@@ -8,7 +8,7 @@ from typing import Any
 from aiohttp import web
 
 from ..domain.lifecycle import StrategyLifecycle
-from .host import StrategyHost
+from .host import StrategyHost, StrategyHostStatus
 
 
 class StrategyControlServer:
@@ -18,6 +18,8 @@ class StrategyControlServer:
         self.host = host
         self.socket_path = Path(socket_path)
         self._server: asyncio.AbstractServer | None = None
+        self._runner: web.AppRunner | None = None
+        self._site: web.UnixSite | None = None
         self._event_task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
 
@@ -33,7 +35,22 @@ class StrategyControlServer:
         await self._site.start()
 
     async def serve_until_stopped(self) -> None:
-        await self._stopped.wait()
+        stop_task = asyncio.create_task(self._stopped.wait())
+        event_task = self._event_task
+        if event_task is None:
+            await stop_task
+            return
+        done, pending = await asyncio.wait(
+            {stop_task, event_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if event_task in done and not self._stopped.is_set():
+            error = event_task.exception()
+            if error is not None:
+                raise error
+            self._stopped.set()
 
     async def close(self) -> None:
         if self._event_task is not None and not self._event_task.done():
@@ -44,7 +61,7 @@ class StrategyControlServer:
                 pass
         self._event_task = None
         self._stopped.set()
-        if getattr(self, "_runner", None) is None:
+        if self._runner is None:
             return
         await self._runner.cleanup()
         self._runner = None
@@ -65,7 +82,10 @@ class StrategyControlServer:
         if method == "GET" and path == "/v1/health":
             status = self.host.status
             return self._status(status) | {
-                "status": "ready" if status.state not in {StrategyLifecycle.FAILED, StrategyLifecycle.STOPPED} else "not_ready"
+                "status": "ready"
+                if status.state
+                not in {StrategyLifecycle.FAILED, StrategyLifecycle.STOPPED}
+                else "not_ready"
             }
         if method == "GET" and path == "/v1/status":
             return self._status(self.host.status)
@@ -89,12 +109,22 @@ class StrategyControlServer:
             return self._status(result)
         raise ValueError(f"unsupported strategy control request: {method} {path}")
 
-    @staticmethod
-    def _status(status: object) -> dict[str, Any]:
-        last_event_time = status.last_event_time.isoformat() if status.last_event_time else None
+    def _status(self, status: StrategyHostStatus) -> dict[str, Any]:
+        last_event_time = (
+            status.last_event_time.isoformat() if status.last_event_time else None
+        )
         last_event_age_ms = None
         if status.last_event_time is not None:
-            last_event_age_ms = max(0, int((datetime.now(status.last_event_time.tzinfo) - status.last_event_time).total_seconds() * 1000))
+            last_event_age_ms = max(
+                0,
+                int(
+                    (
+                        datetime.now(status.last_event_time.tzinfo)
+                        - status.last_event_time
+                    ).total_seconds()
+                    * 1000
+                ),
+            )
         return {
             "status": getattr(status.state, "value", str(status.state)),
             "launch_id": status.launch_id,
@@ -107,9 +137,14 @@ class StrategyControlServer:
             "subscription_count": status.subscription_count,
             "active_subscription_count": status.active_subscription_count,
             "first_event_received": status.first_event_received,
-            "last_event_time": status.last_event_time.isoformat() if status.last_event_time else None,
+            "last_event_time": status.last_event_time.isoformat()
+            if status.last_event_time
+            else None,
             "last_event_age_ms": last_event_age_ms,
             "last_event_kind": status.last_event_kind,
             "event_count": status.event_count,
-            "subscriptions": [dict(subscription) for subscription in status.subscriptions],
+            "subscriptions": [
+                dict(subscription) for subscription in status.subscriptions
+            ],
+            "equity_curve": list(self.host.equity_curve),
         }

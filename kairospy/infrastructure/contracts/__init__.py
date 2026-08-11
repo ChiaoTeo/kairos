@@ -5,8 +5,18 @@ under infrastructure rather than application so callers do not accidentally
 depend on a process client when they only need a snapshot or event contract.
 """
 
-from .base import CommandEnvelope, ContractSnapshot, MmapSnapshotReader, QueryEnvelope, SnapshotMetadata
+from .base import (
+    CommandEnvelope,
+    ContractSnapshot,
+    MmapSnapshotReader,
+    QueryEnvelope,
+    SnapshotMetadata,
+)
 
 __all__ = [
-    "CommandEnvelope", "ContractSnapshot", "MmapSnapshotReader", "QueryEnvelope", "SnapshotMetadata",
+    "CommandEnvelope",
+    "ContractSnapshot",
+    "MmapSnapshotReader",
+    "QueryEnvelope",
+    "SnapshotMetadata",
 ]

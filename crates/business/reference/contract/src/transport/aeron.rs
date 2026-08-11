@@ -60,7 +60,11 @@ impl AeronEventSubscriber {
         sequence: u64,
         event_time_unix_nanos: u64,
     ) -> ContractResult<Option<EventEnvelope>> {
-        let Some(payload) = self.subscriber.next().map_err(ContractError::Transport)? else {
+        let Some(payload) = self
+            .subscriber
+            .next_frame()
+            .map_err(ContractError::Transport)?
+        else {
             return Ok(None);
         };
         Ok(Some(EventEnvelope {

@@ -4,40 +4,67 @@
 //! application module exposes only interaction patterns that are stable
 //! across providers; provider selection and registry mechanics stay private.
 
-pub mod account;
-pub mod account_inspection;
-pub(crate) mod connection;
-pub mod earn;
+pub mod blocking;
+pub mod capabilities;
+pub mod credential;
 pub(crate) mod error;
-pub mod execution_stream;
-pub mod market;
-pub(crate) mod market_stream;
-pub mod order_query;
-pub mod reference;
-pub mod transfer;
+pub mod external_event;
+pub mod outcome;
+pub mod participants;
 
-pub use crate::domain::ConnectionSpec;
 pub use crate::domain::{
-    AccessScope, AssetType, IntegrationCapability, IntegrationRoute, ParticipantKind,
-    ParticipantRef, ProductFamily, TransportKind,
+    ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionLifecycle,
+    ConnectionState, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
+    ProviderInstrumentRef,
 };
-pub use account::{
-    AccountEventStreamConnection, AccountMarketProfileConnection, AccountReadConnection,
-    BufferedIntegrationAccountStream, ExternalMarketProfile, ExternalMarketProfileRequest,
-    IntegrationAccountStream,
+pub use capabilities::account::{
+    AsyncAccountCredentialInspectionConnection, ExternalAccountCredentialProfile,
 };
-pub use account_inspection::{
-    AccountCredentialInspectionConnection, ExternalAccountCredentialProfile,
+pub use capabilities::account::{
+    AsyncAccountEventSource, AsyncAccountMarketProfileConnection, AsyncAccountReadConnection,
+    ExternalMarketProfile, ExternalMarketProfileRequest,
 };
-pub use connection::{Connection, OrderEntryConnection};
-pub use earn::{
-    EarnActionResult, EarnConnection, EarnPosition, EarnProduct, EarnProductType,
+pub use capabilities::account_facts::{
+    ExternalAccountEvent, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
+    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalFillEvent, ExternalMarginMode,
+    ExternalOpenOrder, ExternalOrderEvent, ExternalOrderStatus, ExternalPosition,
+    ExternalPositionMode,
+};
+pub use capabilities::execution::{
+    AsyncOrderEntryConnection, AsyncOrderEventSource, AsyncOrderQueryConnection,
+    ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
+};
+pub use capabilities::execution_facts::{
+    DecimalValue, ExecutionReport, Order, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest,
+    OrderEntryStatus, OrderRequest, OrderSide, OrderStatus, OrderType, TimeInForce,
+};
+pub use capabilities::funding::{
+    AsyncEarnConnection, EarnActionResult, EarnPosition, EarnProduct, EarnProductType,
     EarnRedeemRequest, EarnReward, EarnSubscribeRequest,
 };
-pub use error::IntegrationError;
-pub use execution_stream::{ExecutionStreamConnection, ExternalExecutionEvent};
-pub use market::{
-    MarketEvent, MarketEventKind, MarketStreamConnection, MarketSubscription, SubscriptionId,
+pub use capabilities::funding::{AsyncTransferConnection, TransferRequest, TransferResult};
+pub use capabilities::market::{
+    AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, AsyncMarketSnapshotConnection,
+    HistoricalMarketRequest, MarketEvent, MarketEventKind, MarketSubscription, SubscriptionId,
 };
-pub use order_query::{ExternalOrder, ExternalOrderQuery, OrderQueryConnection};
-pub use transfer::{TransferConnection, TransferRequest, TransferResult};
+pub use capabilities::market_facts::{
+    MarketBar, MarketDataKind, MarketGreeks, MarketQuote, MarketStreamCapabilities, MarketTrade,
+};
+pub use error::IntegrationError;
+pub use external_event::ExternalEventEnvelope;
+pub use outcome::{
+    CommandOutcome, CommandResult, DeliveryCertainty, IndeterminateCommand, ProviderRejection,
+};
+
+// Synchronous contracts stay crate-visible so participant implementations can
+// implement them without making `application::*` a second public blocking API.
+pub(crate) use capabilities::account::{
+    AccountCredentialInspectionConnection, AccountEventReceive, AccountEventStreamConnection,
+    AccountMarketProfileConnection, AccountReadConnection,
+};
+pub(crate) use capabilities::execution::{
+    OrderEntryConnection, OrderEventSource, OrderQueryConnection,
+};
+pub(crate) use capabilities::market::{
+    HistoricalMarketDataConnection, MarketSnapshotConnection, MarketStreamConnection,
+};

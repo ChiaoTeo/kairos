@@ -1,33 +1,35 @@
 use std::collections::BTreeMap;
 
+use kairos_domain_types::{Generation, Sequence};
+
 use crate::application::{AccountProjection, AccountsSnapshot};
 use crate::domain::{
     Account, AccountEvent, AccountSegment, AccountSnapshot, AccountState, ApplyOutcome, Balance,
-    Decimal, SegmentKey, SnapshotKind,
+    SegmentKey, SignedQuantity, SnapshotKind,
 };
 
 pub(crate) struct ActorUndo {
     states: Vec<(SegmentKey, AccountState)>,
-    generation: u64,
-    event_sequence: u64,
+    generation: Generation,
+    event_sequence: Sequence,
 }
 
 #[derive(Clone)]
 pub(crate) struct AccountActor {
     actor_id: String,
     accounts: BTreeMap<SegmentKey, Account>,
-    generation: u64,
-    event_sequence: u64,
+    generation: Generation,
+    event_sequence: Sequence,
 }
 
 impl AccountActor {
     pub(crate) fn new(
         segments: Vec<AccountSegment>,
         restored: Vec<(AccountSegment, crate::domain::AccountState)>,
-        generation: u64,
-        event_sequence: u64,
+        generation: Generation,
+        event_sequence: Sequence,
     ) -> Result<Self, String> {
-        let mut accounts = BTreeMap::new();
+        let mut accounts: BTreeMap<SegmentKey, Account> = BTreeMap::new();
         for segment in segments {
             let key = segment.segment_key.clone();
             if accounts.contains_key(&key) {
@@ -145,6 +147,17 @@ impl AccountActor {
                 })?;
                 account.record_fill(fill).map_err(|error| error.to_string())
             }
+            AccountEvent::ObservedFill(fill) => {
+                let account = self.accounts.get_mut(&fill.segment_key).ok_or_else(|| {
+                    format!(
+                        "observed fill segment is not configured: {}",
+                        fill.segment_key
+                    )
+                })?;
+                account
+                    .observe_fill(fill)
+                    .map_err(|error| error.to_string())
+            }
             AccountEvent::OrderObserved(observation) => {
                 let Some(account) = self.accounts.values_mut().find(|account| {
                     account
@@ -234,7 +247,7 @@ impl AccountActor {
         self.accounts.values().cloned().collect()
     }
 
-    pub(crate) fn persistence_metadata(&self) -> (&str, u64, u64) {
+    pub(crate) fn persistence_metadata(&self) -> (&str, Generation, Sequence) {
         (&self.actor_id, self.generation, self.event_sequence)
     }
 
@@ -257,7 +270,7 @@ impl AccountActor {
 
     pub fn snapshot(&self) -> AccountsSnapshot {
         AccountsSnapshot {
-            actor_id: self.actor_id.clone(),
+            actor_id: kairos_domain_types::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
             event_sequence: self.event_sequence,
             accounts: self
@@ -273,6 +286,7 @@ fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_acco
     match event {
         AccountEvent::Snapshot(snapshot) => keys.push(snapshot.segment_key.clone()),
         AccountEvent::Fill(fill) => keys.push(fill.segment_key.clone()),
+        AccountEvent::ObservedFill(fill) => keys.push(fill.segment_key.clone()),
         AccountEvent::OrderObserved(_) => *all_accounts = true,
         AccountEvent::Batch(events) => {
             for event in events {
@@ -356,7 +370,7 @@ fn compare_snapshot(
         .iter()
         .map(|value| (value.order_id.clone(), value))
         .collect();
-    let order_keys: Vec<String> = if snapshot.kind == SnapshotKind::Delta {
+    let order_keys: Vec<kairos_domain_types::OrderId> = if snapshot.kind == SnapshotKind::Delta {
         external_orders.keys().cloned().collect()
     } else {
         state
@@ -367,21 +381,26 @@ fn compare_snapshot(
             .collect()
     };
     for key in order_keys {
-        let local = state.open_orders().get(&key).map(|value| value.quantity);
-        let external = external_orders.get(&key).map(|value| value.quantity);
+        let local = state
+            .open_orders()
+            .get(&key)
+            .map(|value| SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale()));
+        let external = external_orders
+            .get(&key)
+            .map(|value| SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale()));
         if local.is_none() || external.is_none() {
             compare_decimal(
                 &mut differences,
                 "open_order.present",
-                key,
-                local.map(|_| Decimal::new(1, 0)),
-                external.map(|_| Decimal::new(1, 0)),
+                key.to_string(),
+                local.map(|_| SignedQuantity::new(1, 0)),
+                external.map(|_| SignedQuantity::new(1, 0)),
             );
         } else {
             compare_decimal(
                 &mut differences,
                 "open_order.quantity",
-                key,
+                key.to_string(),
                 local,
                 external,
             );
@@ -423,8 +442,8 @@ fn compare_decimal(
     differences: &mut Vec<crate::application::AccountDifference>,
     field: &str,
     key: String,
-    local: Option<Decimal>,
-    external: Option<Decimal>,
+    local: Option<SignedQuantity>,
+    external: Option<SignedQuantity>,
 ) {
     let local = local.unwrap_or_default();
     let external = external.unwrap_or_default();

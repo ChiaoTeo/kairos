@@ -63,12 +63,14 @@ impl FlatbuffersSnapshotEncoder {
                 let entity_id = builder.create_string(&v.entity_id);
                 let entity_type = builder.create_string(&v.entity_type);
                 let name = builder.create_string(&v.name);
+                let status = builder.create_string(&v.status);
                 FbEntity::create(
                     &mut builder,
                     &FbEntityArgs {
                         entity_id: Some(entity_id),
                         entity_type: Some(entity_type),
                         name: Some(name),
+                        status: Some(status),
                     },
                 )
             })
@@ -141,7 +143,7 @@ impl FlatbuffersSnapshotEncoder {
             .values()
             .map(|v| {
                 let access_id = builder.create_string(&v.access_id);
-                let instrument_id = builder.create_string(&v.instrument_id);
+                let market_id = builder.create_string(&v.market_id);
                 let provider_id = builder.create_string(&v.provider_id);
                 let product_family = builder.create_string(&v.product_family);
                 let provider_symbol = builder.create_string(&v.provider_symbol);
@@ -154,7 +156,7 @@ impl FlatbuffersSnapshotEncoder {
                     &mut builder,
                     &FbExecutionAccessArgs {
                         access_id: Some(access_id),
-                        instrument_id: Some(instrument_id),
+                        market_id: Some(market_id),
                         provider_id: Some(provider_id),
                         product_family: Some(product_family),
                         provider_symbol: Some(provider_symbol),
@@ -181,6 +183,12 @@ impl FlatbuffersSnapshotEncoder {
                     .map(|x| builder.create_string(x));
                 let strike = decimal64(v.strike.as_deref());
                 let option_right = v.option_right.as_ref().map(|x| builder.create_string(x));
+                let issuer_id = v.issuer_id.as_ref().map(|x| builder.create_string(x));
+                let share_class = v.share_class.as_ref().map(|x| builder.create_string(x));
+                let primary_currency_asset_id = v
+                    .primary_currency_asset_id
+                    .as_ref()
+                    .map(|x| builder.create_string(x));
                 let status = builder.create_string(&v.status);
                 FbInstrument::create(
                     &mut builder,
@@ -194,6 +202,9 @@ impl FlatbuffersSnapshotEncoder {
                         expiry_unix_nanos: v.expiry_unix_nanos.unwrap_or_default(),
                         strike: strike.as_ref(),
                         option_right,
+                        issuer_id,
+                        share_class,
+                        primary_currency_asset_id,
                         status: Some(status),
                         ..Default::default()
                     },
@@ -206,16 +217,16 @@ impl FlatbuffersSnapshotEncoder {
             .map(|v| {
                 let listing_id = builder.create_string(&v.listing_id);
                 let instrument_id = builder.create_string(&v.instrument_id);
-                let venue_id = builder.create_string(&v.venue_id);
-                let symbol = builder.create_string(&v.venue_symbol);
+                let exchange_id = builder.create_string(&v.exchange_id);
+                let symbol = builder.create_string(&v.exchange_symbol);
                 let status = builder.create_string(&v.status);
                 FbListing::create(
                     &mut builder,
                     &FbListingArgs {
                         listing_id: Some(listing_id),
                         instrument_id: Some(instrument_id),
-                        venue_id: Some(venue_id),
-                        venue_symbol: Some(symbol),
+                        exchange_id: Some(exchange_id),
+                        exchange_symbol: Some(symbol),
                         status: Some(status),
                         effective_from_unix_nanos: v.effective_from_unix_nanos,
                         effective_to_unix_nanos: v.effective_to_unix_nanos.unwrap_or_default(),
@@ -250,7 +261,6 @@ impl FlatbuffersSnapshotEncoder {
                 instruments: Some(instruments),
                 listings: Some(listings),
                 markets: Some(markets),
-                ..Default::default()
             },
         );
         let header = self.header(&mut builder, "reference.catalog", catalog);
@@ -306,12 +316,14 @@ impl FlatbuffersSnapshotEncoder {
                     let entity_id = builder.create_string(&value.entity_id);
                     let entity_type = builder.create_string(&value.entity_type);
                     let name = builder.create_string(&value.name);
+                    let status = builder.create_string(&value.status);
                     FbEntity::create(
                         &mut builder,
                         &FbEntityArgs {
                             entity_id: Some(entity_id),
                             entity_type: Some(entity_type),
                             name: Some(name),
+                            status: Some(status),
                         },
                     )
                 })
@@ -368,6 +380,18 @@ impl FlatbuffersSnapshotEncoder {
                         .option_right
                         .as_ref()
                         .map(|item| builder.create_string(item));
+                    let issuer_id = value
+                        .issuer_id
+                        .as_ref()
+                        .map(|item| builder.create_string(item));
+                    let share_class = value
+                        .share_class
+                        .as_ref()
+                        .map(|item| builder.create_string(item));
+                    let primary_currency_asset_id = value
+                        .primary_currency_asset_id
+                        .as_ref()
+                        .map(|item| builder.create_string(item));
                     let status = builder.create_string(&value.status);
                     FbInstrument::create(
                         &mut builder,
@@ -381,6 +405,9 @@ impl FlatbuffersSnapshotEncoder {
                             expiry_unix_nanos: value.expiry_unix_nanos.unwrap_or_default(),
                             strike: strike.as_ref(),
                             option_right,
+                            issuer_id,
+                            share_class,
+                            primary_currency_asset_id,
                             status: Some(status),
                             ..Default::default()
                         },
@@ -398,16 +425,16 @@ impl FlatbuffersSnapshotEncoder {
                 .map(|value| {
                     let listing_id = builder.create_string(&value.listing_id);
                     let instrument_id = builder.create_string(&value.instrument_id);
-                    let venue_id = builder.create_string(&value.venue_id);
-                    let symbol = builder.create_string(&value.venue_symbol);
+                    let exchange_id = builder.create_string(&value.exchange_id);
+                    let symbol = builder.create_string(&value.exchange_symbol);
                     let status = builder.create_string(&value.status);
                     FbListing::create(
                         &mut builder,
                         &FbListingArgs {
                             listing_id: Some(listing_id),
                             instrument_id: Some(instrument_id),
-                            venue_id: Some(venue_id),
-                            venue_symbol: Some(symbol),
+                            exchange_id: Some(exchange_id),
+                            exchange_symbol: Some(symbol),
                             status: Some(status),
                             effective_from_unix_nanos: value.effective_from_unix_nanos,
                             effective_to_unix_nanos: value
@@ -490,7 +517,7 @@ impl FlatbuffersSnapshotEncoder {
                 .values()
                 .map(|value| {
                     let access_id = builder.create_string(&value.access_id);
-                    let instrument_id = builder.create_string(&value.instrument_id);
+                    let market_id = builder.create_string(&value.market_id);
                     let provider_id = builder.create_string(&value.provider_id);
                     let product_family = builder.create_string(&value.product_family);
                     let provider_symbol = builder.create_string(&value.provider_symbol);
@@ -503,7 +530,7 @@ impl FlatbuffersSnapshotEncoder {
                         &mut builder,
                         &FbExecutionAccessArgs {
                             access_id: Some(access_id),
-                            instrument_id: Some(instrument_id),
+                            market_id: Some(market_id),
                             provider_id: Some(provider_id),
                             product_family: Some(product_family),
                             provider_symbol: Some(provider_symbol),
@@ -581,8 +608,8 @@ impl FlatbuffersSnapshotEncoder {
                     .listing_id
                     .as_ref()
                     .map(|value| builder.create_string(value));
-                let venue_id = event
-                    .venue_id
+                let exchange_id = event
+                    .exchange_id
                     .as_ref()
                     .map(|value| builder.create_string(value));
                 let source_symbol = event
@@ -605,16 +632,26 @@ impl FlatbuffersSnapshotEncoder {
                     .current_symbol
                     .as_ref()
                     .map(|value| builder.create_string(value));
+                let record_kind = event
+                    .record_kind
+                    .as_ref()
+                    .map(|value| builder.create_string(value));
+                let record_id = event
+                    .record_id
+                    .as_ref()
+                    .map(|value| builder.create_string(value));
                 FbLifecycleEvent::create(
                     &mut builder,
                     &FbLifecycleEventArgs {
                         event_id: Some(event_id),
                         event_type: Some(event_type),
                         event_time_unix_nanos: event.event_time_unix_nanos,
+                        record_kind,
+                        record_id,
                         market_id,
                         instrument_id,
                         listing_id,
-                        venue_id,
+                        exchange_id,
                         source_symbol,
                         previous_status,
                         current_status,
@@ -687,9 +724,14 @@ impl FlatbuffersSnapshotEncoder {
                 let market_key = builder.create_string(&v.market_key);
                 let instrument_id = builder.create_string(&v.instrument_id);
                 let listing_id = builder.create_string(&v.listing_id);
-                let venue_id = builder.create_string(&v.venue_id);
+                let exchange_id = builder.create_string(&v.exchange_id);
                 let market_type = builder.create_string(&v.market_type);
                 let symbol = builder.create_string(&v.source_symbol);
+                let asset_type = v.asset_type.as_ref().map(|x| builder.create_string(x));
+                let underlying = v
+                    .underlying_instrument_id
+                    .as_ref()
+                    .map(|x| builder.create_string(x));
                 let base = v.base_asset_id.as_ref().map(|x| builder.create_string(x));
                 let quote = v.quote_asset_id.as_ref().map(|x| builder.create_string(x));
                 let status = builder.create_string(&v.status);
@@ -705,7 +747,7 @@ impl FlatbuffersSnapshotEncoder {
                         market_key: Some(market_key),
                         instrument_id: Some(instrument_id),
                         listing_id: Some(listing_id),
-                        venue_id: Some(venue_id),
+                        exchange_id: Some(exchange_id),
                         market_type: Some(market_type),
                         source_symbol: Some(symbol),
                         base_asset_id: base,
@@ -720,7 +762,8 @@ impl FlatbuffersSnapshotEncoder {
                         quantity_precision: v.quantity_precision,
                         effective_from_unix_nanos: v.effective_from_unix_nanos,
                         effective_to_unix_nanos: v.effective_to_unix_nanos.unwrap_or_default(),
-                        ..Default::default()
+                        asset_type,
+                        underlying_instrument_id: underlying,
                     },
                 )
             })
@@ -815,7 +858,7 @@ mod tests {
                     product_id: "product:binance:earn:btc".into(),
                     product_type: "earn".into(),
                     name: "BTC Earn".into(),
-                    asset_id: "asset:btc".into(),
+                    asset_id: "asset:BTC".into(),
                     provider_product_id: "btc-earn".into(),
                     apr: Some("0.0525".into()),
                     status: "active".into(),
@@ -853,6 +896,8 @@ mod tests {
             event_id: "event:1".into(),
             event_type: "symbol_changed".into(),
             event_time_unix_nanos: 42,
+            record_kind: Some("market".into()),
+            record_id: Some("market:1".into()),
             market_id: Some("market:1".into()),
             previous_symbol: Some("OLD".into()),
             current_symbol: Some("NEW".into()),
@@ -871,6 +916,30 @@ mod tests {
         let value = events.get(0);
         assert_eq!(value.event_id(), "event:1");
         assert_eq!(value.event_type(), "symbol_changed");
+        assert_eq!(value.record_kind(), Some("market"));
+        assert_eq!(value.record_id(), Some("market:1"));
         assert_eq!(value.current_symbol(), Some("NEW"));
+        let decoded = crate::decode_change(&bytes).unwrap();
+        assert_eq!(decoded.events[0].record_id.as_deref(), Some("market:1"));
+        assert_eq!(decoded.event_sequence, 1);
+    }
+
+    #[test]
+    fn rust_reads_the_python_generated_reference_golden_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../tests/fixtures/reference_catalog_empty.prc1.hex");
+        let hex = std::fs::read_to_string(path).unwrap();
+        let bytes = hex
+            .trim()
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect::<Vec<_>>();
+        assert!(kairos_protocol::generated::kairos::reference::v_1::catalog_snapshot_buffer_has_identifier(&bytes));
+        let snapshot = root_as_catalog_snapshot(&bytes).unwrap();
+        assert_eq!(snapshot.header().snapshot_id(), "reference:0");
+        assert_eq!(snapshot.header().view_key(), "reference.catalog");
+        assert_eq!(snapshot.payload().entity_count(), 0);
+        assert_eq!(snapshot.payload().market_count(), 0);
     }
 }

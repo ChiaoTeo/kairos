@@ -110,8 +110,14 @@ class WorkspacePaths:
 
     def reference_snapshot(self, view: str = "catalog") -> Path:
         if view not in {
-            "catalog", "entities", "assets", "instruments", "listings", "markets",
-            "financial-products", "execution-accesses",
+            "catalog",
+            "entities",
+            "assets",
+            "instruments",
+            "listings",
+            "markets",
+            "financial-products",
+            "execution-accesses",
         }:
             raise ValueError(f"unsupported reference snapshot view: {view}")
         return self.child("snapshots", "reference", f"{view}.snapshot")
@@ -123,7 +129,9 @@ class WorkspacePaths:
         return self.child("run", "risk", "health.json")
 
     def launch_socket(self, mode: str, launch_id: str, instance_id: str) -> Path:
-        candidate = self.child("launches", mode, launch_id, "instances", instance_id, "strategy.sock")
+        candidate = self.child(
+            "launches", mode, launch_id, "instances", instance_id, "strategy.sock"
+        )
         # macOS limits AF_UNIX socket addresses to a small fixed byte length.
         # Keep the logical workspace path for normal roots, but use a stable
         # short alias when temporary or deeply nested roots would not bind.
@@ -140,8 +148,14 @@ class WorkspacePaths:
     def launch_instance_root(self, mode: str, launch_id: str, instance_id: str) -> Path:
         return self.child("launches", mode, launch_id, "instances", instance_id)
 
-    def instance_socket(self, mode: str, launch_id: str, instance_id: str, name: str) -> Path:
-        candidate = self.launch_instance_root(mode, launch_id, instance_id) / "sockets" / f"{name}.sock"
+    def instance_socket(
+        self, mode: str, launch_id: str, instance_id: str, name: str
+    ) -> Path:
+        candidate = (
+            self.launch_instance_root(mode, launch_id, instance_id)
+            / "sockets"
+            / f"{name}.sock"
+        )
         # macOS limits AF_UNIX socket addresses to a small fixed byte length.
         # Instance paths contain a generated UUID and can exceed that limit
         # even when the workspace itself is valid.  Keep the logical path
@@ -153,20 +167,40 @@ class WorkspacePaths:
         ).hexdigest()[:20]
         return Path("/tmp") / f"kairos-instance-{digest}-{name}.sock"
 
-    def instance_health(self, mode: str, launch_id: str, instance_id: str, name: str) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id) / "health" / f"{name}.json"
+    def instance_health(
+        self, mode: str, launch_id: str, instance_id: str, name: str
+    ) -> Path:
+        return (
+            self.launch_instance_root(mode, launch_id, instance_id)
+            / "health"
+            / f"{name}.json"
+        )
 
-    def instance_state(self, mode: str, launch_id: str, instance_id: str, *parts: str) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath("state", *parts)
+    def instance_state(
+        self, mode: str, launch_id: str, instance_id: str, *parts: str
+    ) -> Path:
+        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
+            "state", *parts
+        )
 
-    def instance_snapshot(self, mode: str, launch_id: str, instance_id: str, *parts: str) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath("snapshots", *parts)
+    def instance_snapshot(
+        self, mode: str, launch_id: str, instance_id: str, *parts: str
+    ) -> Path:
+        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
+            "snapshots", *parts
+        )
 
-    def instance_log(self, mode: str, launch_id: str, instance_id: str, *parts: str) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath("logs", *parts)
+    def instance_log(
+        self, mode: str, launch_id: str, instance_id: str, *parts: str
+    ) -> Path:
+        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
+            "logs", *parts
+        )
 
     def instance_manifest(self, mode: str, launch_id: str, instance_id: str) -> Path:
-        return self.instance_state(mode, launch_id, instance_id, "component-endpoints.json")
+        return self.instance_state(
+            mode, launch_id, instance_id, "component-endpoints.json"
+        )
 
     def launch_config(self, launch_id: str) -> Path:
         return self.child("config", "launches", f"{launch_id}.toml")
@@ -182,7 +216,9 @@ class Workspace:
     def workspace_id(self) -> str:
         return self.identity.workspace_id
 
-    def instance(self, mode: str, launch_id: str, instance_id: str = "default") -> "InstanceWorkspace":
+    def instance(
+        self, mode: str, launch_id: str, instance_id: str = "default"
+    ) -> "InstanceWorkspace":
         return InstanceWorkspace(self, mode, launch_id, instance_id)
 
 
@@ -200,8 +236,17 @@ class InstanceWorkspace:
     instance_id: str
 
     def __post_init__(self) -> None:
-        for name, value in (("mode", self.mode), ("launch id", self.launch_id), ("instance id", self.instance_id)):
-            if not value.strip() or "/" in value or "\\" in value or value in {".", ".."}:
+        for name, value in (
+            ("mode", self.mode),
+            ("launch id", self.launch_id),
+            ("instance id", self.instance_id),
+        ):
+            if (
+                not value.strip()
+                or "/" in value
+                or "\\" in value
+                or value in {".", ".."}
+            ):
                 raise ValueError(f"{name} must be a single path component")
 
     @property
@@ -210,32 +255,49 @@ class InstanceWorkspace:
 
     @property
     def root(self) -> Path:
-        return self.paths.launch_instance_root(self.mode, self.launch_id, self.instance_id)
+        return self.paths.launch_instance_root(
+            self.mode, self.launch_id, self.instance_id
+        )
 
     @staticmethod
     def _parts(parts: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not part or part in {".", ".."} or "/" in part or "\\" in part for part in parts):
-            raise ValueError("instance resource path must contain single path components")
+        if any(
+            not part or part in {".", ".."} or "/" in part or "\\" in part
+            for part in parts
+        ):
+            raise ValueError(
+                "instance resource path must contain single path components"
+            )
         return parts
 
     def socket(self, name: str) -> Path:
-        return self.paths.instance_socket(self.mode, self.launch_id, self.instance_id, self._parts((name,))[0])
+        return self.paths.instance_socket(
+            self.mode, self.launch_id, self.instance_id, self._parts((name,))[0]
+        )
 
     def health(self, name: str) -> Path:
-        return self.paths.instance_health(self.mode, self.launch_id, self.instance_id, self._parts((name,))[0])
+        return self.paths.instance_health(
+            self.mode, self.launch_id, self.instance_id, self._parts((name,))[0]
+        )
 
     def lock(self, name: str) -> Path:
         component = self._parts((name,))[0]
         return self.root / "locks" / f"{component}.lock"
 
     def state(self, *parts: str) -> Path:
-        return self.paths.instance_state(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
+        return self.paths.instance_state(
+            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
+        )
 
     def snapshot(self, *parts: str) -> Path:
-        return self.paths.instance_snapshot(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
+        return self.paths.instance_snapshot(
+            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
+        )
 
     def log(self, *parts: str) -> Path:
-        return self.paths.instance_log(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
+        return self.paths.instance_log(
+            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
+        )
 
     def component_manifest(self) -> Path:
         return self.paths.instance_manifest(self.mode, self.launch_id, self.instance_id)
@@ -244,5 +306,14 @@ class InstanceWorkspace:
         return self.state("market", name)
 
     def prepare(self) -> None:
-        for directory in (self.root, self.root / "sockets", self.root / "health", self.root / "locks", self.root / "state", self.root / "snapshots", self.root / "logs", self.root / "checkpoints"):
+        for directory in (
+            self.root,
+            self.root / "sockets",
+            self.root / "health",
+            self.root / "locks",
+            self.root / "state",
+            self.root / "snapshots",
+            self.root / "logs",
+            self.root / "checkpoints",
+        ):
             directory.mkdir(parents=True, exist_ok=True)

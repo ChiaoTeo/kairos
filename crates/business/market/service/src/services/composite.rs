@@ -5,53 +5,94 @@ use std::time::Duration;
 
 use super::feed::{MarketFeed, MarketOrderBookUpdate};
 use super::worker::MarketFeedWorker;
+use crate::application::MarketDataKey;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::market::MarketDescriptor;
 use crate::domain::observations::MarketObservation;
 use crate::domain::subscriptions::SubscriptionId;
+use kairos_domain_types::{Exchange, MarketId};
 
 pub type MarketFeedFactory = Box<dyn Fn() -> Result<Box<dyn MarketFeed>, String> + Send + Sync>;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MarketRoute {
-    pub venue_id: String,
+    pub source_id: Option<String>,
+    pub exchange_id: Exchange,
     pub market_type: String,
     pub asset_type: Option<String>,
 }
 
 impl MarketRoute {
-    pub fn new(venue_id: impl Into<String>, market_type: impl Into<String>) -> Self {
+    pub fn new(exchange_id: impl Into<String>, market_type: impl Into<String>) -> Self {
+        let exchange_id = exchange_id.into().trim().to_ascii_lowercase();
+        let exchange_id = if exchange_id.starts_with("exchange:") {
+            exchange_id
+        } else {
+            format!("exchange:{exchange_id}")
+        };
         Self {
-            venue_id: venue_id.into().trim().to_ascii_lowercase(),
+            source_id: None,
+            exchange_id: Exchange::new(exchange_id).expect("market route exchange is required"),
             market_type: market_type.into().trim().to_ascii_lowercase(),
             asset_type: None,
         }
     }
 
-    pub fn with_asset_type(
-        venue_id: impl Into<String>,
+    pub fn with_source(
+        source_id: impl Into<String>,
+        exchange_id: impl Into<String>,
+        market_type: impl Into<String>,
+    ) -> Self {
+        let mut route = Self::new(exchange_id, market_type);
+        let source_id = source_id.into().trim().to_ascii_lowercase();
+        assert!(!source_id.is_empty(), "market route source is required");
+        route.source_id = Some(source_id);
+        route
+    }
+
+    pub fn with_source_and_asset_type(
+        source_id: impl Into<String>,
+        exchange_id: impl Into<String>,
         market_type: impl Into<String>,
         asset_type: impl Into<String>,
     ) -> Self {
-        let mut route = Self::new(venue_id, market_type);
+        let mut route = Self::with_source(source_id, exchange_id, market_type);
+        route.asset_type = Some(asset_type.into().trim().to_ascii_lowercase());
+        route
+    }
+
+    pub fn with_asset_type(
+        exchange_id: impl Into<String>,
+        market_type: impl Into<String>,
+        asset_type: impl Into<String>,
+    ) -> Self {
+        let mut route = Self::new(exchange_id, market_type);
         route.asset_type = Some(asset_type.into().trim().to_ascii_lowercase());
         route
     }
 
     pub fn from_market(market: &MarketDescriptor) -> Self {
-        match market.asset_type.as_deref() {
-            Some(asset_type) => {
-                Self::with_asset_type(&market.venue_id, &market.market_type, asset_type)
-            }
-            None => Self::new(&market.venue_id, &market.market_type),
+        let route = match market.asset_type.as_deref() {
+            Some(asset_type) => Self::with_asset_type(
+                market.exchange_id.to_string(),
+                &market.market_type,
+                asset_type,
+            ),
+            None => Self::new(market.exchange_id.to_string(), &market.market_type),
+        };
+        if let Some(source_id) = &market.source_id {
+            let mut route = route;
+            route.source_id = Some(source_id.to_ascii_lowercase());
+            return route;
         }
+        route
     }
 }
 
 struct RoutedSubscription {
     route: MarketRoute,
     inner: SubscriptionId,
-    market_id: String,
+    market_id: MarketId,
 }
 
 /// A Market-owned collection of lazily-created provider connections.
@@ -78,40 +119,70 @@ impl CompositeMarketFeed {
     }
 
     fn worker_for(&mut self, route: &MarketRoute) -> Result<&mut MarketFeedWorker, String> {
-        if !self.workers.contains_key(route) {
-            let factory = self.factories.get(route).ok_or_else(|| {
+        let resolved_route = if self.factories.contains_key(route) {
+            route.clone()
+        } else if route.source_id.is_none() {
+            let matches = self
+                .factories
+                .keys()
+                .filter(|candidate| {
+                    candidate.source_id.is_some()
+                        && candidate.exchange_id == route.exchange_id
+                        && candidate.market_type == route.market_type
+                        && candidate.asset_type == route.asset_type
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if matches.len() == 1 {
+                matches.into_iter().next().expect("one route match")
+            } else {
+                route.clone()
+            }
+        } else {
+            route.clone()
+        };
+        if !self.workers.contains_key(&resolved_route) {
+            let factory = self.factories.get(&resolved_route).ok_or_else(|| {
                 format!(
-                    "no market connection route for {}:{}",
-                    route.venue_id, route.market_type
+                    "no market connection route for {}:{}:{}",
+                    resolved_route.source_id.as_deref().unwrap_or("default"),
+                    resolved_route.exchange_id,
+                    resolved_route.market_type
                 )
             })?;
             let feed = factory()?;
             self.workers.insert(
-                route.clone(),
+                resolved_route.clone(),
                 MarketFeedWorker::start(feed, Duration::from_millis(10)),
             );
         }
-        self.workers.get_mut(route).ok_or_else(|| {
+        self.workers.get_mut(&resolved_route).ok_or_else(|| {
             format!(
                 "market connection was not created for {}:{}",
-                route.venue_id, route.market_type
+                resolved_route.exchange_id, resolved_route.market_type
             )
         })
     }
 
-    pub fn active_routes(&self) -> impl Iterator<Item = &MarketRoute> {
+    #[cfg(test)]
+    fn active_routes(&self) -> impl Iterator<Item = &MarketRoute> {
         self.workers.keys()
-    }
-
-    /// Routes declared by the workspace connection directory. This is useful
-    /// for startup validation; a route still creates its concrete provider
-    /// lazily on the first strategy subscription.
-    pub fn configured_routes(&self) -> impl Iterator<Item = &MarketRoute> {
-        self.factories.keys()
     }
 }
 
 impl MarketFeed for CompositeMarketFeed {
+    fn configured_routes(&self) -> Vec<crate::application::MarketFeedRoute> {
+        self.factories
+            .keys()
+            .map(|route| crate::application::MarketFeedRoute {
+                source_id: route.source_id.clone(),
+                exchange_id: route.exchange_id.clone(),
+                market_type: route.market_type.clone(),
+                asset_type: route.asset_type.clone(),
+            })
+            .collect()
+    }
+
     fn start(&mut self) -> Result<(), String> {
         // Route workers are started lazily when their first subscription is
         // created. This method remains a lifecycle no-op for the composite.
@@ -173,29 +244,38 @@ impl MarketFeed for CompositeMarketFeed {
         Ok(())
     }
 
-    fn resync_orderbook(&mut self, market_id: &str) -> Result<(), String> {
+    fn resync_orderbook(&mut self, key: &MarketDataKey) -> Result<(), String> {
         let routes = self
             .subscriptions
             .values()
-            .filter(|subscription| subscription.market_id == market_id)
+            .filter(|subscription| {
+                subscription.market_id == key.market_id
+                    && subscription
+                        .route
+                        .source_id
+                        .as_deref()
+                        .is_none_or(|source| source == key.source_id)
+            })
             .collect::<Vec<_>>();
         let routed = match routes.as_slice() {
             [] => {
                 return Err(format!(
-                    "unknown composite market for order book resync: {market_id}"
+                    "unknown composite market for order book resync: {}",
+                    key.market_id
                 ))
             }
             [single] => *single,
             _ => {
                 return Err(format!(
-                    "composite market has multiple routes for order book resync: {market_id}"
+                    "composite market has multiple routes for order book resync: {}",
+                    key.market_id
                 ))
             }
         };
         self.workers
             .get_mut(&routed.route)
             .ok_or_else(|| "composite route worker is not running".to_string())?
-            .resync_orderbook(market_id)
+            .resync_orderbook(key)
     }
 
     fn unsubscribe(&mut self, subscription: &SubscriptionId) -> Result<(), String> {
@@ -332,10 +412,10 @@ mod tests {
     #[test]
     fn creates_and_reuses_independent_routes() {
         let mut factories: BTreeMap<MarketRoute, MarketFeedFactory> = BTreeMap::new();
-        for (venue, market_type) in [("binance", "spot"), ("okx", "options")] {
-            let source = format!("{venue}-{market_type}");
+        for (exchange, market_type) in [("binance", "spot"), ("okx", "options")] {
+            let source = format!("{exchange}-{market_type}");
             factories.insert(
-                MarketRoute::new(venue, market_type),
+                MarketRoute::new(exchange, market_type),
                 Box::new(move || {
                     Ok(Box::new(FakeFeed {
                         source: source.clone(),
@@ -402,9 +482,9 @@ mod tests {
             ("okx", "options", "crypto"),
         ];
         let mut factories = BTreeMap::new();
-        for (venue, market_type, asset_type) in routes {
+        for (exchange, market_type, asset_type) in routes {
             factories.insert(
-                MarketRoute::with_asset_type(venue, market_type, asset_type),
+                MarketRoute::with_asset_type(exchange, market_type, asset_type),
                 Box::new(|| {
                     Ok(Box::new(FakeFeed {
                         source: "all-products".into(),
@@ -414,11 +494,11 @@ mod tests {
             );
         }
         let mut feed = CompositeMarketFeed::new(factories).unwrap();
-        for (index, (venue, market_type, asset_type)) in routes.into_iter().enumerate() {
+        for (index, (exchange, market_type, asset_type)) in routes.into_iter().enumerate() {
             let descriptor = MarketDescriptor::new_with_asset_type(
                 format!("market:{index}"),
                 format!("instrument:{index}"),
-                venue,
+                exchange,
                 market_type,
                 asset_type,
                 format!("SYMBOL{index}"),

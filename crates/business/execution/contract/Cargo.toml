@@ -12,7 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 kairos-protocol = { path = "../../../kairos-protocol" }
 kairos-transport = { path = "../../../kairos-transport" }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { workspace = true }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 flatbuffers = "25.12.19"

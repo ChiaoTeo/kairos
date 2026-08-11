@@ -12,7 +12,9 @@ from kairospy.application.system import UnixRestClient
 from kairospy.application.workspace import WorkspaceApplication
 
 
-def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_snapshot(tmp_path: Path) -> None:
+def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_snapshot(
+    tmp_path: Path,
+) -> None:
     root = Path(f"/tmp/ksp-{os.getpid()}")
     shutil.rmtree(root, ignore_errors=True)
     workspace = WorkspaceApplication().init(root / "w", workspace_id="sp")
@@ -25,7 +27,8 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
     instance = workspace.instance("paper", "l", "i")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}' % instance.socket("execution"),
+        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}'
+        % instance.socket("execution"),
         encoding="utf-8",
     )
     process = StrategyProcessApplication(workspace, ready_timeout=5)
@@ -35,7 +38,9 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
         instance_id="i",
     )
     assert workspace.instance("paper", "l", "i").log("strategy.log").is_file()
-    assert not (workspace.paths.logs / "launches" / "paper" / "l" / "i" / "strategy.log").exists()
+    assert not (
+        workspace.paths.logs / "launches" / "paper" / "l" / "i" / "strategy.log"
+    ).exists()
     try:
         started = asyncio.run(UnixRestClient(socket).request("POST", "/v1/start"))
         assert started["status"] == "waiting_for_dependencies"
@@ -45,20 +50,30 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_launch_status_and_stop_are_safe_when_instance_is_not_running(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-status")
+def test_launch_status_and_stop_are_safe_when_instance_is_not_running(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-status"
+    )
     application = LaunchControlApplication(workspace)
     target = application.target("launch", "instance")
     assert application.status(target)["status"] == "not_running"
     assert application.stop(target)["status"] == "not_running"
 
 
-def test_launch_status_includes_registered_state_when_instance_is_not_running(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-registry")
+def test_launch_status_includes_registered_state_when_instance_is_not_running(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-registry"
+    )
     application = LaunchControlApplication(workspace)
     from kairospy.application.launch import LaunchRegistryApplication
 
-    LaunchRegistryApplication(workspace).add("launch", instance_id="instance", strategy_ref="user:Strategy")
+    LaunchRegistryApplication(workspace).add(
+        "launch", instance_id="instance", strategy_ref="user:Strategy"
+    )
     value = application.status(application.target("launch", "instance"))
 
     assert value["status"] == "not_running"
@@ -66,8 +81,12 @@ def test_launch_status_includes_registered_state_when_instance_is_not_running(tm
     assert value["registry_consistent"] is True
 
 
-def test_strategy_composition_uses_instance_market_and_account_resources(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-resources")
+def test_strategy_composition_uses_instance_market_and_account_resources(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-resources"
+    )
     (workspace.paths.root / "user_strategy.py").write_text(
         "from kairospy.strategy import StrategyBase\n"
         "class UserStrategy(StrategyBase):\n"
@@ -77,7 +96,8 @@ def test_strategy_composition_uses_instance_market_and_account_resources(tmp_pat
     instance = workspace.instance("backtest", "launch", "run-1")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}' % instance.socket("execution"),
+        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}'
+        % instance.socket("execution"),
         encoding="utf-8",
     )
     composition = compose_strategy_process(
@@ -93,6 +113,7 @@ def test_strategy_composition_uses_instance_market_and_account_resources(tmp_pat
     assert composition.host._snapshots.path == workspace.paths.instance_snapshot(
         "backtest", "launch", "run-1", "market", "market.snapshot"
     )
-    assert composition.host.context._bus._intents.client.socket_path == workspace.paths.instance_socket(
-        "backtest", "launch", "run-1", "execution"
+    assert (
+        composition.host.context._bus._intents.client.socket_path
+        == workspace.paths.instance_socket("backtest", "launch", "run-1", "execution")
     )

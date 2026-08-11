@@ -39,14 +39,14 @@ class Listing(object):
         return None
 
     # Listing
-    def VenueId(self):
+    def ExchangeId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Listing
-    def VenueSymbol(self):
+    def ExchangeSymbol(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -91,17 +91,17 @@ def ListingAddInstrumentId(builder, instrumentId):
 def AddInstrumentId(builder, instrumentId):
     ListingAddInstrumentId(builder, instrumentId)
 
-def ListingAddVenueId(builder, venueId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(venueId), 0)
+def ListingAddExchangeId(builder, exchangeId):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeId), 0)
 
-def AddVenueId(builder, venueId):
-    ListingAddVenueId(builder, venueId)
+def AddExchangeId(builder, exchangeId):
+    ListingAddExchangeId(builder, exchangeId)
 
-def ListingAddVenueSymbol(builder, venueSymbol):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(venueSymbol), 0)
+def ListingAddExchangeSymbol(builder, exchangeSymbol):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeSymbol), 0)
 
-def AddVenueSymbol(builder, venueSymbol):
-    ListingAddVenueSymbol(builder, venueSymbol)
+def AddExchangeSymbol(builder, exchangeSymbol):
+    ListingAddExchangeSymbol(builder, exchangeSymbol)
 
 def ListingAddStatus(builder, status):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)

@@ -39,13 +39,16 @@ class LaunchControlApplication:
         socket = self.workspace.paths.launch_socket(mode, launch_id, instance_id)
         return InstanceControlTarget(launch_id, instance_id, socket)
 
-    def request(self, target: InstanceControlTarget, method: str, path: str) -> dict[str, Any]:
+    def request(
+        self, target: InstanceControlTarget, method: str, path: str
+    ) -> dict[str, Any]:
         return asyncio.run(UnixRestClient(target.socket_path).request(method, path))
 
     def status(self, target: InstanceControlTarget) -> dict[str, Any]:
         registered = next(
             (
-                entry for entry in LaunchRegistryApplication(self.workspace).list()
+                entry
+                for entry in LaunchRegistryApplication(self.workspace).list()
                 if entry.get("launch_id") == target.launch_id
                 and entry.get("instance_id") == target.instance_id
             ),
@@ -58,11 +61,14 @@ class LaunchControlApplication:
                 "status": "not_running",
                 "control_socket": str(target.socket_path),
                 "registry_state": registered.get("state") if registered else None,
-                "registry_consistent": registered is None or registered.get("state") in {"stopped", "failed", "created"},
+                "registry_consistent": registered is None
+                or registered.get("state") in {"stopped", "failed", "created"},
             }
         value = self.request(target, "GET", "/v1/status")
         value["registry_state"] = registered.get("state") if registered else None
-        value["registry_consistent"] = registered is None or registered.get("state") == value.get("status")
+        value["registry_consistent"] = registered is None or registered.get(
+            "state"
+        ) == value.get("status")
         return value
 
     def start(self, target: InstanceControlTarget) -> dict[str, Any]:
@@ -77,7 +83,9 @@ class LaunchControlApplication:
             }
         return self.request(target, "POST", "/v1/stop")
 
-    def strategy_control(self, target: InstanceControlTarget, action: str) -> dict[str, Any]:
+    def strategy_control(
+        self, target: InstanceControlTarget, action: str
+    ) -> dict[str, Any]:
         allowed = {"enable", "pause", "resume", "refresh"}
         if action not in allowed:
             raise ValueError(f"unsupported strategy control: {action}")

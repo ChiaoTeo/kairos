@@ -8,7 +8,9 @@ import typer
 from kairospy.application.reference import ReferenceSnapshotClient
 from kairospy.application.workspace import WorkspaceApplication
 
-reference_app = typer.Typer(no_args_is_help=True, help="Query the running Reference process")
+reference_app = typer.Typer(
+    no_args_is_help=True, help="Query the running Reference process"
+)
 
 
 def _client(workspace: Path | None) -> ReferenceSnapshotClient:
@@ -21,8 +23,12 @@ def _client(workspace: Path | None) -> ReferenceSnapshotClient:
         instruments_snapshot_path=owner.paths.reference_snapshot("instruments"),
         listings_snapshot_path=owner.paths.reference_snapshot("listings"),
         markets_snapshot_path=owner.paths.reference_snapshot("markets"),
-        financial_products_snapshot_path=owner.paths.reference_snapshot("financial-products"),
-        execution_accesses_snapshot_path=owner.paths.reference_snapshot("execution-accesses"),
+        financial_products_snapshot_path=owner.paths.reference_snapshot(
+            "financial-products"
+        ),
+        execution_accesses_snapshot_path=owner.paths.reference_snapshot(
+            "execution-accesses"
+        ),
     )
 
 
@@ -32,6 +38,7 @@ def reference_health(
     output: str = typer.Option("text", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).health(), OutputFormat(output)))
 
 
@@ -41,6 +48,7 @@ def reference_snapshot(
     output: str = typer.Option("json", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).snapshot(), OutputFormat(output)))
 
 
@@ -51,6 +59,7 @@ def reference_catalog(
 ) -> None:
     """Read the complete catalog projection, including all collections."""
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).catalog(), OutputFormat(output)))
 
 
@@ -61,6 +70,7 @@ def reference_snapshots(
 ) -> None:
     """List Reference snapshot views, identities, and resource paths."""
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).snapshot_views(), OutputFormat(output)))
 
 
@@ -70,6 +80,7 @@ def reference_providers(
     output: str = typer.Option("json", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).providers(), OutputFormat(output)))
 
 
@@ -79,74 +90,89 @@ def reference_refresh(
     output: str = typer.Option("json", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
+
     typer.echo(render(_client(workspace).refresh(), OutputFormat(output)))
 
 
 @reference_app.command("markets")
 def reference_markets(
     symbol: str | None = typer.Option(None, "--symbol"),
-    venue_id: str | None = typer.Option(None, "--venue-id", "--venue"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id", "--exchange"),
     market_type: str | None = typer.Option(None, "--market-type"),
     asset_type: str | None = typer.Option(None, "--asset-type"),
     active_only: bool = typer.Option(False, "--active-only"),
     status: str | None = typer.Option(None, "--status"),
+    limit: int | None = typer.Option(None, "--limit"),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("text", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
+
     value = _client(workspace).markets(
         symbol=symbol,
-        venue_id=venue_id,
+        exchange_id=exchange_id,
         market_type=market_type,
         asset_type=asset_type,
         active_only=active_only,
         status=status,
+        limit=limit,
     )
     typer.echo(render(value, OutputFormat(output)))
 
 
-@reference_app.command("lifecycle")
-def reference_lifecycle(
-    limit: int | None = typer.Option(None, "--limit", min=1),
-    workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("text", "--output", "--format"),
+def _reference_collection_command(
+    view: str, workspace: Path | None, output: str
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
-    typer.echo(render(_client(workspace).lifecycle(limit=limit), OutputFormat(output)))
 
-
-def _reference_collection_command(view: str, workspace: Path | None, output: str) -> None:
-    from kairospy.surface.cli.options import OutputFormat, render
     typer.echo(render(_client(workspace).collection(view), OutputFormat(output)))
 
 
 @reference_app.command("assets")
-def reference_assets(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_assets(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("assets", workspace, output)
 
 
 @reference_app.command("entities")
-def reference_entities(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_entities(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("entities", workspace, output)
 
 
 @reference_app.command("instruments")
-def reference_instruments(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_instruments(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("instruments", workspace, output)
 
 
 @reference_app.command("listings")
-def reference_listings(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_listings(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("listings", workspace, output)
 
 
 @reference_app.command("financial-products")
-def reference_financial_products(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_financial_products(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("financial-products", workspace, output)
 
 
 @reference_app.command("execution-accesses")
-def reference_execution_accesses(workspace: Path | None = typer.Option(None, "--workspace"), output: str = typer.Option("table", "--output", "--format")) -> None:
+def reference_execution_accesses(
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
     _reference_collection_command("execution-accesses", workspace, output)
 
 

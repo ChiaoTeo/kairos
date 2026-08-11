@@ -231,6 +231,7 @@ impl RestControlClient {
                 "application/json".parse().expect("static header value"),
             );
         }
+        crate::logging::inject_current_context(request.headers_mut());
         let client = hyper_util::client::legacy::Client::unix();
         let response = client.request(request).await.map_err(io::Error::other)?;
         let status = response.status();

@@ -1,35 +1,13 @@
 //! Stable connection vocabulary. Provider SDK types must not appear here.
 
-pub mod account;
-pub mod bindings;
-pub mod capabilities;
-pub mod connections;
-mod decimal;
-pub mod market;
-pub mod order;
-pub mod participants;
-pub mod products;
-pub mod reference;
-pub mod spec;
-
-pub use account::{
-    ExternalAccountEvent, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
-    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalFillEvent, ExternalMarginMode,
-    ExternalOpenOrder, ExternalOrderEvent, ExternalOrderStatus, ExternalPosition,
-    ExternalPositionMode,
+pub mod connection;
+pub mod instrument;
+pub mod operation;
+pub mod participant;
+pub use connection::{
+    ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionLifecycle,
+    ConnectionState,
 };
-pub use bindings::{AccessScope, AssetType, TransportKind};
-pub use capabilities::IntegrationCapability;
-pub use connections::{ConnectionHealth, ConnectionIdentity, ConnectionLifecycle, ConnectionState};
-pub use market::{MarketBar, MarketEvent, MarketEventKind, MarketGreeks, MarketQuote, MarketTrade};
-pub use order::{
-    DecimalValue, ExecutionReport, Order, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest,
-    OrderEntryStatus, OrderRequest, OrderSide, OrderStatus, OrderType, TimeInForce,
-};
-pub use participants::{IntegrationRoute, ParticipantKind, ParticipantRef};
-pub use products::ProductFamily;
-pub use reference::{
-    ReferenceAsset, ReferenceCatalogPayload, ReferenceEntity, ReferenceExecutionAccess,
-    ReferenceInstrument, ReferenceListing, ReferenceMarket,
-};
-pub use spec::ConnectionSpec;
+pub use instrument::{ParticipantInstrumentTypeRef, ProviderInstrumentRef};
+pub use operation::{CommandOutcome, DeliveryCertainty, IndeterminateCommand, ProviderRejection};
+pub use participant::{ParticipantKind, ParticipantRef};

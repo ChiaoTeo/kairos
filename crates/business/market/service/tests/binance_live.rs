@@ -48,6 +48,7 @@ impl MarketServer {
 
         wait_for_socket(&control_socket);
         wait_for_socket(&event_socket);
+        wait_for_control_plane(&control_socket);
         Self {
             child,
             workspace,
@@ -146,25 +147,45 @@ fn wait_for_socket(path: &Path) {
     }
 }
 
+fn wait_for_control_plane(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Ok(response) = try_http_request(path, "GET", "/v1/health", &json!({})) {
+            if response.starts_with("HTTP/1.1 200") {
+                return;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "market control plane did not become ready"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn http_request(socket_path: &Path, method: &str, path: &str, body: &Value) -> String {
+    try_http_request(socket_path, method, path, body).expect("market HTTP request")
+}
+
+fn try_http_request(
+    socket_path: &Path,
+    method: &str,
+    path: &str,
+    body: &Value,
+) -> std::io::Result<String> {
     let payload = serde_json::to_vec(body).expect("encode HTTP body");
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         payload.len()
     );
-    let mut stream = UnixStream::connect(socket_path).expect("connect market control");
+    let mut stream = UnixStream::connect(socket_path)?;
     stream
         .write_all(request.as_bytes())
-        .and_then(|_| stream.write_all(&payload))
-        .expect("write market HTTP request");
-    stream
-        .shutdown(std::net::Shutdown::Write)
-        .expect("close HTTP request");
+        .and_then(|_| stream.write_all(&payload))?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read market HTTP response");
-    response
+    stream.read_to_string(&mut response)?;
+    Ok(response)
 }
 
 fn parse_http_json(response: &str) -> Value {

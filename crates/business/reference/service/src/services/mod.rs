@@ -2,4 +2,5 @@
 
 pub(crate) mod actor;
 pub(crate) mod providers;
-pub(crate) mod storage;
+pub(crate) mod sqlx_storage;
+pub(crate) mod store;

@@ -53,7 +53,7 @@ class Market(object):
         return None
 
     # Market
-    def VenueId(self):
+    def ExchangeId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -177,8 +177,22 @@ class Market(object):
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
+    # Market
+    def AssetType(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Market
+    def UnderlyingInstrumentId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def MarketStart(builder):
-    builder.StartObject(19)
+    builder.StartObject(21)
 
 def Start(builder):
     MarketStart(builder)
@@ -207,11 +221,11 @@ def MarketAddListingId(builder, listingId):
 def AddListingId(builder, listingId):
     MarketAddListingId(builder, listingId)
 
-def MarketAddVenueId(builder, venueId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(venueId), 0)
+def MarketAddExchangeId(builder, exchangeId):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeId), 0)
 
-def AddVenueId(builder, venueId):
-    MarketAddVenueId(builder, venueId)
+def AddExchangeId(builder, exchangeId):
+    MarketAddExchangeId(builder, exchangeId)
 
 def MarketAddMarketType(builder, marketType):
     builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(marketType), 0)
@@ -296,6 +310,18 @@ def MarketAddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
 
 def AddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
     MarketAddEffectiveToUnixNanos(builder, effectiveToUnixNanos)
+
+def MarketAddAssetType(builder, assetType):
+    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(assetType), 0)
+
+def AddAssetType(builder, assetType):
+    MarketAddAssetType(builder, assetType)
+
+def MarketAddUnderlyingInstrumentId(builder, underlyingInstrumentId):
+    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(underlyingInstrumentId), 0)
+
+def AddUnderlyingInstrumentId(builder, underlyingInstrumentId):
+    MarketAddUnderlyingInstrumentId(builder, underlyingInstrumentId)
 
 def MarketEnd(builder):
     return builder.EndObject()

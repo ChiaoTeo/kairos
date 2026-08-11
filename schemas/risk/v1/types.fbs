@@ -2,6 +2,31 @@ include "../../common/v1/decimal.fbs";
 
 namespace kairos.risk.v1;
 
+table RiskContext {
+  account_snapshot_watermark:ulong;
+  market_freshness_watermark:ulong;
+  portfolio_version:ulong;
+  current_exposure:kairos.common.v1.Decimal64 (required);
+  current_margin:kairos.common.v1.Decimal64 (required);
+  available_margin:kairos.common.v1.Decimal64 (required);
+  current_pnl:long;
+  current_drawdown:kairos.common.v1.Decimal64 (required);
+  market_is_fresh:bool = true;
+  leverage_bps:ulong;
+  price_deviation_bps:ulong;
+  stress_loss:kairos.common.v1.Decimal64 (required);
+}
+
+table CircuitState {
+  account_id:string;
+  strategy_id:string;
+  exchange_id:string;
+  state:string (required);
+  opened_at_unix_nanos:ulong;
+  reset_at_unix_nanos:ulong;
+  reason:string (required);
+}
+
 table Allocation {
   budget_id:string (required);
   metric:string (required);
@@ -35,6 +60,7 @@ table Budget {
 table Reservation {
   reservation_id:string (required);
   owner_id:string (required);
+  idempotency_key:string;
   intent_id:string;
   account_id:string;
   instrument_id:string;
@@ -44,4 +70,6 @@ table Reservation {
   status:string (required);
   created_at_unix_nanos:ulong;
   updated_at_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+  policy_version:ulong;
 }

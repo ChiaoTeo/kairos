@@ -32,7 +32,7 @@ class ExecutionAccess(object):
         return None
 
     # ExecutionAccess
-    def InstrumentId(self):
+    def MarketId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -99,11 +99,11 @@ def ExecutionAccessAddAccessId(builder, accessId):
 def AddAccessId(builder, accessId):
     ExecutionAccessAddAccessId(builder, accessId)
 
-def ExecutionAccessAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+def ExecutionAccessAddMarketId(builder, marketId):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
 
-def AddInstrumentId(builder, instrumentId):
-    ExecutionAccessAddInstrumentId(builder, instrumentId)
+def AddMarketId(builder, marketId):
+    ExecutionAccessAddMarketId(builder, marketId)
 
 def ExecutionAccessAddProviderId(builder, providerId):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(providerId), 0)

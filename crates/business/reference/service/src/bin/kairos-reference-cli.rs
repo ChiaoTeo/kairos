@@ -4,13 +4,12 @@
 //! one JSON value to stdout, and exits. It never starts or discovers a server.
 
 use clap::{Args, Parser, Subcommand};
-use kairos_integration::credentials::load_workspace_credential;
+use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
 use kairos_reference::application::{ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
-    build_application, default_endpoint, ensure_database_parent, ReferenceCompositionConfig,
-    ReferenceEventWriter,
+    build_application, ensure_database_parent, ReferenceCompositionConfig, ReferenceEventWriter,
 };
-use kairos_reference::domain::Asset;
+use kairos_reference::domain::{Asset, Instrument, Listing};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
@@ -18,51 +17,12 @@ use std::str::FromStr;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    let endpoint = args
-        .endpoint
-        .unwrap_or_else(|| default_endpoint(&args.provider).to_string());
     let workspace = Workspace::open(&args.workspace)?;
-    let credential = args
-        .credential_id
-        .as_deref()
-        .map(|credential_id| {
-            let credential_provider = if args.provider.starts_with("massive") {
-                "massive"
-            } else if args.provider.starts_with("binance") {
-                "binance"
-            } else if args.provider.starts_with("okx") {
-                "okx"
-            } else {
-                args.provider.as_str()
-            };
-            load_workspace_credential(
-                &workspace.root().join("credentials"),
-                credential_provider,
-                Some(credential_id),
-            )
-            .map_err(|error| format!("load reference credential {credential_id}: {error}"))?
-            .ok_or_else(|| format!("reference credential not found: {credential_id}"))
-        })
-        .transpose()?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
     ensure_database_parent(&database)?;
     let config = ReferenceCompositionConfig {
         workspace: Some(workspace.root().to_path_buf()),
-        provider: args.provider,
-        endpoint,
         database,
-        api_key: args
-            .api_key
-            .or_else(|| credential.as_ref().map(|value| value.api_key.clone()))
-            .unwrap_or_default(),
-        binance_api_key: args
-            .binance_api_key
-            .or_else(|| credential.as_ref().map(|value| value.api_key.clone()))
-            .unwrap_or_default(),
-        secret: args
-            .secret
-            .or_else(|| credential.as_ref().map(|value| value.secret.clone()))
-            .unwrap_or_default(),
         aeron_dir: args.aeron_dir,
         aeron_channel: args.aeron_channel,
         reference_changes_stream: args.reference_changes_stream,
@@ -131,6 +91,44 @@ fn execute(
             }
             value
         }
+        Command::Instruments { command } => match command {
+            InstrumentCommand::Add(args) => {
+                let generation = application.upsert_instrument(Instrument {
+                    instrument_id: InstrumentId::try_from(args.instrument_id)?,
+                    symbol: Symbol::try_from(args.symbol)?,
+                    name: args.name,
+                    instrument_type: args.instrument_type,
+                    product_family: args.product_family,
+                    underlying_instrument_id: args
+                        .underlying_instrument_id
+                        .map(InstrumentId::try_from)
+                        .transpose()?,
+                    expiry_unix_nanos: args.expiry_unix_nanos.map(UnixNanos::from),
+                    strike: args.strike,
+                    option_right: args.option_right,
+                    status: args.status.into(),
+                    ..Default::default()
+                })?;
+                publish_pending(writer, application)?;
+                json!({"generation": generation})
+            }
+        },
+        Command::Listings { command } => match command {
+            ListingCommand::Add(args) => {
+                let generation = application.upsert_listing(Listing {
+                    source_id: None,
+                    listing_id: ListingId::try_from(args.listing_id)?,
+                    instrument_id: InstrumentId::try_from(args.instrument_id)?,
+                    exchange_id: Exchange::new(args.exchange_id).expect("valid exchange id"),
+                    exchange_symbol: Symbol::new(args.exchange_symbol)?,
+                    status: args.status.into(),
+                    effective_from_unix_nanos: args.effective_from_unix_nanos.into(),
+                    effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
+                })?;
+                publish_pending(writer, application)?;
+                json!({"generation": generation})
+            }
+        },
         Command::Participants { command } => participants(application, command),
         Command::Markets { command } => markets(application, command)?,
         Command::Events(args) => match args.action {
@@ -146,16 +144,18 @@ fn execute(
                             .source_symbol
                             .as_deref()
                             .is_none_or(|symbol| symbol.to_ascii_lowercase() == ticker)
-                            && sync
-                                .venue_id
-                                .as_deref()
-                                .is_none_or(|venue| event.venue_id.as_deref() == Some(venue))
+                            && sync.exchange_id.as_deref().is_none_or(|exchange| {
+                                event
+                                    .exchange_id
+                                    .as_ref()
+                                    .is_some_and(|value| value.as_str() == exchange)
+                            })
                             && sync
                                 .start_unix_nanos
-                                .is_none_or(|start| event.event_time_unix_nanos >= start)
+                                .is_none_or(|start| event.event_time_unix_nanos >= start.into())
                             && sync
                                 .end_unix_nanos
-                                .is_none_or(|end| event.event_time_unix_nanos < end)
+                                .is_none_or(|end| event.event_time_unix_nanos < end.into())
                     })
                     .take(sync.limit.unwrap_or(usize::MAX))
                     .collect::<Vec<_>>();
@@ -219,11 +219,12 @@ fn assets(
     match command {
         AssetCommand::Add(args) => {
             let generation = application.upsert_asset(Asset {
-                asset_id: args.asset_id,
+                asset_id: AssetId::try_from(args.asset_id)?,
                 code: args.code,
                 name: args.name,
                 asset_class: args.asset_class,
-                status: args.status,
+                status: args.status.into(),
+                ..Default::default()
             })?;
             Ok(json!({ "generation": generation }))
         }
@@ -261,8 +262,8 @@ fn participants(
 ) -> Value {
     let kind = match command {
         ParticipantCommand::Brokers => "broker",
-        ParticipantCommand::Exchanges => "venue",
-        ParticipantCommand::Providers => "provider",
+        ParticipantCommand::Exchanges => "exchange",
+        ParticipantCommand::Providers => "data_provider",
     };
     json!(application
         .catalog()
@@ -303,11 +304,18 @@ fn query(
 impl MarketQueryArgs {
     fn into_query(self) -> kairos_reference::MarketQuery {
         kairos_reference::MarketQuery {
-            market_id: self.market_id,
-            venue_id: self.venue_id.or(self.venue),
+            market_id: self
+                .market_id
+                .map(|value| kairos_domain_types::MarketId::new(value).expect("valid market id")),
+            exchange_id: self
+                .exchange_id
+                .or(self.exchange)
+                .map(|value| Exchange::new(value).expect("valid exchange id")),
             market_type: self.market_type.or(self.market),
             asset_type: self.asset_type,
-            source_symbol: self.symbol,
+            source_symbol: self
+                .symbol
+                .map(|value| kairos_domain_types::Symbol::new(value).expect("valid symbol")),
             active_only: self.active_only,
             as_of_unix_nanos: None,
             status: self.status,
@@ -319,16 +327,18 @@ impl QueryArgs {
     fn into_query(self) -> ReferenceQuery {
         ReferenceQuery {
             text: self.text,
-            venue_id: self.venue_id,
+            exchange_id: self
+                .exchange_id
+                .map(|value| Exchange::new(value).expect("valid exchange id")),
             market_type: self.market_type,
             underlying_instrument_id: self.underlying_instrument_id,
             status: self.status,
             active_only: self.active_only,
-            as_of_unix_nanos: self.as_of_unix_nanos,
-            sequence_from: self.sequence_from,
-            sequence_to: self.sequence_to,
-            event_time_from_unix_nanos: self.event_time_from_unix_nanos,
-            event_time_to_unix_nanos: self.event_time_to_unix_nanos,
+            as_of_unix_nanos: self.as_of_unix_nanos.map(Into::into),
+            sequence_from: self.sequence_from.map(Into::into),
+            sequence_to: self.sequence_to.map(Into::into),
+            event_time_from_unix_nanos: self.event_time_from_unix_nanos.map(Into::into),
+            event_time_to_unix_nanos: self.event_time_to_unix_nanos.map(Into::into),
             limit: self.limit,
             ..ReferenceQuery::default()
         }
@@ -354,6 +364,12 @@ impl Command {
                 | Self::Assets {
                     command: AssetCommand::Add(_)
                 }
+                | Self::Instruments {
+                    command: InstrumentCommand::Add(_)
+                }
+                | Self::Listings {
+                    command: ListingCommand::Add(_)
+                }
         )
     }
 }
@@ -368,18 +384,6 @@ struct Cli {
     workspace: std::path::PathBuf,
     #[arg(long, global = true, visible_alias = "format", value_parser = OutputFormat::from_str)]
     output: Option<OutputFormat>,
-    #[arg(long, global = true, default_value = "default", value_parser = kairos_reference::composition::parse_provider)]
-    provider: String,
-    #[arg(long, global = true)]
-    endpoint: Option<String>,
-    #[arg(long, global = true)]
-    credential_id: Option<String>,
-    #[arg(long, global = true)]
-    api_key: Option<String>,
-    #[arg(long, global = true, env = "BINANCE_API_KEY")]
-    binance_api_key: Option<String>,
-    #[arg(long, global = true, env = "BINANCE_API_SECRET")]
-    secret: Option<String>,
     #[arg(
         long = "aeron-channel",
         global = true,
@@ -410,6 +414,14 @@ enum Command {
         #[command(subcommand)]
         command: AssetCommand,
     },
+    Instruments {
+        #[command(subcommand)]
+        command: InstrumentCommand,
+    },
+    Listings {
+        #[command(subcommand)]
+        command: ListingCommand,
+    },
     Participants {
         #[command(subcommand)]
         command: ParticipantCommand,
@@ -431,6 +443,58 @@ enum AssetCommand {
     Add(AddAssetArgs),
     List(AssetListArgs),
     Show { asset_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum InstrumentCommand {
+    Add(AddInstrumentArgs),
+}
+
+#[derive(Debug, Args)]
+struct AddInstrumentArgs {
+    #[arg(long)]
+    instrument_id: String,
+    #[arg(long)]
+    symbol: String,
+    #[arg(long, default_value = "spot")]
+    instrument_type: String,
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    product_family: Option<String>,
+    #[arg(long)]
+    underlying_instrument_id: Option<String>,
+    #[arg(long)]
+    expiry_unix_nanos: Option<u64>,
+    #[arg(long)]
+    strike: Option<String>,
+    #[arg(long)]
+    option_right: Option<String>,
+    #[arg(long, default_value = "active")]
+    status: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum ListingCommand {
+    Add(AddListingArgs),
+}
+
+#[derive(Debug, Args)]
+struct AddListingArgs {
+    #[arg(long)]
+    listing_id: String,
+    #[arg(long)]
+    instrument_id: String,
+    #[arg(long)]
+    exchange_id: String,
+    #[arg(long)]
+    exchange_symbol: String,
+    #[arg(long, default_value = "active")]
+    status: String,
+    #[arg(long, default_value_t = 0)]
+    effective_from_unix_nanos: u64,
+    #[arg(long)]
+    effective_to_unix_nanos: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -480,9 +544,9 @@ struct MarketQueryArgs {
     #[arg(long)]
     market_id: Option<String>,
     #[arg(long)]
-    venue_id: Option<String>,
-    #[arg(long, visible_alias = "venue")]
-    venue: Option<String>,
+    exchange_id: Option<String>,
+    #[arg(long, visible_alias = "exchange")]
+    exchange: Option<String>,
     #[arg(long)]
     market_type: Option<String>,
     #[arg(long)]
@@ -504,7 +568,7 @@ struct QueryArgs {
     #[arg(long, default_value = "all")]
     kind: String,
     #[arg(long)]
-    venue_id: Option<String>,
+    exchange_id: Option<String>,
     #[arg(long)]
     market_type: Option<String>,
     #[arg(long, visible_alias = "underlying")]
@@ -545,7 +609,7 @@ struct EventSyncArgs {
     #[arg(long)]
     ticker: String,
     #[arg(long)]
-    venue_id: Option<String>,
+    exchange_id: Option<String>,
     #[arg(long)]
     start_unix_nanos: Option<u64>,
     #[arg(long)]

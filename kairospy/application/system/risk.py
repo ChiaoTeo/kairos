@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .supervisor import ProcessSpec
 from ..workspace import Workspace
+from ..workspace.domain import InstanceWorkspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +16,7 @@ class RiskProcessConfig:
     """Process-level configuration; risk state remains owned by Rust Risk."""
 
     workspace: Workspace
-    instance_workspace: object
+    instance_workspace: InstanceWorkspace
     binary: str = "kairos-risk"
     interval_ms: int = 1_000
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -35,7 +36,16 @@ class RiskProcessConfig:
         health_file = runtime.health("risk")
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         command = [self.binary, "--workspace", str(self.workspace.paths.root)]
-        command.extend(("--launch-mode", runtime.mode, "--launch-id", runtime.launch_id, "--instance-id", runtime.instance_id))
+        command.extend(
+            (
+                "--launch-mode",
+                runtime.mode,
+                "--launch-id",
+                runtime.launch_id,
+                "--instance-id",
+                runtime.instance_id,
+            )
+        )
         command.extend(("--interval-ms", str(self.interval_ms)))
         return ProcessSpec(
             name="risk",

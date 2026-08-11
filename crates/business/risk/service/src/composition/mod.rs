@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::Budget;
+use crate::domain::RiskPolicy;
 use crate::services::actor::RiskActor;
 use crate::RiskApplication;
 
@@ -10,14 +10,13 @@ use crate::RiskApplication;
 /// not construct actors or persistence objects directly.
 pub fn compose_risk_application(
     actor_id: impl Into<String>,
-    budgets: Vec<Budget>,
-    allow_unbudgeted: bool,
+    policies: Vec<RiskPolicy>,
     state_path: Option<PathBuf>,
 ) -> Result<RiskApplication, String> {
     let store = state_path
-        .map(crate::services::persistence::JsonRiskStore::new)
+        .map(crate::services::persistence::JournalRiskStore::new)
         .map(|store| Box::new(store) as Box<dyn crate::services::persistence::RiskStateStore>);
-    let actor = RiskActor::new(actor_id, budgets, allow_unbudgeted, store)?;
+    let actor = RiskActor::new(actor_id, policies, store)?;
     Ok(RiskApplication::new(actor))
 }
 
@@ -51,6 +50,12 @@ pub struct FlatbuffersRiskEventWriter {
 
 pub struct MmapRiskSnapshotPublisher {
     inner: kairos_risk_contract::encoding::MmapRiskSnapshotPublisher,
+}
+
+impl crate::application::RiskSnapshotPublisher for MmapRiskSnapshotPublisher {
+    fn publish(&mut self, snapshot: &crate::RiskSnapshot) -> Result<(), String> {
+        MmapRiskSnapshotPublisher::publish(self, snapshot)
+    }
 }
 
 impl MmapRiskSnapshotPublisher {

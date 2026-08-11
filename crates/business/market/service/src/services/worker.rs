@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::feed::{MarketFeed, MarketOrderBookUpdate};
+use crate::application::MarketDataKey;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::market::MarketDescriptor;
 use crate::domain::observations::MarketObservation;
@@ -18,11 +19,11 @@ use crate::domain::subscriptions::SubscriptionId;
 enum Command {
     Subscribe {
         id: SubscriptionId,
-        market: MarketDescriptor,
+        market: Box<MarketDescriptor>,
         result: Sender<Result<SubscriptionId, String>>,
     },
     Unsubscribe(SubscriptionId),
-    ResyncOrderBook(String),
+    ResyncOrderBook(MarketDataKey),
     Recover,
 }
 
@@ -33,12 +34,14 @@ enum Event {
         orderbooks: Vec<MarketOrderBookUpdate>,
     },
     Error(String),
+    Complete,
 }
 
 pub struct MarketFeedWorker {
     commands: SyncSender<Command>,
     events: Receiver<Event>,
     status: FeedStatus,
+    complete: bool,
     orderbooks: Vec<MarketOrderBookUpdate>,
     observations: Vec<MarketObservation>,
     next_subscription_id: u64,
@@ -59,6 +62,7 @@ impl MarketFeedWorker {
             commands: command_sender,
             events: event_receiver,
             status: FeedStatus::Disconnected,
+            complete: false,
             orderbooks: Vec::new(),
             observations: Vec::new(),
             next_subscription_id: 1,
@@ -81,6 +85,7 @@ impl MarketFeedWorker {
                     self.status = FeedStatus::Degraded;
                     error = Some(value);
                 }
+                Ok(Event::Complete) => self.complete = true,
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             }
         }
@@ -107,7 +112,7 @@ impl MarketFeed for MarketFeedWorker {
         self.commands
             .try_send(Command::Subscribe {
                 id: id.clone(),
-                market: market.clone(),
+                market: Box::new(market.clone()),
                 result: result_sender,
             })
             .map_err(command_send_error)?;
@@ -135,6 +140,10 @@ impl MarketFeed for MarketFeedWorker {
         self.status
     }
 
+    fn is_complete(&self) -> bool {
+        self.complete && self.observations.is_empty() && self.orderbooks.is_empty()
+    }
+
     fn recover(&mut self) -> Result<(), String> {
         self.status = FeedStatus::Reconnecting;
         self.commands
@@ -142,9 +151,9 @@ impl MarketFeed for MarketFeedWorker {
             .map_err(command_send_error)
     }
 
-    fn resync_orderbook(&mut self, market_id: &str) -> Result<(), String> {
+    fn resync_orderbook(&mut self, key: &MarketDataKey) -> Result<(), String> {
         self.commands
-            .try_send(Command::ResyncOrderBook(market_id.to_owned()))
+            .try_send(Command::ResyncOrderBook(key.clone()))
             .map_err(command_send_error)
     }
 }
@@ -184,18 +193,20 @@ fn run_worker(
                     .map(|orderbooks| (observations, orderbooks))
             }) {
                 Ok((observations, orderbooks)) => {
-                    if !observations.is_empty() || !orderbooks.is_empty() {
-                        if events
+                    if (!observations.is_empty() || !orderbooks.is_empty())
+                        && events
                             .try_send(Event::Batch {
                                 observations,
                                 orderbooks,
                             })
                             .is_err()
-                        {
-                            return;
-                        }
+                    {
+                        return;
                     }
                     if events.try_send(Event::Status(feed.status())).is_err() {
+                        return;
+                    }
+                    if feed.is_complete() && events.try_send(Event::Complete).is_err() {
                         return;
                     }
                 }
@@ -256,15 +267,13 @@ fn process_command(
                 }
             }
         }
-        Command::ResyncOrderBook(market_id) => {
-            if let Err(error) = feed.resync_orderbook(&market_id) {
+        Command::ResyncOrderBook(key) => {
+            if let Err(error) = feed.resync_orderbook(&key) {
                 if !send(Event::Error(error)) {
                     return false;
                 }
-            } else {
-                if !send(Event::Status(feed.status())) {
-                    return false;
-                }
+            } else if !send(Event::Status(feed.status())) {
+                return false;
             }
         }
         Command::Recover => match feed.recover() {

@@ -21,7 +21,7 @@ impl<'a> ::flatbuffers::Follow<'a> for OpenOrder<'a> {
 
 impl<'a> OpenOrder<'a> {
     pub const VT_ORDER_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_VENUE_ORDER_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 10;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 12;
@@ -58,8 +58,8 @@ impl<'a> OpenOrder<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
-        if let Some(x) = args.venue_order_id {
-            builder.add_venue_order_id(x);
+        if let Some(x) = args.remote_order_id {
+            builder.add_remote_order_id(x);
         }
         if let Some(x) = args.order_id {
             builder.add_order_id(x);
@@ -79,13 +79,13 @@ impl<'a> OpenOrder<'a> {
         }
     }
     #[inline]
-    pub fn venue_order_id(&self) -> Option<&'a str> {
+    pub fn remote_order_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(OpenOrder::VT_VENUE_ORDER_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(OpenOrder::VT_REMOTE_ORDER_ID, None)
         }
     }
     #[inline]
@@ -157,8 +157,8 @@ impl ::flatbuffers::Verifiable for OpenOrder<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_order_id",
-                Self::VT_VENUE_ORDER_ID,
+                "remote_order_id",
+                Self::VT_REMOTE_ORDER_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -184,7 +184,7 @@ impl ::flatbuffers::Verifiable for OpenOrder<'_> {
 }
 pub struct OpenOrderArgs<'a> {
     pub order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub venue_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub quantity: Option<&'a super::super::common::v_1::Decimal64>,
@@ -196,7 +196,7 @@ impl<'a> Default for OpenOrderArgs<'a> {
     fn default() -> Self {
         OpenOrderArgs {
             order_id: None, // required field
-            venue_order_id: None,
+            remote_order_id: None,
             instrument_id: None, // required field
             side: None,          // required field
             quantity: None,      // required field
@@ -217,10 +217,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenOrderBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(OpenOrder::VT_ORDER_ID, order_id);
     }
     #[inline]
-    pub fn add_venue_order_id(&mut self, venue_order_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_remote_order_id(&mut self, remote_order_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            OpenOrder::VT_VENUE_ORDER_ID,
-            venue_order_id,
+            OpenOrder::VT_REMOTE_ORDER_ID,
+            remote_order_id,
         );
     }
     #[inline]
@@ -283,7 +283,7 @@ impl ::core::fmt::Debug for OpenOrder<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("OpenOrder");
         ds.field("order_id", &self.order_id());
-        ds.field("venue_order_id", &self.venue_order_id());
+        ds.field("remote_order_id", &self.remote_order_id());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("side", &self.side());
         ds.field("quantity", &self.quantity());

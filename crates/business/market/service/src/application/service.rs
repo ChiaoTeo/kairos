@@ -50,12 +50,27 @@ impl MarketApplication {
         owner_id: impl Into<String>,
         market: MarketDescriptor,
     ) -> Result<(), MarketError> {
+        self.subscribe_static_with_selectors(id, owner_id, market, Vec::new())
+    }
+
+    pub fn subscribe_static_with_selectors(
+        &mut self,
+        id: SubscriptionId,
+        owner_id: impl Into<String>,
+        market: MarketDescriptor,
+        selectors: Vec<String>,
+    ) -> Result<(), MarketError> {
         let subscription_id = id.0.clone();
         info!(event = "market_subscription_started", component = "market", subscription_id = %subscription_id, "static market subscription started");
-        let result = self
-            .actor
-            .subscribe_static(id, owner_id, market)
-            .map_err(MarketError::Invalid);
+        let result = if selectors.is_empty() {
+            self.actor
+                .subscribe_static(id, owner_id, market)
+                .map_err(MarketError::Invalid)
+        } else {
+            self.actor
+                .subscribe_static_with_selectors(id, owner_id, market, selectors)
+                .map_err(MarketError::Invalid)
+        };
         match &result {
             Ok(()) => {
                 info!(event = "market_subscription_accepted", component = "market", subscription_id = %subscription_id, "static market subscription accepted")
@@ -74,13 +89,29 @@ impl MarketApplication {
         query: MarketSelectionQuery,
         markets: Vec<MarketDescriptor>,
     ) -> Result<ReconcileResult, MarketError> {
+        self.subscribe_dynamic_with_selectors(id, owner_id, query, markets, Vec::new())
+    }
+
+    pub fn subscribe_dynamic_with_selectors(
+        &mut self,
+        id: SubscriptionId,
+        owner_id: impl Into<String>,
+        query: MarketSelectionQuery,
+        markets: Vec<MarketDescriptor>,
+        selectors: Vec<String>,
+    ) -> Result<ReconcileResult, MarketError> {
         let subscription_id = id.0.clone();
         let market_count = markets.len();
         info!(event = "market_dynamic_subscription_started", component = "market", subscription_id = %subscription_id, market_count, "dynamic market subscription started");
-        let result = self
-            .actor
-            .subscribe_dynamic(id, owner_id, query, markets)
-            .map_err(MarketError::Invalid);
+        let result = if selectors.is_empty() {
+            self.actor
+                .subscribe_dynamic(id, owner_id, query, markets)
+                .map_err(MarketError::Invalid)
+        } else {
+            self.actor
+                .subscribe_dynamic_with_selectors(id, owner_id, query, markets, selectors)
+                .map_err(MarketError::Invalid)
+        };
         match &result {
             Ok(reconcile) => {
                 info!(event = "market_dynamic_subscription_accepted", component = "market", subscription_id = %subscription_id, added = reconcile.added.len(), removed = reconcile.removed.len(), "dynamic market subscription accepted")
@@ -154,10 +185,18 @@ impl MarketApplication {
     }
 
     pub fn drain_events(&mut self) -> Vec<(u64, MarketObservation)> {
-        self.actor.drain_events()
+        self.actor
+            .drain_events()
+            .into_iter()
+            .map(|(sequence, event)| (sequence.get(), event))
+            .collect()
     }
 
     pub fn drain_events_limited(&mut self, limit: usize) -> Vec<(u64, MarketObservation)> {
-        self.actor.drain_events_limited(limit)
+        self.actor
+            .drain_events_limited(limit)
+            .into_iter()
+            .map(|(sequence, event)| (sequence.get(), event))
+            .collect()
     }
 }

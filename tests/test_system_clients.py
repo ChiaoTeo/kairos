@@ -30,7 +30,9 @@ class RecordingAccountClient(AccountSystemClient):
 def test_account_system_client_owns_business_endpoint_mapping() -> None:
     client = RecordingAccountClient()
 
-    client.balances(segments=["spot", "margin"], include_zero=True, page=2, page_size=50)
+    client.balances(
+        segments=["spot", "margin"], include_zero=True, page=2, page_size=50
+    )
 
     assert client.calls == [
         (

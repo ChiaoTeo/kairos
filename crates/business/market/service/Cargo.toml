@@ -12,7 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 axum = "0.8"
-kairos-workspace = { path = "../../../kairos-workspace" }
+kairos-domain-types = { path = "../../../kairos-domain-types" }
+kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
 kairos-protocol = { path = "../../../kairos-protocol" }
@@ -22,12 +23,20 @@ kairos-market-contract = { path = "../contract" }
 kairos-reference-contract = { path = "../../reference/contract" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+secrecy.workspace = true
+rust_decimal = { version = "1.42", default-features = false }
 toml = "0.8"
 tracing = "0.1"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
 tempfile = "3"
+
+[[bench]]
+name = "orderbook"
+harness = false
 
 [[bin]]
 name = "kairos-market-server"

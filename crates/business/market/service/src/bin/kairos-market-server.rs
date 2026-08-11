@@ -2,26 +2,31 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
-use kairos_integration::credentials::load_workspace_credential;
+use kairos_integration::application::credential::load_workspace_credential;
 use kairos_market::composition::{
     binance_equity_rest_feed, binance_spot_rest_feed, binance_spot_websocket_feed,
-    default_endpoint, workspace_market_feed, AeronReferenceChangeSource,
-    MmapMarketSnapshotPublisher, ReplayMarketFeed,
+    default_endpoint, replay_market_feed, replay_market_feed_with_checkpoint,
+    workspace_market_feed, AeronReferenceChangeSource, MmapMarketSnapshotPublisher,
 };
-use kairos_market::{MarketApplication, MarketObservation, MarketProcess, MarketRuntime};
+use kairos_market::{MarketApplication, MarketProcess, MarketRuntime};
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::workspace::Workspace;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     kairos_workspace::logging::init("market");
-    if let Err(error) = run().await {
+    let result = run().await;
+    if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "market", error = %error, "market server failed");
+    }
+    kairos_workspace::logging::shutdown();
+    if let Err(error) = result {
         eprintln!("kairos-market-server: {error}");
         std::process::exit(1);
     }
 }
 
+#[allow(clippy::needless_question_mark)]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     tracing::info!(event = "process_start", component = "market", provider = %args.provider, actor_id = %args.actor_id, instance_id = %args.instance_id, "starting market server");
@@ -60,6 +65,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .unwrap_or(workspace.process_socket("market-events")?);
     let slot_size = args.slot_size;
+    let reference_markets_snapshot_path =
+        workspace.child(&["snapshots", "reference", "markets.snapshot"])?;
     let provider = args.provider;
     let once = args.once;
     let refresh_ms = args.refresh_ms;
@@ -116,12 +123,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             process
         }
+        .with_reference_snapshot(reference_markets_snapshot_path.clone())
         .run()
         .await?);
     }
     if provider == "workspace" {
         let feed = workspace_market_feed(&workspace)?;
-        application.attach_feed(Box::new(feed));
+        application.attach_feed(feed);
         application.start_feed_worker(Duration::from_millis(refresh_ms))?;
         let process = MarketProcess::new_with_identity(
             application,
@@ -137,31 +145,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             process
         }
-        .with_reference_socket(workspace.process_socket("reference")?)
+        .with_reference_snapshot(reference_markets_snapshot_path.clone())
         .run()
         .await?);
     }
     if provider == "replay" {
-        let replay_file = args
-            .replay_file
-            .clone()
-            .ok_or("replay market provider requires --replay-file")?;
-        let events = std::fs::read_to_string(replay_file)?
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str::<MarketObservation>)
-            .collect::<Result<Vec<_>, _>>()?;
+        let replay_file = args.replay_file.clone();
+        if replay_file.is_empty() {
+            return Err("replay market provider requires at least one --replay-file".into());
+        }
+        let events = kairos_market::load_replay_events_many(&replay_file)?;
         let replay = if let Some(instance) = &instance {
-            ReplayMarketFeed::with_checkpoint(
+            replay_market_feed_with_checkpoint(
                 events,
                 None,
                 None,
                 instance.market_state("cursor.json")?,
             )?
         } else {
-            ReplayMarketFeed::new(events)
+            replay_market_feed(events)
         };
-        application.attach_feed(Box::new(replay));
+        application.attach_feed(replay);
         application.start_feed_worker(Duration::from_millis(refresh_ms))?;
         let process = MarketProcess::new_with_identity(
             application,
@@ -177,6 +181,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             process
         }
+        .with_reference_snapshot(reference_markets_snapshot_path.clone())
         .run()
         .await?);
     }
@@ -190,9 +195,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if credential.api_key.trim().is_empty() {
             return Err("Binance Equity Market credential has no API key".into());
         }
-        let feed =
-            binance_equity_rest_feed(credential.api_key, credential.secret, endpoint.clone())?;
-        application.attach_feed(Box::new(feed));
+        let feed = binance_equity_rest_feed(
+            credential.api_key.clone(),
+            credential.secret_value().to_owned(),
+            endpoint.clone(),
+        )?;
+        application.attach_feed(feed);
     } else {
         if provider != "binance-spot-rest" && provider != "binance-spot-websocket" {
             return Err(format!("unsupported market provider: {provider}").into());
@@ -202,7 +210,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             binance_spot_rest_feed(endpoint.clone())?
         };
-        application.attach_feed(Box::new(feed));
+        application.attach_feed(feed);
     }
     if once {
         application.start_feed()?;
@@ -225,6 +233,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         process
     }
+    .with_reference_snapshot(reference_markets_snapshot_path)
     .run()
     .await?)
 }
@@ -247,7 +256,8 @@ struct Args {
     #[arg(long, default_value = "empty")]
     provider: String,
     #[arg(long)]
-    replay_file: Option<PathBuf>,
+    #[arg(long = "replay-file")]
+    replay_file: Vec<PathBuf>,
     #[arg(long, default_value_t = false)]
     once: bool,
     #[arg(long, default_value_t = 1_000)]
@@ -299,9 +309,10 @@ workspace_id = "workspace-test"
         let feed = workspace_market_feed(&workspace).unwrap();
         let routes = feed
             .configured_routes()
+            .into_iter()
             .map(|route| {
                 (
-                    route.venue_id.clone(),
+                    route.exchange_id.clone(),
                     route.market_type.clone(),
                     route.asset_type.clone(),
                 )
@@ -322,9 +333,9 @@ workspace_id = "workspace-test"
             ("okx", "options", Some("crypto")),
         ]
         .into_iter()
-        .map(|(venue, market_type, asset_type)| {
+        .map(|(exchange, market_type, asset_type)| {
             (
-                venue.to_string(),
+                kairos_domain_types::Exchange::new(format!("exchange:{exchange}")).unwrap(),
                 market_type.to_string(),
                 asset_type.map(str::to_string),
             )

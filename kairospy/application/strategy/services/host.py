@@ -60,12 +60,14 @@ class StrategyHost:
         self._bus = clients.commands
         self._snapshots = clients.market_snapshots
         self.journal = journal
-        self.logger = logger or StrategyLogger(fields={
-            "launch_id": launch_id,
-            "instance_id": instance_id,
-            "strategy_id": strategy.strategy_id,
-            "component": "strategy",
-        })
+        self.logger = logger or StrategyLogger(
+            fields={
+                "launch_id": launch_id,
+                "instance_id": instance_id,
+                "strategy_id": strategy.strategy_id,
+                "component": "strategy",
+            }
+        )
         self.context = StrategyContext(
             strategy.strategy_id,
             instance_id=instance_id,
@@ -74,10 +76,13 @@ class StrategyHost:
             logger=self.logger,
         )
         self.snapshot_views = snapshot_views
-        self._status = StrategyHostStatus(launch_id, instance_id, strategy.strategy_id, StrategyLifecycle.CREATED)
+        self._status = StrategyHostStatus(
+            launch_id, instance_id, strategy.strategy_id, StrategyLifecycle.CREATED
+        )
         self._subscription_requests: set[str] = set()
         self._subscriptions: dict[str, dict[str, object]] = {}
         self._stop_requested = asyncio.Event()
+        self.equity_curve: list[dict[str, object]] = []
         self._log("strategy host created", event="strategy_host_created")
 
     @property
@@ -91,7 +96,9 @@ class StrategyHost:
 
     def start(self) -> StrategyHostStatus:
         if self._status.state is not StrategyLifecycle.CREATED:
-            raise RuntimeError(f"strategy can only start from created: {self._status.state}")
+            raise RuntimeError(
+                f"strategy can only start from created: {self._status.state}"
+            )
         self._transition(StrategyLifecycle.WAITING_FOR_DEPENDENCIES)
         self._log("strategy startup begin", event="strategy_starting")
         self._log("strategy on_start begin", event="strategy_on_start_begin")
@@ -106,11 +113,17 @@ class StrategyHost:
             subscription_count=len(self._subscription_requests),
         )
         if not self._refresh_dependencies():
-            self._log(f"waiting for dependencies reason={self._status.reason}", event="dependencies_waiting")
+            self._log(
+                f"waiting for dependencies reason={self._status.reason}",
+                event="dependencies_waiting",
+            )
             return self._status
         try:
             if not self._bootstrap():
-                self._log(f"waiting for snapshot reason={self._status.reason}", event="snapshot_waiting")
+                self._log(
+                    f"waiting for snapshot reason={self._status.reason}",
+                    event="snapshot_waiting",
+                )
                 return self._status
         except Exception as error:
             self._transition(StrategyLifecycle.FAILED, str(error))
@@ -122,23 +135,33 @@ class StrategyHost:
 
     def enable(self) -> StrategyHostStatus:
         if self._status.state is not StrategyLifecycle.READY:
-            raise RuntimeError(f"strategy can only be enabled from ready: {self._status.state}")
+            raise RuntimeError(
+                f"strategy can only be enabled from ready: {self._status.state}"
+            )
         self._transition(StrategyLifecycle.RUNNING)
-        self._status = replace(self._status, data_health=StrategyDataHealth.WAITING_FOR_DATA)
+        self._status = replace(
+            self._status, data_health=StrategyDataHealth.WAITING_FOR_DATA
+        )
         self._log("strategy enabled; waiting for market data", event="strategy_running")
         return self._status
 
     def pause(self, reason: str = "paused by control") -> StrategyHostStatus:
         if self._status.state is not StrategyLifecycle.RUNNING:
-            raise RuntimeError(f"strategy can only be paused from running: {self._status.state}")
+            raise RuntimeError(
+                f"strategy can only be paused from running: {self._status.state}"
+            )
         self._transition(StrategyLifecycle.PAUSED, reason)
         return self._status
 
     def resume(self) -> StrategyHostStatus:
         if self._status.state is not StrategyLifecycle.PAUSED:
-            raise RuntimeError(f"strategy can only resume from paused: {self._status.state}")
+            raise RuntimeError(
+                f"strategy can only resume from paused: {self._status.state}"
+            )
         self._transition(StrategyLifecycle.RUNNING)
-        self._status = replace(self._status, data_health=StrategyDataHealth.WAITING_FOR_DATA)
+        self._status = replace(
+            self._status, data_health=StrategyDataHealth.WAITING_FOR_DATA
+        )
         self._log("strategy resumed; waiting for market data", event="strategy_resumed")
         return self._status
 
@@ -176,8 +199,10 @@ class StrategyHost:
             "system": "on_system",
         }.get(event.domain, "on_data")
         event_time_source = (
-            "none" if event.occurred_at is None
-            else "market_event" if event.domain == "data"
+            "none"
+            if event.occurred_at is None
+            else "market_event"
+            if event.domain == "data"
             else f"{event.domain}_event"
         )
         with self.logger.bind_event(
@@ -191,6 +216,28 @@ class StrategyHost:
             except Exception as error:
                 self._transition(StrategyLifecycle.FAILED, str(error))
                 raise
+        if self.clients.backtest_market is not None and event.domain == "data":
+            self.clients.backtest_market(event)
+        if self.clients.backtest_account_mark is not None and event.domain == "data":
+            try:
+                mark_result = self.clients.backtest_account_mark(event)
+                if (
+                    isinstance(mark_result, Mapping)
+                    and mark_result.get("snapshot") is not None
+                ):
+                    self.equity_curve.append(
+                        {
+                            "observed_at_unix_nanos": getattr(
+                                event.payload, "event_time_unix_nanos", 0
+                            ),
+                            "snapshot": mark_result["snapshot"],
+                        }
+                    )
+            except RuntimeError as error:
+                # A pre-position quote is valid replay input. Account starts
+                # marking once the first simulated fill creates the position.
+                if "not present in account" not in str(error):
+                    raise
         first_event = not self._status.first_event_received
         self._status = replace(
             self._status,
@@ -220,7 +267,9 @@ class StrategyHost:
         self._stop_requested.clear()
         while not self._stop_requested.is_set():
             try:
-                async for event in self.clients.market_events.events(after_sequence=self._status.event_sequence):
+                async for event in self.clients.market_events.events(
+                    after_sequence=self._status.event_sequence
+                ):
                     if self._stop_requested.is_set():
                         return
                     self.dispatch(event)
@@ -237,10 +286,14 @@ class StrategyHost:
             else:
                 # A replay-capable stream may finish normally.  The current
                 # live stream reconnects internally and does not reach here.
+                self.stop()
                 return
 
     def stop(self) -> StrategyHostStatus:
-        if self._status.state in {StrategyLifecycle.STOPPED, StrategyLifecycle.STOPPING}:
+        if self._status.state in {
+            StrategyLifecycle.STOPPED,
+            StrategyLifecycle.STOPPING,
+        }:
             return self._status
         self._stop_requested.set()
         self._transition(StrategyLifecycle.STOPPING)
@@ -249,14 +302,21 @@ class StrategyHost:
         return self._status
 
     def _refresh_dependencies(self) -> bool:
-        results = {request_id: self.clients.commands.status(request_id) for request_id in self._subscription_requests}
+        results = {
+            request_id: self.clients.commands.status(request_id)
+            for request_id in self._subscription_requests
+        }
         for request_id, result in results.items():
-            subscription = self._subscriptions.setdefault(request_id, {"request_id": request_id})
-            subscription.update({
-                "status": result.status,
-                "error": result.error,
-                "result": dict(result.result),
-            })
+            subscription = self._subscriptions.setdefault(
+                request_id, {"request_id": request_id}
+            )
+            subscription.update(
+                {
+                    "status": result.status,
+                    "error": result.error,
+                    "result": dict(result.result),
+                }
+            )
             self._log(
                 "market subscription status observed",
                 event="market_subscription_status",
@@ -265,20 +325,32 @@ class StrategyHost:
                 error=result.error,
                 result=dict(result.result),
             )
-        pending = [request_id for request_id, result in results.items() if result.status not in {"ready", "accepted"}]
+        pending = [
+            request_id
+            for request_id, result in results.items()
+            if result.status not in {"ready", "accepted"}
+        ]
         active = len(results) - len(pending)
         self._status = replace(
             self._status,
-            readiness=StrategyReadiness.WAITING_FOR_DEPENDENCIES if pending else StrategyReadiness.SUBSCRIPTIONS_ACTIVE,
+            readiness=StrategyReadiness.WAITING_FOR_DEPENDENCIES
+            if pending
+            else StrategyReadiness.SUBSCRIPTIONS_ACTIVE,
             subscription_count=len(results),
             active_subscription_count=active,
             subscriptions=tuple(dict(value) for value in self._subscriptions.values()),
         )
         if pending:
-            self._status = replace(self._status, reason=f"dependencies pending: {', '.join(pending)}")
+            self._status = replace(
+                self._status, reason=f"dependencies pending: {', '.join(pending)}"
+            )
             return False
         else:
-            self._status = replace(self._status, reason=None, readiness=StrategyReadiness.SUBSCRIPTIONS_ACTIVE)
+            self._status = replace(
+                self._status,
+                reason=None,
+                readiness=StrategyReadiness.SUBSCRIPTIONS_ACTIVE,
+            )
             self._log(
                 "market subscriptions active",
                 event="market_subscriptions_active",
@@ -291,12 +363,18 @@ class StrategyHost:
             try:
                 snapshot = self.clients.market_snapshots.read(view_key)
             except (FileNotFoundError, KeyError):
-                self._status = replace(self._status, reason=f"snapshot pending: {view_key}")
+                self._status = replace(
+                    self._status, reason=f"snapshot pending: {view_key}"
+                )
                 return False
             if snapshot.event_stream_id != self.clients.market_events.stream_id:
-                raise RuntimeError("snapshot event stream does not match strategy event stream")
+                raise RuntimeError(
+                    "snapshot event stream does not match strategy event stream"
+                )
             if not self.clients.market_events.can_join(snapshot.event_sequence):
-                raise RuntimeError("snapshot watermark cannot be joined to event stream")
+                raise RuntimeError(
+                    "snapshot watermark cannot be joined to event stream"
+                )
             self.context._install_snapshot(snapshot)
             self._status = replace(self._status, event_sequence=snapshot.event_sequence)
             self._log(
@@ -315,7 +393,11 @@ class StrategyHost:
             if not self._bootstrap():
                 return False
         except (FileNotFoundError, KeyError, RuntimeError, ValueError) as error:
-            self._log("market snapshot recovery is pending", event="market_snapshot_recovery_pending", error=str(error))
+            self._log(
+                "market snapshot recovery is pending",
+                event="market_snapshot_recovery_pending",
+                error=str(error),
+            )
             return False
         self._status = replace(
             self._status,
@@ -335,14 +417,24 @@ class StrategyHost:
             return
         result = callback(*args)
         if result is not None:
-            raise TypeError(f"{name} must return None; use context bus to interact with the system")
+            raise TypeError(
+                f"{name} must return None; use context bus to interact with the system"
+            )
 
     def _transition(self, state: StrategyLifecycle, reason: str | None = None) -> None:
         self._status = replace(self._status, state=state, reason=reason)
-        self.journal.append(LifecycleRecord(
-            self.launch_id, self.instance_id, self.strategy.strategy_id, state.value, reason,
-            self._status.event_sequence, self._status.readiness.value, self._status.data_health.value,
-        ))
+        self.journal.append(
+            LifecycleRecord(
+                self.launch_id,
+                self.instance_id,
+                self.strategy.strategy_id,
+                state.value,
+                reason,
+                self._status.event_sequence,
+                self._status.readiness.value,
+                self._status.data_health.value,
+            )
+        )
         self._log(
             f"strategy state={state.value} event_sequence={self._status.event_sequence}"
             + (f" reason={reason}" if reason else "")

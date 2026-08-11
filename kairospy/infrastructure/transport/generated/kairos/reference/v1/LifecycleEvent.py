@@ -46,70 +46,84 @@ class LifecycleEvent(object):
         return 0
 
     # LifecycleEvent
-    def MarketId(self):
+    def RecordKind(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def InstrumentId(self):
+    def RecordId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def ListingId(self):
+    def MarketId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def VenueId(self):
+    def InstrumentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def SourceSymbol(self):
+    def ListingId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def PreviousStatus(self):
+    def ExchangeId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def CurrentStatus(self):
+    def SourceSymbol(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def PreviousSymbol(self):
+    def PreviousStatus(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # LifecycleEvent
-    def CurrentSymbol(self):
+    def CurrentStatus(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # LifecycleEvent
+    def PreviousSymbol(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # LifecycleEvent
+    def CurrentSymbol(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def LifecycleEventStart(builder):
-    builder.StartObject(12)
+    builder.StartObject(14)
 
 def Start(builder):
     LifecycleEventStart(builder)
@@ -132,56 +146,68 @@ def LifecycleEventAddEventTimeUnixNanos(builder, eventTimeUnixNanos):
 def AddEventTimeUnixNanos(builder, eventTimeUnixNanos):
     LifecycleEventAddEventTimeUnixNanos(builder, eventTimeUnixNanos)
 
+def LifecycleEventAddRecordKind(builder, recordKind):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(recordKind), 0)
+
+def AddRecordKind(builder, recordKind):
+    LifecycleEventAddRecordKind(builder, recordKind)
+
+def LifecycleEventAddRecordId(builder, recordId):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(recordId), 0)
+
+def AddRecordId(builder, recordId):
+    LifecycleEventAddRecordId(builder, recordId)
+
 def LifecycleEventAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
 
 def AddMarketId(builder, marketId):
     LifecycleEventAddMarketId(builder, marketId)
 
 def LifecycleEventAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
 
 def AddInstrumentId(builder, instrumentId):
     LifecycleEventAddInstrumentId(builder, instrumentId)
 
 def LifecycleEventAddListingId(builder, listingId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
 
 def AddListingId(builder, listingId):
     LifecycleEventAddListingId(builder, listingId)
 
-def LifecycleEventAddVenueId(builder, venueId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(venueId), 0)
+def LifecycleEventAddExchangeId(builder, exchangeId):
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeId), 0)
 
-def AddVenueId(builder, venueId):
-    LifecycleEventAddVenueId(builder, venueId)
+def AddExchangeId(builder, exchangeId):
+    LifecycleEventAddExchangeId(builder, exchangeId)
 
 def LifecycleEventAddSourceSymbol(builder, sourceSymbol):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(sourceSymbol), 0)
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(sourceSymbol), 0)
 
 def AddSourceSymbol(builder, sourceSymbol):
     LifecycleEventAddSourceSymbol(builder, sourceSymbol)
 
 def LifecycleEventAddPreviousStatus(builder, previousStatus):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(previousStatus), 0)
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(previousStatus), 0)
 
 def AddPreviousStatus(builder, previousStatus):
     LifecycleEventAddPreviousStatus(builder, previousStatus)
 
 def LifecycleEventAddCurrentStatus(builder, currentStatus):
-    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(currentStatus), 0)
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(currentStatus), 0)
 
 def AddCurrentStatus(builder, currentStatus):
     LifecycleEventAddCurrentStatus(builder, currentStatus)
 
 def LifecycleEventAddPreviousSymbol(builder, previousSymbol):
-    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(previousSymbol), 0)
+    builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(previousSymbol), 0)
 
 def AddPreviousSymbol(builder, previousSymbol):
     LifecycleEventAddPreviousSymbol(builder, previousSymbol)
 
 def LifecycleEventAddCurrentSymbol(builder, currentSymbol):
-    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(currentSymbol), 0)
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(currentSymbol), 0)
 
 def AddCurrentSymbol(builder, currentSymbol):
     LifecycleEventAddCurrentSymbol(builder, currentSymbol)

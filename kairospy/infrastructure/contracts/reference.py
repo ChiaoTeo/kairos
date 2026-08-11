@@ -11,13 +11,17 @@ from .base import CommandEnvelope, MmapSnapshotReader, QueryEnvelope
 
 
 def catalog_reader(path: str | Path) -> MmapSnapshotReader:
-    from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import CatalogSnapshot
+    from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import (
+        CatalogSnapshot,
+    )
 
     return MmapSnapshotReader(path, file_identifier=b"PRC1", root_type=CatalogSnapshot)
 
 
 def markets_reader(path: str | Path) -> MmapSnapshotReader:
-    from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import MarketsSnapshot
+    from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import (
+        MarketsSnapshot,
+    )
 
     return MmapSnapshotReader(path, file_identifier=b"PRD1", root_type=MarketsSnapshot)
 
@@ -71,6 +75,11 @@ def client(
 
 
 __all__ = [
-    "CommandEnvelope", "QueryEnvelope", "ReferenceSnapshotClient", "catalog_reader",
-    "client", "markets_reader", "read_manifest",
+    "CommandEnvelope",
+    "QueryEnvelope",
+    "ReferenceSnapshotClient",
+    "catalog_reader",
+    "client",
+    "markets_reader",
+    "read_manifest",
 ]

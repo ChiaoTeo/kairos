@@ -1,5 +1,7 @@
+mod ports;
 mod process;
 mod query;
+pub mod replay;
 mod runtime;
 mod service;
 pub mod wire {
@@ -7,7 +9,9 @@ pub mod wire {
 }
 
 pub use crate::domain::snapshot::{MarketSnapshot, ReconcileResult, SubscriptionState};
+pub use ports::{MarketDataKey, MarketFeed, MarketFeedRoute, MarketOrderBookUpdate};
 pub use process::{MarketProcess, MarketSnapshotPublisher, ReferenceChangeSource, ReferenceEvent};
-pub use query::{MarketObservationResult, MarketQueryResult};
+pub use query::{ExecutionEstimate, MarketObservationResult, MarketQueryResult, OrderBookSide};
+pub use replay::{load_replay_events, load_replay_events_many};
 pub use runtime::MarketRuntime;
 pub use service::{MarketApplication, MarketError};

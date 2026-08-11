@@ -10,7 +10,7 @@ table Order {
   account_id:string (required);
   instrument_id:string (required);
   market_id:string;
-  venue_order_id:string;
+  remote_order_id:string;
   status:string (required);
   side:kairos.common.v1.Side;
   order_type:kairos.common.v1.OrderType;
@@ -33,7 +33,7 @@ table Fill {
   account_id:string (required);
   instrument_id:string (required);
   market_id:string;
-  venue_order_id:string;
+  remote_order_id:string;
   side:kairos.common.v1.Side;
   quantity:kairos.common.v1.Decimal64 (required);
   price:kairos.common.v1.Decimal64 (required);

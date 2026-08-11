@@ -40,7 +40,11 @@ class SharedSnapshotReader:
         if len(mapped) < self._HEADER_SIZE or mapped[:4] != self._MAGIC:
             raise ValueError("invalid shared snapshot header")
         version, slots, slot_size = struct.unpack_from("<HHI", mapped, 4)
-        if version != self._FORMAT_VERSION or slots != self._SLOT_COUNT or slot_size <= 0:
+        if (
+            version != self._FORMAT_VERSION
+            or slots != self._SLOT_COUNT
+            or slot_size <= 0
+        ):
             raise ValueError("unsupported shared snapshot layout")
         if len(mapped) < self._HEADER_SIZE + slots * slot_size:
             raise ValueError("truncated shared snapshot file")
@@ -48,12 +52,16 @@ class SharedSnapshotReader:
             active = mapped[self._ACTIVE_OFFSET]
             if active >= slots:
                 raise ValueError("invalid active snapshot slot")
-            length = struct.unpack_from("<I", mapped, self._SLOT_LENGTH_OFFSET + active * 4)[0]
-            generation = struct.unpack_from("<Q", mapped, self._SLOT_GENERATION_OFFSET + active * 8)[0]
+            length = struct.unpack_from(
+                "<I", mapped, self._SLOT_LENGTH_OFFSET + active * 4
+            )[0]
+            generation = struct.unpack_from(
+                "<Q", mapped, self._SLOT_GENERATION_OFFSET + active * 8
+            )[0]
             if not 0 < length <= slot_size:
                 raise ValueError("active snapshot slot is empty or too large")
             start = self._HEADER_SIZE + active * slot_size
-            payload = bytes(mapped[start:start + length])
+            payload = bytes(mapped[start : start + length])
             active_after = mapped[self._ACTIVE_OFFSET]
             generation_after = struct.unpack_from(
                 "<Q", mapped, self._SLOT_GENERATION_OFFSET + active * 8

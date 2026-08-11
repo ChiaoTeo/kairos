@@ -11,7 +11,7 @@ import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 
 VALID_MODES = frozenset({"backtest", "paper", "live"})
@@ -54,21 +54,30 @@ class LaunchPlan:
     live_private_sync: Mapping[str, Any] | None = None
 
     def normalized(self) -> dict[str, Any]:
-        return _jsonable({
-            "launch": {"id": self.launch_id, "mode": self.mode, "strategy": self.strategy_ref},
-            "strategy": {"params": dict(self.strategy_params)},
-            "accounts": list(self.account_refs),
-            "execution": dict(self.execution),
-            self.mode: dict(self.mode_config),
-            "market_scope": self.market_scope,
-            "backtest_market": self.backtest_market,
-            "backtest_data_root": self.backtest_data_root,
-            "backtest_storage_format": self.backtest_storage_format,
-            "backtest_replay_file": self.backtest_replay_file,
-            "paper_events": self.paper_events,
-            "live_safety": self.live_safety,
-            "live_private_sync": self.live_private_sync,
-        })
+        return cast(
+            dict[str, Any],
+            _jsonable(
+                {
+                    "launch": {
+                        "id": self.launch_id,
+                        "mode": self.mode,
+                        "strategy": self.strategy_ref,
+                    },
+                    "strategy": {"params": dict(self.strategy_params)},
+                    "accounts": list(self.account_refs),
+                    "execution": dict(self.execution),
+                    self.mode: dict(self.mode_config),
+                    "market_scope": self.market_scope,
+                    "backtest_market": self.backtest_market,
+                    "backtest_data_root": self.backtest_data_root,
+                    "backtest_storage_format": self.backtest_storage_format,
+                    "backtest_replay_file": self.backtest_replay_file,
+                    "paper_events": self.paper_events,
+                    "live_safety": self.live_safety,
+                    "live_private_sync": self.live_private_sync,
+                }
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,17 +87,27 @@ class LaunchConfig:
     values: Mapping[str, Any]
 
     @classmethod
-    def load(cls, path: str | Path, *, root: str | Path | None = None) -> "LaunchConfig":
+    def load(
+        cls, path: str | Path, *, root: str | Path | None = None
+    ) -> "LaunchConfig":
         source = Path(path).expanduser().resolve()
         if not source.is_file():
             raise LaunchConfigError(f"launch config does not exist: {source}")
         try:
             values = tomllib.loads(source.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as error:
-            raise LaunchConfigError(f"invalid TOML in launch config {source}: {error}") from error
+            raise LaunchConfigError(
+                f"invalid TOML in launch config {source}: {error}"
+            ) from error
         if not isinstance(values, dict):
-            raise LaunchConfigError(f"launch config root must be a TOML table: {source}")
-        return cls(source, Path(root).expanduser().resolve() if root is not None else source.parent, values)
+            raise LaunchConfigError(
+                f"launch config root must be a TOML table: {source}"
+            )
+        return cls(
+            source,
+            Path(root).expanduser().resolve() if root is not None else source.parent,
+            values,
+        )
 
     @property
     def launch(self) -> Mapping[str, Any]:
@@ -147,7 +166,9 @@ class LaunchConfig:
         mode = self.mode
         mode_config = dict(_optional_table(self.values.get(mode), mode))
         market_config = _optional_table(mode_config.get("market"), f"{mode}.market")
-        market_scope = str(market_config.get("scope", "shared" if mode == "live" else "instance"))
+        market_scope = str(
+            market_config.get("scope", "shared" if mode == "live" else "instance")
+        )
         execution = dict(self.execution)
         if mode in {"backtest", "paper"}:
             execution.setdefault("dry_run", True)
@@ -163,11 +184,15 @@ class LaunchConfig:
         if mode == "backtest":
             backtest_market = dict(_table(mode_config.get("market"), "backtest.market"))
             raw_data_root = mode_config.get("data_root", ".kairos/data")
-            backtest_data_root = _resolve_path(raw_data_root, self.root, "backtest.data_root")
+            backtest_data_root = _resolve_path(
+                raw_data_root, self.root, "backtest.data_root"
+            )
             backtest_storage_format = str(mode_config.get("storage_format", "parquet"))
             raw_replay = backtest_market.get("events")
             if raw_replay is not None:
-                backtest_replay_file = _resolve_path(raw_replay, self.root, "backtest.market.events")
+                backtest_replay_file = _resolve_path(
+                    raw_replay, self.root, "backtest.market.events"
+                )
         elif mode == "paper":
             raw_events = mode_config.get("events")
             if raw_events is not None:
@@ -178,9 +203,15 @@ class LaunchConfig:
             live_safety = {
                 "trading_enabled": safety.get("trading_enabled", False),
                 "require_limit_orders": safety.get("require_limit_orders", True),
-                **({"max_order_notional": safety["max_order_notional"]} if "max_order_notional" in safety else {}),
+                **(
+                    {"max_order_notional": safety["max_order_notional"]}
+                    if "max_order_notional" in safety
+                    else {}
+                ),
             }
-            live_private_sync = dict(_optional_table(live.get("private_sync"), "live.private_sync"))
+            live_private_sync = dict(
+                _optional_table(live.get("private_sync"), "live.private_sync")
+            )
             live_private_sync.setdefault("enabled", bool(self.account_refs))
         return LaunchPlan(
             launch_id=self.launch_id,
@@ -226,7 +257,9 @@ class LaunchConfig:
         strategy = launch.get("strategy")
         if strategy is None:
             issues.append("launch.strategy is required")
-        elif not isinstance(strategy, str) or not strategy.strip() or ":" not in strategy:
+        elif (
+            not isinstance(strategy, str) or not strategy.strip() or ":" not in strategy
+        ):
             issues.append("launch.strategy must be a module:callable reference")
         for name in ("account", "execution", "strategy"):
             value = self.values.get(name)
@@ -248,7 +281,9 @@ class LaunchConfig:
             issues.append(str(error))
             account_refs = ()
         if mode in {"paper", "live"} and not account_refs:
-            issues.append(f"{mode} launch requires [account].ref or [accounts.<alias>].ref")
+            issues.append(
+                f"{mode} launch requires [account].ref or [accounts.<alias>].ref"
+            )
         if mode == "live":
             live = self.values.get("live")
             if not isinstance(live, Mapping):
@@ -257,19 +292,35 @@ class LaunchConfig:
                 safety = live.get("safety")
                 if safety is not None and not isinstance(safety, Mapping):
                     issues.append("live.safety must be a table")
-                if isinstance(safety, Mapping) and "trading_enabled" in safety and not isinstance(safety["trading_enabled"], bool):
+                if (
+                    isinstance(safety, Mapping)
+                    and "trading_enabled" in safety
+                    and not isinstance(safety["trading_enabled"], bool)
+                ):
                     issues.append("live.safety.trading_enabled must be a boolean")
-                if isinstance(safety, Mapping) and "require_limit_orders" in safety and not isinstance(safety["require_limit_orders"], bool):
+                if (
+                    isinstance(safety, Mapping)
+                    and "require_limit_orders" in safety
+                    and not isinstance(safety["require_limit_orders"], bool)
+                ):
                     issues.append("live.safety.require_limit_orders must be a boolean")
                 if isinstance(safety, Mapping) and "max_order_notional" in safety:
                     try:
                         if Decimal(str(safety["max_order_notional"])) <= 0:
-                            issues.append("live.safety.max_order_notional must be positive")
+                            issues.append(
+                                "live.safety.max_order_notional must be positive"
+                            )
                     except Exception:
-                        issues.append("live.safety.max_order_notional must be decimal-compatible")
+                        issues.append(
+                            "live.safety.max_order_notional must be decimal-compatible"
+                        )
             account = _optional_table(self.values.get("account"), "account")
-            if account.get("environment") is not None and account.get("environment") not in {"live", "testnet"}:
-                issues.append("account.environment must be live or testnet for live launches")
+            if account.get("environment") is not None and account.get(
+                "environment"
+            ) not in {"live", "testnet"}:
+                issues.append(
+                    "account.environment must be live or testnet for live launches"
+                )
         if mode == "backtest":
             backtest = self.values.get("backtest")
             if not isinstance(backtest, Mapping):
@@ -277,41 +328,94 @@ class LaunchConfig:
             else:
                 market = backtest.get("market")
                 if not isinstance(market, Mapping):
-                    issues.append("[backtest.market] table is required for backtest launches")
+                    issues.append(
+                        "[backtest.market] table is required for backtest launches"
+                    )
                 else:
                     for key in ("start", "end"):
                         if market.get(key) is None:
                             issues.append(f"backtest.market.{key} is required")
-                if backtest.get("storage_format", "parquet") not in {"parquet", "jsonl"}:
+                if backtest.get("storage_format", "parquet") not in {
+                    "parquet",
+                    "jsonl",
+                }:
                     issues.append("backtest.storage_format must be parquet or jsonl")
         if mode == "paper":
             account = _optional_table(self.values.get("account"), "account")
-            if account.get("environment") is not None and account.get("environment") not in {"paper", "sandbox", "simulation", "testnet"}:
+            if account.get("environment") is not None and account.get(
+                "environment"
+            ) not in {"paper", "sandbox", "simulation", "testnet"}:
                 issues.append("account.environment must be paper-compatible")
         execution = self.values.get("execution")
-        if isinstance(execution, Mapping) and "dry_run" in execution and not isinstance(execution["dry_run"], bool):
+        if (
+            isinstance(execution, Mapping)
+            and "dry_run" in execution
+            and not isinstance(execution["dry_run"], bool)
+        ):
             issues.append("execution.dry_run must be a boolean")
+        if isinstance(execution, Mapping) and "routes" in execution:
+            routes = execution.get("routes")
+            if not isinstance(routes, list) or not routes:
+                issues.append("execution.routes must be a non-empty array of route tables")
+            else:
+                route_ids: set[str] = set()
+                for index, route in enumerate(routes):
+                    prefix = f"execution.routes[{index}]"
+                    if not isinstance(route, Mapping):
+                        issues.append(f"{prefix} must be a table")
+                        continue
+                    for field in ("route_id", "provider", "product"):
+                        value = route.get(field)
+                        if not isinstance(value, str) or not value.strip():
+                            issues.append(f"{prefix}.{field} is required")
+                    route_id = route.get("route_id")
+                    if isinstance(route_id, str) and route_id.strip():
+                        if route_id in route_ids:
+                            issues.append(f"duplicate execution route_id: {route_id}")
+                        route_ids.add(route_id)
+                    for secret in ("api_key", "secret", "api_secret", "passphrase"):
+                        if secret in route:
+                            issues.append(
+                                f"{prefix}.{secret} is forbidden; use credential_id"
+                            )
+                if execution.get("provider") is not None or execution.get("product") is not None:
+                    issues.append(
+                        "execution.routes cannot be combined with execution.provider/product"
+                    )
         mode_config = self.values.get(mode) if mode else None
         if isinstance(mode_config, Mapping) and "market" in mode_config:
             market = mode_config.get("market")
             if not isinstance(market, Mapping):
                 issues.append(f"[{mode}.market] must be a table")
             else:
-                if market.get("scope", "shared" if mode == "live" else "instance") not in {"shared", "instance"}:
+                if market.get(
+                    "scope", "shared" if mode == "live" else "instance"
+                ) not in {"shared", "instance"}:
                     issues.append(f"{mode}.market.scope must be shared or instance")
-                if market.get("connection") is not None and not isinstance(market.get("connection"), str):
+                if market.get("connection") is not None and not isinstance(
+                    market.get("connection"), str
+                ):
                     issues.append(f"{mode}.market.connection must be a string")
         if mode == "backtest" and isinstance(mode_config, Mapping):
             market = mode_config.get("market")
-            if isinstance(market, Mapping) and market.get("scope", "instance") == "shared":
+            if (
+                isinstance(market, Mapping)
+                and market.get("scope", "instance") == "shared"
+            ):
                 issues.append("backtest.market.scope must be instance")
         if mode == "paper" and isinstance(mode_config, Mapping):
-            if mode_config.get("events") is not None and isinstance(mode_config.get("market"), Mapping):
+            if mode_config.get("events") is not None and isinstance(
+                mode_config.get("market"), Mapping
+            ):
                 if mode_config["market"].get("scope", "instance") == "shared":
-                    issues.append("paper.market.scope must be instance when paper.events is configured")
+                    issues.append(
+                        "paper.market.scope must be instance when paper.events is configured"
+                    )
         for forbidden in ("broker", "credentials", "data"):
             if forbidden in self.values:
-                issues.append(f"[{forbidden}] is not valid launch config; use workspace configuration")
+                issues.append(
+                    f"[{forbidden}] is not valid launch config; use workspace configuration"
+                )
         return LaunchConfigReport(self.path, not issues, tuple(issues))
 
     def require_valid(self) -> None:
@@ -356,15 +460,33 @@ class LaunchEnvironment:
             "KAIROS_LAUNCH_GROUP_DIRECTORY": str(self.group_directory),
             "KAIROS_LAUNCH_NORMALIZED_CONFIG": str(self.normalized_config_path),
             "KAIROS_MARKET_SCOPE": plan.market_scope,
-            "KAIROS_EXECUTION_DRY_RUN": str(bool(plan.execution.get("dry_run", False))).lower(),
-            "KAIROS_ACCOUNT_REFS": json.dumps(list(plan.account_refs), separators=(",", ":")),
-            "KAIROS_LIVE_TRADING_ENABLED": str(bool(safety.get("trading_enabled", False))).lower(),
-            "KAIROS_LIVE_REQUIRE_LIMIT_ORDERS": str(bool(safety.get("require_limit_orders", True))).lower(),
-            **({"KAIROS_LIVE_MAX_ORDER_NOTIONAL": str(safety["max_order_notional"])} if "max_order_notional" in safety else {}),
+            "KAIROS_EXECUTION_DRY_RUN": str(
+                bool(plan.execution.get("dry_run", False))
+            ).lower(),
+            "KAIROS_ACCOUNT_REFS": json.dumps(
+                list(plan.account_refs), separators=(",", ":")
+            ),
+            "KAIROS_LIVE_TRADING_ENABLED": str(
+                bool(safety.get("trading_enabled", False))
+            ).lower(),
+            "KAIROS_LIVE_REQUIRE_LIMIT_ORDERS": str(
+                bool(safety.get("require_limit_orders", True))
+            ).lower(),
+            **(
+                {"KAIROS_LIVE_MAX_ORDER_NOTIONAL": str(safety["max_order_notional"])}
+                if "max_order_notional" in safety
+                else {}
+            ),
         }
 
     @classmethod
-    def create(cls, config: LaunchConfig, *, workspace_root: str | Path, instance_id: str = "default") -> "LaunchEnvironment":
+    def create(
+        cls,
+        config: LaunchConfig,
+        *,
+        workspace_root: str | Path,
+        instance_id: str = "default",
+    ) -> "LaunchEnvironment":
         config.require_valid()
         root = Path(workspace_root).expanduser().resolve()
         if not instance_id.strip():
@@ -373,33 +495,64 @@ class LaunchEnvironment:
         instance = group / "instances" / instance_id
         normalized_path = instance / "normalized-config.json"
         instance.mkdir(parents=True, exist_ok=True)
-        normalized_path.write_text(json.dumps(config.plan().normalized(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return cls(config, config.launch_id, config.mode, instance_id, group, instance, normalized_path)
+        normalized_path.write_text(
+            json.dumps(config.plan().normalized(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return cls(
+            config,
+            config.launch_id,
+            config.mode,
+            instance_id,
+            group,
+            instance,
+            normalized_path,
+        )
 
 
 class LaunchConfigurationApplication:
     """Public use cases for loading and resolving launch configuration."""
 
-    def load(self, path: str | Path, *, workspace_root: str | Path | None = None) -> LaunchConfig:
+    def load(
+        self, path: str | Path, *, workspace_root: str | Path | None = None
+    ) -> LaunchConfig:
         return LaunchConfig.load(path, root=workspace_root)
 
-    def validate(self, path: str | Path, *, workspace_root: str | Path | None = None) -> dict[str, Any]:
+    def validate(
+        self, path: str | Path, *, workspace_root: str | Path | None = None
+    ) -> dict[str, Any]:
         report = self.load(path, workspace_root=workspace_root).report()
-        return {"path": str(report.path), "valid": report.valid, "issues": list(report.issues)}
+        return {
+            "path": str(report.path),
+            "valid": report.valid,
+            "issues": list(report.issues),
+        }
 
-    def explain(self, path: str | Path, *, workspace_root: str | Path | None = None) -> dict[str, Any]:
+    def explain(
+        self, path: str | Path, *, workspace_root: str | Path | None = None
+    ) -> dict[str, Any]:
         config = self.load(path, workspace_root=workspace_root)
         value = config.explain()
         if config.report().valid:
             value["plan"] = config.plan().normalized()
         return value
 
-    def plan(self, path: str | Path, *, workspace_root: str | Path | None = None) -> LaunchPlan:
+    def plan(
+        self, path: str | Path, *, workspace_root: str | Path | None = None
+    ) -> LaunchPlan:
         return self.load(path, workspace_root=workspace_root).plan()
 
-    def environment(self, path: str | Path, *, workspace_root: str | Path, instance_id: str = "default") -> LaunchEnvironment:
+    def environment(
+        self,
+        path: str | Path,
+        *,
+        workspace_root: str | Path,
+        instance_id: str = "default",
+    ) -> LaunchEnvironment:
         config = self.load(path, workspace_root=workspace_root)
-        return LaunchEnvironment.create(config, workspace_root=workspace_root, instance_id=instance_id)
+        return LaunchEnvironment.create(
+            config, workspace_root=workspace_root, instance_id=instance_id
+        )
 
 
 def _table(value: object, name: str) -> Mapping[str, Any]:
@@ -429,6 +582,8 @@ def _resolve_path(value: object, root: Path, name: str) -> Path:
 
 def _jsonable(value: object) -> object:
     if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, Path):
         return str(value)
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}

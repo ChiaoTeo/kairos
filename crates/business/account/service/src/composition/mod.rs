@@ -52,6 +52,12 @@ pub struct MmapAccountPublisher {
     inner: kairos_account_contract::encoding::MmapAccountPublisher,
 }
 
+impl crate::application::AccountSnapshotPublisher for MmapAccountPublisher {
+    fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
+        MmapAccountPublisher::publish(self, snapshot)
+    }
+}
+
 impl MmapAccountPublisher {
     pub fn create(
         path: impl AsRef<std::path::Path>,
@@ -82,27 +88,33 @@ impl MmapAccountPublisher {
 /// without routing hot-path publication through serde JSON.
 fn to_contract_snapshot(snapshot: &AccountsSnapshot) -> contract::AccountsSnapshot {
     contract::AccountsSnapshot {
-        actor_id: snapshot.actor_id.clone(),
-        generation: snapshot.generation,
-        event_sequence: snapshot.event_sequence,
+        actor_id: snapshot.actor_id.to_string(),
+        generation: snapshot.generation.get(),
+        event_sequence: snapshot.event_sequence.get(),
         accounts: snapshot
             .accounts
             .iter()
             .map(|account| contract::AccountProjection {
-                account_id: account.account_id.clone(),
-                segment_key: account.segment_key.clone(),
+                account_id: account.account_id.to_string(),
+                segment_key: account.segment_key.to_string(),
                 environment: account.environment.clone(),
                 broker: account.broker.clone(),
                 configured_account_model: account.configured_account_model.clone(),
                 observed_account_model: account.observed_account_model.map(account_model),
                 status: account_status(account.status),
                 stale: account.stale,
-                observed_at_unix_nanos: account.observed_at_unix_nanos,
-                generation: account.generation,
-                event_sequence: account.event_sequence,
-                equity: account.equity.map(decimal),
-                initial_equity: account.initial_equity.map(decimal),
-                net_profit: account.net_profit.map(decimal),
+                observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
+                generation: account.generation.get(),
+                event_sequence: account.event_sequence.get(),
+                equity: account
+                    .equity
+                    .map(|value| decimal_parts(value.mantissa(), value.scale())),
+                initial_equity: account
+                    .initial_equity
+                    .map(|value| decimal_parts(value.mantissa(), value.scale())),
+                net_profit: account
+                    .net_profit
+                    .map(|value| decimal_parts(value.mantissa(), value.scale())),
                 margin_mode: account.margin_mode.map(margin_mode),
                 position_mode: account.position_mode.map(position_mode),
                 balances: account.balances.iter().map(balance).collect(),
@@ -114,11 +126,8 @@ fn to_contract_snapshot(snapshot: &AccountsSnapshot) -> contract::AccountsSnapsh
     }
 }
 
-fn decimal(value: crate::domain::Decimal) -> contract::Decimal {
-    contract::Decimal {
-        mantissa: value.mantissa,
-        scale: value.scale,
-    }
+fn decimal_parts(mantissa: i64, scale: u8) -> contract::Decimal {
+    contract::Decimal { mantissa, scale }
 }
 
 fn account_model(value: AccountModel) -> contract::AccountModel {
@@ -160,37 +169,62 @@ fn position_mode(value: PositionMode) -> contract::PositionMode {
 fn balance(value: &crate::domain::Balance) -> contract::Balance {
     contract::Balance {
         asset_id: value.asset_id.to_string(),
-        asset_code: value.asset_code.clone(),
-        total: decimal(value.total),
-        available: value.available.map(decimal),
-        locked: value.locked.map(decimal),
-        borrowed: value.borrowed.map(decimal),
-        interest: value.interest.map(decimal),
+        asset_code: value.asset_code.to_string(),
+        total: decimal_parts(value.total.mantissa(), value.total.scale()),
+        available: value
+            .available
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        locked: value
+            .locked
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        borrowed: value
+            .borrowed
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        interest: value
+            .interest
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
     }
 }
 
 fn position(value: &crate::domain::Position) -> contract::Position {
     contract::Position {
         instrument_id: value.instrument_id.to_string(),
-        market_id: value.market_id.clone(),
-        quantity: decimal(value.quantity),
-        average_price: value.average_price.map(decimal),
-        mark_price: value.mark_price.map(decimal),
-        unrealized_pnl: value.unrealized_pnl.map(decimal),
-        realized_pnl: value.realized_pnl.map(decimal),
-        updated_at_unix_nanos: value.updated_at_unix_nanos,
+        market_id: value.market_id.clone().map(|value| value.to_string()),
+        quantity: decimal_parts(value.quantity.mantissa(), value.quantity.scale()),
+        average_price: value
+            .average_price
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        mark_price: value
+            .mark_price
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        unrealized_pnl: value
+            .unrealized_pnl
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        realized_pnl: value
+            .realized_pnl
+            .map(|value| decimal_parts(value.mantissa(), value.scale())),
+        updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
     }
 }
 
 fn open_order(value: &crate::domain::OpenOrder) -> contract::OpenOrder {
     contract::OpenOrder {
-        order_id: value.order_id.clone(),
-        venue_order_id: value.venue_order_id.clone(),
+        order_id: value.order_id.to_string(),
+        remote_order_id: value.remote_order_id.as_ref().map(ToString::to_string),
         instrument_id: value.instrument_id.to_string(),
-        side: value.side.clone(),
-        quantity: decimal(value.quantity),
-        filled_quantity: decimal(value.filled_quantity),
-        status: value.status.clone(),
+        side: serde_json::to_string(&value.side)
+            .expect("canonical order side serializes")
+            .trim_matches('"')
+            .to_owned(),
+        quantity: decimal_parts(value.quantity.mantissa(), value.quantity.scale()),
+        filled_quantity: decimal_parts(
+            value.filled_quantity.mantissa(),
+            value.filled_quantity.scale(),
+        ),
+        status: serde_json::to_string(&value.status)
+            .expect("canonical order status serializes")
+            .trim_matches('"')
+            .to_owned(),
     }
 }
 
@@ -242,7 +276,7 @@ pub fn empty_snapshot(segment_key: impl Into<String>) -> AccountSnapshot {
         positions: Vec::new(),
         open_orders: Vec::new(),
         status: AccountStatus::Ready,
-        observed_at_unix_nanos: 0,
+        observed_at_unix_nanos: 0.into(),
         equity: None,
         initial_equity: None,
         net_profit: None,

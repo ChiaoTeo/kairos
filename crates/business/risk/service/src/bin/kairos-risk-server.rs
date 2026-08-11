@@ -8,8 +8,12 @@ use kairos_workspace::workspace::Workspace;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     kairos_workspace::logging::init("risk");
-    if let Err(error) = run().await {
+    let result = run().await;
+    if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "risk", error = %error, "risk server failed");
+    }
+    kairos_workspace::logging::shutdown();
+    if let Err(error) = result {
         eprintln!("kairos-risk-server: {error}");
         std::process::exit(1);
     }
@@ -29,7 +33,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let application = compose_risk_application(
         format!("risk:{}", args.instance_id),
         Vec::new(),
-        false,
         Some(state),
     )?;
     RiskProcess::new(

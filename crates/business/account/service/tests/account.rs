@@ -2,18 +2,49 @@ use std::collections::BTreeMap;
 
 use kairos_account::composition::account::{
     compose_account_application, compose_account_application_for_segments,
-    compose_in_memory_account_application, AccountOptions, AccountRegistry, CredentialRecord,
-    CredentialStore,
+    compose_in_memory_account_application, AccountOptions,
 };
 use kairos_account::composition::{empty_snapshot, FlatbuffersAccountPublisher};
 use kairos_account::domain::{
-    Account, AccountFill, AccountSegment, AccountSnapshot, AccountStatus, ApplyOutcome, AssetId,
-    Balance, Decimal, ExternalAccountIdentity, FillId, FillSide, InstrumentId, Position,
-    SegmentKey,
+    Account, AccountFill, AccountObservedFill, AccountSegment, AccountSnapshot, AccountStatus,
+    ApplyOutcome, AssetId, Balance, ExternalAccountIdentity, FillId, FillSide, InstrumentId, Money,
+    Position, SegmentKey, SignedQuantity,
 };
-use kairos_account::{AccountDataQuery, AccountQuery, ReconcileAccount, RefreshAccount};
+use kairos_domain_types::{Price, Quantity};
+
+fn order_id(value: &str) -> kairos_domain_types::OrderId {
+    kairos_domain_types::OrderId::new(value).unwrap()
+}
+
+fn remote_order_id(value: &str) -> kairos_domain_types::RemoteOrderId {
+    kairos_domain_types::RemoteOrderId::new(value).unwrap()
+}
+
+fn currency(value: &str) -> kairos_domain_types::Currency {
+    kairos_domain_types::Currency::new(value).unwrap()
+}
+
+fn nanos(value: u64) -> kairos_domain_types::UnixNanos {
+    kairos_domain_types::UnixNanos::new(value)
+}
+
+fn account_id(value: &str) -> kairos_domain_types::AccountId {
+    kairos_domain_types::AccountId::new(value).unwrap()
+}
+
+fn segment_key(value: &str) -> SegmentKey {
+    SegmentKey::new(value).unwrap()
+}
+
+fn symbol(value: &str) -> kairos_domain_types::Symbol {
+    kairos_domain_types::Symbol::new(value).unwrap()
+}
+use kairos_account::{
+    AccountDataQuery, AccountQuery, MarkToMarket, ReconcileAccount, RefreshAccount,
+};
 use kairos_protocol::generated::kairos::account::v_1::root_as_accounts_snapshot;
 use kairos_protocol::InstanceIdentity;
+use kairos_workspace::account::{AccountRegistry, CredentialRecord, CredentialStore};
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {
@@ -24,10 +55,26 @@ fn segment(key: &str) -> AccountSegment {
     }
 }
 
-fn balance(asset_id: &str, asset_code: &str, total: Decimal) -> Balance {
+fn signed(mantissa: i64, scale: u8) -> SignedQuantity {
+    SignedQuantity::new(mantissa, scale)
+}
+
+fn quantity(mantissa: i64, scale: u8) -> Quantity {
+    Quantity::new(mantissa, scale).unwrap()
+}
+
+fn price(mantissa: i64, scale: u8) -> Price {
+    Price::new(mantissa, scale).unwrap()
+}
+
+fn money(mantissa: i64, scale: u8) -> Money {
+    Money::new(mantissa, scale)
+}
+
+fn balance(asset_id: &str, asset_code: &str, total: SignedQuantity) -> Balance {
     Balance {
         asset_id: AssetId::new(asset_id).unwrap(),
-        asset_code: asset_code.into(),
+        asset_code: kairos_domain_types::Currency::new(asset_code).unwrap(),
         total,
         available: None,
         locked: None,
@@ -36,7 +83,7 @@ fn balance(asset_id: &str, asset_code: &str, total: Decimal) -> Balance {
     }
 }
 
-fn position(instrument_id: &str, quantity: Decimal) -> Position {
+fn position(instrument_id: &str, quantity: SignedQuantity) -> Position {
     Position {
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: None,
@@ -45,7 +92,7 @@ fn position(instrument_id: &str, quantity: Decimal) -> Position {
         mark_price: None,
         unrealized_pnl: None,
         realized_pnl: None,
-        updated_at_unix_nanos: 0,
+        updated_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
     }
 }
 
@@ -142,9 +189,9 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
     let options = AccountOptions {
         provider: "paper".into(),
         product: "spot".into(),
-        api_key: String::new(),
-        secret: String::new(),
-        passphrase: String::new(),
+        api_key: String::new().into(),
+        secret: String::new().into(),
+        passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         account_id: "paper-main".into(),
         segment: "spot".into(),
@@ -162,7 +209,7 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
         composition
             .application
             .refresh(RefreshAccount {
-                account_id: "paper-main".into(),
+                account_id: account_id("paper-main"),
                 segments: vec![],
             })
             .unwrap(),
@@ -171,7 +218,7 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
     assert_eq!(composition.application.snapshot().accounts.len(), 1);
     assert_eq!(
         composition.application.balances(Some("paper-main"))[0].2[0].total,
-        Decimal::new(1_000_050, 2)
+        signed(1_000_050, 2)
     );
 }
 
@@ -181,9 +228,9 @@ fn paper_account_composition_restores_multiple_configured_segments() {
     let options = AccountOptions {
         provider: "paper".into(),
         product: "spot".into(),
-        api_key: String::new(),
-        secret: String::new(),
-        passphrase: String::new(),
+        api_key: String::new().into(),
+        secret: String::new().into(),
+        passphrase: String::new().into(),
         base_url: String::new(),
         account_id: "paper-main".into(),
         segment: "spot".into(),
@@ -203,7 +250,7 @@ fn paper_account_composition_restores_multiple_configured_segments() {
     composition
         .application
         .refresh(RefreshAccount {
-            account_id: "paper-main".into(),
+            account_id: account_id("paper-main"),
             segments: vec![],
         })
         .unwrap();
@@ -216,9 +263,9 @@ fn account_application_exposes_capabilities_and_fee_queries() {
     let options = AccountOptions {
         provider: "paper".into(),
         product: "spot".into(),
-        api_key: String::new(),
-        secret: String::new(),
-        passphrase: String::new(),
+        api_key: String::new().into(),
+        secret: String::new().into(),
+        passphrase: String::new().into(),
         base_url: String::new(),
         account_id: "paper-main".into(),
         segment: "spot".into(),
@@ -262,9 +309,9 @@ fn ibkr_account_composition_selects_native_equity_connection() {
     let options = AccountOptions {
         provider: "ibkr".into(),
         product: "equity".into(),
-        api_key: String::new(),
-        secret: String::new(),
-        passphrase: String::new(),
+        api_key: String::new().into(),
+        secret: String::new().into(),
+        passphrase: String::new().into(),
         base_url: String::new(),
         account_id: "DU123".into(),
         segment: "equity".into(),
@@ -285,13 +332,13 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
         "spot".into(),
         AccountSnapshot {
             segment_key: SegmentKey::new("spot").unwrap(),
-            balances: vec![balance("asset:usdt", "USDT", Decimal::new(10_000, 2))],
+            balances: vec![balance("asset:usdt", "USDT", signed(10_000, 2))],
             collateral: vec![],
-            positions: vec![position("instrument:btc", Decimal::new(25, 2))],
+            positions: vec![position("instrument:btc", signed(25, 2))],
             open_orders: vec![],
             status: AccountStatus::Ready,
-            observed_at_unix_nanos: 42,
-            equity: Some(Decimal::new(10_000, 2)),
+            observed_at_unix_nanos: 42.into(),
+            equity: Some(money(10_000, 2)),
             initial_equity: None,
             net_profit: None,
             account_model: None,
@@ -305,7 +352,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
 
     assert_eq!(
         app.refresh(RefreshAccount {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: vec![]
         })
         .unwrap(),
@@ -313,7 +360,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
     );
     let result = app
         .query(AccountQuery {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: vec![],
             max_age_seconds: None,
             now_unix_nanos: None,
@@ -327,7 +374,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
             .find(|value| value.asset_id == "asset:usdt")
             .unwrap()
             .total,
-        Decimal::new(10_000, 2)
+        signed(10_000, 2)
     );
     assert_eq!(
         result[0]
@@ -336,26 +383,26 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
             .find(|value| value.instrument_id == "instrument:btc")
             .unwrap()
             .quantity,
-        Decimal::new(25, 2)
+        signed(25, 2)
     );
     app.apply_simulated_fill(AccountFill {
         fill_id: FillId::new("paper-fill-position").unwrap(),
         order_id: None,
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-        quantity: Decimal::new(1, 2),
-        price: Decimal::new(100, 0),
+        quantity: quantity(1, 2),
+        price: price(100, 0),
         side: FillSide::Buy,
         settlement_asset: None,
         settlement_delta: None,
         fee_asset: None,
         fee_amount: None,
-        occurred_at_unix_nanos: 43,
+        occurred_at_unix_nanos: nanos(43),
     })
     .unwrap();
     let reconciliation = app
         .reconcile_report(ReconcileAccount {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: vec![],
         })
         .unwrap();
@@ -364,8 +411,8 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
         .iter()
         .any(|value| value.field == "position.quantity" && value.key == "instrument:btc"));
     let filtered = app.balances_query(&AccountDataQuery {
-        account_id: Some("main".into()),
-        segments: vec!["spot".into()],
+        account_id: Some(account_id("main")),
+        segments: vec![segment_key("spot")],
         page: Some(1),
         page_size: Some(10),
         ..Default::default()
@@ -373,8 +420,8 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].2[0].asset_code, "USDT");
     let positions = app.positions_query(&AccountDataQuery {
-        account_id: Some("main".into()),
-        symbol: Some("btc".into()),
+        account_id: Some(account_id("main")),
+        symbol: Some(symbol("btc")),
         ..Default::default()
     });
     assert_eq!(positions[0].2.len(), 1);
@@ -386,7 +433,7 @@ fn publisher_emits_current_account_snapshot() {
     let mut app =
         compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
     app.refresh(RefreshAccount {
-        account_id: "main".into(),
+        account_id: account_id("main"),
         segments: vec![],
     })
     .unwrap();
@@ -414,7 +461,7 @@ fn fill_event_updates_account_position_owned_by_actor() {
     let mut app =
         compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
     app.refresh(RefreshAccount {
-        account_id: "main".into(),
+        account_id: account_id("main"),
         segments: vec![],
     })
     .unwrap();
@@ -423,19 +470,19 @@ fn fill_event_updates_account_position_owned_by_actor() {
         order_id: None,
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-        quantity: Decimal::new(2, 0),
-        price: Decimal::new(100, 0),
+        quantity: quantity(2, 0),
+        price: price(100, 0),
         side: FillSide::Buy,
         settlement_asset: None,
         settlement_delta: None,
         fee_asset: None,
         fee_amount: None,
-        occurred_at_unix_nanos: 99,
+        occurred_at_unix_nanos: nanos(99),
     })
     .unwrap();
     assert_eq!(
         app.query(AccountQuery {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: vec![],
             max_age_seconds: None,
             now_unix_nanos: None
@@ -446,7 +493,7 @@ fn fill_event_updates_account_position_owned_by_actor() {
             .find(|value| value.instrument_id == "instrument:btc")
             .unwrap()
             .quantity,
-        Decimal::new(2, 0)
+        signed(2, 0)
     );
 }
 
@@ -455,35 +502,35 @@ fn fill_settles_balance_and_fee_in_account_application() {
     let snapshots = BTreeMap::from([(
         "spot".into(),
         AccountSnapshot {
-            balances: vec![balance("asset:usdt", "USDT", Decimal::new(1_000_000, 2))],
+            balances: vec![balance("asset:usdt", "USDT", signed(1_000_000, 2))],
             ..empty_snapshot("spot")
         },
     )]);
     let mut app =
         compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
     app.refresh(RefreshAccount {
-        account_id: "main".into(),
+        account_id: account_id("main"),
         segments: vec![],
     })
     .unwrap();
     app.apply_simulated_fill(AccountFill {
         fill_id: FillId::new("fill-1").unwrap(),
-        order_id: Some("order-1".into()),
+        order_id: Some(order_id("order-1")),
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-        quantity: Decimal::new(2, 0),
-        price: Decimal::new(100, 0),
+        quantity: quantity(2, 0),
+        price: price(100, 0),
         side: FillSide::Buy,
-        settlement_asset: Some("USDT".into()),
-        settlement_delta: Some(Decimal::new(-20_000, 2)),
-        fee_asset: Some("USDT".into()),
-        fee_amount: Some(Decimal::new(100, 2)),
-        occurred_at_unix_nanos: 10,
+        settlement_asset: Some(currency("USDT")),
+        settlement_delta: Some(signed(-20_000, 2)),
+        fee_asset: Some(currency("USDT")),
+        fee_amount: Some(signed(100, 2)),
+        occurred_at_unix_nanos: nanos(10),
     })
     .unwrap();
     let view = &app
         .query(AccountQuery {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: vec![],
             max_age_seconds: None,
             now_unix_nanos: None,
@@ -495,7 +542,7 @@ fn fill_settles_balance_and_fee_in_account_application() {
             .find(|value| value.instrument_id == "instrument:btc")
             .unwrap()
             .quantity,
-        Decimal::new(2, 0)
+        signed(2, 0)
     );
     assert_eq!(
         view.balances
@@ -503,8 +550,115 @@ fn fill_settles_balance_and_fee_in_account_application() {
             .find(|value| value.asset_id == "asset:usdt")
             .unwrap()
             .total,
-        Decimal::new(979_900, 2)
+        signed(979_900, 2)
     );
+}
+
+#[test]
+fn simulated_settlement_tracks_average_cost_and_realized_pnl() {
+    let snapshots = BTreeMap::from([(
+        "spot".into(),
+        AccountSnapshot {
+            balances: vec![balance("asset:usdt", "USDT", signed(1_000_000, 2))],
+            ..empty_snapshot("spot")
+        },
+    )]);
+    let mut app =
+        compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
+    app.refresh(RefreshAccount {
+        account_id: account_id("main"),
+        segments: vec![],
+    })
+    .unwrap();
+
+    for (id, quantity, price, at) in [
+        ("buy-1", quantity(2, 0), price(100, 0), 10),
+        ("buy-2", quantity(2, 0), price(120, 0), 20),
+        ("sell-1", quantity(1, 0), price(130, 0), 30),
+    ] {
+        app.apply_simulated_fill(AccountFill {
+            fill_id: FillId::new(id).unwrap(),
+            order_id: Some(order_id(id)),
+            segment_key: SegmentKey::new("spot").unwrap(),
+            instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+            quantity,
+            price,
+            side: if id.starts_with("buy") {
+                FillSide::Buy
+            } else {
+                FillSide::Sell
+            },
+            settlement_asset: None,
+            settlement_delta: None,
+            fee_asset: None,
+            fee_amount: None,
+            occurred_at_unix_nanos: nanos(at),
+        })
+        .unwrap();
+    }
+
+    let position = &app
+        .query(AccountQuery {
+            account_id: account_id("main"),
+            segments: vec![],
+            max_age_seconds: None,
+            now_unix_nanos: None,
+        })
+        .unwrap()[0]
+        .positions[0];
+    assert_eq!(position.quantity, signed(3, 0));
+    assert_eq!(position.average_price, Some(price(110, 0)));
+    assert_eq!(position.realized_pnl, Some(money(20, 0)));
+}
+
+#[test]
+fn mark_to_market_updates_equity_and_unrealized_pnl() {
+    let mut initial = empty_snapshot("spot");
+    initial.balances = vec![balance("asset:usdt", "USDT", signed(10_000, 0))];
+    initial.equity = Some(money(10_000, 0));
+    initial.initial_equity = Some(money(10_000, 0));
+    let snapshots = BTreeMap::from([("spot".into(), initial)]);
+    let mut app =
+        compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
+    app.refresh(RefreshAccount {
+        account_id: account_id("main"),
+        segments: vec![],
+    })
+    .unwrap();
+    app.apply_simulated_fill(AccountFill {
+        fill_id: FillId::new("mark-fill").unwrap(),
+        order_id: Some(order_id("mark-order")),
+        segment_key: SegmentKey::new("spot").unwrap(),
+        instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+        quantity: quantity(2, 0),
+        price: price(100, 0),
+        side: FillSide::Buy,
+        settlement_asset: Some(currency("USDT")),
+        settlement_delta: Some(signed(-200, 0)),
+        fee_asset: None,
+        fee_amount: None,
+        occurred_at_unix_nanos: nanos(10),
+    })
+    .unwrap();
+    app.mark_to_market(MarkToMarket {
+        segment_key: segment_key("spot"),
+        instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+        quote_asset: currency("USDT"),
+        mark_price: price(120, 0),
+        observed_at_unix_nanos: nanos(20),
+    })
+    .unwrap();
+    let view = &app
+        .query(AccountQuery {
+            account_id: account_id("main"),
+            segments: vec![],
+            max_age_seconds: None,
+            now_unix_nanos: None,
+        })
+        .unwrap()[0];
+    assert_eq!(view.equity, Some(money(10_040, 0)));
+    assert_eq!(view.net_profit, Some(money(40, 0)));
+    assert_eq!(view.positions[0].unrealized_pnl, Some(money(40, 0)));
 }
 
 #[test]
@@ -515,19 +669,43 @@ fn duplicate_fill_id_is_rejected_without_mutating_account_state() {
         order_id: None,
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-        quantity: Decimal::new(1, 0),
-        price: Decimal::new(100, 0),
+        quantity: quantity(1, 0),
+        price: price(100, 0),
         side: FillSide::Buy,
         settlement_asset: None,
         settlement_delta: None,
         fee_asset: None,
         fee_amount: None,
-        occurred_at_unix_nanos: 1,
+        occurred_at_unix_nanos: nanos(1),
     };
     account.record_fill(fill.clone()).unwrap();
     let state_after_first = account.state().clone();
     assert_eq!(account.record_fill(fill), Ok(ApplyOutcome::Duplicate));
     assert_eq!(account.state(), &state_after_first);
+}
+
+#[test]
+fn conflicting_duplicate_fill_enters_reconciliation() {
+    let mut account = Account::new(segment("spot")).unwrap();
+    let fill = AccountFill {
+        fill_id: FillId::new("fill-conflict").unwrap(),
+        order_id: None,
+        segment_key: SegmentKey::new("spot").unwrap(),
+        instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+        quantity: quantity(1, 0),
+        price: price(100, 0),
+        side: FillSide::Buy,
+        settlement_asset: None,
+        settlement_delta: None,
+        fee_asset: None,
+        fee_amount: None,
+        occurred_at_unix_nanos: nanos(1),
+    };
+    account.record_fill(fill.clone()).unwrap();
+    let mut conflict = fill;
+    conflict.price = price(101, 0);
+    assert_eq!(account.record_fill(conflict), Ok(ApplyOutcome::Conflict));
+    assert_eq!(account.status(), AccountStatus::Reconciling);
 }
 
 #[test]
@@ -542,12 +720,12 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
     account
         .apply_snapshot(AccountSnapshot {
             segment_key: SegmentKey::new("spot").unwrap(),
-            balances: vec![balance("asset:usdt", "USDT", Decimal::new(10, 0))],
+            balances: vec![balance("asset:usdt", "USDT", signed(10, 0))],
             collateral: vec![],
-            positions: vec![position("instrument:btc", Decimal::new(1, 0))],
+            positions: vec![position("instrument:btc", signed(1, 0))],
             open_orders: vec![],
             status: AccountStatus::Ready,
-            observed_at_unix_nanos: 1,
+            observed_at_unix_nanos: 1.into(),
             equity: None,
             initial_equity: None,
             net_profit: None,
@@ -560,12 +738,12 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
     account
         .apply_snapshot(AccountSnapshot {
             segment_key: SegmentKey::new("spot").unwrap(),
-            balances: vec![balance("asset:usdc", "USDC", Decimal::new(5, 0))],
+            balances: vec![balance("asset:usdc", "USDC", signed(5, 0))],
             collateral: vec![],
-            positions: vec![position("instrument:btc", Decimal::new(0, 0))],
+            positions: vec![position("instrument:btc", signed(0, 0))],
             open_orders: vec![],
             status: AccountStatus::Ready,
-            observed_at_unix_nanos: 2,
+            observed_at_unix_nanos: 2.into(),
             equity: None,
             initial_equity: None,
             net_profit: None,
@@ -585,8 +763,8 @@ fn json_store_restores_account_state() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("account.json");
     let mut snapshot = empty_snapshot("spot");
-    snapshot.observed_at_unix_nanos = 10;
-    snapshot.balances = vec![balance("asset:usdt", "USDT", Decimal::new(42, 0))];
+    snapshot.observed_at_unix_nanos = 10.into();
+    snapshot.balances = vec![balance("asset:usdt", "USDT", signed(42, 0))];
     let mut application = compose_in_memory_account_application(
         vec![segment("spot")],
         BTreeMap::from([("spot".into(), snapshot)]),
@@ -595,7 +773,7 @@ fn json_store_restores_account_state() {
     .unwrap();
     application
         .refresh(RefreshAccount {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: Vec::new(),
         })
         .unwrap();
@@ -610,7 +788,7 @@ fn json_store_restores_account_state() {
     assert_eq!(restored.snapshot().generation, generation);
     assert_eq!(
         restored.snapshot().accounts[0].balances[0].total,
-        Decimal::new(42, 0)
+        signed(42, 0)
     );
     let persisted: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -630,7 +808,7 @@ fn journal_restores_high_frequency_fill_without_checkpoint_rewrite() {
     .unwrap();
     application
         .refresh(RefreshAccount {
-            account_id: "main".into(),
+            account_id: account_id("main"),
             segments: Vec::new(),
         })
         .unwrap();
@@ -640,14 +818,14 @@ fn journal_restores_high_frequency_fill_without_checkpoint_rewrite() {
             order_id: None,
             segment_key: SegmentKey::new("spot").unwrap(),
             instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-            quantity: Decimal::new(1, 0),
-            price: Decimal::new(100, 0),
+            quantity: quantity(1, 0),
+            price: price(100, 0),
             side: FillSide::Buy,
             settlement_asset: None,
             settlement_delta: None,
             fee_asset: None,
             fee_amount: None,
-            occurred_at_unix_nanos: 11,
+            occurred_at_unix_nanos: nanos(11),
         })
         .unwrap();
     let generation = application.snapshot().generation;
@@ -659,7 +837,7 @@ fn journal_restores_high_frequency_fill_without_checkpoint_rewrite() {
     assert_eq!(restored.snapshot().generation, generation);
     assert_eq!(
         restored.snapshot().accounts[0].positions[0].quantity,
-        Decimal::new(1, 0)
+        signed(1, 0)
     );
 }
 
@@ -667,8 +845,8 @@ fn journal_restores_high_frequency_fill_without_checkpoint_rewrite() {
 fn snapshot_transition_rejects_stale_and_duplicate_observations() {
     let mut account = Account::new(segment("spot")).unwrap();
     let mut snapshot = empty_snapshot("spot");
-    snapshot.observed_at_unix_nanos = 100;
-    snapshot.balances = vec![balance("asset:usdt", "USDT", Decimal::new(10_000, 2))];
+    snapshot.observed_at_unix_nanos = 100.into();
+    snapshot.balances = vec![balance("asset:usdt", "USDT", signed(10_000, 2))];
 
     assert_eq!(
         account.apply_snapshot(snapshot.clone()).unwrap(),
@@ -680,8 +858,8 @@ fn snapshot_transition_rejects_stale_and_duplicate_observations() {
         ApplyOutcome::Duplicate
     );
 
-    snapshot.observed_at_unix_nanos = 99;
-    snapshot.balances[0].total = Decimal::new(1, 0);
+    snapshot.observed_at_unix_nanos = 99.into();
+    snapshot.balances[0].total = signed(1, 0);
     assert_eq!(
         account.apply_snapshot(snapshot).unwrap(),
         ApplyOutcome::Stale
@@ -693,21 +871,27 @@ fn snapshot_transition_rejects_stale_and_duplicate_observations() {
 fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     let mut account = Account::new(segment("spot")).unwrap();
     let mut full = empty_snapshot("spot");
-    full.observed_at_unix_nanos = 100;
+    full.observed_at_unix_nanos = 100.into();
     assert_eq!(account.apply_snapshot(full).unwrap(), ApplyOutcome::Applied);
-    account.evaluate_staleness(200, 50);
+    account.evaluate_staleness(
+        kairos_domain_types::UnixNanos::new(200),
+        kairos_domain_types::DurationNanos::new(50),
+    );
     assert!(account.state().stale());
 
     let mut delta = empty_snapshot("spot");
     delta.kind = kairos_account::domain::SnapshotKind::Delta;
-    delta.observed_at_unix_nanos = 150;
-    delta.balances = vec![balance("asset:usdt", "USDT", Decimal::new(5, 0))];
+    delta.observed_at_unix_nanos = 150.into();
+    delta.balances = vec![balance("asset:usdt", "USDT", signed(5, 0))];
     assert_eq!(
         account.apply_snapshot(delta).unwrap(),
         ApplyOutcome::Applied
     );
     assert!(account.state().stale());
-    assert_eq!(account.state().observed_at_unix_nanos(), 100);
+    assert_eq!(
+        account.state().observed_at_unix_nanos(),
+        kairos_domain_types::UnixNanos::new(100)
+    );
 }
 
 #[test]
@@ -723,9 +907,9 @@ fn reconciliation_transition_is_explicit_and_idempotent() {
 fn observed_live_fill_is_audit_only() {
     let mut account = Account::new(segment("spot")).unwrap();
     let mut snapshot = empty_snapshot("spot");
-    snapshot.observed_at_unix_nanos = 10;
-    snapshot.balances = vec![balance("asset:usdt", "USDT", Decimal::new(100, 0))];
-    snapshot.positions = vec![position("instrument:btc", Decimal::new(1, 0))];
+    snapshot.observed_at_unix_nanos = 10.into();
+    snapshot.balances = vec![balance("asset:usdt", "USDT", signed(100, 0))];
+    snapshot.positions = vec![position("instrument:btc", signed(1, 0))];
     account.apply_snapshot(snapshot).unwrap();
     let balances_before = account.state().balances().clone();
     let positions_before = account.state().positions().clone();
@@ -734,23 +918,89 @@ fn observed_live_fill_is_audit_only() {
         account
             .record_fill(AccountFill {
                 fill_id: FillId::new("live-fill-1").unwrap(),
-                order_id: Some("order-1".into()),
+                order_id: Some(order_id("order-1")),
                 segment_key: SegmentKey::new("spot").unwrap(),
                 instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-                quantity: Decimal::new(2, 0),
-                price: Decimal::new(25, 0),
+                quantity: quantity(2, 0),
+                price: price(25, 0),
                 side: FillSide::Buy,
-                settlement_asset: Some("USDT".into()),
-                settlement_delta: Some(Decimal::new(-50, 0)),
+                settlement_asset: Some(currency("USDT")),
+                settlement_delta: Some(signed(-50, 0)),
                 fee_asset: None,
                 fee_amount: None,
-                occurred_at_unix_nanos: 20,
+                occurred_at_unix_nanos: nanos(20),
             })
             .unwrap(),
         ApplyOutcome::Applied
     );
     assert_eq!(account.state().balances(), &balances_before);
     assert_eq!(account.state().positions(), &positions_before);
+}
+
+#[test]
+fn account_first_observed_fill_enters_reconciliation_without_settlement() {
+    let mut account = Account::new(segment("spot")).unwrap();
+    let mut snapshot = empty_snapshot("spot");
+    snapshot.observed_at_unix_nanos = 10.into();
+    snapshot.balances = vec![balance("asset:usdt", "USDT", signed(100, 0))];
+    account.apply_snapshot(snapshot).unwrap();
+    let balances_before = account.state().balances().clone();
+
+    assert_eq!(
+        account
+            .observe_fill(AccountObservedFill {
+                fill_id: FillId::new("account-first-fill").unwrap(),
+                order_id: Some(order_id("local-order-not-yet-recovered")),
+                remote_order_id: Some(remote_order_id("exchange-order-1")),
+                segment_key: SegmentKey::new("spot").unwrap(),
+                instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+                quantity: quantity(1, 0),
+                price: price(100, 0),
+                side: FillSide::Buy,
+                occurred_at_unix_nanos: nanos(20),
+            })
+            .unwrap(),
+        ApplyOutcome::Applied
+    );
+    assert_eq!(account.status(), AccountStatus::Reconciling);
+    assert_eq!(account.state().balances(), &balances_before);
+    assert_eq!(account.observed_fills().len(), 1);
+    assert_eq!(
+        account
+            .record_fill(AccountFill {
+                fill_id: FillId::new("account-first-fill").unwrap(),
+                order_id: Some(order_id("local-order-not-yet-recovered")),
+                segment_key: SegmentKey::new("spot").unwrap(),
+                instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+                quantity: quantity(1, 0),
+                price: price(100, 0),
+                side: FillSide::Buy,
+                settlement_asset: None,
+                settlement_delta: None,
+                fee_asset: None,
+                fee_amount: None,
+                occurred_at_unix_nanos: nanos(20),
+            })
+            .unwrap(),
+        ApplyOutcome::Applied
+    );
+    assert!(account.observed_fills().is_empty());
+    assert_eq!(
+        account
+            .observe_fill(AccountObservedFill {
+                fill_id: FillId::new("account-first-fill").unwrap(),
+                order_id: Some(order_id("local-order-not-yet-recovered")),
+                remote_order_id: Some(remote_order_id("exchange-order-1")),
+                segment_key: SegmentKey::new("spot").unwrap(),
+                instrument_id: InstrumentId::new("instrument:btc").unwrap(),
+                quantity: quantity(1, 0),
+                price: price(100, 0),
+                side: FillSide::Buy,
+                occurred_at_unix_nanos: nanos(20),
+            })
+            .unwrap(),
+        ApplyOutcome::Duplicate
+    );
 }
 
 #[test]
@@ -768,14 +1018,14 @@ fn persistence_failure_does_not_commit_simulated_fill() {
         order_id: None,
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new("instrument:btc").unwrap(),
-        quantity: Decimal::new(1, 0),
-        price: Decimal::new(100, 0),
+        quantity: quantity(1, 0),
+        price: price(100, 0),
         side: FillSide::Buy,
         settlement_asset: None,
         settlement_delta: None,
         fee_asset: None,
         fee_amount: None,
-        occurred_at_unix_nanos: 1,
+        occurred_at_unix_nanos: nanos(1),
     });
     assert!(result.is_err());
     let after = application.snapshot();

@@ -9,12 +9,17 @@ pub mod snapshot;
 pub mod transport;
 
 pub use event::EventEnvelope;
-pub use model::{MarketSnapshot, Quote};
+pub use model::{
+    DepthCursor, DepthPolicy, FundingRate, IndexPrice, InstrumentStatus, MarkPrice,
+    MarketFreshness, MarketSnapshot, OpenInterest, Quote, QuoteBar, Rate, Ticker24h, TradeBar,
+};
 pub use query::{CommandEnvelope, QueryEnvelope};
 pub use reference::{decode_reference_changed, ReferenceChangeNotice};
 pub use snapshot::{
+    read_latest_bars, read_latest_greeks, read_latest_market_snapshot, read_latest_quote_bars,
     read_latest_quotes, read_latest_quotes_watermark, read_latest_quotes_with_watermark,
-    MarketSnapshotRead, SnapshotEnvelope,
+    read_latest_trade_bars, read_latest_trades, read_orderbooks, MarketSnapshotRead,
+    SnapshotEnvelope,
 };
 
 #[derive(Debug)]

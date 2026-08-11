@@ -3,12 +3,37 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from dataclasses import dataclass
+import time
 from typing import Callable, Mapping, Sequence
 
+from kairospy.application.observability import (
+    record_counter,
+    record_duration_ms,
+    start_span,
+)
 from kairospy.strategy import StrategyContextProtocol, StrategyLogger
 from kairospy.infrastructure.contracts.reference import ReferenceSnapshotClient
-from ..domain.messages import CommandHandle, ContextRequest, EventEnvelope, SnapshotEnvelope, SubscriptionRequest, TargetPositionRequest
-from ..protocol import ContextBus, EventStream, IntentCommandPort, MarketCommandPort, SnapshotReader
+from ..domain.messages import (
+    ArbitrageLegRequest,
+    CommandHandle,
+    ContextRequest,
+    EventEnvelope,
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    PortfolioRebalanceTarget,
+    QuoteProvisioningRequest,
+    QuoteRefreshRequest,
+    SnapshotEnvelope,
+    SubscriptionRequest,
+    TargetPositionRequest,
+)
+from ..protocol import (
+    ContextBus,
+    EventStream,
+    IntentCommandPort,
+    MarketCommandPort,
+    SnapshotReader,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +46,8 @@ class StrategyClientBundle:
     market_snapshots: SnapshotReader
     market_events: EventStream
     reference: ReferenceSnapshotClient | None = None
+    backtest_market: Callable[[EventEnvelope], None] | None = None
+    backtest_account_mark: Callable[[EventEnvelope], object] | None = None
 
 
 class StrategyContext(StrategyContextProtocol):
@@ -48,7 +75,9 @@ class StrategyContext(StrategyContextProtocol):
         self.reference = clients.reference
         self._request_observer = request_observer
         self.state = state if state is not None else {}
-        self.logger = logger or StrategyLogger(fields={"strategy_id": strategy_id, "instance_id": instance_id})
+        self.logger = logger or StrategyLogger(
+            fields={"strategy_id": strategy_id, "instance_id": instance_id}
+        )
         self._event: EventEnvelope | None = None
         self._views: dict[str, SnapshotEnvelope] = {}
         self._request_counter = 0
@@ -66,11 +95,40 @@ class StrategyContext(StrategyContextProtocol):
         return self._event
 
     def _submit(self, operation: str, payload: object) -> CommandHandle:
-        request = ContextRequest(operation, payload, self.strategy_id, self._request_id(operation), self.instance_id)
+        started = time.monotonic()
+        request = ContextRequest(
+            operation,
+            payload,
+            self.strategy_id,
+            self._request_id(operation),
+            self.instance_id,
+        )
+        with start_span(
+            "strategy.command",
+            attributes={
+                "component": "strategy",
+                "operation": operation,
+                "request_id": request.request_id,
+            },
+        ):
+            try:
+                handle = self._submit_request(request, payload)
+            except Exception:
+                record_counter("kairos.operation.failed")
+                raise
+            record_counter("kairos.operation")
+            record_duration_ms(
+                "kairos.operation.duration", (time.monotonic() - started) * 1_000
+            )
+            return handle
+
+    def _submit_request(
+        self, request: ContextRequest, payload: object
+    ) -> CommandHandle:
         self.logger.info(
             "strategy command submitted",
             event="strategy_command_submitted",
-            operation=operation,
+            operation=request.operation,
             request_id=request.request_id,
             payload_type=type(payload).__name__,
             **self._command_observability(payload),
@@ -78,18 +136,22 @@ class StrategyContext(StrategyContextProtocol):
         try:
             handle = self.clients.commands.submit(request)
         except Exception as error:
+            record_counter("kairos.strategy.command.failed")
             self.logger.error(
                 "strategy command raised",
                 event="strategy_command_raised",
-                operation=operation,
+                operation=request.operation,
                 request_id=request.request_id,
+                error_kind=type(error).__name__,
+                retryable=False,
                 error=str(error),
             )
             raise
+        record_counter("kairos.strategy.command.total")
         self.logger.info(
             "strategy command result",
             event="strategy_command_result",
-            operation=operation,
+            operation=request.operation,
             request_id=request.request_id,
             command_status=handle.status,
             error=handle.error,
@@ -117,30 +179,80 @@ class StrategyContext(StrategyContextProtocol):
             }
         return {}
 
-    def subscribe(self, subject: str, *, selectors: Sequence[str] = (), exchange: str | None = None, market_type: str | None = None, asset_type: str | None = None, identity: str | None = None, params: Mapping[str, object] | None = None, dynamic: bool = False) -> CommandHandle:
-        request = SubscriptionRequest(subject=subject, selectors=tuple(selectors), exchange=exchange, market_type=market_type, asset_type=asset_type, identity=identity, params=params or {}, dynamic=dynamic)
+    def subscribe(
+        self,
+        subject: str,
+        *,
+        selectors: Sequence[str] = (),
+        exchange: str | None = None,
+        market_type: str | None = None,
+        asset_type: str | None = None,
+        identity: str | None = None,
+        params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
+    ) -> CommandHandle:
+        request = SubscriptionRequest(
+            subject=subject,
+            selectors=tuple(selectors),
+            exchange=exchange,
+            market_type=market_type,
+            asset_type=asset_type,
+            identity=identity,
+            params=params or {},
+            dynamic=dynamic,
+        )
         return self._submit("market.subscribe", request)
-
 
     def unsubscribe(self, subscription: object) -> CommandHandle:
         return self._submit("market.unsubscribe", subscription)
 
-    def target_position(self, instrument: str, quantity: Decimal | str | int | float, *, account: str | None = None, accounts: Sequence[str] | None = None, limit_price: Decimal | str | int | float | None = None, reason: str = "", intent_id: str | None = None) -> CommandHandle:
-        return self._submit("intent.target_position", TargetPositionRequest(
-            instrument_id=instrument,
-            quantity=Decimal(str(quantity)),
-            account_id=account,
-            account_ids=tuple(accounts or ()),
-            limit_price=None if limit_price is None else Decimal(str(limit_price)),
-            reason=reason,
-            intent_id=intent_id,
-            source_snapshot_id=None if self._event is None else self._event.stream_id,
-            source_event_sequence=None if self._event is None else self._event.sequence,
-        ))
+    def target_position(
+        self,
+        instrument: str,
+        quantity: Decimal | str | int | float,
+        *,
+        account: str | None = None,
+        accounts: Sequence[str] | None = None,
+        limit_price: Decimal | str | int | float | None = None,
+        reason: str = "",
+        intent_id: str | None = None,
+    ) -> CommandHandle:
+        return self._submit(
+            "intent.target_position",
+            TargetPositionRequest(
+                instrument_id=instrument,
+                quantity=Decimal(str(quantity)),
+                account_id=account,
+                account_ids=tuple(accounts or ()),
+                limit_price=None if limit_price is None else Decimal(str(limit_price)),
+                reason=reason,
+                intent_id=intent_id,
+                source_snapshot_id=None
+                if self._event is None
+                else self._event.stream_id,
+                source_event_sequence=None
+                if self._event is None
+                else self._event.sequence,
+            ),
+        )
+
+    def pair_arbitrage(self, request: PairArbitrageRequest) -> CommandHandle:
+        return self._submit("intent.pair_arbitrage", request)
+
+    def portfolio_rebalance(self, request: PortfolioRebalanceRequest) -> CommandHandle:
+        return self._submit("intent.portfolio_rebalance", request)
+
+    def quote_provisioning(self, request: QuoteProvisioningRequest) -> CommandHandle:
+        return self._submit("intent.quote_provisioning", request)
+
+    def refresh_quote(self, request: QuoteRefreshRequest) -> CommandHandle:
+        return self._submit("intent.refresh_quote", request)
 
     def view(self, view_key: str, default: object = None) -> object:
         try:
-            return self._views.get(view_key, self.clients.market_snapshots.read(view_key)).payload
+            return self._views.get(
+                view_key, self.clients.market_snapshots.read(view_key)
+            ).payload
         except (KeyError, FileNotFoundError):
             return default
 

@@ -22,8 +22,8 @@ impl<'a> ::flatbuffers::Follow<'a> for Listing<'a> {
 impl<'a> Listing<'a> {
     pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_VENUE_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_VENUE_SYMBOL: ::flatbuffers::VOffsetT = 10;
+    pub const VT_EXCHANGE_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_EXCHANGE_SYMBOL: ::flatbuffers::VOffsetT = 10;
     pub const VT_STATUS: ::flatbuffers::VOffsetT = 12;
     pub const VT_EFFECTIVE_FROM_UNIX_NANOS: ::flatbuffers::VOffsetT = 14;
     pub const VT_EFFECTIVE_TO_UNIX_NANOS: ::flatbuffers::VOffsetT = 16;
@@ -48,11 +48,11 @@ impl<'a> Listing<'a> {
         if let Some(x) = args.status {
             builder.add_status(x);
         }
-        if let Some(x) = args.venue_symbol {
-            builder.add_venue_symbol(x);
+        if let Some(x) = args.exchange_symbol {
+            builder.add_exchange_symbol(x);
         }
-        if let Some(x) = args.venue_id {
-            builder.add_venue_id(x);
+        if let Some(x) = args.exchange_id {
+            builder.add_exchange_id(x);
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
@@ -86,24 +86,24 @@ impl<'a> Listing<'a> {
         }
     }
     #[inline]
-    pub fn venue_id(&self) -> &'a str {
+    pub fn exchange_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Listing::VT_VENUE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Listing::VT_EXCHANGE_ID, None)
                 .unwrap()
         }
     }
     #[inline]
-    pub fn venue_symbol(&self) -> &'a str {
+    pub fn exchange_symbol(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Listing::VT_VENUE_SYMBOL, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Listing::VT_EXCHANGE_SYMBOL, None)
                 .unwrap()
         }
     }
@@ -160,13 +160,13 @@ impl ::flatbuffers::Verifiable for Listing<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_id",
-                Self::VT_VENUE_ID,
+                "exchange_id",
+                Self::VT_EXCHANGE_ID,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_symbol",
-                Self::VT_VENUE_SYMBOL,
+                "exchange_symbol",
+                Self::VT_EXCHANGE_SYMBOL,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
@@ -187,8 +187,8 @@ impl ::flatbuffers::Verifiable for Listing<'_> {
 pub struct ListingArgs<'a> {
     pub listing_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub venue_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub venue_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub exchange_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub exchange_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub effective_from_unix_nanos: u64,
     pub effective_to_unix_nanos: u64,
@@ -197,11 +197,11 @@ impl<'a> Default for ListingArgs<'a> {
     #[inline]
     fn default() -> Self {
         ListingArgs {
-            listing_id: None,    // required field
-            instrument_id: None, // required field
-            venue_id: None,      // required field
-            venue_symbol: None,  // required field
-            status: None,        // required field
+            listing_id: None,      // required field
+            instrument_id: None,   // required field
+            exchange_id: None,     // required field
+            exchange_symbol: None, // required field
+            status: None,          // required field
             effective_from_unix_nanos: 0,
             effective_to_unix_nanos: 0,
         }
@@ -226,15 +226,15 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ListingBuilder<'a, 'b, A> {
         );
     }
     #[inline]
-    pub fn add_venue_id(&mut self, venue_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_exchange_id(&mut self, exchange_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Listing::VT_VENUE_ID, venue_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Listing::VT_EXCHANGE_ID, exchange_id);
     }
     #[inline]
-    pub fn add_venue_symbol(&mut self, venue_symbol: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_exchange_symbol(&mut self, exchange_symbol: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Listing::VT_VENUE_SYMBOL,
-            venue_symbol,
+            Listing::VT_EXCHANGE_SYMBOL,
+            exchange_symbol,
         );
     }
     #[inline]
@@ -272,9 +272,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ListingBuilder<'a, 'b, A> {
         self.fbb_.required(o, Listing::VT_LISTING_ID, "listing_id");
         self.fbb_
             .required(o, Listing::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Listing::VT_VENUE_ID, "venue_id");
         self.fbb_
-            .required(o, Listing::VT_VENUE_SYMBOL, "venue_symbol");
+            .required(o, Listing::VT_EXCHANGE_ID, "exchange_id");
+        self.fbb_
+            .required(o, Listing::VT_EXCHANGE_SYMBOL, "exchange_symbol");
         self.fbb_.required(o, Listing::VT_STATUS, "status");
         ::flatbuffers::WIPOffset::new(o.value())
     }
@@ -285,8 +286,8 @@ impl ::core::fmt::Debug for Listing<'_> {
         let mut ds = f.debug_struct("Listing");
         ds.field("listing_id", &self.listing_id());
         ds.field("instrument_id", &self.instrument_id());
-        ds.field("venue_id", &self.venue_id());
-        ds.field("venue_symbol", &self.venue_symbol());
+        ds.field("exchange_id", &self.exchange_id());
+        ds.field("exchange_symbol", &self.exchange_symbol());
         ds.field("status", &self.status());
         ds.field(
             "effective_from_unix_nanos",

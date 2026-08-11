@@ -5,6 +5,10 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+const SEGMENT_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
+const CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
+const CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
+
 pub(crate) struct RefreshFetch {
     pub segment: AccountSegment,
     pub result: Result<AccountSnapshot, String>,
@@ -38,13 +42,45 @@ impl AccountRefreshWorker {
                 let handle = thread::Builder::new()
                     .name(name)
                     .spawn(move || {
+                        let mut consecutive_failures = 0_u32;
+                        let mut circuit_open_until = None;
                         while let Ok(job) = receiver.recv() {
+                            if let Some(until) = circuit_open_until {
+                                if Instant::now() < until {
+                                    let elapsed_ms = 0;
+                                    let fetch = RefreshFetch {
+                                        segment: job.segment,
+                                        result: Err("account refresh circuit is open".into()),
+                                        elapsed_ms,
+                                    };
+                                    if job.response.send(fetch).is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                circuit_open_until = None;
+                            }
                             let started = Instant::now();
-                            let result = source.fetch(&job.segment);
+                            let mut result = source.fetch(&job.segment);
+                            let elapsed = started.elapsed();
+                            if elapsed > SEGMENT_REFRESH_TIMEOUT {
+                                result = Err(format!(
+                                    "account segment refresh timed out after {}ms",
+                                    elapsed.as_millis()
+                                ));
+                            }
+                            if result.is_err() {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
+                                if consecutive_failures >= CIRCUIT_FAILURE_THRESHOLD {
+                                    circuit_open_until = Some(Instant::now() + CIRCUIT_COOLDOWN);
+                                }
+                            } else {
+                                consecutive_failures = 0;
+                            }
                             let fetch = RefreshFetch {
                                 segment: job.segment,
                                 result,
-                                elapsed_ms: started.elapsed().as_millis() as u64,
+                                elapsed_ms: elapsed.as_millis() as u64,
                             };
                             if job.response.send(fetch).is_err() {
                                 break;

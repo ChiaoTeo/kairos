@@ -32,16 +32,34 @@ def snapshot_reader(path: str | Path) -> MmapMarketSnapshotReader:
     return MmapMarketSnapshotReader(path)
 
 
-def event_stream(path: str | Path, *, stream_id: str = "market.events") -> UnixMarketEventStream:
-    return UnixMarketEventStream(path, stream_id=stream_id)
+def event_stream(
+    path: str | Path,
+    *,
+    stream_id: str = "market.events",
+    replayable: bool = False,
+) -> UnixMarketEventStream:
+    return UnixMarketEventStream(path, stream_id=stream_id, replayable=replayable)
 
 
-def command_port(path: str | Path, *, launch_id: str | None = None) -> MarketUnixCommandPort:
+def command_port(
+    path: str | Path, *, launch_id: str | None = None
+) -> MarketUnixCommandPort:
     return MarketUnixCommandPort(UnixJsonCommandClient(path), launch_id=launch_id)
 
 
 __all__ = [
-    "BarView", "CommandEnvelope", "DecimalValue", "EventStreamGap", "GreeksView", "MarketDataView",
-    "MmapMarketSnapshotReader", "QueryEnvelope", "QuoteView", "TradeView",
-    "UnixMarketEventStream", "command_port", "event_stream", "snapshot_reader",
+    "BarView",
+    "CommandEnvelope",
+    "DecimalValue",
+    "EventStreamGap",
+    "GreeksView",
+    "MarketDataView",
+    "MmapMarketSnapshotReader",
+    "QueryEnvelope",
+    "QuoteView",
+    "TradeView",
+    "UnixMarketEventStream",
+    "command_port",
+    "event_stream",
+    "snapshot_reader",
 ]

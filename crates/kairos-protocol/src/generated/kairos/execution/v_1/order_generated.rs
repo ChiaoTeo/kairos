@@ -26,7 +26,7 @@ impl<'a> Order<'a> {
     pub const VT_ACCOUNT_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 12;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 14;
-    pub const VT_VENUE_ORDER_ID: ::flatbuffers::VOffsetT = 16;
+    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 16;
     pub const VT_STATUS: ::flatbuffers::VOffsetT = 18;
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 20;
     pub const VT_ORDER_TYPE: ::flatbuffers::VOffsetT = 22;
@@ -77,8 +77,8 @@ impl<'a> Order<'a> {
         if let Some(x) = args.status {
             builder.add_status(x);
         }
-        if let Some(x) = args.venue_order_id {
-            builder.add_venue_order_id(x);
+        if let Some(x) = args.remote_order_id {
+            builder.add_remote_order_id(x);
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
@@ -167,13 +167,13 @@ impl<'a> Order<'a> {
         }
     }
     #[inline]
-    pub fn venue_order_id(&self) -> Option<&'a str> {
+    pub fn remote_order_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Order::VT_VENUE_ORDER_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Order::VT_REMOTE_ORDER_ID, None)
         }
     }
     #[inline]
@@ -340,8 +340,8 @@ impl ::flatbuffers::Verifiable for Order<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_order_id",
-                Self::VT_VENUE_ORDER_ID,
+                "remote_order_id",
+                Self::VT_REMOTE_ORDER_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
@@ -398,7 +398,7 @@ pub struct OrderArgs<'a> {
     pub account_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub venue_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: super::super::common::v_1::Side,
     pub order_type: super::super::common::v_1::OrderType,
@@ -421,7 +421,7 @@ impl<'a> Default for OrderArgs<'a> {
             account_id: None,    // required field
             instrument_id: None, // required field
             market_id: None,
-            venue_order_id: None,
+            remote_order_id: None,
             status: None, // required field
             side: super::super::common::v_1::Side::UNSPECIFIED,
             order_type: super::super::common::v_1::OrderType::UNSPECIFIED,
@@ -475,10 +475,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Order::VT_MARKET_ID, market_id);
     }
     #[inline]
-    pub fn add_venue_order_id(&mut self, venue_order_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_remote_order_id(&mut self, remote_order_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Order::VT_VENUE_ORDER_ID,
-            venue_order_id,
+            Order::VT_REMOTE_ORDER_ID,
+            remote_order_id,
         );
     }
     #[inline]
@@ -597,7 +597,7 @@ impl ::core::fmt::Debug for Order<'_> {
         ds.field("account_id", &self.account_id());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
-        ds.field("venue_order_id", &self.venue_order_id());
+        ds.field("remote_order_id", &self.remote_order_id());
         ds.field("status", &self.status());
         ds.field("side", &self.side());
         ds.field("order_type", &self.order_type());

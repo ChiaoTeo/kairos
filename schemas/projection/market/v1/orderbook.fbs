@@ -10,6 +10,9 @@ table OrderBook {
   event_time_unix_nanos:ulong;
   source_id:string;
   checksum:string;
+  depth_policy:string;
+  first_sequence:ulong;
+  last_sequence:ulong;
   synchronized:bool;
   bids:[kairos.market.v1.OrderBookLevel];
   asks:[kairos.market.v1.OrderBookLevel];

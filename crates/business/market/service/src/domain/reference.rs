@@ -1,4 +1,5 @@
 use crate::domain::market::MarketDescriptor;
+use kairos_domain_types::{Generation, Sequence};
 
 /// Notification that a newer Reference snapshot is available.
 ///
@@ -7,7 +8,7 @@ use crate::domain::market::MarketDescriptor;
 /// change and reconciles its own subscription state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceChanged {
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub markets: Vec<MarketDescriptor>,
 }

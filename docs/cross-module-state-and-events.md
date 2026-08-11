@@ -417,21 +417,24 @@ fallback data path; any administrative operation must be an explicit control
 command executed by a composition-owned preflight worker.
 
 The provider's private order stream is a fifth, execution-owned input pipe. It
-publishes normalized `VenueOrderEvent` facts into Execution and is never
+publishes normalized `RemoteOrderEvent` facts into Execution and is never
 represented as an application command. Order entry and remote order queries
 also have separate provider gateway workers; their concrete SDK connections
 never enter the state owner.
 
 Execution's high-frequency path is explicitly bounded and batched. The state
-owner consumes at most 64 venue facts before yielding one control request, then
+owner consumes at most 64 exchange facts before yielding one control request, then
 flushes the durable outbox and publishes the newest snapshot once per batch.
-The venue, command, and query mailboxes are bounded; queue depth, batch size,
+The exchange, command, and query mailboxes are bounded; queue depth, batch size,
 applied event count, and last state-operation latency are exposed in health.
 SQLite commits a state checkpoint and its outbox record in one transaction,
 while audit publication and outbox acknowledgement use batch transactions.
 Provider/preflight queues have a finite enqueue deadline, and repeated
 dependency transport failures open a short circuit; cleanup commands bypass the
 circuit so reservations can still be released or consumed.
+Account and Reference projections short-circuit full reads when their health
+watermark is unchanged; Market first reads only its snapshot watermark and
+decodes quotes only after a publication change.
 
 ### Account and Risk
 

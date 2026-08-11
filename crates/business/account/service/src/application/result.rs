@@ -1,24 +1,26 @@
 use crate::domain::{
-    Account, AccountModel, AccountStatus, Balance, Decimal, MarginMode, OpenOrder, Position,
+    Account, AccountModel, AccountStatus, Balance, MarginMode, Money, OpenOrder, Position,
     PositionMode,
 };
+use crate::domain::{AccountId, SegmentKey};
+use kairos_domain_types::{ActorId, Currency, Generation, Sequence, UnixNanos};
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AccountProjection {
-    pub account_id: String,
-    pub segment_key: String,
+    pub account_id: AccountId,
+    pub segment_key: SegmentKey,
     pub environment: String,
     pub broker: String,
     pub configured_account_model: Option<String>,
     pub observed_account_model: Option<AccountModel>,
     pub status: AccountStatus,
     pub stale: bool,
-    pub observed_at_unix_nanos: u64,
-    pub generation: u64,
-    pub event_sequence: u64,
-    pub equity: Option<Decimal>,
-    pub initial_equity: Option<Decimal>,
-    pub net_profit: Option<Decimal>,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub equity: Option<Money>,
+    pub initial_equity: Option<Money>,
+    pub net_profit: Option<Money>,
     pub margin_mode: Option<MarginMode>,
     pub position_mode: Option<PositionMode>,
     pub balances: Vec<Balance>,
@@ -32,8 +34,8 @@ impl AccountProjection {
         let segment = account.segment();
         let state = account.state();
         Self {
-            account_id: segment.identity.account_id.to_string(),
-            segment_key: segment.segment_key.to_string(),
+            account_id: segment.identity.account_id.clone(),
+            segment_key: segment.segment_key.clone(),
             environment: segment.environment.clone(),
             broker: segment.identity.broker.clone(),
             configured_account_model: segment.account_model.clone(),
@@ -58,7 +60,7 @@ impl AccountProjection {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountRefreshIssue {
-    pub segment_key: String,
+    pub segment_key: SegmentKey,
     pub error: String,
     pub elapsed_ms: u64,
     pub diagnostic_id: String,
@@ -68,14 +70,14 @@ pub struct AccountRefreshIssue {
 pub struct AccountDifference {
     pub field: String,
     pub key: String,
-    pub local: Decimal,
-    pub external: Decimal,
+    pub local: crate::domain::SignedQuantity,
+    pub external: crate::domain::SignedQuantity,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountRefreshReport {
-    pub account_id: String,
-    pub refreshed_segments: Vec<String>,
+    pub account_id: AccountId,
+    pub refreshed_segments: Vec<SegmentKey>,
     pub issues: Vec<AccountRefreshIssue>,
     #[serde(default)]
     pub differences: Vec<AccountDifference>,
@@ -83,16 +85,16 @@ pub struct AccountRefreshReport {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountsSnapshot {
-    pub actor_id: String,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub accounts: Vec<AccountProjection>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountCapability {
-    pub account_id: String,
-    pub segment_key: String,
+    pub account_id: AccountId,
+    pub segment_key: SegmentKey,
     pub can_trade: bool,
     pub can_hold_assets: bool,
     pub can_hold_position: bool,
@@ -100,23 +102,23 @@ pub struct AccountCapability {
     pub can_transfer_in: bool,
     pub can_transfer_out: bool,
     pub supported_order_types: Vec<String>,
-    pub settlement_assets: Vec<String>,
+    pub settlement_assets: Vec<Currency>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountFeeSchedule {
-    pub account_id: String,
-    pub segment_key: String,
-    pub maker: Option<Decimal>,
-    pub taker: Option<Decimal>,
-    pub currency: Option<String>,
+    pub account_id: AccountId,
+    pub segment_key: SegmentKey,
+    pub maker: Option<kairos_domain_types::Rate>,
+    pub taker: Option<kairos_domain_types::Rate>,
+    pub currency: Option<Currency>,
     pub tier: Option<String>,
     pub source: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct AccountBalanceRow {
-    pub account_id: String,
-    pub segment_key: String,
+    pub account_id: AccountId,
+    pub segment_key: SegmentKey,
     pub balance: Balance,
 }

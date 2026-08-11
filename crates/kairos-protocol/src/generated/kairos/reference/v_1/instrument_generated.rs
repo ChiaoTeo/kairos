@@ -30,7 +30,10 @@ impl<'a> Instrument<'a> {
     pub const VT_STRIKE: ::flatbuffers::VOffsetT = 18;
     pub const VT_OPTION_RIGHT: ::flatbuffers::VOffsetT = 20;
     pub const VT_MULTIPLIER: ::flatbuffers::VOffsetT = 22;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_ISSUER_ID: ::flatbuffers::VOffsetT = 24;
+    pub const VT_SHARE_CLASS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_PRIMARY_CURRENCY_ASSET_ID: ::flatbuffers::VOffsetT = 28;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -50,6 +53,15 @@ impl<'a> Instrument<'a> {
         builder.add_expiry_unix_nanos(args.expiry_unix_nanos);
         if let Some(x) = args.status {
             builder.add_status(x);
+        }
+        if let Some(x) = args.primary_currency_asset_id {
+            builder.add_primary_currency_asset_id(x);
+        }
+        if let Some(x) = args.share_class {
+            builder.add_share_class(x);
+        }
+        if let Some(x) = args.issuer_id {
+            builder.add_issuer_id(x);
         }
         if let Some(x) = args.multiplier {
             builder.add_multiplier(x);
@@ -188,6 +200,38 @@ impl<'a> Instrument<'a> {
         }
     }
     #[inline]
+    pub fn issuer_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Instrument::VT_ISSUER_ID, None)
+        }
+    }
+    #[inline]
+    pub fn share_class(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Instrument::VT_SHARE_CLASS, None)
+        }
+    }
+    #[inline]
+    pub fn primary_currency_asset_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                Instrument::VT_PRIMARY_CURRENCY_ASSET_ID,
+                None,
+            )
+        }
+    }
+    #[inline]
     pub fn status(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
@@ -241,6 +285,21 @@ impl ::flatbuffers::Verifiable for Instrument<'_> {
                 Self::VT_MULTIPLIER,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "issuer_id",
+                Self::VT_ISSUER_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "share_class",
+                Self::VT_SHARE_CLASS,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "primary_currency_asset_id",
+                Self::VT_PRIMARY_CURRENCY_ASSET_ID,
+                false,
+            )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
             .finish();
         Ok(())
@@ -257,6 +316,9 @@ pub struct InstrumentArgs<'a> {
     pub strike: Option<&'a super::super::common::v_1::Decimal64>,
     pub option_right: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub multiplier: Option<&'a super::super::common::v_1::Decimal64>,
+    pub issuer_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub share_class: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub primary_currency_asset_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for InstrumentArgs<'a> {
@@ -273,6 +335,9 @@ impl<'a> Default for InstrumentArgs<'a> {
             strike: None,
             option_right: None,
             multiplier: None,
+            issuer_id: None,
+            share_class: None,
+            primary_currency_asset_id: None,
             status: None, // required field
         }
     }
@@ -353,6 +418,28 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> InstrumentBuilder<'a, 'b, A> 
             );
     }
     #[inline]
+    pub fn add_issuer_id(&mut self, issuer_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Instrument::VT_ISSUER_ID, issuer_id);
+    }
+    #[inline]
+    pub fn add_share_class(&mut self, share_class: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Instrument::VT_SHARE_CLASS,
+            share_class,
+        );
+    }
+    #[inline]
+    pub fn add_primary_currency_asset_id(
+        &mut self,
+        primary_currency_asset_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Instrument::VT_PRIMARY_CURRENCY_ASSET_ID,
+            primary_currency_asset_id,
+        );
+    }
+    #[inline]
     pub fn add_status(&mut self, status: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Instrument::VT_STATUS, status);
@@ -393,6 +480,12 @@ impl ::core::fmt::Debug for Instrument<'_> {
         ds.field("strike", &self.strike());
         ds.field("option_right", &self.option_right());
         ds.field("multiplier", &self.multiplier());
+        ds.field("issuer_id", &self.issuer_id());
+        ds.field("share_class", &self.share_class());
+        ds.field(
+            "primary_currency_asset_id",
+            &self.primary_currency_asset_id(),
+        );
         ds.field("status", &self.status());
         ds.finish()
     }

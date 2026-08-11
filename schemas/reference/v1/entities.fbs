@@ -10,8 +10,8 @@ table Asset {
   status:string (required);
 }
 
-table Venue {
-  venue_id:string (required);
+table Exchange {
+  exchange_id:string (required);
   name:string (required);
   country:string;
   status:string (required);
@@ -28,14 +28,17 @@ table Instrument {
   strike:kairos.common.v1.Decimal64;
   option_right:string;
   multiplier:kairos.common.v1.Decimal64;
+  issuer_id:string;
+  share_class:string;
+  primary_currency_asset_id:string;
   status:string (required);
 }
 
 table Listing {
   listing_id:string (required);
   instrument_id:string (required);
-  venue_id:string (required);
-  venue_symbol:string (required);
+  exchange_id:string (required);
+  exchange_symbol:string (required);
   status:string (required);
   effective_from_unix_nanos:ulong;
   effective_to_unix_nanos:ulong;
@@ -46,7 +49,7 @@ table Market {
   market_key:string (required);
   instrument_id:string (required);
   listing_id:string (required);
-  venue_id:string (required);
+  exchange_id:string (required);
   market_type:string (required);
   source_symbol:string (required);
   base_asset_id:string;
@@ -61,6 +64,8 @@ table Market {
   contract_size:kairos.common.v1.Decimal64;
   effective_from_unix_nanos:ulong;
   effective_to_unix_nanos:ulong;
+  asset_type:string;
+  underlying_instrument_id:string;
 }
 
 table Catalog {
@@ -86,16 +91,19 @@ table Entity {
   entity_id:string (required);
   entity_type:string (required);
   name:string (required);
+  status:string;
 }
 
 table LifecycleEvent {
   event_id:string (required);
   event_type:string (required);
   event_time_unix_nanos:ulong;
+  record_kind:string;
+  record_id:string;
   market_id:string;
   instrument_id:string;
   listing_id:string;
-  venue_id:string;
+  exchange_id:string;
   source_symbol:string;
   previous_status:string;
   current_status:string;
@@ -124,7 +132,7 @@ table FinancialProduct {
 
 table ExecutionAccess {
   access_id:string (required);
-  instrument_id:string (required);
+  market_id:string (required);
   provider_id:string (required);
   product_family:string (required);
   provider_symbol:string (required);

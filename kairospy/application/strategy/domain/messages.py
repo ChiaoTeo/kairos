@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from kairospy.strategy import (
     CommandResult,
     EventEnvelope,
+    ArbitrageLegRequest,
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    PortfolioRebalanceTarget,
+    QuoteProvisioningRequest,
+    QuoteRefreshRequest,
     SubscriptionRequest,
     TargetPositionRequest,
 )
@@ -21,7 +27,14 @@ class SnapshotEnvelope:
     payload: object
 
     def __post_init__(self) -> None:
-        if not all((self.view_key.strip(), self.snapshot_id.strip(), self.owner_actor_id.strip(), self.event_stream_id.strip())):
+        if not all(
+            (
+                self.view_key.strip(),
+                self.snapshot_id.strip(),
+                self.owner_actor_id.strip(),
+                self.event_stream_id.strip(),
+            )
+        ):
             raise ValueError("snapshot identity fields are required")
         if self.event_sequence < 0 or self.generation < 0:
             raise ValueError("snapshot sequence and generation cannot be negative")
@@ -41,7 +54,14 @@ class StrategyCommand:
     payload: object
 
     def __post_init__(self) -> None:
-        if not all((self.strategy_id.strip(), self.instance_id.strip(), self.request_id.strip(), self.operation.strip())):
+        if not all(
+            (
+                self.strategy_id.strip(),
+                self.instance_id.strip(),
+                self.request_id.strip(),
+                self.operation.strip(),
+            )
+        ):
             raise ValueError("strategy command identity and operation are required")
 
 

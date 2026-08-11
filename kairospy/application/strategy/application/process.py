@@ -43,7 +43,9 @@ class StrategyProcessApplication:
         else:
             if health.get("status") == "ready":
                 if health.get("strategy_state") == "failed":
-                    raise RuntimeError("strategy server is already failed; stop and recreate the instance")
+                    raise RuntimeError(
+                        "strategy server is already failed; stop and recreate the instance"
+                    )
                 return socket
 
         # Strategy is an instance-owned process. Keep its stdout beside the
@@ -55,12 +57,19 @@ class StrategyProcessApplication:
         log_dir.mkdir(parents=True, exist_ok=True)
         log = log_path.open("ab")
         command = [
-            sys.executable, "-m", "kairospy.bin.strategy",
-            "--workspace", str(self.workspace.paths.root),
-            "--launch-id", launch_id,
-            "--instance-id", instance_id,
-            "--mode", mode,
-            "--strategy", strategy_ref,
+            sys.executable,
+            "-m",
+            "kairospy.bin.strategy",
+            "--workspace",
+            str(self.workspace.paths.root),
+            "--launch-id",
+            launch_id,
+            "--instance-id",
+            instance_id,
+            "--mode",
+            mode,
+            "--strategy",
+            strategy_ref,
         ]
         if params:
             command.extend(("--params", json.dumps(params, separators=(",", ":"))))
@@ -89,8 +98,16 @@ class StrategyProcessApplication:
             except Exception:
                 pass
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"strategy server did not become ready; inspect {log_path}")
+                raise TimeoutError(
+                    f"strategy server did not become ready; inspect {log_path}"
+                )
             time.sleep(0.05)
 
-    def stop(self, launch_id: str, instance_id: str, mode: str = "paper") -> dict[str, Any]:
-        return asyncio.run(UnixRestClient(self.socket(launch_id, instance_id, mode)).request("POST", "/v1/stop"))
+    def stop(
+        self, launch_id: str, instance_id: str, mode: str = "paper"
+    ) -> dict[str, Any]:
+        return asyncio.run(
+            UnixRestClient(self.socket(launch_id, instance_id, mode)).request(
+                "POST", "/v1/stop"
+            )
+        )

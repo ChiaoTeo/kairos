@@ -1,0 +1,12 @@
+include "../../common/v1/header.fbs";
+include "data.fbs";
+
+namespace kairos.market.v1;
+
+table RateMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  payload:Rate (required);
+}
+
+root_type RateMessage;
+file_identifier "MRA1";

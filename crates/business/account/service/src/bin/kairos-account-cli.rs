@@ -5,19 +5,36 @@ use clap::{Args, Parser, Subcommand};
 use kairos_account::application::AccountDataQuery;
 use kairos_account::application::{AccountMarketProfileRequest, ReconcileAccount, RefreshAccount};
 use kairos_account::composition::account::{
-    compose_account_application_for_segments, compose_binance_earn, compose_binance_transfer,
-    inspect_account_credential, AccountBindingRecord, AccountCredentialBinding, AccountOptions,
-    AccountRegistry, CredentialRecord, CredentialStore,
+    compose_account_application_for_segments, compose_binance_async_account_application,
+    compose_okx_async_account_application, inspect_account_credential, AccountOptions,
 };
-use kairos_account::domain::{AccountFill, AccountModel};
-use kairos_integration::domain::account::{
-    ExternalAccountIdentity, ExternalAccountSegment, ExternalDecimal,
-};
-use kairos_integration::{
-    EarnProductType, EarnRedeemRequest, EarnSubscribeRequest, TransferRequest,
+use kairos_account::domain::{AccountFill, AccountId, AccountModel, SegmentKey};
+use kairos_domain_types::{MarketId, Price, Quantity, SignedQuantity, Symbol};
+use kairos_integration::application::ExternalAccountCredentialProfile;
+use kairos_workspace::account::{
+    AccountBindingRecord, AccountCredentialBinding, AccountRegistry, CredentialRecord,
+    CredentialStore,
 };
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
+
+async fn inspect_credential(
+    options: &AccountOptions,
+    workspace: &Workspace,
+    egress_scope_id: &str,
+) -> Result<ExternalAccountCredentialProfile, String> {
+    inspect_account_credential(
+        options,
+        Some(
+            workspace
+                .state_root()
+                .join("integration")
+                .join("provider-quota.mmap"),
+        ),
+        egress_scope_id,
+    )
+    .await
+}
 
 /// One-shot account inspection and mutation commands.
 #[tokio::main(flavor = "current_thread")]
@@ -32,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .to_string();
     std::env::set_var("KAIROS_CLI_FORMAT", output);
-    run_direct(&args, &workspace, args.command.clone())?;
+    run_direct(&args, &workspace, args.command.clone()).await?;
     Ok(())
 }
 
@@ -79,6 +96,8 @@ struct ConnectionArgs {
     segment: String,
     #[arg(long, default_value = "live")]
     environment: String,
+    #[arg(long, default_value = "default-egress")]
+    egress_scope_id: String,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -116,7 +135,7 @@ enum Command {
         #[arg(long)]
         account_model: Option<String>,
         #[arg(long)]
-        venue: Option<String>,
+        exchange: Option<String>,
         #[arg(long = "field")]
         fields: Vec<String>,
     },
@@ -126,7 +145,7 @@ enum Command {
         #[arg(long)]
         provider: Option<String>,
         #[arg(long)]
-        venue: Option<String>,
+        exchange: Option<String>,
         #[arg(long)]
         alias: Option<String>,
         #[arg(long)]
@@ -161,22 +180,6 @@ enum Command {
         initial_balances: Vec<String>,
         #[arg(long)]
         fee_rate: Option<String>,
-    },
-    Transfer {
-        #[arg(long)]
-        source_segment: String,
-        #[arg(long)]
-        destination_segment: String,
-        #[arg(long)]
-        asset: String,
-        #[arg(long)]
-        amount_mantissa: i64,
-        #[arg(long, default_value_t = 0)]
-        amount_scale: u8,
-    },
-    Earn {
-        #[command(subcommand)]
-        command: EarnCommand,
     },
     Remove {
         #[arg(long)]
@@ -231,23 +234,6 @@ enum Command {
         provider: String,
     },
     Doctor,
-    TradeLockList,
-    TradeLockAcquire {
-        #[arg(long)]
-        account_id: String,
-        #[arg(long, default_value = "cli")]
-        owner: String,
-    },
-    TradeLockRelease {
-        #[arg(long)]
-        account_id: String,
-        #[arg(long)]
-        owner: Option<String>,
-    },
-    TradeLockStatus {
-        #[arg(long)]
-        account_id: String,
-    },
     Connect,
     Snapshot {
         #[arg(long)]
@@ -344,72 +330,48 @@ impl FillArgs {
                     .ok_or("--fill-id is required for idempotency")?,
             )
             .map_err(|error| error.to_string())?,
-            order_id: self.order_id.clone(),
+            order_id: self
+                .order_id
+                .clone()
+                .map(kairos_domain_types::OrderId::new)
+                .transpose()
+                .map_err(|error| error.to_string())?,
             segment_key: kairos_account::domain::SegmentKey::new(self.segment.clone())
                 .map_err(|error| error.to_string())?,
             instrument_id: kairos_account::domain::InstrumentId::new(self.instrument_id.clone())
                 .map_err(|error| error.to_string())?,
-            quantity: kairos_account::domain::Decimal::new(
-                self.quantity_mantissa,
-                self.quantity_scale,
-            ),
-            price: kairos_account::domain::Decimal::new(self.price_mantissa, self.price_scale),
+            quantity: Quantity::new(self.quantity_mantissa, self.quantity_scale)
+                .map_err(|error| error.to_string())?,
+            price: Price::new(self.price_mantissa, self.price_scale)
+                .map_err(|error| error.to_string())?,
             side: match self.side.to_ascii_lowercase().as_str() {
                 "sell" => kairos_account::domain::FillSide::Sell,
                 _ => kairos_account::domain::FillSide::Buy,
             },
-            settlement_asset: self.settlement_asset.clone(),
-            settlement_delta: self.settlement_delta_mantissa.map(|value| {
-                kairos_account::domain::Decimal::new(value, self.settlement_delta_scale)
-            }),
-            fee_asset: self.fee_asset.clone(),
+            settlement_asset: self
+                .settlement_asset
+                .clone()
+                .map(kairos_domain_types::Currency::new)
+                .transpose()
+                .map_err(|error| error.to_string())?,
+            settlement_delta: self
+                .settlement_delta_mantissa
+                .map(|value| SignedQuantity::new(value, self.settlement_delta_scale)),
+            fee_asset: self
+                .fee_asset
+                .clone()
+                .map(kairos_domain_types::Currency::new)
+                .transpose()
+                .map_err(|error| error.to_string())?,
             fee_amount: self
                 .fee_mantissa
-                .map(|value| kairos_account::domain::Decimal::new(value, self.fee_scale)),
-            occurred_at_unix_nanos: 0,
+                .map(|value| SignedQuantity::new(value, self.fee_scale)),
+            occurred_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
         })
     }
 }
 
-#[derive(Clone, Debug, Subcommand)]
-enum EarnCommand {
-    Products {
-        #[arg(long)]
-        asset: Option<String>,
-        #[arg(long)]
-        product_type: Option<String>,
-    },
-    Positions {
-        #[arg(long)]
-        asset: Option<String>,
-    },
-    Rewards {
-        #[arg(long)]
-        asset: Option<String>,
-    },
-    Subscribe {
-        #[arg(long)]
-        product_id: String,
-        #[arg(long, default_value = "flexible")]
-        product_type: String,
-        #[arg(long)]
-        amount: String,
-        #[arg(long)]
-        auto_renew: Option<bool>,
-    },
-    Redeem {
-        #[arg(long)]
-        product_id: String,
-        #[arg(long, default_value = "flexible")]
-        product_type: String,
-        #[arg(long)]
-        amount: Option<String>,
-        #[arg(long)]
-        destination_account: Option<String>,
-    },
-}
-
-fn run_direct(
+async fn run_direct(
     args: &Cli,
     workspace: &Workspace,
     command: Command,
@@ -418,7 +380,6 @@ fn run_direct(
     let mut registry = AccountRegistry::load(&registry_path)?;
     let credentials_path = workspace.child(&["credentials", "credentials.toml"])?;
     let mut credential_store = CredentialStore::load(&credentials_path)?;
-    registry.credentials.clear();
     for account in &mut registry.accounts {
         if account.credentials.is_empty() {
             if let Some(credential_id) = account.credential_id.clone() {
@@ -514,7 +475,7 @@ fn run_direct(
             environment,
             segment,
             account_model,
-            venue,
+            exchange,
             fields,
         } => {
             let values = parse_field_values(fields)?;
@@ -522,7 +483,7 @@ fn run_direct(
                 account_id: account_id.clone(),
                 alias: account_id.clone(),
                 provider: provider.clone(),
-                venue: venue.clone(),
+                exchange: exchange.clone(),
                 environment: environment.clone(),
                 remote_identity: None,
                 permissions: BTreeMap::new(),
@@ -543,7 +504,7 @@ fn run_direct(
         Command::Modify {
             account_id,
             provider,
-            venue,
+            exchange,
             alias,
             environment,
             segment,
@@ -565,8 +526,8 @@ fn run_direct(
             if let Some(value) = provider {
                 record.provider = value.clone();
             }
-            if let Some(value) = venue {
-                record.venue = Some(value.clone());
+            if let Some(value) = exchange {
+                record.exchange = Some(value.clone());
             }
             if let Some(value) = alias {
                 record.alias = value.clone();
@@ -617,7 +578,7 @@ fn run_direct(
                 account_id: account_id.clone(),
                 alias: account_id.clone(),
                 provider: "paper".into(),
-                venue: Some("paper".into()),
+                exchange: Some("paper".into()),
                 environment: "paper".into(),
                 remote_identity: None,
                 permissions: BTreeMap::new(),
@@ -641,19 +602,8 @@ fn run_direct(
             return Ok(());
         }
         Command::Remove { account_id, force } => {
-            if !force
-                && registry
-                    .locks
-                    .iter()
-                    .any(|lock| lock.account_id == *account_id)
-            {
-                return Err(format!(
-                    "account has an active trade lock: {account_id}; use --force to remove"
-                )
-                .into());
-            }
+            let _ = force;
             let removed = registry.remove_account(account_id);
-            registry.locks.retain(|lock| lock.account_id != *account_id);
             registry.save(&registry_path)?;
             print_json(serde_json::json!({"account_id": account_id, "removed": removed}));
             return Ok(());
@@ -695,8 +645,10 @@ fn run_direct(
                 .ok_or_else(|| format!("credential not found: {credential_id}"))?;
             if *check {
                 let options = credential_probe_options(args, &record, credential)?;
-                let profile = inspect_account_credential(&options)
-                    .map_err(|error| format!("credential check failed: {error}"))?;
+                let profile =
+                    inspect_credential(&options, workspace, &args.connection.egress_scope_id)
+                        .await
+                        .map_err(|error| format!("credential check failed: {error}"))?;
                 let permissions: std::collections::BTreeSet<_> = profile
                     .permissions
                     .iter()
@@ -873,32 +825,6 @@ fn run_direct(
             print_json(serde_json::json!({"accounts": registry.accounts, "issues": issues}));
             return Ok(());
         }
-        Command::TradeLockList => {
-            print_json(serde_json::to_value(&registry.locks)?);
-            return Ok(());
-        }
-        Command::TradeLockAcquire { account_id, owner } => {
-            registry.acquire_lock(account_id, owner)?;
-            registry.save(&registry_path)?;
-            print_json(
-                serde_json::json!({"account_id": account_id, "owner": owner, "status":"locked"}),
-            );
-            return Ok(());
-        }
-        Command::TradeLockRelease { account_id, owner } => {
-            let released = registry.release_lock(account_id, owner.as_deref());
-            registry.save(&registry_path)?;
-            print_json(serde_json::json!({"account_id": account_id, "released": released}));
-            return Ok(());
-        }
-        Command::TradeLockStatus { account_id } => {
-            let value = registry
-                .locks
-                .iter()
-                .find(|lock| lock.account_id == *account_id);
-            print_json(serde_json::to_value(value)?);
-            return Ok(());
-        }
         _ => {}
     }
     let account_id = args.connection.account_id.clone();
@@ -926,6 +852,8 @@ fn run_direct(
         })
         .ok_or("--account-id is required for a direct account command")?;
     let account_id = resolve_account_id(&registry, &account_id)?;
+    let account_id_type = AccountId::new(account_id.clone())?;
+    let selected_segment_type = SegmentKey::new(selected_segment.clone())?;
     let account_record = registry
         .accounts
         .iter()
@@ -986,9 +914,9 @@ fn run_direct(
     let options = AccountOptions {
         provider,
         product,
-        api_key,
-        secret,
-        passphrase,
+        api_key: api_key.into(),
+        secret: secret.into(),
+        passphrase: passphrase.into(),
         base_url: args.connection.base_url.clone(),
         account_id: account_id.clone(),
         segment: selected_segment.clone(),
@@ -1004,98 +932,6 @@ fn run_direct(
         port: args.connection.port,
         client_id: args.connection.client_id,
     };
-    if let Command::Transfer {
-        source_segment,
-        destination_segment,
-        asset,
-        amount_mantissa,
-        amount_scale,
-    } = &command
-    {
-        let mut connection = compose_binance_transfer(&options)?;
-        let identity = ExternalAccountIdentity::new(&options.provider, account_id.clone())?;
-        let result = connection.transfer(&TransferRequest {
-            source: ExternalAccountSegment {
-                identity: identity.clone(),
-                segment_key: source_segment.clone(),
-                environment: options.environment.clone(),
-                account_model: None,
-            },
-            destination: ExternalAccountSegment {
-                identity,
-                segment_key: destination_segment.clone(),
-                environment: options.environment.clone(),
-                account_model: None,
-            },
-            asset: asset.clone(),
-            amount: ExternalDecimal::new(*amount_mantissa, *amount_scale),
-        })?;
-        print_json(serde_json::json!({
-            "accepted": result.accepted,
-            "reference_id": result.reference_id,
-            "reason": result.reason,
-        }));
-        return Ok(());
-    }
-    if let Command::Earn {
-        command: earn_command,
-    } = &command
-    {
-        let mut connection = compose_binance_earn(&options)?;
-        let value = match earn_command {
-            EarnCommand::Products {
-                asset,
-                product_type,
-            } => {
-                let products = connection.products(
-                    asset.as_deref(),
-                    product_type
-                        .as_deref()
-                        .map(parse_earn_product_type)
-                        .transpose()?,
-                )?;
-                serde_json::json!({"products": products.iter().map(earn_product_json).collect::<Vec<_>>()})
-            }
-            EarnCommand::Positions { asset } => serde_json::json!({
-                "positions": connection
-                    .positions(asset.as_deref())?
-                    .iter()
-                    .map(earn_position_json)
-                    .collect::<Vec<_>>()
-            }),
-            EarnCommand::Rewards { asset } => serde_json::json!({
-                "rewards": connection
-                    .rewards(asset.as_deref())?
-                    .iter()
-                    .map(earn_reward_json)
-                    .collect::<Vec<_>>()
-            }),
-            EarnCommand::Subscribe {
-                product_id,
-                product_type,
-                amount,
-                auto_renew,
-            } => earn_action_json(connection.subscribe(&EarnSubscribeRequest {
-                product_id: product_id.clone(),
-                product_type: parse_earn_product_type(product_type)?,
-                amount: amount.clone(),
-                auto_renew: *auto_renew,
-            })?),
-            EarnCommand::Redeem {
-                product_id,
-                product_type,
-                amount,
-                destination_account,
-            } => earn_action_json(connection.redeem(&EarnRedeemRequest {
-                product_id: product_id.clone(),
-                product_type: parse_earn_product_type(product_type)?,
-                amount: amount.clone(),
-                destination_account: destination_account.clone(),
-            })?),
-        };
-        print_json(value);
-        return Ok(());
-    }
     let state = workspace.child(&["state", "account", "account-state.json"])?;
     let configured_segments = registry
         .accounts
@@ -1104,8 +940,42 @@ fn run_direct(
         .map(|record| record.segments.clone())
         .filter(|segments| !segments.is_empty())
         .unwrap_or_else(|| vec![selected_segment.clone()]);
-    let mut composition =
-        compose_account_application_for_segments(&options, &configured_segments, Some(state))?;
+    let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
+        && configured_segments.iter().all(|segment| {
+            matches!(
+                segment.trim().to_ascii_lowercase().as_str(),
+                "spot" | "funding"
+            )
+        });
+    let native_okx_account = matches!(
+        options.provider.trim().to_ascii_lowercase().as_str(),
+        "okx" | "okex"
+    );
+    let shared_quota_ledger = workspace
+        .state_root()
+        .join("integration")
+        .join("provider-quota.mmap");
+    let mut composition = if native_binance_account {
+        compose_binance_async_account_application(
+            &options,
+            &configured_segments,
+            Some(state),
+            "wss://ws-api.binance.com:443/ws-api/v3",
+            Some(shared_quota_ledger.clone()),
+            &args.connection.egress_scope_id,
+        )?
+    } else if native_okx_account {
+        compose_okx_async_account_application(
+            &options,
+            &configured_segments,
+            Some(state),
+            None,
+            Some(shared_quota_ledger),
+            &args.connection.egress_scope_id,
+        )?
+    } else {
+        compose_account_application_for_segments(&options, &configured_segments, Some(state))?
+    };
     let trade_enabled = account_record.as_ref().map_or_else(
         || credential.is_none_or(|value| !value.role.eq_ignore_ascii_case("readonly")),
         |record| {
@@ -1127,10 +997,10 @@ fn run_direct(
             composition
                 .application
                 .refresh_market_profile(AccountMarketProfileRequest {
-                    account_id: account_id.clone(),
-                    segment_key: selected_segment.clone(),
-                    market_id: market_id.clone(),
-                    source_symbol: source_symbol.clone(),
+                    account_id: account_id_type.clone(),
+                    segment_key: selected_segment_type.clone(),
+                    market_id: MarketId::new(market_id.clone())?,
+                    source_symbol: Symbol::new(source_symbol.clone())?,
                 })?;
         print_json(serde_json::to_value(profile)?);
         return Ok(());
@@ -1138,12 +1008,12 @@ fn run_direct(
 
     let refresh_report = if matches!(&command, Command::Reconcile) {
         composition.application.reconcile_report(ReconcileAccount {
-            account_id: account_id.clone(),
+            account_id: account_id_type.clone(),
             segments: Vec::new(),
         })?
     } else {
         composition.application.refresh_report(RefreshAccount {
-            account_id: account_id.clone(),
+            account_id: account_id_type.clone(),
             segments: Vec::new(),
         })?
     };
@@ -1167,7 +1037,10 @@ fn run_direct(
             .iter()
             .find(|record| record.account_id == account_id)
             .cloned();
-        let credential_profile = inspect_account_credential(&options).ok();
+        let credential_profile =
+            inspect_credential(&options, workspace, &args.connection.egress_scope_id)
+                .await
+                .ok();
         print_json(serde_json::json!({
             "account_id": account_id,
             "provider": options.provider,
@@ -1183,7 +1056,10 @@ fn run_direct(
         return Ok(());
     }
     if matches!(&command, Command::Connect) {
-        let credential_profile = inspect_account_credential(&options).ok();
+        let credential_profile =
+            inspect_credential(&options, workspace, &args.connection.egress_scope_id)
+                .await
+                .ok();
         let connected_role = credential
             .map(|value| value.role.clone())
             .unwrap_or_else(|| "readonly".into());
@@ -1200,7 +1076,7 @@ fn run_direct(
                 .clone()
                 .unwrap_or_else(|| account_id.clone()),
             provider: options.provider.clone(),
-            venue: Some(options.provider.clone()),
+            exchange: Some(options.provider.clone()),
             environment: options.environment.clone(),
             remote_identity: credential_profile
                 .as_ref()
@@ -1251,8 +1127,8 @@ fn run_direct(
     let value = match command {
         Command::Snapshot { symbol } => {
             serde_json::to_value(composition.application.snapshot_query(&AccountDataQuery {
-                account_id: Some(account_id.clone()),
-                symbol,
+                account_id: Some(account_id_type.clone()),
+                symbol: symbol.and_then(|value| Symbol::new(value).ok()),
                 ..Default::default()
             }))?
         }
@@ -1266,8 +1142,11 @@ fn run_direct(
             page_size,
         } => {
             let query = AccountDataQuery {
-                account_id: Some(account_id.clone()),
-                segments,
+                account_id: Some(account_id_type.clone()),
+                segments: segments
+                    .into_iter()
+                    .filter_map(|value| SegmentKey::new(value).ok())
+                    .collect(),
                 include_zero,
                 page: Some(page),
                 page_size: Some(page_size),
@@ -1283,16 +1162,19 @@ fn run_direct(
         }
         Command::Positions { segments, symbol } => {
             serde_json::json!({"accounts": composition.application.positions_query(&AccountDataQuery {
-                account_id: Some(account_id.clone()),
-                segments,
-                symbol,
+                account_id: Some(account_id_type.clone()),
+                segments: segments
+                    .into_iter()
+                    .filter_map(|value| SegmentKey::new(value).ok())
+                    .collect(),
+                symbol: symbol.and_then(|value| Symbol::new(value).ok()),
                 ..Default::default()
             }), "refresh": refresh_report})
         }
         Command::OpenOrders { symbol, limit } => {
             serde_json::json!({"accounts": composition.application.open_orders_query(&AccountDataQuery {
-                account_id: Some(account_id.clone()),
-                symbol,
+                account_id: Some(account_id_type.clone()),
+                symbol: symbol.and_then(|value| Symbol::new(value).ok()),
                 limit,
                 ..Default::default()
             }), "refresh": refresh_report})
@@ -1315,8 +1197,6 @@ fn run_direct(
         | Command::Register { .. }
         | Command::Modify { .. }
         | Command::Simulate { .. }
-        | Command::Transfer { .. }
-        | Command::Earn { .. }
         | Command::Remove { .. }
         | Command::CredentialList
         | Command::CredentialAdd { .. }
@@ -1326,10 +1206,6 @@ fn run_direct(
         | Command::Schemas
         | Command::Schema { .. }
         | Command::Doctor
-        | Command::TradeLockList
-        | Command::TradeLockAcquire { .. }
-        | Command::TradeLockRelease { .. }
-        | Command::TradeLockStatus { .. }
         | Command::Connect
         | Command::MarketProfile { .. } => unreachable!(),
     };
@@ -1424,9 +1300,9 @@ fn credential_probe_options(
             .first()
             .cloned()
             .unwrap_or_else(|| args.connection.product.clone()),
-        api_key,
-        secret,
-        passphrase,
+        api_key: api_key.into(),
+        secret: secret.into(),
+        passphrase: passphrase.into(),
         base_url: args.connection.base_url.clone(),
         account_id: account.account_id.clone(),
         segment: account
@@ -1440,57 +1316,6 @@ fn credential_probe_options(
         host: args.connection.host.clone(),
         port: args.connection.port,
         client_id: args.connection.client_id,
-    })
-}
-
-fn parse_earn_product_type(value: &str) -> Result<EarnProductType, Box<dyn std::error::Error>> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "flexible" => Ok(EarnProductType::Flexible),
-        "locked" => Ok(EarnProductType::Locked),
-        _ => Err(format!("unsupported earn product type: {value}").into()),
-    }
-}
-
-fn earn_product_json(value: &kairos_integration::EarnProduct) -> serde_json::Value {
-    serde_json::json!({
-        "product_id": value.product_id,
-        "asset": value.asset,
-        "product_type": format!("{:?}", value.product_type).to_ascii_lowercase(),
-        "annual_rate": value.annual_rate,
-        "min_amount": value.min_amount,
-        "max_amount": value.max_amount,
-        "status": value.status,
-        "duration_days": value.duration_days,
-    })
-}
-
-fn earn_position_json(value: &kairos_integration::EarnPosition) -> serde_json::Value {
-    serde_json::json!({
-        "product_id": value.product_id,
-        "asset": value.asset,
-        "amount": value.amount,
-        "rewards": value.rewards,
-        "annual_rate": value.annual_rate,
-        "status": value.status,
-        "updated_at_unix_millis": value.updated_at_unix_millis,
-    })
-}
-
-fn earn_reward_json(value: &kairos_integration::EarnReward) -> serde_json::Value {
-    serde_json::json!({
-        "asset": value.asset,
-        "amount": value.amount,
-        "product_id": value.product_id,
-        "occurred_at_unix_millis": value.occurred_at_unix_millis,
-    })
-}
-
-fn earn_action_json(value: kairos_integration::EarnActionResult) -> serde_json::Value {
-    serde_json::json!({
-        "accepted": value.accepted,
-        "action_id": value.action_id,
-        "status": value.status,
-        "reason": value.reason,
     })
 }
 

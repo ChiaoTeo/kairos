@@ -1,9 +1,9 @@
 use super::{
     AccountBalanceRow, AccountCapability, AccountDataQuery, AccountError, AccountFeeSchedule,
     AccountMarketProfile, AccountMarketProfileRequest, AccountProjection, AccountQuery,
-    AccountRefreshReport, AccountsSnapshot, ReconcileAccount, RefreshAccount,
+    AccountRefreshReport, AccountsSnapshot, MarkToMarket, ReconcileAccount, RefreshAccount,
 };
-use crate::domain::AccountSegment;
+use crate::domain::{AccountEvent, AccountObservedFill, AccountSegment};
 use crate::services::integration::{
     AccountEventStream, AccountMarketProfileGateway, AccountSnapshotGateway,
 };
@@ -12,6 +12,8 @@ use crate::services::runtime::AccountRuntime;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
+
+type BalanceRows = Vec<(String, String, Vec<crate::domain::Balance>)>;
 
 pub struct AccountApplication {
     runtime: AccountRuntime,
@@ -82,6 +84,10 @@ impl AccountApplication {
         self.runtime.stream_queue_depth()
     }
 
+    pub(crate) fn stream_wakeup(&self) -> Arc<tokio::sync::Notify> {
+        self.runtime.stream_wakeup()
+    }
+
     pub(crate) fn take_persistence_error(&self) -> Option<String> {
         self.runtime.take_persistence_error()
     }
@@ -99,25 +105,35 @@ impl AccountApplication {
     }
 
     pub fn query(&self, request: AccountQuery) -> Result<Vec<AccountProjection>, AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
-        let mut views = self.runtime.query(&request.account_id, &request.segments);
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let mut views = self.runtime.query(request.account_id.as_str(), &segments);
         if let (Some(max_age), Some(now)) = (request.max_age_seconds, request.now_unix_nanos) {
-            let max_age_nanos = max_age.saturating_mul(1_000_000_000);
             for view in &mut views {
-                view.stale = now.saturating_sub(view.observed_at_unix_nanos) > max_age_nanos;
+                view.stale =
+                    now.get().saturating_sub(view.observed_at_unix_nanos.get()) > max_age.get();
             }
         }
         Ok(views)
     }
 
     pub fn refresh(&mut self, request: RefreshAccount) -> Result<usize, AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         self.runtime
-            .refresh(&request.account_id, &request.segments)
+            .refresh(request.account_id.as_str(), &segments)
             .map_err(AccountError::Source)
     }
 
@@ -125,14 +141,19 @@ impl AccountApplication {
         &mut self,
         request: RefreshAccount,
     ) -> Result<AccountRefreshReport, AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
         let started = Instant::now();
         info!(event = "account_refresh_started", component = "account", account_id = %request.account_id, requested_segments = request.segments.len(), "account refresh started");
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         match self
             .runtime
-            .refresh_report(&request.account_id, &request.segments)
+            .refresh_report(request.account_id.as_str(), &segments)
             .map_err(AccountError::Source)
         {
             Ok(report) => {
@@ -151,11 +172,16 @@ impl AccountApplication {
     }
 
     pub fn start_refresh(&mut self, request: RefreshAccount) -> Result<(), AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         self.runtime
-            .start_refresh(&request.account_id, &request.segments)
+            .start_refresh(request.account_id.as_str(), &segments)
             .map_err(AccountError::Source)
     }
 
@@ -168,11 +194,16 @@ impl AccountApplication {
     }
 
     pub fn reconcile(&mut self, request: ReconcileAccount) -> Result<usize, AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         self.runtime
-            .reconcile(&request.account_id, &request.segments)
+            .reconcile(request.account_id.as_str(), &segments)
             .map_err(AccountError::Source)
     }
 
@@ -180,11 +211,16 @@ impl AccountApplication {
         &mut self,
         request: ReconcileAccount,
     ) -> Result<AccountRefreshReport, AccountError> {
-        if request.account_id.trim().is_empty() {
+        if request.account_id.as_str().trim().is_empty() {
             return Err(AccountError::Invalid("account_id is required".into()));
         }
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         self.runtime
-            .reconcile_report(&request.account_id, &request.segments)
+            .reconcile_report(request.account_id.as_str(), &segments)
             .map_err(AccountError::Source)
     }
 
@@ -207,19 +243,21 @@ impl AccountApplication {
             .iter()
             .filter(|view| account_id.is_none_or(|id| view.account_id == id))
             .map(|view| {
-                let key = view.segment_key.to_ascii_lowercase();
-                let broker = view.broker.to_ascii_lowercase();
-                let can_trade = self.trade_enabled && !matches!(key.as_str(), "funding" | "earn");
-                // Transfer is an integration capability, not a property of
-                // every account snapshot.  The current native adapter exists
-                // only for live Binance accounts; paper/other venues must
-                // report unavailable instead of advertising a false action.
-                let can_transfer = broker == "binance"
-                    && !matches!(
-                        view.environment.to_ascii_lowercase().as_str(),
-                        "paper" | "simulated"
-                    );
-                let can_hold_position = !matches!(key.as_str(), "spot" | "funding" | "earn");
+                // Account reports conservative account facts. Provider action
+                // capabilities (transfers, earn, and order-type support) are
+                // owned by Integration/Execution and must not be inferred
+                // from a broker or segment string here.
+                let can_trade = self.trade_enabled
+                    && matches!(view.status, crate::domain::AccountStatus::Ready);
+                let can_transfer = false;
+                let can_hold_position = view
+                    .observed_account_model
+                    .or_else(|| {
+                        view.configured_account_model
+                            .as_deref()
+                            .and_then(crate::domain::AccountModel::parse)
+                    })
+                    .is_some_and(|model| !matches!(model, crate::domain::AccountModel::NoMargin));
                 let can_borrow = view
                     .configured_account_model
                     .as_deref()
@@ -292,7 +330,10 @@ impl AccountApplication {
     }
 
     pub fn snapshot_query(&self, request: &AccountDataQuery) -> AccountsSnapshot {
-        let symbol = request.symbol.as_deref().map(str::to_ascii_lowercase);
+        let symbol = request
+            .symbol
+            .as_ref()
+            .map(|value| value.as_str().to_ascii_lowercase());
         let source = self.snapshot_shared();
         let accounts = source
             .accounts
@@ -347,8 +388,8 @@ impl AccountApplication {
             .filter(|view| account_id.is_none_or(|id| view.account_id == id))
             .map(|view| {
                 (
-                    view.account_id.clone(),
-                    view.segment_key.clone(),
+                    view.account_id.to_string(),
+                    view.segment_key.to_string(),
                     view.balances.clone(),
                 )
             })
@@ -380,10 +421,7 @@ impl AccountApplication {
     pub fn balances_query_with_rows(
         &self,
         request: &AccountDataQuery,
-    ) -> (
-        Vec<(String, String, Vec<crate::domain::Balance>)>,
-        Vec<AccountBalanceRow>,
-    ) {
+    ) -> (BalanceRows, Vec<AccountBalanceRow>) {
         let mut accounts = Vec::new();
         let mut rows = Vec::new();
         for view in &self.runtime.snapshot_shared().accounts {
@@ -410,7 +448,11 @@ impl AccountApplication {
                 segment_key: view.segment_key.clone(),
                 balance,
             }));
-            accounts.push((view.account_id.clone(), view.segment_key.clone(), balances));
+            accounts.push((
+                view.account_id.to_string(),
+                view.segment_key.to_string(),
+                balances,
+            ));
         }
         paginate(&mut accounts, request.page, request.page_size);
         paginate(&mut rows, request.page, request.page_size);
@@ -428,8 +470,10 @@ impl AccountApplication {
                 balances.into_iter().filter_map(move |balance| {
                     if request.include_zero || !balance.total.is_zero() {
                         Some(AccountBalanceRow {
-                            account_id: account_id.clone(),
-                            segment_key: segment_key.clone(),
+                            account_id: kairos_domain_types::AccountId::new(account_id.clone())
+                                .expect("runtime projection account IDs are validated"),
+                            segment_key: crate::domain::SegmentKey::new(segment_key.clone())
+                                .expect("runtime projection segment keys are validated"),
                             balance,
                         })
                     } else {
@@ -453,8 +497,8 @@ impl AccountApplication {
             .filter(|view| account_id.is_none_or(|id| view.account_id == id))
             .map(|view| {
                 (
-                    view.account_id.clone(),
-                    view.segment_key.clone(),
+                    view.account_id.to_string(),
+                    view.segment_key.to_string(),
                     view.positions.clone(),
                 )
             })
@@ -502,8 +546,8 @@ impl AccountApplication {
             .filter(|view| account_id.is_none_or(|id| view.account_id == id))
             .map(|view| {
                 (
-                    view.account_id.clone(),
-                    view.segment_key.clone(),
+                    view.account_id.to_string(),
+                    view.segment_key.to_string(),
                     view.open_orders.clone(),
                 )
             })
@@ -542,7 +586,7 @@ impl AccountApplication {
 
     pub fn set_market_profile(&mut self, profile: AccountMarketProfile) {
         self.market_profiles.insert(
-            (profile.segment_key.clone(), profile.market_id.clone()),
+            (profile.segment_key.clone(), profile.market_id.to_string()),
             profile,
         );
     }
@@ -570,10 +614,7 @@ impl AccountApplication {
         request: &AccountMarketProfileRequest,
     ) -> Option<AccountMarketProfile> {
         self.market_profiles
-            .get(&(
-                crate::domain::SegmentKey::new(request.segment_key.clone()).ok()?,
-                request.market_id.clone(),
-            ))
+            .get(&(request.segment_key.clone(), request.market_id.to_string()))
             .cloned()
     }
 
@@ -604,6 +645,40 @@ impl AccountApplication {
                 Err(error)
             }
         }
+    }
+
+    pub fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), AccountError> {
+        if request.segment_key.trim().is_empty() {
+            return Err(AccountError::Invalid("segment_key is required".into()));
+        }
+        if request.instrument_id.trim().is_empty() {
+            return Err(AccountError::Invalid("instrument_id is required".into()));
+        }
+        if request.quote_asset.trim().is_empty() {
+            return Err(AccountError::Invalid("quote_asset is required".into()));
+        }
+        if !request.mark_price.is_positive() {
+            return Err(AccountError::Invalid("mark_price must be positive".into()));
+        }
+        self.runtime
+            .mark_to_market(request)
+            .map_err(AccountError::Invalid)
+    }
+
+    /// Apply an externally observed account fact. Live fills and order
+    /// observations do not invoke paper settlement; balances and positions
+    /// remain authoritative from provider snapshots/events.
+    pub fn apply_event(&mut self, event: AccountEvent) -> Result<usize, AccountError> {
+        self.runtime
+            .apply_event(event)
+            .map_err(AccountError::Invalid)
+    }
+
+    /// Record a private-stream fill that arrived before Execution confirmed
+    /// the corresponding exchange order. This deliberately enters account
+    /// reconciliation and does not settle balances or positions.
+    pub fn observe_fill(&mut self, fill: AccountObservedFill) -> Result<usize, AccountError> {
+        self.apply_event(AccountEvent::ObservedFill(fill))
     }
 
     pub(crate) fn with_dependencies(

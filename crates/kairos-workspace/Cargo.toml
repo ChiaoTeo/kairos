@@ -5,6 +5,15 @@ edition = "2021"
 license = "MIT"
 description = "Generic workspace resources, process lifecycle and control transport"
 
+[features]
+default = []
+otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+]
+
 [dependencies]
 axum = "0.8"
 http-body-util = "0.1"
@@ -19,6 +28,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 sha2 = "0.10"
 libc = "0.2"
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

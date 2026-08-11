@@ -27,6 +27,9 @@ fn risk_domain_has_no_infrastructure_dependencies() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/domain");
     for path in rust_files(&root) {
         let source = fs::read_to_string(&path).unwrap();
-        assert!(!source.contains("kairos_") && !source.contains("std::fs"));
+        let shared_types_only = source
+            .replace("kairos_domain_types", "")
+            .replace("kairos-domain-types", "");
+        assert!(!shared_types_only.contains("kairos_") && !source.contains("std::fs"));
     }
 }

@@ -1,6 +1,6 @@
 # Kairos Reference
 
-Reference owns the workspace-wide reference universe: entities, venues,
+Reference owns the workspace-wide reference universe: entities, exchanges,
 assets, instruments, listings, markets, financial products, and their
 lifecycle facts.
 
@@ -17,11 +17,25 @@ may filter query results by underlying after the full catalog has been built.
 
 ## Default startup
 
-Reference owns its provider/product source registry. Start the Workspace-global
-server without selecting a provider:
+Reference owns its provider/product source registry. The registry is configured
+in the Workspace manifest; the process does not select providers from command
+line arguments:
 
 ```text
 kairos-reference-server --workspace <workspace>
+```
+
+Configure providers in `<workspace>/kairos.toml` (or the discovered
+`.kairos/kairos.toml`):
+
+```toml
+[reference.providers.massive]
+enabled = true
+credential_id = "massive-readonly"
+endpoint = "https://api.massiveprivateserver.site"
+
+[reference.providers.okx]
+enabled = false
 ```
 
 Transport and runtime options use the canonical names below:
@@ -31,7 +45,6 @@ Transport and runtime options use the canonical names below:
 --reference-changes-stream <ID>
 --refresh-interval <30s|5m|1h>
 --snapshot-slot-size-mib <MiB>
---credential-id <ID>
 --run-mode <daemon|once>
 ```
 
@@ -40,12 +53,12 @@ The Reference changes stream is a registered transport resource
 shared by Reference publishers and Market subscribers. The process rejects a
 different stream ID; changing it requires changing the transport registry and
 all consumers together.
-Credentials should normally be selected by Workspace credential ID rather than
-passed as secrets on the command line.
+Credentials are selected by Workspace credential ID and are never passed as
+secrets on the command line.
 
 Binance, OKX, and Hyperliquid public products are built in. Credentialed sources such as Massive are
-added when their Workspace credential exists, with optional overrides under
-`[reference.providers.*]` or `[reference.products.*]`. Reference does not read
+added only when enabled under `[reference.providers.*]`; their credentials are
+resolved from the Workspace credential store. Reference does not read
 `market.connections`; that section belongs to the Market runtime.
 
 Public sources can be disabled explicitly when a workspace does not want them:
@@ -88,7 +101,7 @@ lifecycle; it is not a second catalog state owner.
 - one-shot CLI and workspace-managed Unix-socket server.
 
 Provider-specific implementation details and current delivery status are
-tracked in [`docs/reference-capabilities.md`](../../docs/reference-capabilities.md).
+tracked in [`docs/reference-capabilities.md`](../../../../docs/reference-capabilities.md).
 
 ## Verification
 

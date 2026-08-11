@@ -1,10 +1,15 @@
-//! Typed low-frequency Risk command client.
+//! Typed Risk command client.  JSON is kept as an administrative transport
+//! adapter; the Risk state owner receives already-decoded business commands.
 
 use reqwest::blocking::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::model::{
+    AuthorizeRequest, CircuitState, CloseCircuitRequest, OpenCircuitRequest, Reservation,
+    RiskDecision,
+};
 use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -12,38 +17,10 @@ pub struct Health {
     pub status: String,
     pub generation: u64,
     pub event_sequence: u64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Amount {
-    pub mantissa: i64,
-    pub scale: u8,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Usage {
-    pub metric: String,
-    pub amount: Amount,
-    pub budgets: Vec<BudgetRef>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct BudgetRef {
-    pub scope: String,
-    pub subject: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Assessment {
-    pub request_id: String,
-    pub usages: Vec<Usage>,
-    pub at_unix_nanos: u64,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ReserveRequest {
-    pub reservation_id: String,
-    pub assessment: Assessment,
+    pub policy_version: u64,
+    pub reservation_count: usize,
+    #[serde(default)]
+    pub open_circuit_count: usize,
 }
 
 pub struct RiskContractClient {
@@ -64,21 +41,62 @@ impl RiskContractClient {
         self.get("/v1/health")
     }
 
-    pub fn reserve(&self, request: &ReserveRequest) -> ContractResult<()> {
-        self.post("/v1/reserve", request)
+    pub fn authorize_and_reserve(
+        &self,
+        request: &AuthorizeRequest,
+    ) -> ContractResult<RiskDecision> {
+        self.post("/v1/authorize_and_reserve", request)
     }
 
-    pub fn release(&self, reservation_id: &str) -> ContractResult<()> {
+    pub fn pre_trade_check(&self, request: &AuthorizeRequest) -> ContractResult<RiskDecision> {
+        self.post("/v1/pre_trade_check", request)
+    }
+
+    pub fn post_trade_check(&self, request: &AuthorizeRequest) -> ContractResult<RiskDecision> {
+        self.post("/v1/post_trade_check", request)
+    }
+
+    pub fn open_circuit(&self, request: &OpenCircuitRequest) -> ContractResult<CircuitState> {
+        self.post("/v1/open_circuit", request)
+    }
+
+    pub fn close_circuit(&self, request: &CloseCircuitRequest) -> ContractResult<CircuitState> {
+        self.post("/v1/close_circuit", request)
+    }
+
+    pub fn release(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
         self.post(
             "/v1/release",
-            &serde_json::json!({"reservation_id": reservation_id}),
+            &serde_json::json!({
+                "reservation_id": reservation_id,
+                "at_unix_nanos": at_unix_nanos,
+            }),
         )
     }
 
-    pub fn consume(&self, reservation_id: &str) -> ContractResult<()> {
+    pub fn resize(
+        &self,
+        reservation_id: &str,
+        amount: &crate::model::Amount,
+        at_unix_nanos: u64,
+    ) -> ContractResult<Reservation> {
+        self.post(
+            "/v1/resize",
+            &serde_json::json!({
+                "reservation_id": reservation_id,
+                "amount": amount,
+                "at_unix_nanos": at_unix_nanos,
+            }),
+        )
+    }
+
+    pub fn consume(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
         self.post(
             "/v1/consume",
-            &serde_json::json!({"reservation_id": reservation_id}),
+            &serde_json::json!({
+                "reservation_id": reservation_id,
+                "at_unix_nanos": at_unix_nanos,
+            }),
         )
     }
 
@@ -91,14 +109,14 @@ impl RiskContractClient {
         decode_response(path, response)
     }
 
-    fn post<T: Serialize>(&self, path: &str, body: &T) -> ContractResult<()> {
+    fn post<T: Serialize, R: DeserializeOwned>(&self, path: &str, body: &T) -> ContractResult<R> {
         let response = self
             .client
             .post(format!("http://localhost{path}"))
             .json(body)
             .send()
             .map_err(|error| ContractError::Transport(format!("POST {path}: {error}")))?;
-        decode_response::<serde_json::Value>(path, response).map(|_| ())
+        decode_response(path, response)
     }
 }
 
@@ -111,7 +129,7 @@ fn decode_response<T: DeserializeOwned>(
         .json()
         .map_err(|error| ContractError::Transport(format!("decode {path}: {error}")))?;
     if !status.is_success() {
-        return Err(ContractError::Transport(format!(
+        return Err(ContractError::Rejected(format!(
             "{path} failed with HTTP {status}: {value}"
         )));
     }

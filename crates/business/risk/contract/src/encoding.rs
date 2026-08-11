@@ -62,23 +62,32 @@ impl FlatbuffersRiskSnapshotWriter {
     pub fn publish(&mut self, snapshot: &RiskSnapshot) -> Result<(), String> {
         let mut builder = FlatBufferBuilder::new();
         let mut budgets = Vec::new();
-        for budget in &snapshot.budgets {
-            let budget_id = builder.create_string(&budget.budget_id);
-            let owner_id = builder.create_string(&budget.owner_id);
-            let metric = builder.create_string(budget.metric.as_str());
+        for limit in &snapshot.limits {
+            let budget_id = builder.create_string(&limit.policy.policy_id);
+            let owner_id = builder.create_string(
+                limit
+                    .policy
+                    .scope
+                    .account_id
+                    .as_deref()
+                    .or(limit.policy.scope.strategy_id.as_deref())
+                    .or(limit.policy.scope.instrument_id.as_deref())
+                    .or(limit.policy.scope.exchange_id.as_deref())
+                    .unwrap_or(&snapshot.actor_id),
+            );
+            let metric = builder.create_string(limit.policy.metric.as_str());
             let status = builder.create_string("active");
-            let limit = Decimal64::new(budget.limit.mantissa, budget.limit.scale);
-            let used = Decimal64::new(budget.used.mantissa, budget.used.scale);
-            let reserved = Decimal64::new(budget.reserved.mantissa, budget.reserved.scale);
-            let available = budget.available();
-            let available = Decimal64::new(available.mantissa, available.scale);
+            let limit_value = Decimal64::new(limit.policy.limit.mantissa, limit.policy.limit.scale);
+            let used = Decimal64::new(limit.used.mantissa, limit.used.scale);
+            let reserved = Decimal64::new(limit.reserved.mantissa, limit.reserved.scale);
+            let available = Decimal64::new(limit.available.mantissa, limit.available.scale);
             budgets.push(risk_fb::Budget::create(
                 &mut builder,
                 &risk_fb::BudgetArgs {
                     budget_id: Some(budget_id),
                     owner_id: Some(owner_id),
                     metric: Some(metric),
-                    limit: Some(&limit),
+                    limit: Some(&limit_value),
                     used: Some(&used),
                     reserved: Some(&reserved),
                     available: Some(&available),
@@ -106,7 +115,7 @@ impl FlatbuffersRiskSnapshotWriter {
             let amount = Decimal64::new(allocation.amount.mantissa, allocation.amount.scale);
             let mut allocation_offsets = Vec::new();
             for item in &reservation.allocations {
-                let budget_id = builder.create_string(&item.budget_id);
+                let budget_id = builder.create_string(&item.policy_id);
                 let metric = builder.create_string(item.metric.as_str());
                 let amount = Decimal64::new(item.amount.mantissa, item.amount.scale);
                 allocation_offsets.push(risk_fb::Allocation::create(
@@ -135,13 +144,48 @@ impl FlatbuffersRiskSnapshotWriter {
             ));
         }
         let reservations = builder.create_vector(&reservation_offsets);
+        let mut circuit_offsets = Vec::new();
+        for circuit in &snapshot.circuits {
+            let account_id = circuit
+                .scope
+                .account_id
+                .as_deref()
+                .map(|value| builder.create_string(value));
+            let strategy_id = circuit
+                .scope
+                .strategy_id
+                .as_deref()
+                .map(|value| builder.create_string(value));
+            let exchange_id = circuit
+                .scope
+                .exchange_id
+                .as_deref()
+                .map(|value| builder.create_string(value));
+            let state = builder.create_string(if circuit.open { "open" } else { "closed" });
+            let reason = builder.create_string(&circuit.reason);
+            circuit_offsets.push(risk_fb::CircuitState::create(
+                &mut builder,
+                &risk_fb::CircuitStateArgs {
+                    account_id,
+                    strategy_id,
+                    exchange_id,
+                    state: Some(state),
+                    opened_at_unix_nanos: circuit.opened_at_unix_nanos.unwrap_or_default(),
+                    reset_at_unix_nanos: circuit.reset_at_unix_nanos.unwrap_or_default(),
+                    reason: Some(reason),
+                },
+            ));
+        }
+        let circuits = builder.create_vector(&circuit_offsets);
         let payload = risk_fb::Risk::create(
             &mut builder,
             &risk_fb::RiskArgs {
-                budget_count: snapshot.budgets.len() as u64,
+                budget_count: snapshot.limits.len() as u64,
                 reservation_count: snapshot.reservations.len() as u64,
+                circuit_count: snapshot.circuits.len() as u64,
                 budgets: Some(budgets),
                 reservations: Some(reservations),
+                circuits: Some(circuits),
             },
         );
         let snapshot_id = builder.create_string(&format!("risk-{}", snapshot.event_sequence));
@@ -195,10 +239,17 @@ impl FlatbuffersRiskEventWriter {
 
 impl FlatbuffersRiskEventWriter {
     pub fn publish(&mut self, event: &RiskEvent) -> Result<(), String> {
-        let RiskEvent::ReservationChanged {
-            reservation,
-            event_sequence,
-        } = event;
+        let (reservation, event_sequence) = match event {
+            RiskEvent::ReservationChanged {
+                reservation,
+                event_sequence,
+            } => (reservation, event_sequence),
+            RiskEvent::PolicyActivated { .. } => {
+                return Err(
+                    "policy activation event encoding is not supported by risk event schema".into(),
+                )
+            }
+        };
         let mut builder = FlatBufferBuilder::new();
         let message_id = builder.create_string(&format!("risk-reservation-{}", event_sequence));
         let stream_id = builder.create_string("risk.events");
@@ -227,7 +278,7 @@ impl FlatbuffersRiskEventWriter {
         });
         let mut allocation_offsets = Vec::new();
         for allocation in &reservation.allocations {
-            let budget_id = builder.create_string(&allocation.budget_id);
+            let budget_id = builder.create_string(&allocation.policy_id);
             let metric = builder.create_string(allocation.metric.as_str());
             let amount = Decimal64::new(allocation.amount.mantissa, allocation.amount.scale);
             allocation_offsets.push(risk_fb::Allocation::create(

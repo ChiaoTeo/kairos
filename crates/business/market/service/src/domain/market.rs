@@ -1,45 +1,63 @@
+use kairos_domain_types::{Exchange, InstrumentId, MarketId, ReferenceStatus, Symbol};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct MarketDescriptor {
-    pub market_id: String,
-    pub instrument_id: String,
-    pub venue_id: String,
+    pub market_id: MarketId,
+    pub instrument_id: InstrumentId,
+    pub exchange_id: Exchange,
     pub market_type: String,
     #[serde(default)]
     pub asset_type: Option<String>,
     #[serde(default)]
     pub underlying_instrument_id: Option<String>,
-    pub source_symbol: String,
-    pub status: String,
+    pub source_symbol: Symbol,
+    /// Optional market-data source requested by the caller. Reference owns
+    /// the canonical market; this field is a route constraint, not provider
+    /// payload or exchange identity.
+    #[serde(default)]
+    pub source_id: Option<String>,
+    pub status: ReferenceStatus,
 }
 
 impl MarketDescriptor {
     pub fn new(
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
-        venue_id: impl Into<String>,
+        exchange_id: impl Into<String>,
         market_type: impl Into<String>,
         source_symbol: impl Into<String>,
     ) -> Result<Self, String> {
         let value = Self {
-            market_id: market_id.into(),
-            instrument_id: instrument_id.into(),
-            venue_id: venue_id.into(),
+            market_id: MarketId::new(market_id.into()).map_err(|error| error.to_string())?,
+            instrument_id: InstrumentId::new(instrument_id.into())
+                .map_err(|error| error.to_string())?,
+            exchange_id: Exchange::new(exchange_id).map_err(|error| error.to_string())?,
             market_type: market_type.into(),
             asset_type: None,
             underlying_instrument_id: None,
-            source_symbol: source_symbol.into(),
-            status: "active".into(),
+            source_symbol: Symbol::new(source_symbol).map_err(|error| error.to_string())?,
+            source_id: None,
+            status: ReferenceStatus::Active,
         };
         value.validate()?;
         Ok(value)
     }
 
+    pub fn with_source(mut self, source_id: impl Into<String>) -> Result<Self, String> {
+        let source_id = source_id.into();
+        if source_id.trim().is_empty() {
+            return Err("market source id cannot be blank".into());
+        }
+        self.source_id = Some(source_id);
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn new_with_asset_type(
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
-        venue_id: impl Into<String>,
+        exchange_id: impl Into<String>,
         market_type: impl Into<String>,
         asset_type: impl Into<String>,
         source_symbol: impl Into<String>,
@@ -51,7 +69,7 @@ impl MarketDescriptor {
         let mut value = Self::new(
             market_id,
             instrument_id,
-            venue_id,
+            exchange_id,
             market_type,
             source_symbol,
         )?;
@@ -60,35 +78,41 @@ impl MarketDescriptor {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        for (name, value) in [
-            ("market_id", &self.market_id),
-            ("instrument_id", &self.instrument_id),
-            ("venue_id", &self.venue_id),
-            ("market_type", &self.market_type),
-            ("source_symbol", &self.source_symbol),
-            ("status", &self.status),
-        ] {
-            if value.trim().is_empty() {
-                return Err(format!("{name} is required"));
-            }
+        if self.market_type.trim().is_empty() {
+            return Err("market_type is required".into());
+        }
+        if self.status == ReferenceStatus::Unknown {
+            return Err("status is required".into());
+        }
+        if self
+            .source_id
+            .as_deref()
+            .is_some_and(|source_id| source_id.trim().is_empty())
+        {
+            return Err("market source id cannot be blank".into());
         }
         Ok(())
     }
 
     pub fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "active" | "trading")
+        matches!(
+            self.status,
+            ReferenceStatus::Active | ReferenceStatus::Trading
+        )
     }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketSelectionQuery {
-    pub market_id: Option<String>,
-    pub venue_id: Option<String>,
+    pub market_id: Option<MarketId>,
+    pub exchange_id: Option<Exchange>,
     pub market_type: Option<String>,
     pub asset_type: Option<String>,
-    pub source_symbol: Option<String>,
+    pub source_symbol: Option<Symbol>,
     #[serde(default)]
-    pub underlying_instrument_id: Option<String>,
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub underlying_instrument_id: Option<InstrumentId>,
     pub active_only: bool,
 }
 
@@ -97,11 +121,11 @@ impl MarketSelectionQuery {
         if self
             .market_id
             .as_deref()
-            .is_some_and(|v| v != market.market_id)
+            .is_some_and(|v| market.market_id != *v)
             || self
-                .venue_id
-                .as_deref()
-                .is_some_and(|v| v != market.venue_id)
+                .exchange_id
+                .as_ref()
+                .is_some_and(|v| v != &market.exchange_id)
             || self
                 .market_type
                 .as_deref()
@@ -113,7 +137,11 @@ impl MarketSelectionQuery {
             || self
                 .source_symbol
                 .as_deref()
-                .is_some_and(|v| !v.eq_ignore_ascii_case(&market.source_symbol))
+                .is_some_and(|v| !v.eq_ignore_ascii_case(market.source_symbol.as_str()))
+            || self
+                .source_id
+                .as_deref()
+                .is_some_and(|v| market.source_id.as_deref() != Some(v))
             || self
                 .underlying_instrument_id
                 .as_deref()

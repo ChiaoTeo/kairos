@@ -8,7 +8,11 @@ from kairospy.strategy import (
     TargetPositionRequest,
 )
 from kairospy.application.strategy.services import StrategyContextBus
-from kairospy.application.strategy.domain.messages import CommandHandle, ContextRequest, StrategySignal
+from kairospy.application.strategy.domain.messages import (
+    CommandHandle,
+    ContextRequest,
+    StrategySignal,
+)
 
 
 @dataclass
@@ -43,9 +47,13 @@ def test_context_bus_routes_typed_requests_with_instance_identity() -> None:
     bus = StrategyContextBus(market=market, intents=intents)
 
     subscription = MarketSubscriptionRequest("BTCUSDT", selectors=("quote",))
-    subscribe = bus.submit(ContextRequest("market.subscribe", subscription, "sma", "r-1", "i-1"))
+    subscribe = bus.submit(
+        ContextRequest("market.subscribe", subscription, "sma", "r-1", "i-1")
+    )
     target = TargetPositionRequest("BTCUSDT", Decimal("1.25"), account_id="main")
-    intent = bus.submit(ContextRequest("intent.target_position", target, "sma", "r-2", "i-1"))
+    intent = bus.submit(
+        ContextRequest("intent.target_position", target, "sma", "r-2", "i-1")
+    )
 
     assert subscribe.status == "pending"
     assert intent.status == "accepted"
@@ -57,7 +65,9 @@ def test_context_bus_routes_typed_requests_with_instance_identity() -> None:
 def test_context_bus_rejects_untyped_or_unknown_operations() -> None:
     bus = StrategyContextBus(market=MarketPort([]), intents=IntentPort([], []))
 
-    wrong_type = bus.submit(ContextRequest("market.subscribe", {"subject": "BTCUSDT"}, "sma", "r-1"))
+    wrong_type = bus.submit(
+        ContextRequest("market.subscribe", {"subject": "BTCUSDT"}, "sma", "r-1")
+    )
     unknown = bus.submit(ContextRequest("account.read", object(), "sma", "r-2"))
 
     assert wrong_type.status == "rejected"
@@ -71,13 +81,15 @@ def test_context_bus_turns_missing_owner_process_into_a_rejected_handle() -> Non
             raise FileNotFoundError("market socket is absent")
 
     bus = StrategyContextBus(market=MissingMarket([]), intents=IntentPort([], []))
-    handle = bus.submit(ContextRequest(
-        "market.subscribe",
-        MarketSubscriptionRequest("BTCUSDT"),
-        "sma",
-        "r-missing",
-        "i-1",
-    ))
+    handle = bus.submit(
+        ContextRequest(
+            "market.subscribe",
+            MarketSubscriptionRequest("BTCUSDT"),
+            "sma",
+            "r-missing",
+            "i-1",
+        )
+    )
 
     assert handle.status == "rejected"
     assert "market socket" in (handle.error or "")

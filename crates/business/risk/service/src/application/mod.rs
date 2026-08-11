@@ -1,8 +1,9 @@
 mod process;
 mod service;
 
-pub use process::RiskProcess;
+pub use process::{RiskProcess, RiskSnapshotPublisher};
 pub use service::{
-    AssessRisk, ConfigureBudgets, ConsumeReservation, ReleaseReservation, ReserveRisk,
-    RiskApplication, RiskAssessment, RiskError, RiskEvent, RiskSnapshot,
+    CloseCircuit, ConsumeReservation, ExpireReservations, LimitView, OpenCircuit, PublishPolicy,
+    ReleaseReservation, ResizeReservation, RiskApplication, RiskDecision, RiskError, RiskEvent,
+    RiskSnapshot,
 };

@@ -133,7 +133,7 @@ impl AeronByteSubscription {
         })
     }
 
-    pub fn next(&mut self) -> Result<Option<Vec<u8>>, String> {
+    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
         self.poll(64)?;
         Ok(self.queue.pop_front())
     }

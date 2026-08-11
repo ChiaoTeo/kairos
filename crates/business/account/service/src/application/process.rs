@@ -20,12 +20,15 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::application::{
-    AccountApplication, AccountDataQuery, AccountRefreshReport, RefreshAccount,
+    AccountApplication, AccountDataQuery, AccountRefreshReport, AccountsSnapshot, MarkToMarket,
+    RefreshAccount,
 };
-use crate::composition::MmapAccountPublisher;
-use crate::domain::AccountFill;
+use crate::domain::{AccountFill, AccountOrderObservation};
+use crate::services::integration::AccountAsyncEventSource;
+use kairos_domain_types::AccountId;
+use kairos_integration::application::IntegrationError;
 use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 
 pub struct AccountProcess {
     application: AccountApplication,
@@ -33,7 +36,7 @@ pub struct AccountProcess {
     socket_path: PathBuf,
     refresh_interval: Duration,
     health_file: Option<PathBuf>,
-    publisher: Option<MmapAccountPublisher>,
+    publisher: Option<Box<dyn AccountSnapshotPublisher>>,
     stop_requested: bool,
     last_error: Option<String>,
     last_refresh: Option<AccountRefreshReport>,
@@ -42,6 +45,14 @@ pub struct AccountProcess {
     lease_instance_id: Option<String>,
     snapshot_dirty: bool,
     refresh_started: Option<Instant>,
+    async_account_streams: Vec<AccountAsyncEventSource>,
+    async_provider_tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// Application-owned publication capability. Concrete transport publishers
+/// are selected by composition and injected into the process facade.
+pub trait AccountSnapshotPublisher: Send {
+    fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String>;
 }
 
 struct AccountHttpRequest {
@@ -57,7 +68,7 @@ impl AccountProcess {
         socket_path: impl Into<PathBuf>,
         refresh_interval: Duration,
         health_file: Option<PathBuf>,
-        publisher: Option<MmapAccountPublisher>,
+        publisher: Option<Box<dyn AccountSnapshotPublisher>>,
     ) -> Result<Self, String> {
         let account_id = account_id.into();
         if account_id.trim().is_empty() {
@@ -82,7 +93,24 @@ impl AccountProcess {
             lease_instance_id: None,
             snapshot_dirty: true,
             refresh_started: None,
+            async_account_streams: Vec::new(),
+            async_provider_tasks: Vec::new(),
         })
+    }
+}
+
+impl AccountProcess {
+    pub(crate) fn with_async_account_streams(
+        mut self,
+        streams: Vec<AccountAsyncEventSource>,
+    ) -> Self {
+        self.async_account_streams = streams;
+        self
+    }
+
+    pub fn with_async_provider_tasks(mut self, tasks: Vec<tokio::task::JoinHandle<()>>) -> Self {
+        self.async_provider_tasks = tasks;
+        self
     }
 
     pub fn with_trade_lease(
@@ -108,22 +136,31 @@ impl AccountProcess {
         let listener = UnixListener::bind(&self.socket_path)?;
         const CONTROL_QUEUE_CAPACITY: usize = 256;
         const STREAM_BATCH_SIZE: usize = 64;
-        const STREAM_POLL_MS: u64 = 5;
         const REFRESH_RESULT_POLL_MS: u64 = 10;
         let (sender, mut receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
         let router = Router::new()
             .fallback(account_http_handler)
             .with_state(sender);
         let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
         info!(event = "process_ready", component = "account", socket = %self.socket_path.display(), "account control socket ready");
         let mut interval = time::interval(self.refresh_interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut refresh_result_poll = time::interval(Duration::from_millis(REFRESH_RESULT_POLL_MS));
         refresh_result_poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let mut stream_poll = time::interval(Duration::from_millis(STREAM_POLL_MS));
-        stream_poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let stream_wakeup = self.application.stream_wakeup();
+        let (async_stream_shutdown, async_stream_shutdown_rx) = tokio::sync::watch::channel(false);
+        let async_stream_overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let async_stream_overflow_wakeup = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (async_event_sender, mut async_event_receiver) = mpsc::channel(256);
+        let async_stream_tasks = self.start_async_stream_consumers(
+            async_event_sender,
+            async_stream_shutdown_rx,
+            std::sync::Arc::clone(&async_stream_overflow),
+            std::sync::Arc::clone(&async_stream_overflow_wakeup),
+        );
+        let async_stream_enabled = !async_stream_tasks.is_empty();
         interval.tick().await;
-        stream_poll.tick().await;
         self.schedule_refresh();
         if let Err(error) = self.publish_snapshot_if_dirty() {
             self.last_error = Some(error);
@@ -141,7 +178,7 @@ impl AccountProcess {
                     let response = self.handle_request(&request.target, &String::from_utf8_lossy(&request.body));
                     let _ = request.response.send(response.map_err(|error| error.to_string()));
                 }
-                _ = stream_poll.tick(), if self.stream_enabled => {
+                _ = stream_wakeup.notified(), if self.stream_enabled => {
                     if let Some(error) = self.application.take_persistence_error() {
                         warn!(event = "account_persistence_failed", component = "account", error = %error, "account persistence worker reported an error");
                         self.last_error = Some(error);
@@ -158,6 +195,13 @@ impl AccountProcess {
                                 "account stream batch applied"
                             );
                             self.snapshot_dirty = true;
+                            if self.application.stream_queue_depth() > 0 {
+                                // `Notify` intentionally coalesces permits. A
+                                // full batch schedules one more drain so an
+                                // already-buffered tail cannot wait for a new
+                                // provider event.
+                                stream_wakeup.notify_one();
+                            }
                             if let Err(error) = self.publish_snapshot_if_dirty() {
                                 error!(event = "snapshot_publish_failed", component = "account", error = %error, "account snapshot publication failed");
                                 self.last_error = Some(error);
@@ -167,7 +211,44 @@ impl AccountProcess {
                         Err(error) => {
                             warn!(event = "stream_poll_failed", component = "account", error = %error, "account stream poll failed");
                             self.last_error = Some(error.to_string());
+                            // Stream continuity is no longer trustworthy. A
+                            // snapshot refresh, not continued delta guessing,
+                            // is the recovery boundary.
+                            self.schedule_refresh();
                         }
+                    }
+                }
+                Some(result) = async_event_receiver.recv(), if async_stream_enabled => {
+                    match result {
+                        Ok(event) => match crate::services::integration::map_event(event)
+                            .and_then(|event| self.application.apply_event(event).map_err(|error| error.to_string()))
+                        {
+                            Ok(applied) if applied > 0 => {
+                                self.snapshot_dirty = true;
+                                if let Err(error) = self.publish_snapshot_if_dirty() {
+                                    self.last_error = Some(error);
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                warn!(event = "async_account_event_apply_failed", component = "account", error = %error, "async account event could not be applied");
+                                self.last_error = Some(error);
+                                self.schedule_refresh();
+                            }
+                        },
+                        Err(error) => {
+                            warn!(event = "async_account_stream_failed", component = "account", error = %error, "async account stream reported a continuity failure");
+                            self.last_error = Some(error.to_string());
+                            self.schedule_refresh();
+                        }
+                    }
+                }
+                _ = async_stream_overflow_wakeup.notified(), if async_stream_enabled => {
+                    if async_stream_overflow.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                        let error = "async account event queue overflowed; snapshot resynchronization is required".to_string();
+                        warn!(event = "async_account_stream_overflow", component = "account", error = %error, "async account stream continuity was lost");
+                        self.last_error = Some(error);
+                        self.schedule_refresh();
                     }
                 }
                 _ = interval.tick() => {
@@ -195,6 +276,16 @@ impl AccountProcess {
                 }
             }
         }
+        let _ = async_stream_shutdown.send(true);
+        for task in async_stream_tasks {
+            if let Err(error) = task.await {
+                warn!(event = "async_account_stream_task_failed", component = "account", error = %error, "async account stream task failed");
+            }
+        }
+        for task in self.async_provider_tasks.drain(..) {
+            task.abort();
+            let _ = task.await;
+        }
         remove_socket(&self.socket_path)?;
         server.abort();
         let _ = server.await;
@@ -202,12 +293,79 @@ impl AccountProcess {
         Ok(())
     }
 
+    fn start_async_stream_consumers(
+        &mut self,
+        sender: mpsc::Sender<
+            Result<
+                kairos_integration::application::capabilities::account_facts::ExternalAccountEvent,
+                IntegrationError,
+            >,
+        >,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+        overflowed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        overflow_wakeup: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
+        std::mem::take(&mut self.async_account_streams)
+            .into_iter()
+            .map(|mut stream| {
+                let sender = sender.clone();
+                let mut shutdown = shutdown.clone();
+                let overflowed = std::sync::Arc::clone(&overflowed);
+                let overflow_wakeup = std::sync::Arc::clone(&overflow_wakeup);
+                tokio::spawn(async move {
+                    loop {
+                        let result = tokio::select! {
+                            biased;
+                            changed = shutdown.changed() => {
+                                if changed.is_err() || *shutdown.borrow() {
+                                    break;
+                                }
+                                continue;
+                            }
+                            result = stream.next_account_event() => result,
+                        };
+                        let should_reconnect = result.is_err();
+                        match sender.try_send(result) {
+                            Ok(()) => {}
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                overflowed.store(true, std::sync::atomic::Ordering::Release);
+                                overflow_wakeup.notify_one();
+                                break;
+                            }
+                        }
+                        if should_reconnect {
+                            if let Err(error) = stream.reconnect_channel().await {
+                                tracing::warn!(event = "async_account_stream_reconnect_failed", component = "account", error = %error, "async account stream reconnect failed");
+                                tokio::select! {
+                                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                                    changed = shutdown.changed() => {
+                                        if changed.is_err() || *shutdown.borrow() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let _ = stream.disconnect_channel().await;
+                })
+            })
+            .collect()
+    }
+
     fn schedule_refresh(&mut self) {
         if self.application.refresh_pending() {
             return;
         }
         if let Err(error) = self.application.start_refresh(RefreshAccount {
-            account_id: self.account_id.clone(),
+            account_id: match AccountId::new(self.account_id.clone()) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.last_error = Some(error.to_string());
+                    return;
+                }
+            },
             segments: Vec::new(),
         }) {
             self.last_error = Some(error.to_string());
@@ -249,6 +407,7 @@ impl AccountProcess {
             Err(error) => {
                 self.refresh_started = None;
                 self.last_error = Some(error.to_string());
+                kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
                 true
             }
         }
@@ -290,12 +449,75 @@ impl AccountProcess {
                 200,
                 json!({"accounts": self.application.open_orders_query(&account_query)}),
             ),
-            "/v1/fill" => self.json_command(body, |application, body| {
+            "/v1/simulated-fill" => self.json_command(body, |application, body| {
                 let fill: AccountFill =
                     serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
                     .apply_simulated_fill(fill)
                     .map(|_| json!({"status":"applied"}))
+                    .map_err(|error| error.to_string())
+            }),
+            "/v1/mark-to-market" => self.json_command(body, |application, body| {
+                let value: MarkToMarket =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                application
+                    .mark_to_market(value)
+                    .map(|_| json!({"status":"applied"}))
+                    .map_err(|error| error.to_string())
+            }),
+            "/v1/fill" => self.json_command(body, |application, body| {
+                let fill: AccountFill =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                application
+                    .apply_event(crate::domain::AccountEvent::Fill(fill))
+                    .map(|applied| json!({"status":"applied", "events": applied}))
+                    .map_err(|error| error.to_string())
+            }),
+            "/v1/order-event" => self.json_command(body, |application, body| {
+                let event: kairos_account_contract::client::OrderEvent =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                let active = matches!(
+                    event.status.to_ascii_lowercase().as_str(),
+                    "acknowledged" | "partially_filled" | "open" | "new"
+                );
+                let observation = AccountOrderObservation {
+                    order_id: kairos_domain_types::OrderId::new(event.order_id)
+                        .map_err(|error| error.to_string())?,
+                    remote_order_id: event
+                        .remote_order_id
+                        .map(kairos_domain_types::RemoteOrderId::new)
+                        .transpose()
+                        .map_err(|error| error.to_string())?,
+                    status: match event.status.to_ascii_lowercase().as_str() {
+                        "pending" => kairos_domain_types::OrderStatus::Pending,
+                        "acknowledged" | "new" | "open" => {
+                            kairos_domain_types::OrderStatus::Acknowledged
+                        }
+                        "accepted" => kairos_domain_types::OrderStatus::Accepted,
+                        "partially_filled" | "partial" => {
+                            kairos_domain_types::OrderStatus::PartiallyFilled
+                        }
+                        "filled" => kairos_domain_types::OrderStatus::Filled,
+                        "canceled" | "cancelled" => kairos_domain_types::OrderStatus::Canceled,
+                        "rejected" => kairos_domain_types::OrderStatus::Rejected,
+                        "expired" => kairos_domain_types::OrderStatus::Expired,
+                        _ => kairos_domain_types::OrderStatus::Unknown,
+                    },
+                    filled_quantity: Some(
+                        kairos_domain_types::Quantity::new(
+                            event.filled_quantity.mantissa,
+                            event.filled_quantity.scale,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    active,
+                    observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(
+                        event.occurred_at_unix_nanos,
+                    ),
+                };
+                application
+                    .apply_event(crate::domain::AccountEvent::OrderObserved(observation))
+                    .map(|applied| json!({"status":"applied", "events": applied}))
                     .map_err(|error| error.to_string())
             }),
             "/v1/market-profiles" => (200, json!({"profiles": self.application.market_profiles()})),
@@ -308,8 +530,11 @@ impl AccountProcess {
                 json!({"fees": self.application.fee_schedules(Some(&self.account_id))}),
             ),
             "/v1/fills" => match serde_json::from_str::<AccountFill>(body) {
-                Ok(fill) => match self.application.apply_simulated_fill(fill) {
-                    Ok(()) => (202, json!({"status": "accepted"})),
+                Ok(fill) => match self
+                    .application
+                    .apply_event(crate::domain::AccountEvent::Fill(fill))
+                {
+                    Ok(applied) => (202, json!({"status": "accepted", "events": applied})),
                     Err(error) => (422, json!({"error": error.to_string()})),
                 },
                 Err(error) => (
@@ -335,7 +560,10 @@ impl AccountProcess {
                 let result = self
                     .application
                     .reconcile(crate::application::ReconcileAccount {
-                        account_id: self.account_id.clone(),
+                        account_id: match AccountId::new(self.account_id.clone()) {
+                            Ok(value) => value,
+                            Err(error) => return Ok((503, json!({"error": error.to_string()}))),
+                        },
                         segments: Vec::new(),
                     });
                 match result {
@@ -365,14 +593,18 @@ impl AccountProcess {
             return Ok(());
         };
         let snapshot = self.application.snapshot_shared();
+        kairos_workspace::logging::record_gauge(
+            "kairos.snapshot.generation",
+            snapshot.generation.get(),
+        );
         let started = Instant::now();
         let result = publisher.publish(&snapshot);
         if result.is_ok() {
             debug!(
                 event = "account_snapshot_published",
                 component = "account",
-                generation = snapshot.generation,
-                event_sequence = snapshot.event_sequence,
+                generation = snapshot.generation.get(),
+                event_sequence = snapshot.event_sequence.get(),
                 account_count = snapshot.accounts.len(),
                 duration_ms = started.elapsed().as_millis(),
                 "account snapshot published"
@@ -436,6 +668,59 @@ impl AccountProcess {
 
 async fn account_http_handler(
     State(sender): State<Sender<AccountHttpRequest>>,
+    request: Request,
+) -> Response {
+    let started = Instant::now();
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let span = tracing::info_span!(
+        "account.control_request",
+        component = "account",
+        method = %method,
+        path = %path,
+        status = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+        result = tracing::field::Empty,
+        error_code = tracing::field::Empty,
+        retryable = tracing::field::Empty,
+        trace_id = tracing::field::Empty,
+        span_id = tracing::field::Empty
+    );
+    kairos_workspace::logging::record_counter("kairos.control.request", 1);
+    kairos_workspace::logging::record_counter("kairos.operation", 1);
+    let queue_depth = sender.max_capacity() - sender.capacity();
+    kairos_workspace::logging::set_remote_parent(&span, request.headers());
+    let response = account_http_handler_inner(sender, request)
+        .instrument(span.clone())
+        .await;
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    span.record("status", response.status().as_u16());
+    span.record("duration_ms", duration_ms);
+    span.record(
+        "result",
+        if response.status().is_success() {
+            "accepted"
+        } else {
+            "rejected"
+        },
+    );
+    kairos_workspace::logging::record_duration_ms("kairos.control.request.duration", duration_ms);
+    kairos_workspace::logging::record_duration_ms("kairos.operation.duration", duration_ms);
+    kairos_workspace::logging::record_gauge("kairos.queue.depth", queue_depth as u64);
+    if response.status().is_server_error() {
+        kairos_workspace::logging::mark_span_error(&span, "control.internal_error", true);
+        kairos_workspace::logging::record_counter("kairos.control.request.failed", 1);
+        kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
+    } else if !response.status().is_success() {
+        span.record("error_code", "control.request_rejected");
+        span.record("retryable", false);
+    }
+    tracing::info!(parent: &span, event = "control_request_completed", component = "account", duration_ms, result = if response.status().is_success() { "accepted" } else { "rejected" }, "account control request completed");
+    response
+}
+
+async fn account_http_handler_inner(
+    sender: Sender<AccountHttpRequest>,
     request: Request,
 ) -> Response {
     let target = request
@@ -503,7 +788,7 @@ fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
 
 fn parse_account_query(query: &str, account_id: &str) -> AccountDataQuery {
     let mut request = AccountDataQuery {
-        account_id: Some(account_id.to_string()),
+        account_id: AccountId::new(account_id).ok(),
         ..Default::default()
     };
     for pair in query.split('&').filter(|value| !value.is_empty()) {
@@ -511,8 +796,12 @@ fn parse_account_query(query: &str, account_id: &str) -> AccountDataQuery {
             continue;
         };
         match key {
-            "segment" => request.segments.push(value.to_string()),
-            "symbol" => request.symbol = Some(value.to_string()),
+            "segment" => {
+                if let Ok(value) = crate::domain::SegmentKey::new(value) {
+                    request.segments.push(value);
+                }
+            }
+            "symbol" => request.symbol = kairos_domain_types::Symbol::new(value).ok(),
             "limit" => request.limit = value.parse().ok(),
             "include_zero" => request.include_zero = value == "true" || value == "1",
             "page" => request.page = value.parse().ok(),

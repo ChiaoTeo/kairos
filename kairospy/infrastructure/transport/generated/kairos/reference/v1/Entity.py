@@ -45,8 +45,15 @@ class Entity(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # Entity
+    def Status(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def EntityStart(builder):
-    builder.StartObject(3)
+    builder.StartObject(4)
 
 def Start(builder):
     EntityStart(builder)
@@ -68,6 +75,12 @@ def EntityAddName(builder, name):
 
 def AddName(builder, name):
     EntityAddName(builder, name)
+
+def EntityAddStatus(builder, status):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+
+def AddStatus(builder, status):
+    EntityAddStatus(builder, status)
 
 def EntityEnd(builder):
     return builder.EndObject()

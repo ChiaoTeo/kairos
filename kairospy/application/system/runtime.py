@@ -44,7 +44,9 @@ class SystemRuntimeSupervisor:
 
     processes: ComponentProcessApplication
     desired: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    policies: Mapping[str, RestartPolicy] = field(default_factory=lambda: DEFAULT_RESTART_POLICIES)
+    policies: Mapping[str, RestartPolicy] = field(
+        default_factory=lambda: DEFAULT_RESTART_POLICIES
+    )
     _attempts: dict[str, int] = field(default_factory=dict, init=False)
     _last_attempt: dict[str, float] = field(default_factory=dict, init=False)
 
@@ -52,7 +54,9 @@ class SystemRuntimeSupervisor:
     def desired_path(self) -> Path:
         return self.processes.workspace.paths.run / "supervisor" / "desired.json"
 
-    def register(self, component: str, options: Mapping[str, Any] | None = None) -> None:
+    def register(
+        self, component: str, options: Mapping[str, Any] | None = None
+    ) -> None:
         if component not in SUPERVISED_COMPONENTS:
             raise ValueError(
                 f"{component} is launch-owned; only {', '.join(SUPERVISED_COMPONENTS)} "
@@ -133,7 +137,9 @@ class SystemRuntimeSupervisor:
                 continue
             policy = self.policies.get(component, RestartPolicy(False))
             if not policy.auto_restart:
-                statuses[component] = self._manual_reconcile_required(component, statuses[component])
+                statuses[component] = self._manual_reconcile_required(
+                    component, statuses[component]
+                )
                 continue
             attempt = self._attempts.get(component, 0)
             if attempt >= policy.max_attempts:

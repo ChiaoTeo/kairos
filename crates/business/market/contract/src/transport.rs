@@ -46,7 +46,11 @@ impl AeronReferenceChangeSource {
     }
 
     pub fn next_change(&mut self) -> ContractResult<Option<ReferenceChangeNotice>> {
-        while let Some(frame) = self.subscription.next().map_err(ContractError::Transport)? {
+        while let Some(frame) = self
+            .subscription
+            .next_frame()
+            .map_err(ContractError::Transport)?
+        {
             self.queue
                 .push_back(decode_reference_changed(&frame).map_err(ContractError::Invalid)?);
         }

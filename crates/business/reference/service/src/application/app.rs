@@ -6,14 +6,15 @@
 
 use crate::domain::LifecycleEvent;
 use crate::domain::ProviderHealth;
-use crate::domain::{Asset, Market, ReferenceError, ReferenceResult};
+use crate::domain::{Asset, Instrument, Listing, Market, ReferenceError, ReferenceResult};
 
 use crate::application::queries::{
     LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceRecord,
 };
 use crate::services::actor::ReferenceActor;
 use crate::services::providers::ReferenceSource;
-use crate::services::storage::CatalogStore;
+use crate::services::store::CatalogStore;
+use kairos_domain_types::{Generation, Sequence};
 use tracing::{info, warn};
 
 /// Public application boundary for reference data.
@@ -35,8 +36,8 @@ pub struct ReferenceReadModel {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceRefreshResult {
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub changed: bool,
     pub events: Vec<LifecycleEvent>,
 }
@@ -76,19 +77,40 @@ impl ReferenceApplication {
 
     /// Refresh provider data, reconcile lifecycle changes, persist and publish.
     pub fn refresh(&mut self) -> ReferenceResult<ReferenceRefreshResult> {
+        let started = std::time::Instant::now();
         info!(event = "reference_refresh_started", component = "reference", source = %self.source_id(), "reference refresh started");
         let result = match self.actor.refresh() {
             Ok(result) => result,
             Err(error) => {
-                warn!(event = "reference_refresh_failed", component = "reference", error = %error, "reference refresh failed");
+                let provider_health = self.provider_health();
+                let degraded_providers = provider_health
+                    .iter()
+                    .filter(|health| health.status != "ready" && health.status != "unknown")
+                    .map(|health| health.source_id.as_str())
+                    .collect::<Vec<_>>();
+                let stale_provider_count =
+                    provider_health.iter().filter(|health| health.stale).count();
+                warn!(
+                    event = "reference_refresh_failed",
+                    component = "reference",
+                    source = %self.source_id(),
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    provider_count = provider_health.len(),
+                    degraded_provider_count = degraded_providers.len(),
+                    stale_provider_count,
+                    degraded_providers = ?degraded_providers,
+                    fallback = if stale_provider_count > 0 { "last_known_good" } else { "none" },
+                    error = %error,
+                    "reference refresh failed"
+                );
                 return Err(error);
             }
         };
         info!(
             event = "reference_refresh_completed",
             component = "reference",
-            generation = result.generation,
-            event_sequence = result.event_sequence,
+            generation = result.generation.get(),
+            event_sequence = result.event_sequence.get(),
             change_count = result.events.len(),
             "reference refresh completed"
         );
@@ -100,17 +122,27 @@ impl ReferenceApplication {
         })
     }
 
-    pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<u64> {
+    pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<Generation> {
         info!(event = "reference_asset_upsert_started", component = "reference", asset_id = %asset.asset_id, "reference asset upsert started");
         self.actor.upsert_asset(asset)?;
         let generation = self.actor.catalog.generation;
         info!(
             event = "reference_asset_upsert_completed",
             component = "reference",
-            generation,
+            generation = generation.get(),
             "reference asset upsert completed"
         );
         Ok(generation)
+    }
+
+    pub fn upsert_instrument(&mut self, instrument: Instrument) -> ReferenceResult<Generation> {
+        self.actor.upsert_instrument(instrument)?;
+        Ok(self.actor.catalog.generation)
+    }
+
+    pub fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<Generation> {
+        self.actor.upsert_listing(listing)?;
+        Ok(self.actor.catalog.generation)
     }
 
     pub fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
@@ -135,22 +167,37 @@ impl ReferenceApplication {
         query: &ReferenceQuery,
     ) -> ReferenceResult<Vec<ReferenceRecord>> {
         let limit = query.limit.unwrap_or(256).clamp(1, 4096);
-        let events =
-            self.lifecycle_events_page(query.sequence_from, query.sequence_to, limit * 4)?;
+        let events = self.actor.lifecycle_events_filtered(
+            query.sequence_from.map(Into::into),
+            query.sequence_to.map(Into::into),
+            query.event_time_from_unix_nanos.map(Into::into),
+            query.event_time_to_unix_nanos.map(Into::into),
+            limit,
+        )?;
         Ok(events
             .into_iter()
             .filter(|value| {
-                query.matches_status(value.current_status.as_deref().unwrap_or(""))
-                    && query.matches_text(&[
-                        &value.event_id,
-                        &value.event_type,
-                        value.market_id.as_deref().unwrap_or(""),
-                        value.source_symbol.as_deref().unwrap_or(""),
-                    ])
+                query.matches_status(
+                    value
+                        .current_status
+                        .as_ref()
+                        .map(|status| status.as_str())
+                        .unwrap_or(""),
+                ) && query.matches_text(&[
+                    &value.event_id,
+                    &value.event_type,
+                    value.record_kind.as_deref().unwrap_or(""),
+                    value.record_id.as_deref().unwrap_or(""),
+                    value.market_id.as_deref().unwrap_or(""),
+                    value.source_symbol.as_deref().unwrap_or(""),
+                ]) && query
+                    .exchange_id
+                    .as_ref()
+                    .is_none_or(|exchange| value.exchange_id.as_deref() == Some(exchange.as_str()))
                     && query
-                        .venue_id
+                        .record_kind
                         .as_deref()
-                        .is_none_or(|venue| value.venue_id.as_deref() == Some(venue))
+                        .is_none_or(|kind| value.record_kind.as_deref() == Some(kind))
                     && query
                         .event_time_from_unix_nanos
                         .is_none_or(|from| value.event_time_unix_nanos >= from)
@@ -169,12 +216,14 @@ impl ReferenceApplication {
         query: &LifecycleQuery,
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         let limit = query.limit.unwrap_or(4096).clamp(1, 1_000_000);
-        let events = self
-            .actor
-            .lifecycle_events(query.sequence_from, query.sequence_to, limit)?;
+        let events = self.actor.lifecycle_events(
+            query.sequence_from.map(Into::into),
+            query.sequence_to.map(Into::into),
+            limit,
+        )?;
         Ok(events
             .into_iter()
-            .filter(|event| query.matches(event_sequence(event), event))
+            .filter(|event| query.matches(event_sequence(event).into(), event))
             .take(limit)
             .collect())
     }
@@ -182,8 +231,8 @@ impl ReferenceApplication {
     /// Replay lifecycle events in their persisted sequence order.
     pub fn replay_lifecycle_events(
         &mut self,
-        sequence_from: Option<u64>,
-        sequence_to: Option<u64>,
+        sequence_from: Option<kairos_domain_types::Sequence>,
+        sequence_to: Option<kairos_domain_types::Sequence>,
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         self.lifecycle_events(&LifecycleQuery {
             sequence_from,
@@ -246,16 +295,16 @@ impl ReferenceApplication {
                     .entities
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.entity_id,
                                 &value.entity_type,
                                 &value.name,
                             ])
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
-                                .is_none_or(|venue| venue == value.entity_id)
+                                .is_none_or(|exchange| exchange == value.entity_id)
                     })
                     .cloned()
                     .map(ReferenceRecord::Entity),
@@ -268,7 +317,7 @@ impl ReferenceApplication {
                     .assets
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.asset_id,
                                 &value.code,
@@ -286,7 +335,7 @@ impl ReferenceApplication {
                     .instruments
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.instrument_id,
                                 &value.symbol,
@@ -308,11 +357,11 @@ impl ReferenceApplication {
                     .listings
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
-                                .is_none_or(|venue| venue == value.venue_id)
+                                .is_none_or(|exchange| exchange == value.exchange_id.as_str())
                             && query.as_of_unix_nanos.is_none_or(|at| {
                                 value.effective_from_unix_nanos <= at
                                     && value.effective_to_unix_nanos.is_none_or(|end| at < end)
@@ -320,8 +369,8 @@ impl ReferenceApplication {
                             && query.matches_text(&[
                                 &value.listing_id,
                                 &value.instrument_id,
-                                &value.venue_symbol,
-                                &value.venue_id,
+                                &value.exchange_symbol,
+                                value.exchange_id.as_str(),
                             ])
                     })
                     .cloned()
@@ -330,10 +379,13 @@ impl ReferenceApplication {
         }
         if include(ReferenceKind::Market) {
             let market_query = MarketQuery {
-                venue_id: query.venue_id.clone(),
+                exchange_id: query.exchange_id.clone(),
                 market_type: query.market_type.clone(),
                 asset_type: query.asset_type.clone(),
-                source_symbol: query.text.clone(),
+                source_symbol: query
+                    .text
+                    .as_deref()
+                    .and_then(|value| kairos_domain_types::Symbol::new(value).ok()),
                 active_only: query.active_only,
                 as_of_unix_nanos: query.as_of_unix_nanos,
                 status: query.status.clone(),
@@ -365,7 +417,7 @@ impl ReferenceApplication {
                     .financial_products
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.product_id,
                                 &value.provider_product_id,
@@ -384,14 +436,14 @@ impl ReferenceApplication {
                     .execution_accesses
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
                                 .is_none_or(|provider| provider == value.provider_id)
                             && query.matches_text(&[
                                 &value.access_id,
-                                &value.instrument_id,
+                                &value.market_id,
                                 &value.provider_id,
                                 &value.product_family,
                                 &value.provider_symbol,
@@ -405,7 +457,7 @@ impl ReferenceApplication {
             let lifecycle_query = LifecycleQuery {
                 sequence_from: query.sequence_from,
                 sequence_to: query.sequence_to,
-                venue_id: query.venue_id.clone(),
+                exchange_id: query.exchange_id.clone(),
                 event_time_from_unix_nanos: query.event_time_from_unix_nanos,
                 event_time_to_unix_nanos: query.event_time_to_unix_nanos,
                 limit: None,
@@ -415,13 +467,23 @@ impl ReferenceApplication {
                 self.recent_lifecycle_events(&lifecycle_query)
                     .into_iter()
                     .filter(|value| {
-                        query.matches_status(value.current_status.as_deref().unwrap_or(""))
-                            && query.matches_text(&[
-                                &value.event_id,
-                                &value.event_type,
-                                value.market_id.as_deref().unwrap_or(""),
-                                value.source_symbol.as_deref().unwrap_or(""),
-                            ])
+                        query.matches_status(
+                            value
+                                .current_status
+                                .as_ref()
+                                .map(|status| status.as_str())
+                                .unwrap_or(""),
+                        ) && query.matches_text(&[
+                            &value.event_id,
+                            &value.event_type,
+                            value.record_kind.as_deref().unwrap_or(""),
+                            value.record_id.as_deref().unwrap_or(""),
+                            value.market_id.as_deref().unwrap_or(""),
+                            value.source_symbol.as_deref().unwrap_or(""),
+                        ]) && query
+                            .record_kind
+                            .as_deref()
+                            .is_none_or(|kind| value.record_kind.as_deref() == Some(kind))
                     })
                     .map(ReferenceRecord::Event),
             );
@@ -483,7 +545,7 @@ impl ReferenceApplication {
             .catalog
             .lifecycle_events
             .iter()
-            .filter(|event| query.matches(event_sequence(event), event))
+            .filter(|event| query.matches(event_sequence(event).into(), event))
             .cloned()
             .collect::<Vec<_>>();
         if let Some(limit) = query.limit {
@@ -514,7 +576,7 @@ impl ReferenceReadModel {
         &self.catalog
     }
 
-    pub fn generation(&self) -> u64 {
+    pub fn generation(&self) -> Generation {
         self.catalog.generation
     }
 
@@ -541,7 +603,7 @@ impl ReferenceReadModel {
             .catalog
             .lifecycle_events
             .iter()
-            .filter(|event| query.matches(event_sequence(event), event))
+            .filter(|event| query.matches(event_sequence(event).into(), event))
             .cloned()
             .collect::<Vec<_>>();
         if let Some(limit) = query.limit {
@@ -559,16 +621,16 @@ impl ReferenceReadModel {
                     .entities
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.entity_id,
                                 &value.entity_type,
                                 &value.name,
                             ])
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
-                                .is_none_or(|venue| venue == value.entity_id)
+                                .is_none_or(|exchange| exchange == value.entity_id)
                     })
                     .cloned()
                     .map(ReferenceRecord::Entity),
@@ -580,7 +642,7 @@ impl ReferenceReadModel {
                     .assets
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.asset_id,
                                 &value.code,
@@ -597,7 +659,7 @@ impl ReferenceReadModel {
                     .instruments
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.instrument_id,
                                 &value.symbol,
@@ -618,11 +680,11 @@ impl ReferenceReadModel {
                     .listings
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
-                                .is_none_or(|venue| venue == value.venue_id)
+                                .is_none_or(|exchange| exchange == value.exchange_id.as_str())
                             && query.as_of_unix_nanos.is_none_or(|at| {
                                 value.effective_from_unix_nanos <= at
                                     && value.effective_to_unix_nanos.is_none_or(|end| at < end)
@@ -630,8 +692,8 @@ impl ReferenceReadModel {
                             && query.matches_text(&[
                                 &value.listing_id,
                                 &value.instrument_id,
-                                &value.venue_symbol,
-                                &value.venue_id,
+                                &value.exchange_symbol,
+                                value.exchange_id.as_str(),
                             ])
                     })
                     .cloned()
@@ -640,10 +702,13 @@ impl ReferenceReadModel {
         }
         if include(ReferenceKind::Market) {
             let market_query = MarketQuery {
-                venue_id: query.venue_id.clone(),
+                exchange_id: query.exchange_id.clone(),
                 market_type: query.market_type.clone(),
                 asset_type: query.asset_type.clone(),
-                source_symbol: query.text.clone(),
+                source_symbol: query
+                    .text
+                    .as_deref()
+                    .and_then(|value| kairos_domain_types::Symbol::new(value).ok()),
                 active_only: query.active_only,
                 as_of_unix_nanos: query.as_of_unix_nanos,
                 status: query.status.clone(),
@@ -673,7 +738,7 @@ impl ReferenceReadModel {
                     .financial_products
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.product_id,
                                 &value.provider_product_id,
@@ -691,14 +756,14 @@ impl ReferenceReadModel {
                     .execution_accesses
                     .values()
                     .filter(|value| {
-                        query.matches_status(&value.status)
+                        query.matches_status(value.status.as_str())
                             && query
-                                .venue_id
+                                .exchange_id
                                 .as_deref()
                                 .is_none_or(|provider| provider == value.provider_id)
                             && query.matches_text(&[
                                 &value.access_id,
-                                &value.instrument_id,
+                                &value.market_id,
                                 &value.provider_id,
                                 &value.product_family,
                                 &value.provider_symbol,
@@ -712,7 +777,7 @@ impl ReferenceReadModel {
             let lifecycle_query = LifecycleQuery {
                 sequence_from: query.sequence_from,
                 sequence_to: query.sequence_to,
-                venue_id: query.venue_id.clone(),
+                exchange_id: query.exchange_id.clone(),
                 event_time_from_unix_nanos: query.event_time_from_unix_nanos,
                 event_time_to_unix_nanos: query.event_time_to_unix_nanos,
                 limit: None,
@@ -722,13 +787,23 @@ impl ReferenceReadModel {
                 self.lifecycle_events(&lifecycle_query)
                     .into_iter()
                     .filter(|value| {
-                        query.matches_status(value.current_status.as_deref().unwrap_or(""))
-                            && query.matches_text(&[
-                                &value.event_id,
-                                &value.event_type,
-                                value.market_id.as_deref().unwrap_or(""),
-                                value.source_symbol.as_deref().unwrap_or(""),
-                            ])
+                        query.matches_status(
+                            value
+                                .current_status
+                                .as_ref()
+                                .map(|status| status.as_str())
+                                .unwrap_or(""),
+                        ) && query.matches_text(&[
+                            &value.event_id,
+                            &value.event_type,
+                            value.record_kind.as_deref().unwrap_or(""),
+                            value.record_id.as_deref().unwrap_or(""),
+                            value.market_id.as_deref().unwrap_or(""),
+                            value.source_symbol.as_deref().unwrap_or(""),
+                        ]) && query
+                            .record_kind
+                            .as_deref()
+                            .is_none_or(|kind| value.record_kind.as_deref() == Some(kind))
                     })
                     .map(ReferenceRecord::Event),
             );

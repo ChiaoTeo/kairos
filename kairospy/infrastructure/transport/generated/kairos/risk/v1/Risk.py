@@ -43,8 +43,15 @@ class Risk(object):
         return 0
 
     # Risk
-    def Budgets(self, j):
+    def CircuitCount(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Risk
+    def Budgets(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -57,19 +64,19 @@ class Risk(object):
 
     # Risk
     def BudgetsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # Risk
     def BudgetsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         return o == 0
 
     # Risk
     def Reservations(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -82,18 +89,43 @@ class Risk(object):
 
     # Risk
     def ReservationsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # Risk
     def ReservationsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        return o == 0
+
+    # Risk
+    def Circuits(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.risk.v1.CircuitState import CircuitState
+            obj = CircuitState()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Risk
+    def CircuitsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # Risk
+    def CircuitsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         return o == 0
 
 def RiskStart(builder):
-    builder.StartObject(4)
+    builder.StartObject(6)
 
 def Start(builder):
     RiskStart(builder)
@@ -110,8 +142,14 @@ def RiskAddReservationCount(builder, reservationCount):
 def AddReservationCount(builder, reservationCount):
     RiskAddReservationCount(builder, reservationCount)
 
+def RiskAddCircuitCount(builder, circuitCount):
+    builder.PrependUint64Slot(2, circuitCount, 0)
+
+def AddCircuitCount(builder, circuitCount):
+    RiskAddCircuitCount(builder, circuitCount)
+
 def RiskAddBudgets(builder, budgets):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(budgets), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(budgets), 0)
 
 def AddBudgets(builder, budgets):
     RiskAddBudgets(builder, budgets)
@@ -123,7 +161,7 @@ def StartBudgetsVector(builder, numElems):
     return RiskStartBudgetsVector(builder, numElems)
 
 def RiskAddReservations(builder, reservations):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(reservations), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(reservations), 0)
 
 def AddReservations(builder, reservations):
     RiskAddReservations(builder, reservations)
@@ -133,6 +171,18 @@ def RiskStartReservationsVector(builder, numElems):
 
 def StartReservationsVector(builder, numElems):
     return RiskStartReservationsVector(builder, numElems)
+
+def RiskAddCircuits(builder, circuits):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(circuits), 0)
+
+def AddCircuits(builder, circuits):
+    RiskAddCircuits(builder, circuits)
+
+def RiskStartCircuitsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartCircuitsVector(builder, numElems):
+    return RiskStartCircuitsVector(builder, numElems)
 
 def RiskEnd(builder):
     return builder.EndObject()

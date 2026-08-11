@@ -8,11 +8,16 @@ pub mod encoding;
 pub mod error;
 pub mod event;
 pub mod model;
-pub mod query;
+pub mod projection;
 pub mod snapshot;
 pub mod transport;
 
 pub use error::{ContractError, ContractResult};
-pub use event::{EventEnvelope, EventPublisher};
+pub use event::{decode_change, EventEnvelope, EventPublisher, ReferenceChange};
 pub use model::{LifecycleEvent, ReferenceCatalog};
+pub use projection::{ReferenceHealth, ReferenceMarket};
 pub use snapshot::{SnapshotEnvelope, SnapshotPublisher, SnapshotReader};
+pub use transport::{
+    ReferenceMarketsSnapshot, ReferenceMmapMarketsReader, ReferenceMmapSnapshotSetReader,
+    ReferenceSnapshotSet,
+};

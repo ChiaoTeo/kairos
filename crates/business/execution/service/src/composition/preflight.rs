@@ -5,9 +5,11 @@
 //! Unix sockets.  No business state is cached here.
 
 use crate::application::{
-    DependencyWatermarks, ExecuteStrategyIntent, ExecutionPreflight, SnapshotWatermark, SubmitOrder,
+    DependencyWatermarks, ExecuteStrategyIntent, ExecutionPreflight, QuoteObservation,
+    SnapshotWatermark, SubmitOrder,
 };
 use crate::domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
+use kairos_domain_types::{InstrumentId, MarketId, OrderId, Price, Quantity, UnixNanos};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,9 +24,9 @@ use kairos_account_contract::client::{
     AccountContractClient, BalancesResponse, Capability, DecimalValue as AccountDecimal, Health,
     PositionsResponse,
 };
-use kairos_reference_contract::query::{ReferenceMarket, ReferenceQueryClient};
+use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
 use kairos_risk_contract::client::RiskContractClient;
-use kairos_risk_contract::client::{Amount as RiskAmount, Assessment, ReserveRequest, Usage};
+use kairos_risk_contract::model::{Amount as RiskAmount, AuthorizeRequest, Metric, RiskContext};
 
 const PROJECTION_REFRESH: Duration = Duration::from_millis(250);
 const PROJECTION_MAX_AGE: Duration = Duration::from_secs(5);
@@ -46,7 +48,7 @@ struct MarketProjection {
 
 #[derive(Clone)]
 struct ReferenceProjection {
-    health: kairos_reference_contract::query::Health,
+    health: ReferenceHealth,
     markets: Vec<ReferenceMarket>,
     refreshed_at: Instant,
 }
@@ -68,11 +70,11 @@ struct DependencyProjection {
 pub struct SocketExecutionPreflight {
     accounts: BTreeMap<String, PathBuf>,
     market_snapshot: Option<PathBuf>,
-    reference: Option<PathBuf>,
     risk: Option<PathBuf>,
     reservations: BTreeMap<String, String>,
     reservation_amounts: BTreeMap<String, i64>,
     reservation_quantities: BTreeMap<String, i64>,
+    reservation_requests: BTreeMap<String, SubmitOrder>,
     orders: BTreeMap<String, (String, String)>,
     dependency_watermarks: DependencyWatermarks,
     projection: Arc<RwLock<DependencyProjection>>,
@@ -80,6 +82,7 @@ pub struct SocketExecutionPreflight {
     projection_workers: Vec<JoinHandle<()>>,
     account_clients: BTreeMap<String, AccountContractClient>,
     risk_client: Option<RiskContractClient>,
+    simulated_settlement: bool,
 }
 
 const MAX_PRICE_DEVIATION_BPS: i64 = 500;
@@ -116,17 +119,18 @@ impl SocketExecutionPreflight {
             .parent()
             .and_then(Path::parent)
             .map(Path::to_path_buf);
-        let market_snapshot = instance_root.map(|root| {
+        let market_snapshot = instance_root.clone().map(|root| {
             root.join("snapshots")
                 .join("market")
                 .join("market.snapshot")
         });
+        let reference_snapshot = instance_root.map(|root| root.join("snapshots").join("reference"));
         let projection = Arc::new(RwLock::new(DependencyProjection::default()));
         let projection_stop = Arc::new(AtomicBool::new(false));
         let projection_workers = Self::start_projection_workers(
             accounts.clone(),
             market_snapshot.clone(),
-            endpoint("reference"),
+            reference_snapshot.clone(),
             endpoint("risk"),
             Arc::clone(&projection),
             Arc::clone(&projection_stop),
@@ -134,11 +138,11 @@ impl SocketExecutionPreflight {
         Ok(Self {
             accounts,
             market_snapshot,
-            reference: endpoint("reference"),
             risk: endpoint("risk"),
             reservations: BTreeMap::new(),
             reservation_amounts: BTreeMap::new(),
             reservation_quantities: BTreeMap::new(),
+            reservation_requests: BTreeMap::new(),
             orders: BTreeMap::new(),
             dependency_watermarks: DependencyWatermarks::default(),
             projection,
@@ -146,7 +150,13 @@ impl SocketExecutionPreflight {
             projection_workers,
             account_clients: BTreeMap::new(),
             risk_client: None,
+            simulated_settlement: false,
         })
+    }
+
+    pub fn with_simulated_settlement(mut self, enabled: bool) -> Self {
+        self.simulated_settlement = enabled;
+        self
     }
 
     fn account_client(&mut self, account_id: &str) -> Result<&AccountContractClient, String> {
@@ -183,7 +193,7 @@ impl SocketExecutionPreflight {
     fn start_projection_workers(
         accounts: BTreeMap<String, PathBuf>,
         market_snapshot: Option<PathBuf>,
-        reference: Option<PathBuf>,
+        reference_snapshot: Option<PathBuf>,
         risk: Option<PathBuf>,
         projection: Arc<RwLock<DependencyProjection>>,
         stop: Arc<AtomicBool>,
@@ -270,16 +280,34 @@ impl SocketExecutionPreflight {
                 }
             }));
         }
-        if let Some(path) = reference {
+        if let Some(snapshot_root) = reference_snapshot {
             let projection = Arc::clone(&projection);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
-                let client = ReferenceQueryClient::connect(path);
+                let reader = loop {
+                    match kairos_reference_contract::ReferenceMmapSnapshotSetReader::open(
+                        &snapshot_root,
+                    ) {
+                        Ok(reader) => break reader,
+                        Err(_) if !stop.load(Ordering::Acquire) => {
+                            std::thread::sleep(PROJECTION_REFRESH)
+                        }
+                        Err(_) => return,
+                    }
+                };
                 let mut last_watermark = None;
                 while !stop.load(Ordering::Acquire) {
                     let result = (|| {
-                        let health = client.health().map_err(|error| error.to_string())?;
-                        let watermark = (health.generation, health.event_sequence);
+                        let snapshot = reader.read().map_err(|error| error.to_string())?;
+                        let health = ReferenceHealth {
+                            status: "ready".into(),
+                            generation: snapshot.generation,
+                            event_sequence: snapshot.event_sequence,
+                        };
+                        let watermark = (snapshot.generation, snapshot.event_sequence);
+                        if (health.generation, health.event_sequence) != watermark {
+                            return Err("Reference health and snapshot watermark disagree".into());
+                        }
                         if last_watermark == Some(watermark) {
                             if let Ok(mut state) = projection.write() {
                                 if let Some(value) = state.reference.as_mut() {
@@ -289,9 +317,19 @@ impl SocketExecutionPreflight {
                             }
                             return Ok::<_, String>(None);
                         }
+                        let markets = snapshot
+                            .markets
+                            .into_iter()
+                            .map(reference_market_from_snapshot)
+                            .collect::<Vec<_>>();
                         let value = ReferenceProjection {
                             health,
-                            markets: client.active_markets().map_err(|error| error.to_string())?,
+                            markets: markets
+                                .into_iter()
+                                .filter(|market| {
+                                    matches!(market.status.as_str(), "active" | "trading")
+                                })
+                                .collect(),
                             refreshed_at: Instant::now(),
                         };
                         last_watermark = Some(watermark);
@@ -402,25 +440,25 @@ impl SocketExecutionPreflight {
                     (
                         account_id.clone(),
                         SnapshotWatermark {
-                            generation: value.health.generation,
-                            event_sequence: value.health.event_sequence,
+                            generation: value.health.generation.into(),
+                            event_sequence: value.health.event_sequence.into(),
                         },
                     )
                 })
                 .collect();
             self.dependency_watermarks.market =
                 state.market.as_ref().map(|value| SnapshotWatermark {
-                    generation: value.snapshot.generation,
-                    event_sequence: value.snapshot.event_sequence,
+                    generation: value.snapshot.generation.into(),
+                    event_sequence: value.snapshot.event_sequence.into(),
                 });
             self.dependency_watermarks.reference =
                 state.reference.as_ref().map(|value| SnapshotWatermark {
-                    generation: value.health.generation,
-                    event_sequence: value.health.event_sequence,
+                    generation: value.health.generation.into(),
+                    event_sequence: value.health.event_sequence.into(),
                 });
             self.dependency_watermarks.risk = state.risk.as_ref().map(|value| SnapshotWatermark {
-                generation: value.health.generation,
-                event_sequence: value.health.event_sequence,
+                generation: value.health.generation.into(),
+                event_sequence: value.health.event_sequence.into(),
             });
         }
     }
@@ -457,6 +495,198 @@ impl SocketExecutionPreflight {
         }
         Ok(())
     }
+
+    fn authorize_risk(
+        &mut self,
+        request: &SubmitOrder,
+        reservation_id: String,
+        amount: i64,
+    ) -> Result<(), String> {
+        let health = self.risk_projection()?.health;
+        let account = self.account_projection(request.account_id.as_str())?;
+        let (market_generation, market_event_sequence, market_is_fresh) =
+            if self.market_snapshot.is_some() {
+                let market = self.market_projection()?;
+                let has_quote = market.snapshot.quotes.iter().any(|quote| {
+                    quote.instrument_id == request.instrument_id
+                        && request
+                            .market_id
+                            .as_ref()
+                            .is_none_or(|market_id| quote.market_id == market_id.as_str())
+                });
+                (
+                    market.snapshot.generation,
+                    market.snapshot.event_sequence,
+                    has_quote
+                        && market.snapshot.freshness.iter().all(|(_, value)| {
+                            value.market_id
+                                != request
+                                    .market_id
+                                    .as_ref()
+                                    .map(MarketId::as_str)
+                                    .unwrap_or_default()
+                                || matches!(
+                                    value.status,
+                                    kairos_market_contract::model::DataFreshnessStatus::Current
+                                )
+                        }),
+                )
+            } else {
+                (0, 0, true)
+            };
+        let available_margin = request
+            .options
+            .quote_asset
+            .as_deref()
+            .and_then(|asset| find_available(&account.balances, asset))
+            .unwrap_or_default()
+            .max(0);
+        let decision = self
+            .risk_client()?
+            .authorize_and_reserve(&AuthorizeRequest {
+                request_id: request.order_id.to_string(),
+                idempotency_key: reservation_id.clone(),
+                reservation_id,
+                account_id: request.account_id.to_string(),
+                strategy_id: request
+                    .intent_id
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "execution".into()),
+                instrument_id: request.instrument_id.to_string(),
+                exchange_id: request
+                    .market_id
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| request.segment_key.to_string()),
+                metric: Metric::Notional,
+                amount: RiskAmount {
+                    mantissa: amount,
+                    scale: request.quantity.scale(),
+                },
+                at_unix_nanos: now_unix_nanos(),
+                reservation_ttl_nanos: 60_000_000_000,
+                dependency_generation: health.generation,
+                dependency_event_sequence: health.event_sequence,
+                context: Some(RiskContext {
+                    account_snapshot_watermark: account.health.generation,
+                    market_freshness_watermark: market_generation.max(market_event_sequence),
+                    portfolio_version: account.health.event_sequence,
+                    current_exposure: RiskAmount {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    current_margin: RiskAmount {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    available_margin: RiskAmount {
+                        mantissa: available_margin,
+                        scale: 0,
+                    },
+                    current_pnl: 0,
+                    current_drawdown: RiskAmount {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    market_is_fresh,
+                    leverage_bps: 0,
+                    price_deviation_bps: 0,
+                    stress_loss: RiskAmount {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                }),
+            })
+            .map_err(|error| error.to_string())?;
+        if !decision.allowed {
+            return Err(if decision.violations.is_empty() {
+                "risk authorization rejected order".into()
+            } else {
+                decision.violations.join("; ")
+            });
+        }
+        if decision.reservation.is_none() {
+            return Err("risk authorization did not create a reservation".into());
+        }
+        Ok(())
+    }
+
+    fn plan_explicit_legs(
+        &mut self,
+        intent: &ExecuteStrategyIntent,
+    ) -> Result<Vec<SubmitOrder>, String> {
+        let mut orders = Vec::with_capacity(intent.legs.len());
+        for leg in &intent.legs {
+            if leg.leg_id.as_str().trim().is_empty()
+                || leg.account_id.as_str().trim().is_empty()
+                || leg.segment_key.as_str().trim().is_empty()
+                || leg.instrument_id.as_str().trim().is_empty()
+            {
+                return Err("explicit intent leg identity is required".into());
+            }
+            self.health(leg.account_id.as_str())?;
+            let (side, quantity) = if leg.target_position {
+                let positions = self.account_projection(leg.account_id.as_str())?.positions;
+                let current = find_position(&positions, leg.instrument_id.as_str())
+                    .unwrap_or((0, leg.quantity.scale()));
+                let target =
+                    scale_decimal(leg.quantity.mantissa(), leg.quantity.scale(), current.1)?;
+                let delta = target
+                    .checked_sub(current.0)
+                    .ok_or_else(|| "explicit intent leg quantity overflow".to_string())?;
+                if delta == 0 {
+                    continue;
+                }
+                (
+                    if delta > 0 {
+                        OrderSide::Buy
+                    } else {
+                        OrderSide::Sell
+                    },
+                    Quantity::new(delta.unsigned_abs() as i64, current.1)
+                        .map_err(|error| error.to_string())?,
+                )
+            } else {
+                if leg.quantity.mantissa() <= 0 {
+                    return Err("explicit intent leg quantity must be positive".into());
+                }
+                (leg.side, leg.quantity)
+            };
+            orders.push(SubmitOrder {
+                order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
+                    .map_err(|error| error.to_string())?,
+                intent_id: Some(intent.intent_id.clone()),
+                account_id: leg.account_id.clone(),
+                segment_key: leg.segment_key.clone(),
+                instrument_id: leg.instrument_id.clone(),
+                market_id: leg.market_id.clone(),
+                side,
+                order_type: if leg.limit_price.is_some() {
+                    OrderType::Limit
+                } else {
+                    OrderType::Market
+                },
+                quantity,
+                limit_price: leg.limit_price,
+                options: leg.options.clone(),
+            });
+        }
+        if intent.intent_type == crate::domain::IntentType::PairArbitrage
+            && (intent.min_edge_bps.is_some() || intent.max_slippage_bps.is_some())
+        {
+            let quotes = self.market_projection()?.snapshot.quotes;
+            validate_pair_constraints(intent, &orders, &quotes)?;
+        }
+        if intent.intent_type == crate::domain::IntentType::QuoteProvisioning {
+            validate_quote_provisioning(&orders)?;
+        }
+        if self.market_snapshot.is_some() {
+            let quotes = self.market_projection()?.snapshot.quotes;
+            validate_quote_freshness(&orders, &quotes)?;
+        }
+        Ok(orders)
+    }
 }
 
 impl Drop for SocketExecutionPreflight {
@@ -470,8 +700,13 @@ impl Drop for SocketExecutionPreflight {
 
 enum PreflightRequest {
     Plan {
-        intent: ExecuteStrategyIntent,
+        intent: Box<ExecuteStrategyIntent>,
         reply: std::sync::mpsc::SyncSender<Result<Vec<SubmitOrder>, String>>,
+    },
+    LatestQuote {
+        instrument_id: String,
+        market_id: Option<String>,
+        reply: std::sync::mpsc::SyncSender<Result<Option<QuoteObservation>, String>>,
     },
     Validate {
         request: SubmitOrder,
@@ -528,10 +763,7 @@ struct DependencyCircuit {
 
 impl DependencyCircuit {
     fn permits(&self, bypass: bool) -> bool {
-        bypass
-            || self
-                .open_until
-                .map_or(true, |until| Instant::now() >= until)
+        bypass || self.open_until.is_none_or(|until| Instant::now() >= until)
     }
 
     fn record(&mut self, result: &Result<(), String>) {
@@ -596,6 +828,14 @@ impl QueuedExecutionPreflight {
             match request {
                 PreflightRequest::Plan { intent, reply } => {
                     let _ = reply.send(preflight.plan_intent(&intent));
+                }
+                PreflightRequest::LatestQuote {
+                    instrument_id,
+                    market_id,
+                    reply,
+                } => {
+                    let _ =
+                        reply.send(preflight.latest_quote(&instrument_id, market_id.as_deref()));
                 }
                 PreflightRequest::Validate { request, reply } => {
                     let _ = reply.send(preflight.validate_order(&request));
@@ -696,7 +936,24 @@ impl ExecutionPreflight for QueuedExecutionPreflight {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             PreflightRequest::Plan {
-                intent: intent.clone(),
+                intent: Box::new(intent.clone()),
+                reply: reply_tx,
+            },
+            reply_rx,
+            false,
+        )
+    }
+
+    fn latest_quote(
+        &mut self,
+        instrument_id: &str,
+        market_id: Option<&str>,
+    ) -> Result<Option<QuoteObservation>, String> {
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        self.request(
+            PreflightRequest::LatestQuote {
+                instrument_id: instrument_id.into(),
+                market_id: market_id.map(str::to_owned),
                 reply: reply_tx,
             },
             reply_rx,
@@ -815,29 +1072,27 @@ impl ExecutionPreflight for SocketExecutionPreflight {
 
     fn plan_intent(&mut self, intent: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
         self.refresh_watermarks();
+        if !intent.legs.is_empty() {
+            return self.plan_explicit_legs(intent);
+        }
         if self.market_snapshot.is_some() {
             let quotes = self.market_projection()?.snapshot.quotes;
             if quotes.is_empty() {
                 return Err("market snapshot has no quotes".into());
             }
-            if let Some(limit) = intent.limit_price_mantissa {
-                validate_market_price(
-                    &quotes,
-                    intent,
-                    limit,
-                    intent.limit_price_scale.unwrap_or(intent.quantity_scale),
-                )?;
+            if let Some(limit) = intent.limit_price {
+                validate_market_price(&quotes, intent, limit.mantissa(), limit.scale())?;
             }
         }
         let mut orders = Vec::with_capacity(intent.account_ids.len());
         for (index, account_id) in intent.account_ids.iter().enumerate() {
-            self.health(account_id)?;
-            let positions = self.account_projection(account_id)?.positions;
-            let current = find_position(&positions, &intent.instrument_id)
-                .unwrap_or((0, intent.quantity_scale));
+            self.health(account_id.as_str())?;
+            let positions = self.account_projection(account_id.as_str())?.positions;
+            let current = find_position(&positions, intent.instrument_id.as_str())
+                .unwrap_or((0, intent.target_quantity.scale()));
             let target = scale_decimal(
-                intent.target_quantity_mantissa,
-                intent.quantity_scale,
+                intent.target_quantity.mantissa(),
+                intent.target_quantity.scale(),
                 current.1,
             )?;
             let delta = target
@@ -846,8 +1101,10 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             if delta == 0 {
                 continue;
             }
+            let limit_price = intent.limit_price;
             orders.push(SubmitOrder {
-                order_id: format!("{}:order:{}", intent.intent_id, index),
+                order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index))
+                    .map_err(|error| error.to_string())?,
                 intent_id: Some(intent.intent_id.clone()),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
@@ -858,37 +1115,74 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 } else {
                     OrderSide::Sell
                 },
-                order_type: if intent.limit_price_mantissa.is_some() {
+                order_type: if intent.limit_price.is_some() {
                     OrderType::Limit
                 } else {
                     OrderType::Market
                 },
-                quantity_mantissa: delta.unsigned_abs() as i64,
-                quantity_scale: current.1,
-                limit_price_mantissa: intent.limit_price_mantissa,
-                limit_price_scale: intent.limit_price_scale,
-                options: Default::default(),
+                quantity: Quantity::new(delta.unsigned_abs() as i64, current.1)
+                    .map_err(|error| error.to_string())?,
+                limit_price,
+                options: intent.order_options.clone(),
             });
         }
         Ok(orders)
     }
 
+    fn latest_quote(
+        &mut self,
+        instrument_id: &str,
+        market_id: Option<&str>,
+    ) -> Result<Option<QuoteObservation>, String> {
+        let snapshot = self.market_projection()?.snapshot;
+        snapshot
+            .quotes
+            .into_iter()
+            .find(|quote| {
+                quote.instrument_id.eq_ignore_ascii_case(instrument_id)
+                    && market_id.is_none_or(|value| quote.market_id == value)
+            })
+            .map(|quote| {
+                Ok::<_, String>(QuoteObservation {
+                    instrument_id: InstrumentId::new(quote.instrument_id)
+                        .map_err(|error| error.to_string())?,
+                    market_id: Some(
+                        MarketId::new(quote.market_id).map_err(|error| error.to_string())?,
+                    ),
+                    bid_price: quote
+                        .bid_price
+                        .map(|value| value.parse::<Price>().map_err(|error| error.to_string()))
+                        .transpose()?,
+                    ask_price: quote
+                        .ask_price
+                        .map(|value| value.parse::<Price>().map_err(|error| error.to_string()))
+                        .transpose()?,
+                    observed_at_unix_nanos: UnixNanos::from(quote.observed_at_unix_nanos),
+                })
+            })
+            .transpose()
+    }
+
     fn validate_order(&mut self, request: &SubmitOrder) -> Result<(), String> {
-        self.health(&request.account_id)?;
-        if request.quantity_mantissa <= 0 {
+        self.health(request.account_id.as_str())?;
+        if request.quantity.mantissa() <= 0 {
             return Err("order quantity must be positive".into());
         }
         if request.order_type == OrderType::Limit
-            && request.limit_price_mantissa.unwrap_or_default() <= 0
+            && request
+                .limit_price
+                .is_some_and(|price| price.mantissa() <= 0)
         {
             return Err("limit price must be positive".into());
         }
-        if self.reference.is_some() {
-            let market =
-                self.reference_market(request.market_id.as_deref(), &request.instrument_id)?;
-            validate_reference_rules(&market, request)?;
-        }
-        let balances = self.account_projection(&request.account_id)?.balances;
+        let market = self.reference_market(
+            request.market_id.as_ref().map(MarketId::as_str),
+            request.instrument_id.as_str(),
+        )?;
+        validate_reference_rules(&market, request)?;
+        let balances = self
+            .account_projection(request.account_id.as_str())?
+            .balances;
         let asset = match request.side {
             OrderSide::Buy => request.options.quote_asset.clone().or_else(|| {
                 request
@@ -904,17 +1198,81 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         if let Some(asset) = asset {
             let needed = if request.side == OrderSide::Buy {
                 request
-                    .quantity_mantissa
-                    .checked_mul(request.limit_price_mantissa.unwrap_or(0))
+                    .quantity
+                    .mantissa()
+                    .checked_mul(request.limit_price.map_or(0, |price| price.mantissa()))
                     .ok_or_else(|| "order notional overflow".to_string())?
             } else {
-                request.quantity_mantissa
+                request.quantity.mantissa()
             };
             let available = find_available(&balances, &asset)
                 .ok_or_else(|| format!("no available balance for {asset}"))?;
             if available < needed {
                 return Err(format!("insufficient available balance for {asset}"));
             }
+        }
+        if let Some(policy) = request.options.maker.as_ref() {
+            if let Some(max_inventory) = policy.max_inventory_abs {
+                let positions = self
+                    .account_projection(request.account_id.as_str())?
+                    .positions;
+                let inventory_scale = max_inventory.scale();
+                let current = find_position(&positions, request.instrument_id.as_str())
+                    .and_then(|(value, scale)| scale_decimal(value, scale, inventory_scale).ok())
+                    .unwrap_or_default();
+                let reserved = self
+                    .reservation_requests
+                    .values()
+                    .filter(|value| {
+                        value.account_id == request.account_id.as_str()
+                            && value.instrument_id == request.instrument_id.as_str()
+                    })
+                    .try_fold(0_i64, |total, value| -> Result<i64, String> {
+                        let signed = if value.side == OrderSide::Buy {
+                            scale_decimal(
+                                value.quantity.mantissa(),
+                                value.quantity.scale(),
+                                inventory_scale,
+                            )?
+                        } else {
+                            -scale_decimal(
+                                value.quantity.mantissa(),
+                                value.quantity.scale(),
+                                inventory_scale,
+                            )?
+                        };
+                        total
+                            .checked_add(signed)
+                            .ok_or_else(|| "maker inventory reservation overflow".to_string())
+                    })?;
+                let signed_request = if request.side == OrderSide::Buy {
+                    scale_decimal(
+                        request.quantity.mantissa(),
+                        request.quantity.scale(),
+                        inventory_scale,
+                    )?
+                } else {
+                    -scale_decimal(
+                        request.quantity.mantissa(),
+                        request.quantity.scale(),
+                        inventory_scale,
+                    )?
+                };
+                let projected = current
+                    .checked_add(reserved)
+                    .and_then(|value| value.checked_add(signed_request))
+                    .ok_or_else(|| "maker inventory projection overflow".to_string())?;
+                if projected.unsigned_abs() > max_inventory.mantissa().unsigned_abs() {
+                    return Err(format!(
+                        "maker inventory guard exceeded for {}: projected={}, limit={}",
+                        request.instrument_id, projected, max_inventory
+                    ));
+                }
+            }
+        }
+        if self.market_snapshot.is_some() {
+            let quotes = self.market_projection()?.snapshot.quotes;
+            validate_quote_freshness(std::slice::from_ref(request), &quotes)?;
         }
         Ok(())
     }
@@ -925,85 +1283,52 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         }
         let reservation_id = format!("execution:{}", request.order_id);
         let amount = request
-            .quantity_mantissa
-            .checked_mul(request.limit_price_mantissa.unwrap_or(1))
+            .quantity
+            .mantissa()
+            .checked_mul(request.limit_price.map_or(1, |price| price.mantissa()))
             .ok_or_else(|| "risk notional overflow".to_string())?;
-        self.risk_client()?
-            .reserve(&ReserveRequest {
-                reservation_id: reservation_id.clone(),
-                assessment: Assessment {
-                    request_id: request.order_id.clone(),
-                    usages: vec![Usage {
-                        metric: "notional".into(),
-                        amount: RiskAmount {
-                            mantissa: amount,
-                            scale: request.quantity_scale,
-                        },
-                        budgets: vec![],
-                    }],
-                    at_unix_nanos: now_unix_nanos(),
-                },
-            })
-            .map_err(|error| error.to_string())?;
+        self.authorize_risk(request, reservation_id.clone(), amount)?;
         self.reservations.insert(
-            request.order_id.clone(),
+            request.order_id.to_string(),
             format!("execution:{}", request.order_id),
         );
         self.reservation_amounts
-            .insert(request.order_id.clone(), amount);
+            .insert(request.order_id.to_string(), amount);
         self.reservation_quantities
-            .insert(request.order_id.clone(), request.quantity_mantissa);
+            .insert(request.order_id.to_string(), request.quantity.mantissa());
+        self.reservation_requests
+            .insert(request.order_id.to_string(), request.clone());
         Ok(())
     }
+
     fn prepare_order(&mut self, request: &SubmitOrder) -> Result<(), String> {
-        self.account_client(&request.account_id)?
-            .plan_order(&kairos_account_contract::client::OrderPlan {
-                order_id: request.order_id.clone(),
-                intent_id: request.intent_id.clone(),
-                account_id: request.account_id.clone(),
-                segment_key: request.segment_key.clone(),
-                instrument_id: request.instrument_id.clone(),
-                market_id: request.market_id.clone(),
-                side: if request.side == OrderSide::Buy {
-                    "Buy"
-                } else {
-                    "Sell"
-                }
-                .into(),
-                quantity: AccountDecimal {
-                    mantissa: request.quantity_mantissa,
-                    scale: request.quantity_scale,
-                },
-                order_type: if request.order_type == OrderType::Limit {
-                    "Limit"
-                } else {
-                    "Market"
-                }
-                .into(),
-                limit_price: request.limit_price_mantissa.map(|mantissa| AccountDecimal {
-                    mantissa,
-                    scale: request.limit_price_scale.unwrap_or(request.quantity_scale),
-                }),
-            })
-            .map_err(|error| error.to_string())?;
+        // Account does not own execution planning. Execution owns the order
+        // plan and lifecycle; Account receives only observed order/fill facts.
+        let _ = request;
         self.orders.insert(
-            request.order_id.clone(),
-            (request.account_id.clone(), request.segment_key.clone()),
+            request.order_id.to_string(),
+            (
+                request.account_id.to_string(),
+                request.segment_key.to_string(),
+            ),
         );
+        self.reservation_requests
+            .entry(request.order_id.to_string())
+            .or_insert_with(|| request.clone());
         Ok(())
     }
     fn publish_order(&mut self, order: &ExecutionOrder) -> Result<(), String> {
         let account_id = &order.account_id;
         self.account_client(account_id)?
             .publish_order_event(&kairos_account_contract::client::OrderEvent {
-                order_id: order.order_id.clone(),
+                order_id: order.order_id.to_string(),
                 status: account_order_status(order.status).into(),
-                venue_order_id: order.venue_order_id.clone(),
+                remote_order_id: order.remote_order_id.as_ref().map(ToString::to_string),
                 filled_quantity: AccountDecimal {
-                    mantissa: order.filled_quantity_mantissa,
-                    scale: order.filled_quantity_scale,
+                    mantissa: order.filled_quantity.mantissa(),
+                    scale: order.filled_quantity.scale(),
                 },
-                occurred_at_unix_nanos: order.updated_at_unix_nanos,
+                occurred_at_unix_nanos: order.updated_at_unix_nanos.get(),
                 reason: order.reason.clone(),
             })
             .map_err(|error| error.to_string())
@@ -1011,30 +1336,76 @@ impl ExecutionPreflight for SocketExecutionPreflight {
     fn publish_fill(&mut self, fill: &ExecutionFill) -> Result<(), String> {
         let (account_id, segment_key) = self
             .orders
-            .get(&fill.order_id)
+            .get(fill.order_id.as_str())
             .cloned()
             .ok_or_else(|| format!("order fact is not prepared: {}", fill.order_id))?;
+        let side = if fill.side == OrderSide::Buy {
+            "Buy"
+        } else {
+            "Sell"
+        };
+        if self.simulated_settlement {
+            let notional = fill
+                .quantity
+                .mantissa()
+                .checked_mul(fill.price.mantissa())
+                .ok_or_else(|| "simulated settlement notional overflow".to_string())?;
+            let settlement_delta = if fill.side == OrderSide::Buy {
+                -notional
+            } else {
+                notional
+            };
+            let settlement_scale = fill
+                .quantity
+                .scale()
+                .checked_add(fill.price.scale())
+                .ok_or_else(|| "simulated settlement decimal scale overflow".to_string())?;
+            return self
+                .account_client(&account_id)?
+                .publish_simulated_fill(&kairos_account_contract::client::SimulatedFill {
+                    fill_id: fill.fill_id.to_string(),
+                    order_id: fill.order_id.to_string(),
+                    segment_key,
+                    instrument_id: fill.instrument_id.to_string(),
+                    quantity: AccountDecimal {
+                        mantissa: fill.quantity.mantissa(),
+                        scale: fill.quantity.scale(),
+                    },
+                    price: AccountDecimal {
+                        mantissa: fill.price.mantissa(),
+                        scale: fill.price.scale(),
+                    },
+                    side: side.into(),
+                    settlement_asset: "USDT".into(),
+                    settlement_delta: AccountDecimal {
+                        mantissa: settlement_delta,
+                        scale: settlement_scale,
+                    },
+                    fee_asset: "USDT".into(),
+                    fee_amount: AccountDecimal {
+                        mantissa: fill.fee.mantissa(),
+                        scale: fill.fee.scale(),
+                    },
+                    occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
+                })
+                .map_err(|error| error.to_string());
+        }
         self.account_client(&account_id)?
             .publish_fill(&kairos_account_contract::client::Fill {
-                fill_id: fill.fill_id.clone(),
-                order_id: fill.order_id.clone(),
+                fill_id: fill.fill_id.to_string(),
+                order_id: fill.order_id.to_string(),
                 segment_key,
-                instrument_id: fill.instrument_id.clone(),
+                instrument_id: fill.instrument_id.to_string(),
                 quantity: AccountDecimal {
-                    mantissa: fill.quantity_mantissa,
-                    scale: fill.quantity_scale,
+                    mantissa: fill.quantity.mantissa(),
+                    scale: fill.quantity.scale(),
                 },
                 price: AccountDecimal {
-                    mantissa: fill.price_mantissa,
-                    scale: fill.price_scale,
+                    mantissa: fill.price.mantissa(),
+                    scale: fill.price.scale(),
                 },
-                side: if fill.side == OrderSide::Buy {
-                    "Buy"
-                } else {
-                    "Sell"
-                }
-                .into(),
-                occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
+                side: side.into(),
+                occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
             })
             .map_err(|error| error.to_string())
     }
@@ -1049,9 +1420,6 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             .get(order_id)
             .cloned()
             .ok_or_else(|| "order reservation is missing".to_string())?;
-        self.risk_client()?
-            .release(&old_id)
-            .map_err(|error| error.to_string())?;
         let previous = self
             .reservation_amounts
             .get(order_id)
@@ -1068,28 +1436,29 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             .and_then(|value| value.checked_div(original_quantity as i128))
             .and_then(|value| i64::try_from(value).ok())
             .unwrap_or(original_quantity);
-        let new_id = format!("execution:{order_id}:remaining:{remaining_quantity_mantissa}");
-        self.risk_client()?
-            .reserve(&ReserveRequest {
-                reservation_id: new_id.clone(),
-                assessment: Assessment {
-                    request_id: new_id.clone(),
-                    usages: vec![Usage {
-                        metric: "notional".into(),
-                        amount: RiskAmount {
-                            mantissa: amount,
-                            scale: quantity_scale,
-                        },
-                        budgets: vec![],
-                    }],
-                    at_unix_nanos: now_unix_nanos(),
-                },
-            })
+        let mut replacement = self
+            .reservation_requests
+            .get(order_id)
+            .cloned()
+            .ok_or_else(|| "order reservation context is missing".to_string())?;
+        replacement.quantity = Quantity::new(remaining_quantity_mantissa, quantity_scale)
             .map_err(|error| error.to_string())?;
-        self.reservations.insert(order_id.to_owned(), new_id);
+        self.risk_client()?
+            .resize(
+                &old_id,
+                &RiskAmount {
+                    mantissa: amount,
+                    scale: quantity_scale,
+                },
+                now_unix_nanos(),
+            )
+            .map_err(|error| error.to_string())?;
+        self.reservations.insert(order_id.to_owned(), old_id);
         self.reservation_amounts.insert(order_id.to_owned(), amount);
         self.reservation_quantities
             .insert(order_id.to_owned(), remaining_quantity_mantissa);
+        self.reservation_requests
+            .insert(order_id.to_owned(), replacement);
         Ok(())
     }
     fn release_order(&mut self, order_id: &str) -> Result<(), String> {
@@ -1097,13 +1466,14 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             let reservation_id = self.reservations.get(order_id).cloned();
             if let Some(reservation_id) = reservation_id {
                 self.risk_client()?
-                    .release(&reservation_id)
+                    .release(&reservation_id, now_unix_nanos())
                     .map_err(|error| error.to_string())?;
             }
         }
         self.reservations.remove(order_id);
         self.reservation_amounts.remove(order_id);
         self.reservation_quantities.remove(order_id);
+        self.reservation_requests.remove(order_id);
         Ok(())
     }
     fn consume_order(&mut self, order_id: &str) -> Result<(), String> {
@@ -1111,21 +1481,48 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             let reservation_id = self.reservations.get(order_id).cloned();
             if let Some(reservation_id) = reservation_id {
                 self.risk_client()?
-                    .consume(&reservation_id)
+                    .consume(&reservation_id, now_unix_nanos())
                     .map_err(|error| error.to_string())?;
             }
         }
         self.reservations.remove(order_id);
         self.reservation_amounts.remove(order_id);
         self.reservation_quantities.remove(order_id);
+        self.reservation_requests.remove(order_id);
         Ok(())
     }
 }
 
-fn validate_reference_rules(
-    market: &kairos_reference_contract::query::ReferenceMarket,
-    request: &SubmitOrder,
-) -> Result<(), String> {
+fn reference_market_from_snapshot(
+    market: kairos_reference_contract::model::Market,
+) -> ReferenceMarket {
+    ReferenceMarket {
+        market_id: market.market_id,
+        source_id: None,
+        market_key: market.market_key,
+        instrument_id: market.instrument_id,
+        listing_id: market.listing_id,
+        exchange_id: market.exchange_id,
+        market_type: market.market_type,
+        asset_type: market.asset_type,
+        source_symbol: market.source_symbol,
+        base_asset_id: market.base_asset_id,
+        quote_asset_id: market.quote_asset_id,
+        underlying_instrument_id: market.underlying_instrument_id,
+        status: market.status,
+        price_tick: market.price_tick,
+        quantity_tick: market.quantity_tick,
+        minimum_quantity: market.minimum_quantity,
+        minimum_notional: market.minimum_notional,
+        price_precision: market.price_precision,
+        quantity_precision: market.quantity_precision,
+        contract_size: market.contract_size,
+        effective_from_unix_nanos: market.effective_from_unix_nanos,
+        effective_to_unix_nanos: market.effective_to_unix_nanos,
+    }
+}
+
+fn validate_reference_rules(market: &ReferenceMarket, request: &SubmitOrder) -> Result<(), String> {
     let status = market.status.as_str();
     if !matches!(
         status.to_ascii_lowercase().as_str(),
@@ -1133,7 +1530,8 @@ fn validate_reference_rules(
     ) {
         return Err("instrument or market is not tradable".into());
     }
-    let quantity = request.quantity_mantissa as f64 / 10_f64.powi(request.quantity_scale as i32);
+    let quantity =
+        request.quantity.mantissa() as f64 / 10_f64.powi(request.quantity.scale() as i32);
     if let Some(minimum) = market.minimum_quantity.as_deref().and_then(parse_float) {
         if quantity < minimum {
             return Err("order quantity is below the market minimum".into());
@@ -1144,9 +1542,8 @@ fn validate_reference_rules(
             return Err("order quantity violates lot size".into());
         }
     }
-    if let Some(price_mantissa) = request.limit_price_mantissa {
-        let price = price_mantissa as f64
-            / 10_f64.powi(request.limit_price_scale.unwrap_or(request.quantity_scale) as i32);
+    if let Some(price_value) = request.limit_price {
+        let price = price_value.mantissa() as f64 / 10_f64.powi(price_value.scale() as i32);
         if let Some(tick) = market.price_tick.as_deref().and_then(parse_float) {
             if !is_multiple(price, tick) {
                 return Err("order price violates tick size".into());
@@ -1238,7 +1635,7 @@ fn validate_market_price(
         .find(|quote| {
             quote
                 .instrument_id
-                .eq_ignore_ascii_case(&intent.instrument_id)
+                .eq_ignore_ascii_case(intent.instrument_id.as_str())
         })
         .ok_or_else(|| "market quote is unavailable".to_string())?;
     let reference = quote
@@ -1254,6 +1651,155 @@ fn validate_market_price(
         || ((limit - reference).abs() / reference) * 10_000.0 > MAX_PRICE_DEVIATION_BPS as f64
     {
         return Err("limit price deviates too far from the current market quote".into());
+    }
+    Ok(())
+}
+
+fn validate_pair_constraints(
+    intent: &ExecuteStrategyIntent,
+    orders: &[SubmitOrder],
+    quotes: &[kairos_market_contract::Quote],
+) -> Result<(), String> {
+    if orders.len() < 2 {
+        return Err("pair arbitrage requires at least two executable legs".into());
+    }
+    let mut buy_price = None;
+    let mut sell_price = None;
+    for order in orders {
+        let quote = quotes
+            .iter()
+            .find(|quote| {
+                quote
+                    .instrument_id
+                    .eq_ignore_ascii_case(&order.instrument_id)
+                    && order
+                        .market_id
+                        .as_deref()
+                        .is_none_or(|market_id| quote.market_id == market_id)
+            })
+            .ok_or_else(|| format!("market quote is unavailable: {}", order.instrument_id))?;
+        let executable = match order.side {
+            OrderSide::Buy => quote.ask_price.as_deref(),
+            OrderSide::Sell => quote.bid_price.as_deref(),
+        }
+        .ok_or_else(|| format!("quote has no executable side: {}", order.instrument_id))?
+        .parse::<f64>()
+        .map_err(|_| format!("invalid market quote price: {}", order.instrument_id))?;
+        if executable <= 0.0 {
+            return Err(format!(
+                "market quote is not positive: {}",
+                order.instrument_id
+            ));
+        }
+        match order.side {
+            OrderSide::Buy => buy_price = Some(executable),
+            OrderSide::Sell => sell_price = Some(executable),
+        }
+        if let (Some(limit), Some(max_slippage)) = (
+            order
+                .limit_price
+                .map(|price| (price.mantissa(), price.scale())),
+            intent.max_slippage_bps,
+        ) {
+            let limit = limit.0 as f64 / 10_f64.powi(limit.1 as i32);
+            let slippage_bps = match order.side {
+                OrderSide::Buy => (limit - executable) / executable * 10_000.0,
+                OrderSide::Sell => (executable - limit) / executable * 10_000.0,
+            };
+            if slippage_bps > max_slippage as f64 {
+                return Err(format!(
+                    "pair leg {} exceeds max slippage: {:.2} bps > {} bps",
+                    order.instrument_id, slippage_bps, max_slippage
+                ));
+            }
+        }
+    }
+    if let Some(min_edge) = intent.min_edge_bps {
+        let buy = buy_price.ok_or_else(|| "pair arbitrage requires a buy leg".to_string())?;
+        let sell = sell_price.ok_or_else(|| "pair arbitrage requires a sell leg".to_string())?;
+        let gross_edge_bps = (sell - buy) / buy * 10_000.0;
+        let net_edge_bps = gross_edge_bps - intent.estimated_fee_bps.unwrap_or_default() as f64;
+        if net_edge_bps < min_edge as f64 {
+            return Err(format!(
+                "pair net edge is below minimum: {:.2} bps < {} bps (gross={:.2}, fees={})",
+                net_edge_bps,
+                min_edge,
+                gross_edge_bps,
+                intent.estimated_fee_bps.unwrap_or_default()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_quote_provisioning(orders: &[SubmitOrder]) -> Result<(), String> {
+    let bid = orders
+        .iter()
+        .find(|order| order.side == OrderSide::Buy)
+        .ok_or_else(|| "quote provisioning requires a bid leg".to_string())?;
+    let ask = orders
+        .iter()
+        .find(|order| order.side == OrderSide::Sell)
+        .ok_or_else(|| "quote provisioning requires an ask leg".to_string())?;
+    if bid.instrument_id != ask.instrument_id || bid.market_id != ask.market_id {
+        return Err(
+            "quote provisioning bid and ask must target the same instrument and market".into(),
+        );
+    }
+    if bid.options.post_only != Some(true) || ask.options.post_only != Some(true) {
+        return Err("quote provisioning requires post_only on both legs".into());
+    }
+    let bid_price = bid
+        .limit_price
+        .map(|price| (price.mantissa(), price.scale()))
+        .ok_or_else(|| "quote provisioning bid must be a limit order".to_string())?;
+    let ask_price = ask
+        .limit_price
+        .map(|price| (price.mantissa(), price.scale()))
+        .ok_or_else(|| "quote provisioning ask must be a limit order".to_string())?;
+    let bid_value = bid_price.0 as f64 / 10_f64.powi(bid_price.1 as i32);
+    let ask_value = ask_price.0 as f64 / 10_f64.powi(ask_price.1 as i32);
+    if bid_value <= 0.0 || ask_value <= bid_value {
+        return Err("quote provisioning requires a positive bid below ask".into());
+    }
+    Ok(())
+}
+
+fn validate_quote_freshness(
+    orders: &[SubmitOrder],
+    quotes: &[kairos_market_contract::Quote],
+) -> Result<(), String> {
+    let now = now_unix_nanos();
+    for order in orders {
+        let Some(max_age) = order
+            .options
+            .maker
+            .as_ref()
+            .and_then(|policy| policy.max_quote_age)
+        else {
+            continue;
+        };
+        let quote = quotes
+            .iter()
+            .find(|quote| {
+                quote
+                    .instrument_id
+                    .eq_ignore_ascii_case(&order.instrument_id)
+                    && order
+                        .market_id
+                        .as_deref()
+                        .is_none_or(|market_id| quote.market_id == market_id)
+            })
+            .ok_or_else(|| format!("market quote is unavailable: {}", order.instrument_id))?;
+        let age = now.saturating_sub(quote.observed_at_unix_nanos);
+        if age > max_age.get() {
+            return Err(format!(
+                "market quote is stale for {}: age={}ms exceeds {}ms",
+                order.instrument_id,
+                age / 1_000_000,
+                max_age.get() / 1_000_000
+            ));
+        }
     }
     Ok(())
 }

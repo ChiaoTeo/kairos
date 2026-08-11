@@ -4,16 +4,17 @@ use std::path::Path;
 
 use crate::domain::ReferenceResult;
 use crate::services::providers::{
-    BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource, CompositeSource,
-    HyperliquidSource, MassiveEquitySource, MassiveSource, PublicSource, ReferenceSource,
+    BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
+    CompositeSource, HyperliquidSource, MassiveEquitySource, MassiveSource, OkxSource,
+    ParticipantAugmentedSource, ReferenceSource,
 };
-use crate::services::storage::{SqliteCatalogStore, SqliteProviderSyncStore};
+use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use crate::ReferenceApplication;
 
-use kairos_integration::credentials::load_workspace_credential;
-use kairos_integration::domain::{AssetType, IntegrationRoute, ProductFamily};
-use kairos_integration::Integration;
-use kairos_protocol::InstanceIdentity;
+use kairos_integration::application::credential::load_workspace_credential;
+use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
+use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
+pub use kairos_reference_contract::transport::ReferenceMmapSnapshotConfig;
 use kairos_reference_contract::transport::{
     ReferenceAeronEventWriter as AeronEventWriter,
     ReferenceMmapSnapshotWriter as MmapReferenceSnapshotWriter,
@@ -50,37 +51,10 @@ fn to_contract_events(
 #[derive(Clone, Debug)]
 pub struct ReferenceCompositionConfig {
     pub workspace: Option<std::path::PathBuf>,
-    pub provider: String,
-    pub endpoint: String,
     pub database: std::path::PathBuf,
-    pub api_key: String,
-    pub binance_api_key: String,
-    pub secret: String,
     pub aeron_dir: Option<String>,
     pub aeron_channel: String,
     pub reference_changes_stream: i32,
-}
-
-/// Parse the provider registry exposed by the Reference binaries.
-pub fn parse_provider(value: &str) -> Result<String, String> {
-    match value {
-        "default"
-        | "binance-spot"
-        | "binance-options"
-        | "binance-usdm-futures"
-        | "binance-coinm-futures"
-        | "binance-equity"
-        | "okx-spot"
-        | "okx-equity"
-        | "okx-swap"
-        | "okx-futures"
-        | "okx-options"
-        | "massive"
-        | "massive-equity"
-        | "massive-options"
-        | "hyperliquid" => Ok(value.to_owned()),
-        _ => Err(format!("unsupported reference provider: {value}")),
-    }
 }
 
 /// Build the same business application for both process modes.
@@ -110,33 +84,9 @@ pub struct ReferenceMmapSnapshotWriter {
 }
 
 impl ReferenceMmapSnapshotWriter {
-    pub fn create(
-        catalog_path: impl AsRef<Path>,
-        entities_path: impl AsRef<Path>,
-        assets_path: impl AsRef<Path>,
-        instruments_path: impl AsRef<Path>,
-        listings_path: impl AsRef<Path>,
-        markets_path: impl AsRef<Path>,
-        financial_products_path: impl AsRef<Path>,
-        execution_accesses_path: impl AsRef<Path>,
-        slot_size: usize,
-        identity: InstanceIdentity,
-    ) -> ReferenceResult<Self> {
+    pub fn create(config: ReferenceMmapSnapshotConfig) -> ReferenceResult<Self> {
         Ok(Self {
-            inner: MmapReferenceSnapshotWriter::create(
-                catalog_path,
-                entities_path,
-                assets_path,
-                instruments_path,
-                listings_path,
-                markets_path,
-                financial_products_path,
-                execution_accesses_path,
-                slot_size,
-                "reference-actor",
-                "reference.lifecycle",
-                identity,
-            )?,
+            inner: MmapReferenceSnapshotWriter::create(config)?,
         })
     }
 
@@ -151,9 +101,8 @@ impl ReferenceMmapSnapshotWriter {
 pub fn default_endpoint(provider: &str) -> &'static str {
     match provider {
         "hyperliquid" => "https://api.hyperliquid.xyz/info",
-        "binance-options" | "binance-options-rest" => {
-            "https://eapi.binance.com/eapi/v1/exchangeInfo"
-        }
+        "binance-spot" | "binance-spot-rest" => "https://api.binance.com",
+        "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
         "binance-usdm-futures" | "binance-usdm-futures-rest" => {
             "https://fapi.binance.com/fapi/v1/exchangeInfo"
         }
@@ -173,94 +122,67 @@ pub fn default_endpoint(provider: &str) -> &'static str {
     }
 }
 
-/// Return the configured Massive REST endpoint, falling back to the bundled
-/// private proxy. The CLI `--endpoint` remains the highest-precedence option.
-pub fn massive_rest_endpoint(workspace: Option<&Path>) -> String {
-    let configured = workspace
-        .and_then(|root| kairos_workspace::workspace::Workspace::open(root).ok())
-        .and_then(|workspace| workspace.market_config().massive.rest_base_url.clone())
-        .filter(|value| !value.trim().is_empty());
-    configured.unwrap_or_else(|| default_endpoint("massive").to_owned())
-}
-
 /// Build the normal Workspace Reference catalog.
 ///
 /// Reference owns the source selection for the global catalog. Public Binance,
 /// OKX, and Hyperliquid products are built in; credentialed providers such as
-/// Massive are enabled when their Workspace credential is available. Every
-/// provider can be explicitly disabled through `[reference.providers.*]`.
+/// Massive are added only when explicitly enabled in
+/// `[reference.providers.*]`. Every provider can be explicitly disabled there.
 fn build_default_source(
     config: &ReferenceCompositionConfig,
 ) -> ReferenceResult<Box<dyn ReferenceSource>> {
-    let manifest = config
+    let workspace = config
         .workspace
         .as_ref()
-        .and_then(|root| std::fs::read_to_string(root.join("kairos.toml")).ok())
-        .or_else(|| {
-            config
-                .workspace
-                .as_ref()
-                .and_then(|root| std::fs::read_to_string(root.join("workspace.toml")).ok())
-        })
-        .map(|text| toml::from_str::<toml::Value>(&text))
+        .map(kairos_workspace::workspace::Workspace::open)
         .transpose()
         .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+    let reference = workspace.as_ref().map(|value| value.reference_config());
 
     let mut sources: Vec<Box<dyn ReferenceSource>> = vec![
         Box::new(BinanceSpotSource::new(default_endpoint("binance-spot"))?),
-        Box::new(public_source(
-            "binance-usdm-futures",
-            ProductFamily::UsdMFutures,
-            Some(AssetType::Crypto),
+        Box::new(BinanceDerivativesSource::new(
+            BinanceInstrumentType::UsdMFutures,
             default_endpoint("binance-usdm-futures"),
         )?),
-        Box::new(public_source(
-            "binance-coinm-futures",
-            ProductFamily::CoinMFutures,
-            Some(AssetType::Crypto),
+        Box::new(BinanceDerivativesSource::new(
+            BinanceInstrumentType::CoinMFutures,
             default_endpoint("binance-coinm-futures"),
         )?),
-        Box::new(BinanceOptionsSource::new(default_endpoint(
-            "binance-options",
-        ))?),
     ];
+    if product_enabled_or_default(reference, "binance", "options", true) {
+        sources.push(Box::new(BinanceOptionsSource::new(default_endpoint(
+            "binance-options",
+        ))?));
+    }
 
     let credentials_root = config
         .workspace
         .as_ref()
         .map(|root| root.join("credentials"));
-    let reference = manifest
-        .as_ref()
-        .and_then(|value| value.get("reference"))
-        .and_then(toml::Value::as_table);
-
-    if !reference_provider_disabled(reference, "okx") {
-        sources.push(Box::new(public_source(
+    if !provider_disabled(reference, "okx") {
+        sources.push(Box::new(OkxSource::new(
             "okx-spot",
-            ProductFamily::Spot,
-            Some(AssetType::Crypto),
+            OkxInstrumentType::Spot,
             default_endpoint("okx-spot"),
         )?));
-        sources.push(Box::new(public_source(
+        sources.push(Box::new(OkxSource::new(
             "okx-swap",
-            ProductFamily::UsdMFutures,
-            Some(AssetType::Crypto),
+            OkxInstrumentType::Swap,
             default_endpoint("okx-swap"),
         )?));
-        sources.push(Box::new(public_source(
+        sources.push(Box::new(OkxSource::new(
             "okx-futures",
-            ProductFamily::CoinMFutures,
-            Some(AssetType::Crypto),
+            OkxInstrumentType::Futures,
             default_endpoint("okx-futures"),
         )?));
-        sources.push(Box::new(public_source(
+        sources.push(Box::new(OkxSource::new(
             "okx-options",
-            ProductFamily::Options,
-            Some(AssetType::Crypto),
+            OkxInstrumentType::Option,
             default_endpoint("okx-options"),
         )?));
     }
-    if !reference_provider_disabled(reference, "hyperliquid") {
+    if !provider_disabled(reference, "hyperliquid") {
         sources.push(Box::new(HyperliquidSource::new(default_endpoint(
             "hyperliquid",
         ))?));
@@ -270,16 +192,13 @@ fn build_default_source(
         load_workspace_credential(
             root,
             "massive",
-            reference_provider_credential(reference, "massive"),
+            provider_config(reference, "massive").and_then(|value| value.credential_id.as_deref()),
         )
         .ok()
         .flatten()
     });
-    let massive_enabled = reference_provider_enabled(reference, "massive");
-    let massive_ready = massive_credential
-        .as_ref()
-        .is_some_and(|credential| !credential.api_key.trim().is_empty());
-    if !reference_provider_disabled(reference, "massive") && (massive_enabled || massive_ready) {
+    let massive_enabled = provider_enabled(reference, "massive");
+    if massive_enabled {
         let credential = massive_credential.ok_or_else(|| {
             crate::domain::ReferenceError::Provider(
                 "Reference Massive source is enabled but its credential is missing".into(),
@@ -290,22 +209,30 @@ fn build_default_source(
                 "Reference Massive source is enabled but its API key is missing".into(),
             ));
         }
-        sources.push(Box::new(MassiveEquitySource::new(
-            credential.api_key.clone(),
-            massive_rest_endpoint(config.workspace.as_deref()),
-        )?));
-        // Reference owns the complete provider catalog. Underlying filtering
-        // belongs to the Market subscription query, not to catalog refresh.
-        let sync_store = SqliteProviderSyncStore::open(&config.database)?;
-        sources.push(Box::new(MassiveSource::new_with_sync_store(
-            credential.api_key,
-            massive_rest_endpoint(config.workspace.as_deref()),
-            Box::new(sync_store),
-        )?));
+        let endpoint = provider_endpoint(reference, "massive", default_endpoint("massive"));
+        if product_enabled_or_default(reference, "massive", "equity", true) {
+            let equity_sync_store = SqlxProviderSyncStore::open(&config.database)?;
+            sources.push(Box::new(MassiveEquitySource::new_with_sync_store(
+                credential.api_key.clone(),
+                endpoint.clone(),
+                Box::new(equity_sync_store),
+            )?));
+        }
+        if product_enabled_or_default(reference, "massive", "options", true) {
+            // Reference owns the complete provider catalog. Underlying filtering
+            // belongs to the Market subscription query, not to catalog refresh.
+            let sync_store = SqlxProviderSyncStore::open(&config.database)?;
+            sources.push(Box::new(MassiveSource::new_with_sync_store(
+                credential.api_key,
+                endpoint,
+                Box::new(sync_store),
+            )?));
+        }
     }
 
-    if reference_product_enabled(reference, "binance", "equity") {
-        let credential_id = reference_product_credential(reference, "binance", "equity");
+    if product_enabled(reference, "binance", "equity") {
+        let credential_id = product_config(reference, "binance", "equity")
+            .and_then(|value| value.credential_id.as_deref());
         let credential = credentials_root
             .as_deref()
             .and_then(|root| {
@@ -319,91 +246,119 @@ fn build_default_source(
                         .into(),
                 )
             })?;
+        let api_secret = credential.secret_value().to_owned();
         sources.push(Box::new(BinanceEquitySource::new(
             credential.api_key,
-            credential.secret,
+            api_secret,
         )?));
     }
 
-    Ok(Box::new(CompositeSource::new(sources)?))
+    let sync_store = SqlxProviderSyncStore::open(&config.database)?;
+    let source: Box<dyn ReferenceSource> = Box::new(CompositeSource::new_with_sync_store(
+        sources,
+        Some(Box::new(sync_store)),
+    )?);
+    let mut participants = vec![
+        configured_provider("binance", "Binance"),
+        configured_provider("hyperliquid", "Hyperliquid"),
+    ];
+    if !provider_disabled(reference, "okx") {
+        participants.push(configured_provider("okx", "OKX"));
+    }
+    if let Some(reference) = reference {
+        for (id, participant) in &reference.participants {
+            if participant.enabled != Some(false) {
+                if participant.entity_type.trim().is_empty() || participant.name.trim().is_empty() {
+                    return Err(crate::domain::ReferenceError::Provider(format!(
+                        "reference participant {id} requires type and name"
+                    )));
+                }
+                participants.push(crate::domain::Entity {
+                    source_id: None,
+                    entity_id: format!("{}:{id}", participant.entity_type),
+                    entity_type: participant.entity_type.clone(),
+                    name: participant.name.clone(),
+                    status: "active".into(),
+                });
+            }
+        }
+    }
+    Ok(ParticipantAugmentedSource::wrap(source, participants))
 }
 
-fn reference_provider_enabled(
-    reference: Option<&toml::map::Map<String, toml::Value>>,
+fn configured_provider(id: &str, name: &str) -> crate::domain::Entity {
+    crate::domain::Entity {
+        source_id: None,
+        entity_id: format!("data_provider:{id}"),
+        entity_type: "data_provider".into(),
+        name: name.into(),
+        status: "active".into(),
+    }
+}
+
+fn provider_config<'a>(
+    reference: Option<&'a kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+) -> Option<&'a kairos_workspace::workspace::WorkspaceReferenceProviderConfig> {
+    reference.and_then(|value| value.providers.get(provider))
+}
+
+fn provider_enabled(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
     provider: &str,
 ) -> bool {
-    let Some(table) = reference
-        .and_then(|value| value.get("providers"))
-        .and_then(toml::Value::as_table)
-        .and_then(|providers| providers.get(provider))
-        .and_then(toml::Value::as_table)
-    else {
-        return false;
-    };
-    table
-        .get("enabled")
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(true)
-}
-
-fn reference_provider_disabled(
-    reference: Option<&toml::map::Map<String, toml::Value>>,
-    provider: &str,
-) -> bool {
-    reference
-        .and_then(|value| value.get("providers"))
-        .and_then(toml::Value::as_table)
-        .and_then(|providers| providers.get(provider))
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("enabled"))
-        .and_then(toml::Value::as_bool)
-        .is_some_and(|enabled| !enabled)
-}
-
-fn reference_provider_credential<'a>(
-    reference: Option<&'a toml::map::Map<String, toml::Value>>,
-    provider: &str,
-) -> Option<&'a str> {
-    reference
-        .and_then(|value| value.get("providers"))
-        .and_then(toml::Value::as_table)
-        .and_then(|providers| providers.get(provider))
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("credential_id"))
-        .and_then(toml::Value::as_str)
-}
-
-fn reference_product_enabled(
-    reference: Option<&toml::map::Map<String, toml::Value>>,
-    provider: &str,
-    product: &str,
-) -> bool {
-    reference
-        .and_then(|value| value.get("products"))
-        .and_then(toml::Value::as_table)
-        .and_then(|products| products.get(provider))
-        .and_then(toml::Value::as_table)
-        .and_then(|provider| provider.get(product))
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("enabled"))
-        .and_then(toml::Value::as_bool)
+    provider_config(reference, provider)
+        .and_then(|value| value.enabled)
         .unwrap_or(false)
 }
 
-fn reference_product_credential<'a>(
-    reference: Option<&'a toml::map::Map<String, toml::Value>>,
+fn provider_disabled(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+) -> bool {
+    provider_config(reference, provider).and_then(|value| value.enabled) == Some(false)
+}
+
+fn provider_endpoint(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+    default: &str,
+) -> String {
+    provider_config(reference, provider)
+        .and_then(|value| value.endpoint.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default.to_owned())
+}
+
+fn product_config<'a>(
+    reference: Option<&'a kairos_workspace::workspace::WorkspaceReferenceConfig>,
     provider: &str,
     product: &str,
-) -> Option<&'a str> {
+) -> Option<&'a kairos_workspace::workspace::WorkspaceReferenceProductConfig> {
     reference
-        .and_then(|value| value.get("products"))
-        .and_then(toml::Value::as_table)
-        .and_then(|products| products.get(provider))
-        .and_then(toml::Value::as_table)
-        .and_then(|provider| provider.get(product))
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("credential_id"))
-        .and_then(toml::Value::as_str)
+        .and_then(|value| value.products.get(provider))
+        .and_then(|value| value.get(product))
+}
+
+fn product_enabled(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+    product: &str,
+) -> bool {
+    product_config(reference, provider, product)
+        .and_then(|value| value.enabled)
+        .unwrap_or(false)
+}
+
+fn product_enabled_or_default(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+    product: &str,
+    default: bool,
+) -> bool {
+    product_config(reference, provider, product)
+        .and_then(|value| value.enabled)
+        .unwrap_or(default)
 }
 
 impl ReferenceEventWriter {
@@ -440,103 +395,8 @@ pub fn build_application(
             kairos_transport::stream_ids::REFERENCE_CHANGES
         )));
     }
-    let source: Box<dyn ReferenceSource> = match config.provider.as_str() {
-        "default" => build_default_source(config)?,
-        "binance-spot" => Box::new(BinanceSpotSource::new(config.endpoint.clone())?),
-        "binance-options" => Box::new(BinanceOptionsSource::new(config.endpoint.clone())?),
-        "binance-usdm-futures" => {
-            let integration = Integration::new()
-                .with_binance_derivatives_reference(
-                    kairos_integration::domain::ProductFamily::UsdMFutures,
-                    config.endpoint.clone(),
-                )
-                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-            Box::new(PublicSource::new(
-                "binance-usdm-futures",
-                integration
-                    .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        IntegrationRoute::exchange("binance"),
-                        kairos_integration::domain::ProductFamily::UsdMFutures,
-                        Some(kairos_integration::domain::AssetType::Crypto),
-                    ))
-                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
-            ))
-        }
-        "binance-coinm-futures" => {
-            let integration = Integration::new()
-                .with_binance_derivatives_reference(
-                    kairos_integration::domain::ProductFamily::CoinMFutures,
-                    config.endpoint.clone(),
-                )
-                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-            Box::new(PublicSource::new(
-                "binance-coinm-futures",
-                integration
-                    .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        IntegrationRoute::exchange("binance"),
-                        kairos_integration::domain::ProductFamily::CoinMFutures,
-                        Some(kairos_integration::domain::AssetType::Crypto),
-                    ))
-                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
-            ))
-        }
-        "okx-spot" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options" => {
-            let (product, asset_type) = match config.provider.as_str() {
-                "okx-spot" => (
-                    kairos_integration::domain::ProductFamily::Spot,
-                    Some(kairos_integration::domain::AssetType::Crypto),
-                ),
-                "okx-equity" => (
-                    kairos_integration::domain::ProductFamily::Spot,
-                    Some(kairos_integration::domain::AssetType::Equity),
-                ),
-                "okx-swap" => (
-                    kairos_integration::domain::ProductFamily::UsdMFutures,
-                    Some(kairos_integration::domain::AssetType::Crypto),
-                ),
-                "okx-futures" => (
-                    kairos_integration::domain::ProductFamily::CoinMFutures,
-                    Some(kairos_integration::domain::AssetType::Crypto),
-                ),
-                _ => (
-                    kairos_integration::domain::ProductFamily::Options,
-                    Some(kairos_integration::domain::AssetType::Crypto),
-                ),
-            };
-            let integration = Integration::new()
-                .with_okx_reference(product, asset_type, config.endpoint.clone())
-                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-            Box::new(PublicSource::new(
-                config.provider.clone(),
-                integration
-                    .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        IntegrationRoute::exchange("okx"),
-                        product,
-                        asset_type,
-                    ))
-                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
-            ))
-        }
-        "binance-equity" => Box::new(BinanceEquitySource::new(
-            config.binance_api_key.clone(),
-            config.secret.clone(),
-        )?),
-        "massive-options" => Box::new(MassiveSource::new(
-            config.api_key.clone(),
-            config.endpoint.clone(),
-        )?),
-        "massive" | "massive-equity" => Box::new(MassiveEquitySource::new(
-            config.api_key.clone(),
-            config.endpoint.clone(),
-        )?),
-        "hyperliquid" => Box::new(HyperliquidSource::new(config.endpoint.clone())?),
-        value => {
-            return Err(crate::domain::ReferenceError::Provider(format!(
-                "unsupported reference provider: {value}"
-            )))
-        }
-    };
-    let store = SqliteCatalogStore::open(&config.database)?;
+    let source = build_default_source(config)?;
+    let store = SqlxCatalogStore::open(&config.database)?;
     let event_writer = if publish {
         Some(ReferenceEventWriter::connect(
             &ReferenceEventWriterConfig {
@@ -552,45 +412,6 @@ pub fn build_application(
         application: ReferenceApplication::new("reference-actor", source, Box::new(store))?,
         event_writer,
     })
-}
-
-fn public_source(
-    id: &str,
-    product: ProductFamily,
-    asset_type: Option<AssetType>,
-    endpoint: &str,
-) -> ReferenceResult<PublicSource> {
-    let integration = match product {
-        ProductFamily::UsdMFutures | ProductFamily::CoinMFutures => Integration::new()
-            .with_binance_derivatives_reference(product, endpoint)
-            .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
-        ProductFamily::Spot | ProductFamily::Options => Integration::new()
-            .with_okx_reference(product, asset_type, endpoint)
-            .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
-        _ => {
-            return Err(crate::domain::ReferenceError::Provider(
-                "unsupported public reference product".into(),
-            ))
-        }
-    };
-    let provider = if matches!(
-        product,
-        ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
-    ) {
-        "binance"
-    } else {
-        "okx"
-    };
-    let route = if provider == "binance" {
-        IntegrationRoute::exchange("binance")
-    } else {
-        IntegrationRoute::exchange("okx")
-    };
-    let spec = crate::services::providers::reference_spec_for_public(route, product, asset_type);
-    let connection = integration
-        .connect_reference(&spec)
-        .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?;
-    Ok(PublicSource::new(id, connection))
 }
 
 pub fn ensure_database_parent(path: &Path) -> std::io::Result<()> {

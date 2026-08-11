@@ -10,7 +10,7 @@ use kairos_workspace::Workspace;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let _workspace = Workspace::open(&args.workspace)?;
-    let application = compose_risk_application("risk-cli", Vec::new(), false, None)?;
+    let application = compose_risk_application("risk-cli", Vec::new(), None)?;
     let value = match args.command {
         Command::Status => serde_json::json!({
             "status": "ready",

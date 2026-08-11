@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::AccountDomainError;
 
+pub use kairos_domain_types::AccountId;
+
 macro_rules! non_empty_id {
     ($name:ident, $field:literal) => {
         #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
@@ -105,7 +107,6 @@ macro_rules! non_empty_id {
     };
 }
 
-non_empty_id!(AccountId, "account_id");
 non_empty_id!(SegmentKey, "segment_key");
 non_empty_id!(AssetId, "asset_id");
 non_empty_id!(InstrumentId, "instrument_id");

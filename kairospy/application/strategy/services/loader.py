@@ -5,7 +5,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, cast
 
 from kairospy.strategy import validate_strategy
 
@@ -19,7 +19,9 @@ class StrategyEntrypoint:
     module_file: Path | None
 
 
-def load_strategy(ref: str, *, root: Path, params: Mapping[str, object] | None = None) -> StrategyEntrypoint:
+def load_strategy(
+    ref: str, *, root: Path, params: Mapping[str, object] | None = None
+) -> StrategyEntrypoint:
     if ":" not in ref:
         raise ValueError("strategy ref must be module:callable")
     module_name, attribute = ref.split(":", 1)
@@ -43,5 +45,13 @@ def load_strategy(ref: str, *, root: Path, params: Mapping[str, object] | None =
     try:
         validate_strategy(strategy)
     except ValueError as error:
-        raise ValueError(f"strategy entrypoint does not implement StrategyProtocol: {ref}: {error}") from error
-    return StrategyEntrypoint(ref, strategy, Path(module.__file__).resolve() if getattr(module, "__file__", None) else None)
+        raise ValueError(
+            f"strategy entrypoint does not implement StrategyProtocol: {ref}: {error}"
+        ) from error
+    return StrategyEntrypoint(
+        ref,
+        cast(Strategy, strategy),
+        Path(cast(str, module.__file__)).resolve()
+        if getattr(module, "__file__", None)
+        else None,
+    )

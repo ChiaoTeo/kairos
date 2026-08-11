@@ -1,4 +1,5 @@
 use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
+use kairos_domain_types::{ActorId, Generation, Sequence};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -7,9 +8,9 @@ const ACCOUNT_STATE_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PersistedAccounts {
     pub schema_version: u32,
-    pub actor_id: String,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub accounts: Vec<(AccountSegment, AccountState)>,
 }
 
@@ -26,9 +27,9 @@ impl JsonAccountStore {
         if !self.path.exists() {
             return Ok(PersistedAccounts {
                 schema_version: ACCOUNT_STATE_SCHEMA_VERSION,
-                actor_id: "account".into(),
-                generation: 0,
-                event_sequence: 0,
+                actor_id: ActorId::new("account").expect("valid account actor ID"),
+                generation: 0.into(),
+                event_sequence: 0.into(),
                 accounts: Vec::new(),
             });
         }
@@ -39,9 +40,9 @@ impl JsonAccountStore {
             let accounts = serde_json::from_value(value).map_err(|error| error.to_string())?;
             return Ok(PersistedAccounts {
                 schema_version: ACCOUNT_STATE_SCHEMA_VERSION,
-                actor_id: "account".into(),
-                generation: 0,
-                event_sequence: 0,
+                actor_id: ActorId::new("account").expect("valid account actor ID"),
+                generation: 0.into(),
+                event_sequence: 0.into(),
                 accounts,
             });
         }
@@ -107,9 +108,9 @@ impl JsonAccountStore {
             .collect();
         let payload = serde_json::to_vec_pretty(&PersistedAccounts {
             schema_version: ACCOUNT_STATE_SCHEMA_VERSION,
-            actor_id: actor_id.into(),
-            generation,
-            event_sequence,
+            actor_id: ActorId::new(actor_id).map_err(|error| error.to_string())?,
+            generation: generation.into(),
+            event_sequence: event_sequence.into(),
             accounts: values,
         })
         .map_err(|error| error.to_string())?;

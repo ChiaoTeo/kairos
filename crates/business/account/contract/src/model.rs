@@ -78,7 +78,7 @@ pub struct Position {
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenOrder {
     pub order_id: String,
-    pub venue_order_id: Option<String>,
+    pub remote_order_id: Option<String>,
     pub instrument_id: String,
     pub side: String,
     pub quantity: Decimal,

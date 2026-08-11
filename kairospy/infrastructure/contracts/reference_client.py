@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
@@ -31,11 +31,26 @@ class ReferenceSnapshotClient:
             ("catalog", self.snapshot_path, "reference.catalog", "PRC1"),
             ("entities", self.entities_snapshot_path, "reference.entities", "PRS1"),
             ("assets", self.assets_snapshot_path, "reference.assets", "PRS1"),
-            ("instruments", self.instruments_snapshot_path, "reference.instruments", "PRS1"),
+            (
+                "instruments",
+                self.instruments_snapshot_path,
+                "reference.instruments",
+                "PRS1",
+            ),
             ("listings", self.listings_snapshot_path, "reference.listings", "PRS1"),
             ("markets", self.markets_snapshot_path, "reference.markets", "PRD1"),
-            ("financial-products", self.financial_products_snapshot_path, "reference.financial_products", "PRS1"),
-            ("execution-accesses", self.execution_accesses_snapshot_path, "reference.execution_accesses", "PRS1"),
+            (
+                "financial-products",
+                self.financial_products_snapshot_path,
+                "reference.financial_products",
+                "PRS1",
+            ),
+            (
+                "execution-accesses",
+                self.execution_accesses_snapshot_path,
+                "reference.execution_accesses",
+                "PRS1",
+            ),
         )
         return [
             {
@@ -48,20 +63,39 @@ class ReferenceSnapshotClient:
             for view, path, view_key, identifier in views
         ]
 
-    def request(self, path: str, *, method: str = "GET", **params: object) -> Any:
+    def request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        timeout: float | None = None,
+        **params: object,
+    ) -> Any:
         if self.socket_path is None:
             raise RuntimeError("Reference control socket is not configured")
-        query = urlencode({
-            key: str(value).lower() if isinstance(value, bool) else str(value)
-            for key, value in params.items() if value is not None
-        })
+        query = urlencode(
+            {
+                key: str(value).lower() if isinstance(value, bool) else str(value)
+                for key, value in params.items()
+                if value is not None
+            }
+        )
         target = f"{path}?{query}" if query else path
         try:
-            status, value = request_sync(self.socket_path, method, target, timeout=self.timeout)
+            status, value = request_sync(
+                self.socket_path,
+                method,
+                target,
+                timeout=self.timeout if timeout is None else timeout,
+            )
         except (OSError, ValueError) as error:
             raise RuntimeError("Reference returned an invalid JSON response") from error
         if status >= 400:
-            message = value.get("error", f"HTTP {status}") if isinstance(value, dict) else f"HTTP {status}"
+            message = (
+                value.get("error", f"HTTP {status}")
+                if isinstance(value, dict)
+                else f"HTTP {status}"
+            )
             raise RuntimeError(str(message))
         return value
 
@@ -72,7 +106,11 @@ class ReferenceSnapshotClient:
         return self.request("/v1/providers")
 
     def refresh(self) -> dict[str, Any]:
-        return self.request("/v1/refresh", method="POST")
+        # One incremental provider page is allowed to spend the provider
+        # fetch budget; query/status calls should remain short-lived.
+        return self.request(
+            "/v1/refresh", method="POST", timeout=max(self.timeout, 120.0)
+        )
 
     def snapshot(self) -> dict[str, Any]:
         return self.catalog()
@@ -81,17 +119,29 @@ class ReferenceSnapshotClient:
         if self.snapshot_path is None:
             raise RuntimeError("Reference catalog snapshot path is not configured")
         payload, generation = self._read_payload(self.snapshot_path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import CatalogSnapshot
+        from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import (
+            CatalogSnapshot,
+        )
 
         self._require_identifier(payload, b"PRC1", "Reference catalog")
         root = CatalogSnapshot.GetRootAs(payload, 0)
         header = root.Header()
         catalog = root.Payload()
         if header is None or catalog is None:
-            raise RuntimeError("Reference catalog snapshot is missing header or payload")
+            raise RuntimeError(
+                "Reference catalog snapshot is missing header or payload"
+            )
         collections = {
             name: self._decode_table_collection(catalog, name)
-            for name in ("entities", "assets", "instruments", "listings", "markets", "financial_products", "execution_accesses")
+            for name in (
+                "entities",
+                "assets",
+                "instruments",
+                "listings",
+                "markets",
+                "financial_products",
+                "execution_accesses",
+            )
         }
         return {
             "actor_id": self._text(header.OwnerActorId()),
@@ -114,25 +164,19 @@ class ReferenceSnapshotClient:
         self,
         *,
         symbol: str | None = None,
-        venue_id: str | None = None,
+        exchange_id: str | None = None,
         market_type: str | None = None,
         asset_type: str | None = None,
         active_only: bool = False,
         status: str | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         if self.markets_snapshot_path is None:
-            value = self.request(
-                "/v1/markets",
-                symbol=symbol,
-                venue_id=venue_id,
-                market_type=market_type,
-                asset_type=asset_type,
-                active_only=active_only,
-                status=status,
-            )
-            return list(value.get("markets", ()))
+            raise RuntimeError("Reference markets snapshot path is not configured")
         payload, _ = self._read_payload(self.markets_snapshot_path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import MarketsSnapshot
+        from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import (
+            MarketsSnapshot,
+        )
 
         self._require_identifier(payload, b"PRD1", "Reference markets")
         data = MarketsSnapshot.GetRootAs(payload, 0).Payload()
@@ -148,12 +192,14 @@ class ReferenceSnapshotClient:
                 "market_key": self._text(market.MarketKey()),
                 "instrument_id": self._text(market.InstrumentId()),
                 "listing_id": self._text(market.ListingId()),
-                "venue_id": self._text(market.VenueId()),
+                "exchange_id": self._text(market.ExchangeId()),
                 "market_type": self._text(market.MarketType()),
                 "symbol": self._text(market.SourceSymbol()),
                 "base_asset_id": self._text(market.BaseAssetId()),
                 "quote_asset_id": self._text(market.QuoteAssetId()),
                 "status": self._text(market.Status()),
+                "asset_type": self._text(market.AssetType()),
+                "underlying_instrument_id": self._text(market.UnderlyingInstrumentId()),
                 "price_tick": self._decimal(market.PriceTick()),
                 "quantity_tick": self._decimal(market.QuantityTick()),
                 "minimum_quantity": self._decimal(market.MinimumQuantity()),
@@ -166,7 +212,7 @@ class ReferenceSnapshotClient:
             }
             if symbol is not None and value["symbol"] != symbol:
                 continue
-            if venue_id is not None and value["venue_id"] != venue_id:
+            if exchange_id is not None and value["exchange_id"] != exchange_id:
                 continue
             if market_type is not None and value["market_type"] != market_type:
                 continue
@@ -177,11 +223,9 @@ class ReferenceSnapshotClient:
             if active_only and value["status"] != "active":
                 continue
             result.append(value)
+            if limit is not None and len(result) >= limit:
+                break
         return result
-
-    def lifecycle(self, *, limit: int | None = None) -> list[dict[str, Any]]:
-        value = self.request("/v1/events", kind="event", limit=limit)
-        return list(value if isinstance(value, list) else value.get("events", ()))
 
     def collection(self, view: str) -> list[dict[str, Any]]:
         paths = {
@@ -194,9 +238,13 @@ class ReferenceSnapshotClient:
         }
         path = paths.get(view)
         if path is None:
-            raise RuntimeError(f"Reference collection snapshot path is not configured: {view}")
+            raise RuntimeError(
+                f"Reference collection snapshot path is not configured: {view}"
+            )
         payload, _ = self._read_payload(path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.ReferenceCollectionsSnapshot import ReferenceCollectionsSnapshot
+        from kairospy.infrastructure.transport.generated.kairos.reference.v1.ReferenceCollectionsSnapshot import (
+            ReferenceCollectionsSnapshot,
+        )
 
         self._require_identifier(payload, b"PRS1", f"Reference {view}")
         data = ReferenceCollectionsSnapshot.GetRootAs(payload, 0).Payload()
@@ -205,7 +253,17 @@ class ReferenceSnapshotClient:
         return self._decode_table_collection(data, view)
 
     def resolve_market(self, **filters: object) -> dict[str, Any]:
-        return self.request("/v1/markets/resolve", **filters)
+        markets = self.markets(
+            symbol=cast(str | None, filters.get("symbol")),
+            exchange_id=cast(str | None, filters.get("exchange_id")),
+            market_type=cast(str | None, filters.get("market_type")),
+            asset_type=cast(str | None, filters.get("asset_type")),
+            active_only=cast(bool, filters.get("active_only", True)),
+            status=cast(str | None, filters.get("status")),
+        )
+        if len(markets) != 1:
+            raise RuntimeError("Reference market resolution is not unique")
+        return markets[0]
 
     def _read_payload(self, path: Path) -> tuple[bytes, int]:
         try:
@@ -241,7 +299,11 @@ class ReferenceSnapshotClient:
         scale = value.Scale()
         sign = "-" if mantissa < 0 else ""
         digits = str(abs(mantissa)).rjust(scale + 1, "0")
-        return f"{sign}{digits}" if scale == 0 else f"{sign}{digits[:-scale]}.{digits[-scale:]}"
+        return (
+            f"{sign}{digits}"
+            if scale == 0
+            else f"{sign}{digits[:-scale]}.{digits[-scale:]}"
+        )
 
     def _decode_table_collection(self, table: Any, view: str) -> list[dict[str, Any]]:
         field = view.replace("-", "_")

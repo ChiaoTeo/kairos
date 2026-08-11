@@ -14,7 +14,11 @@ def validate_strategy(strategy: object) -> None:
     strategy_id = getattr(strategy, "strategy_id", None)
     if not isinstance(strategy_id, str) or not strategy_id.strip():
         raise StrategyContractError("strategy must expose a non-empty strategy_id")
-    missing = [name for name in _LIFECYCLE if not isinstance(getattr(strategy, name, None), Callable)]
+    missing = [
+        name
+        for name in _LIFECYCLE
+        if not isinstance(getattr(strategy, name, None), Callable)
+    ]
     if missing:
         raise StrategyContractError(
             f"strategy {strategy_id!r} is missing lifecycle callbacks: {', '.join(missing)}"

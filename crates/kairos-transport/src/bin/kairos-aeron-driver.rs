@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_logging();
+    kairos_workspace::logging::init("aeron");
     let result = run();
     if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "aeron", error = %error, "Aeron driver failed");
     }
+    kairos_workspace::logging::shutdown();
     result
 }
 
@@ -53,16 +54,4 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     driver.join()?;
     Ok(())
-}
-
-fn init_logging() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_ansi(false)
-        .with_env_filter(filter)
-        .try_init();
 }

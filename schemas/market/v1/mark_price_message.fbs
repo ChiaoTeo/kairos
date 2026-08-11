@@ -1,0 +1,6 @@
+include "../../common/v1/header.fbs";
+include "data.fbs";
+namespace kairos.market.v1;
+table MarkPriceMessage { header: kairos.common.v1.MessageHeader (required); payload: MarkPrice (required); }
+root_type MarkPriceMessage;
+file_identifier "MMP1";

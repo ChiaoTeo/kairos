@@ -12,7 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 axum = "0.8"
-kairos-workspace = { path = "../../../kairos-workspace" }
+kairos-domain-types = { path = "../../../kairos-domain-types" }
+kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
 kairos-protocol = { path = "../../../kairos-protocol" }

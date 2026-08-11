@@ -1,0 +1,6 @@
+include "../../common/v1/header.fbs";
+include "data.fbs";
+namespace kairos.market.v1;
+table FundingRateMessage { header: kairos.common.v1.MessageHeader (required); payload: FundingRate (required); }
+root_type FundingRateMessage;
+file_identifier "MFR1";

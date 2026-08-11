@@ -4,6 +4,7 @@
 //! query contract without knowing whether the catalog came from SQLite, an
 //! in-memory test store, or a running reference process.
 
+use kairos_domain_types::{Exchange, MarketId, Sequence, Symbol, UnixNanos};
 use serde::Serialize;
 
 use crate::domain::{
@@ -28,35 +29,36 @@ pub enum ReferenceKind {
 pub struct ReferenceQuery {
     pub text: Option<String>,
     pub kind: ReferenceKind,
-    pub venue_id: Option<String>,
+    pub exchange_id: Option<Exchange>,
     pub market_type: Option<String>,
     pub asset_type: Option<String>,
     pub underlying_instrument_id: Option<String>,
     pub status: Option<String>,
     pub active_only: bool,
-    pub as_of_unix_nanos: Option<u64>,
-    pub sequence_from: Option<u64>,
-    pub sequence_to: Option<u64>,
-    pub event_time_from_unix_nanos: Option<u64>,
-    pub event_time_to_unix_nanos: Option<u64>,
+    pub as_of_unix_nanos: Option<UnixNanos>,
+    pub sequence_from: Option<Sequence>,
+    pub sequence_to: Option<Sequence>,
+    pub event_time_from_unix_nanos: Option<UnixNanos>,
+    pub event_time_to_unix_nanos: Option<UnixNanos>,
+    pub record_kind: Option<String>,
     pub limit: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LifecycleQuery {
     /// Lifecycle sequence numbers are one-based and stable across restarts.
-    pub sequence_from: Option<u64>,
-    pub sequence_to: Option<u64>,
+    pub sequence_from: Option<Sequence>,
+    pub sequence_to: Option<Sequence>,
     pub event_type: Option<String>,
-    pub market_id: Option<String>,
-    pub venue_id: Option<String>,
-    pub event_time_from_unix_nanos: Option<u64>,
-    pub event_time_to_unix_nanos: Option<u64>,
+    pub market_id: Option<MarketId>,
+    pub exchange_id: Option<Exchange>,
+    pub event_time_from_unix_nanos: Option<UnixNanos>,
+    pub event_time_to_unix_nanos: Option<UnixNanos>,
     pub limit: Option<usize>,
 }
 
 impl LifecycleQuery {
-    pub fn matches(&self, sequence: u64, event: &LifecycleEvent) -> bool {
+    pub fn matches(&self, sequence: Sequence, event: &LifecycleEvent) -> bool {
         self.sequence_from.is_none_or(|value| sequence >= value)
             && self.sequence_to.is_none_or(|value| sequence <= value)
             && self
@@ -68,9 +70,9 @@ impl LifecycleQuery {
                 .as_deref()
                 .is_none_or(|value| event.market_id.as_deref() == Some(value))
             && self
-                .venue_id
-                .as_deref()
-                .is_none_or(|value| event.venue_id.as_deref() == Some(value))
+                .exchange_id
+                .as_ref()
+                .is_none_or(|value| event.exchange_id.as_ref() == Some(value))
             && self
                 .event_time_from_unix_nanos
                 .is_none_or(|value| event.event_time_unix_nanos >= value)
@@ -113,20 +115,20 @@ impl ReferenceQuery {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MarketQuery {
-    pub market_id: Option<String>,
-    pub venue_id: Option<String>,
+    pub market_id: Option<MarketId>,
+    pub exchange_id: Option<Exchange>,
     pub market_type: Option<String>,
     pub asset_type: Option<String>,
-    pub source_symbol: Option<String>,
+    pub source_symbol: Option<Symbol>,
     pub active_only: bool,
-    pub as_of_unix_nanos: Option<u64>,
+    pub as_of_unix_nanos: Option<UnixNanos>,
     pub status: Option<String>,
 }
 
 impl MarketQuery {
     pub fn by_symbol(symbol: impl Into<String>) -> Self {
         Self {
-            source_symbol: Some(symbol.into()),
+            source_symbol: Some(Symbol::new(symbol).expect("market query symbol is required")),
             ..Self::default()
         }
     }
@@ -135,11 +137,11 @@ impl MarketQuery {
         if self
             .market_id
             .as_deref()
-            .is_some_and(|value| value != market.market_id)
+            .is_some_and(|value| value != market.market_id.as_str())
             || self
-                .venue_id
-                .as_deref()
-                .is_some_and(|value| value != market.venue_id)
+                .exchange_id
+                .as_ref()
+                .is_some_and(|value| value != &market.exchange_id)
             || self
                 .market_type
                 .as_deref()
@@ -148,14 +150,15 @@ impl MarketQuery {
                 .asset_type
                 .as_deref()
                 .is_some_and(|value| market.asset_type.as_deref() != Some(value))
-            || self
-                .source_symbol
-                .as_deref()
-                .is_some_and(|value| !value.eq_ignore_ascii_case(&market.source_symbol))
+            || self.source_symbol.as_deref().is_some_and(|value| {
+                !value
+                    .to_string()
+                    .eq_ignore_ascii_case(market.source_symbol.as_str())
+            })
             || self
                 .status
                 .as_deref()
-                .is_some_and(|value| !value.eq_ignore_ascii_case(&market.status))
+                .is_some_and(|value| !value.eq_ignore_ascii_case(market.status.as_str()))
         {
             return false;
         }

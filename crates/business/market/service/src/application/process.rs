@@ -3,7 +3,7 @@
 use crate::application::MarketRuntime;
 use crate::domain::observations::MarketObservation;
 use crate::domain::snapshot::MarketSnapshot;
-use crate::services::reference::{resolve_active_markets, resolve_market, resolve_option_markets};
+use crate::services::reference::{resolve_market, resolve_option_markets};
 use crate::{MarketDescriptor, SubscriptionId};
 use axum::{
     body::to_bytes,
@@ -14,14 +14,27 @@ use axum::{
     Json, Router,
 };
 use flatbuffers::FlatBufferBuilder;
+use kairos_domain_types::Sequence;
 use kairos_protocol::generated::kairos::common::v_1::{
     Decimal64, MessageHeader, MessageHeaderArgs,
 };
 use kairos_protocol::generated::kairos::market::v_1::{
-    finish_bar_message_buffer, finish_greeks_message_buffer, finish_quote_message_buffer,
+    finish_bar_message_buffer, finish_funding_rate_message_buffer, finish_greeks_message_buffer,
+    finish_index_price_message_buffer, finish_instrument_status_message_buffer,
+    finish_mark_price_message_buffer, finish_open_interest_message_buffer,
+    finish_quote_message_buffer, finish_rate_message_buffer, finish_ticker_24h_message_buffer,
     finish_trade_message_buffer, Bar as FbBar, BarArgs as FbBarArgs, BarMessage, BarMessageArgs,
-    Greeks as FbGreeks, GreeksArgs as FbGreeksArgs, GreeksMessage, GreeksMessageArgs,
-    Quote as FbQuote, QuoteArgs as FbQuoteArgs, QuoteMessage, QuoteMessageArgs, Trade as FbTrade,
+    FundingRate as FbFundingRate, FundingRateArgs as FbFundingRateArgs, FundingRateMessage,
+    FundingRateMessageArgs, Greeks as FbGreeks, GreeksArgs as FbGreeksArgs, GreeksMessage,
+    GreeksMessageArgs, IndexPrice as FbIndexPrice, IndexPriceArgs as FbIndexPriceArgs,
+    IndexPriceMessage, IndexPriceMessageArgs, InstrumentStatus as FbInstrumentStatus,
+    InstrumentStatusArgs as FbInstrumentStatusArgs, InstrumentStatusMessage,
+    InstrumentStatusMessageArgs, MarkPrice as FbMarkPrice, MarkPriceArgs as FbMarkPriceArgs,
+    MarkPriceMessage, MarkPriceMessageArgs, OpenInterest as FbOpenInterest,
+    OpenInterestArgs as FbOpenInterestArgs, OpenInterestMessage, OpenInterestMessageArgs,
+    Quote as FbQuote, QuoteArgs as FbQuoteArgs, QuoteMessage, QuoteMessageArgs, Rate as FbRate,
+    RateArgs as FbRateArgs, RateMessage, RateMessageArgs, Ticker24h as FbTicker24h,
+    Ticker24hArgs as FbTicker24hArgs, Ticker24hMessage, Ticker24hMessageArgs, Trade as FbTrade,
     TradeArgs as FbTradeArgs, TradeMessage, TradeMessageArgs,
 };
 use kairos_protocol::InstanceIdentity;
@@ -31,16 +44,17 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Instrument};
 
 const MAX_PENDING_ENCODED_EVENTS: usize = 8_192;
+const MAX_COMMAND_RESULTS: usize = 4_096;
 
 #[derive(Debug, Deserialize)]
 struct SubscribePayload {
@@ -50,7 +64,6 @@ struct SubscribePayload {
     market_type: Option<String>,
     #[serde(default)]
     asset_type: Option<String>,
-    identity: Option<String>,
     #[serde(default)]
     params: BTreeMap<String, Value>,
     dynamic: bool,
@@ -78,7 +91,6 @@ struct SubscribeRequest {
     market_type: Option<String>,
     #[serde(default)]
     asset_type: Option<String>,
-    identity: Option<String>,
     params: BTreeMap<String, Value>,
     dynamic: bool,
 }
@@ -90,7 +102,7 @@ struct UnsubscribePayload {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceEvent {
-    pub sequence: u64,
+    pub sequence: Sequence,
 }
 
 pub trait ReferenceChangeSource {
@@ -102,7 +114,7 @@ pub struct MarketProcess {
     socket_path: PathBuf,
     event_socket_path: PathBuf,
     reference_events: Option<Box<dyn ReferenceChangeSource>>,
-    reference_event_sequence: Option<u64>,
+    reference_event_sequence: Option<Sequence>,
 }
 
 struct MarketHttpRequest {
@@ -125,7 +137,7 @@ pub trait MarketSnapshotPublisher: Send {
 
 enum EngineCommand {
     Http(MarketHttpRequest),
-    ReferenceChanged { sequence: u64, gap: bool },
+    ReferenceChanged { sequence: Sequence, gap: bool },
 }
 
 struct MarketEngine {
@@ -136,9 +148,18 @@ struct MarketEngine {
     interval: Duration,
     feed_enabled: bool,
     stop_requested: bool,
-    reference_socket_path: Option<PathBuf>,
-    reference_event_sequence: Option<u64>,
+    reference_snapshot_path: Option<PathBuf>,
+    reference_markets: Option<Vec<MarketDescriptor>>,
+    reference_event_sequence: Option<Sequence>,
     reference_recovery_needed: bool,
+    command_results: BTreeMap<String, CachedCommandResult>,
+}
+
+#[derive(Clone)]
+struct CachedCommandResult {
+    request_body: String,
+    status: u16,
+    payload: Value,
 }
 
 impl MarketProcess {
@@ -178,14 +199,16 @@ impl MarketProcess {
             engine: MarketEngine {
                 application,
                 publisher: Box::new(publisher),
-                event_actor_id,
+                event_actor_id: event_actor_id.to_string(),
                 event_identity: identity,
                 interval,
                 feed_enabled,
                 stop_requested: false,
-                reference_socket_path: None,
+                reference_snapshot_path: None,
+                reference_markets: None,
                 reference_event_sequence: None,
                 reference_recovery_needed: false,
+                command_results: BTreeMap::new(),
             },
             socket_path: socket_path.into(),
             event_socket_path: event_socket_path.into(),
@@ -194,8 +217,9 @@ impl MarketProcess {
         })
     }
 
-    pub fn with_reference_socket(mut self, path: impl Into<PathBuf>) -> Self {
-        self.engine.reference_socket_path = Some(path.into());
+    pub fn with_reference_snapshot(mut self, path: impl Into<PathBuf>) -> Self {
+        self.engine.reference_snapshot_path = Some(path.into());
+        self.engine.reference_recovery_needed = true;
         self
     }
 
@@ -243,6 +267,7 @@ impl MarketProcess {
         });
         let mut engine =
             tokio::spawn(async move { engine.run_engine(control_receiver, event_sender).await });
+        kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
         info!(event = "process_starting", component = "market", socket = %socket_path.display(), event_socket = %event_socket_path.display(), feed_enabled, interval_ms = interval.as_millis(), "market process starting");
         log_event(
             "info",
@@ -273,7 +298,13 @@ impl MarketProcess {
                     // cannot delay control, ingest, or other clients.
                     event_clients.retain(|client| match client.try_send(payload.clone()) {
                         Ok(()) => true,
-                        Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => false,
+                        Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
+                            kairos_workspace::logging::record_counter(
+                                "kairos.queue.rejected",
+                                1,
+                            );
+                            false
+                        }
                     });
                 }
                 _ = reference_ticks.tick(), if reference_events.is_some() => {
@@ -283,6 +314,7 @@ impl MarketProcess {
                         &mut reference_event_sequence,
                         &mut pending_reference_command,
                     ) {
+                        kairos_workspace::logging::record_counter("kairos.retry", 1);
                         log_event("warn", "reference event forwarding deferred", json!({"error": error}));
                     }
                 }
@@ -318,6 +350,7 @@ impl MarketEngine {
             component = "market",
             "market application engine starting"
         );
+        self.recover_reference_projection()?;
         self.publish_snapshot()?;
         let mut pending_encoded_events = VecDeque::new();
         let mut ticks = time::interval(self.interval);
@@ -333,6 +366,7 @@ impl MarketEngine {
                         }
                         EngineCommand::ReferenceChanged { sequence, gap } => {
                             if gap {
+                                kairos_workspace::logging::record_counter("kairos.event.gap", 1);
                                 self.reference_recovery_needed = true;
                             }
                             self.reference_event_sequence = Some(
@@ -351,6 +385,7 @@ impl MarketEngine {
                     }
                     if self.feed_enabled {
                         if let Err(error) = self.application.reconcile_feed() {
+                            kairos_workspace::logging::record_counter("kairos.retry", 1);
                             log_event(
                                 "warn",
                                 "market feed reconciliation deferred",
@@ -378,6 +413,9 @@ impl MarketEngine {
                     }
                     self.publish_pending_events(&mut pending_encoded_events, &event_sender)?;
                     self.publish_snapshot()?;
+                    if self.application.feed_complete() && pending_encoded_events.is_empty() {
+                        self.stop_requested = true;
+                    }
                     let elapsed = tick_started.elapsed();
                     if elapsed > self.interval {
                         log_event("warn", "market tick exceeded interval", json!({
@@ -397,17 +435,71 @@ impl MarketEngine {
     }
 
     fn publish_snapshot(&mut self) -> Result<(), String> {
-        self.publisher.publish(&self.application.snapshot())
+        let snapshot = self.application.snapshot();
+        kairos_workspace::logging::record_gauge(
+            "kairos.snapshot.generation",
+            snapshot.generation.get(),
+        );
+        let now_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let now_nanos = u64::try_from(now_nanos).unwrap_or(u64::MAX);
+        let max_lag_ms = snapshot
+            .freshness
+            .values()
+            .map(|freshness| {
+                now_nanos.saturating_sub(freshness.last_received_time_unix_nanos.get()) / 1_000_000
+            })
+            .max()
+            .unwrap_or_default();
+        kairos_workspace::logging::record_gauge("kairos.event.lag", max_lag_ms);
+        self.publisher.publish(&snapshot)
     }
 
     fn recover_reference_projection(&mut self) -> Result<(), String> {
         if !self.reference_recovery_needed {
             return Ok(());
         }
-        let Some(socket) = self.reference_socket_path.as_ref() else {
-            return Err("Reference event recovery requires Reference socket".into());
-        };
-        let markets = resolve_active_markets(socket)?;
+        let path = self
+            .reference_snapshot_path
+            .as_ref()
+            .ok_or_else(|| "Reference snapshot is not configured".to_string())?;
+        // A live provider can serve explicit static subscriptions without a
+        // Reference process. Treat the absent optional projection as an empty
+        // reference view; dynamic subscriptions still require a snapshot or
+        // a later Reference change to populate it.
+        if !path.exists() {
+            self.reference_markets = Some(Vec::new());
+            self.reference_recovery_needed = false;
+            return Ok(());
+        }
+        let snapshot = kairos_reference_contract::ReferenceMmapMarketsReader::open(
+            path,
+            "reference",
+            "reference.lifecycle",
+        )
+        .map_err(|error| error.to_string())?
+        .read()
+        .map_err(|error| error.to_string())?;
+        let markets = snapshot
+            .markets
+            .into_iter()
+            .filter(|market| matches!(market.status.as_str(), "active" | "trading"))
+            .map(|market| {
+                let mut descriptor = MarketDescriptor::new(
+                    market.market_id,
+                    market.instrument_id,
+                    market.exchange_id,
+                    market.market_type,
+                    market.source_symbol,
+                )?;
+                descriptor.asset_type = market.asset_type;
+                descriptor.underlying_instrument_id = market.underlying_instrument_id;
+                Ok(descriptor)
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.reference_markets = Some(markets.clone());
         self.application
             .reconcile_reference(markets)
             .map_err(|error| error.to_string())?;
@@ -455,6 +547,40 @@ impl MarketEngine {
             "market control request",
             json!({"method": method.as_str(), "path": path}),
         );
+        let command_key = if matches!(path, "/v1/subscribe" | "/v1/unsubscribe") {
+            serde_json::from_str::<Value>(body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("idempotency_key")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
+        if let Some(key) = command_key.as_deref() {
+            if let Some(cached) = self.command_results.get(key).cloned() {
+                if cached.request_body == body {
+                    return MarketHttpResponse {
+                        status: StatusCode::from_u16(cached.status)
+                            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        payload: cached.payload,
+                    };
+                }
+                return MarketHttpResponse {
+                    status: StatusCode::CONFLICT,
+                    payload: json!({
+                        "error": {
+                            "code": "command.idempotency_conflict",
+                            "message": "idempotency key was already used with a different request",
+                            "retryable": false
+                        }
+                    }),
+                };
+            }
+        }
         let (status, payload) = match path {
             HEALTH_PATH => (200, self.health()),
             SNAPSHOT_PATH => match serde_json::to_value(self.application.snapshot()) {
@@ -473,6 +599,22 @@ impl MarketEngine {
             }
             _ => (404, json!({"error":"unknown market control path"})),
         };
+        if let Some(key) = command_key {
+            self.command_results.insert(
+                key,
+                CachedCommandResult {
+                    request_body: body.to_owned(),
+                    status,
+                    payload: payload.clone(),
+                },
+            );
+            while self.command_results.len() > MAX_COMMAND_RESULTS {
+                let Some(oldest_key) = self.command_results.keys().next().cloned() else {
+                    break;
+                };
+                self.command_results.remove(&oldest_key);
+            }
+        }
         info!(event = "control_response", component = "market", method = %method, path = %path, status, duration_ms = started.elapsed().as_millis(), "market control response sent");
         MarketHttpResponse {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -530,7 +672,6 @@ impl MarketEngine {
             exchange: value.payload.exchange,
             market_type: value.payload.market_type,
             asset_type: value.payload.asset_type,
-            identity: value.payload.identity,
             params: value.payload.params,
             dynamic: value.payload.dynamic,
         };
@@ -554,11 +695,7 @@ impl MarketEngine {
             .strip_prefix("market.")
             .unwrap_or(&request.subject)
             .to_owned();
-        let market_id = request
-            .identity
-            .clone()
-            .unwrap_or_else(|| source_symbol.clone());
-        let venue = request.exchange.clone().unwrap_or_else(|| "binance".into());
+        let exchange = request.exchange.clone().unwrap_or_else(|| "binance".into());
         let market_type = request.market_type.clone().unwrap_or_else(|| "spot".into());
         let subscription_id = match SubscriptionId::new(request.request_id.clone()) {
             Ok(value) => value,
@@ -574,11 +711,8 @@ impl MarketEngine {
                     )
                 }
             };
-            let Some(reference_socket) = &self.reference_socket_path else {
-                return (
-                    422,
-                    json!({"error":"chain subscription requires Reference"}),
-                );
+            let Some(reference_markets) = self.reference_markets.as_deref() else {
+                return (422, json!({"error":"Reference snapshot is not ready"}));
             };
             if market_type != "options" {
                 return (
@@ -587,8 +721,8 @@ impl MarketEngine {
                 );
             }
             let markets = match resolve_option_markets(
-                reference_socket,
-                &venue,
+                reference_markets,
+                &exchange,
                 request.asset_type.as_deref(),
                 &underlying,
             ) {
@@ -601,19 +735,29 @@ impl MarketEngine {
                 }
                 Err(error) => return (422, json!({"error": error})),
             };
+            let exchange_id = match kairos_domain_types::Exchange::new(exchange.clone()) {
+                Ok(value) => value,
+                Err(error) => return (422, json!({"error": error.to_string()})),
+            };
             let query = crate::MarketSelectionQuery {
-                venue_id: Some(venue.clone()),
+                exchange_id: Some(exchange_id),
                 market_type: Some(market_type),
                 asset_type: request.asset_type.clone(),
-                underlying_instrument_id: markets[0].underlying_instrument_id.clone(),
+                underlying_instrument_id: markets[0].underlying_instrument_id.as_deref().map(
+                    |value| {
+                        kairos_domain_types::InstrumentId::new(value)
+                            .expect("valid underlying instrument id")
+                    },
+                ),
                 active_only: true,
                 ..Default::default()
             };
-            let result = self.application.subscribe_dynamic(
+            let result = self.application.subscribe_dynamic_with_selectors(
                 subscription_id.clone(),
                 request.strategy_id.clone(),
                 query,
                 markets,
+                request.selectors.clone(),
             );
             let command_id = request.request_id.clone();
             return match result {
@@ -646,6 +790,7 @@ impl MarketEngine {
                             "added": diff.added,
                             "removed": diff.removed,
                             "changed": diff.changed,
+                            "rejected": diff.rejected,
                         }),
                     )
                 }
@@ -657,54 +802,44 @@ impl MarketEngine {
                 json!({"error":"dynamic subscriptions require params.mode=chain"}),
             );
         }
-        let descriptor_result = if let Some(reference_socket) = &self.reference_socket_path {
-            resolve_market(
-                reference_socket,
-                &venue,
+        let descriptor_result = match self.reference_markets.as_deref() {
+            Some(reference_markets) if !reference_markets.is_empty() => resolve_market(
+                reference_markets,
+                &exchange,
                 &market_type,
                 request.asset_type.as_deref(),
                 &source_symbol,
-            )
-        } else {
-            match request.asset_type {
-                Some(asset_type) => MarketDescriptor::new_with_asset_type(
+            ),
+            // Explicit static subscriptions are valid for public feeds even
+            // when the optional Reference projection is not running. Keep
+            // Reference validation when a catalog is available; this
+            // fallback is intentionally not used for dynamic subscriptions.
+            _ => {
+                let market_id = format!("market:{exchange}:{market_type}:{source_symbol}");
+                let instrument_id = format!("instrument:{exchange}:{market_type}:{source_symbol}");
+                MarketDescriptor::new(
                     market_id,
-                    source_symbol.clone(),
-                    venue,
+                    instrument_id,
+                    exchange,
                     market_type,
-                    asset_type,
-                    source_symbol.clone(),
-                ),
-                None => MarketDescriptor::new(
-                    market_id.clone(),
-                    source_symbol.clone(),
-                    venue.clone(),
-                    market_type.clone(),
-                    source_symbol.clone(),
+                    source_symbol,
                 )
-                .and_then(|descriptor| {
-                    if venue == "binance" && market_type == "spot" {
-                        MarketDescriptor::new_with_asset_type(
-                            descriptor.market_id,
-                            descriptor.instrument_id,
-                            descriptor.venue_id,
-                            descriptor.market_type,
-                            "crypto",
-                            descriptor.source_symbol,
-                        )
-                    } else {
-                        Ok(descriptor)
-                    }
-                }),
+                .map(|mut descriptor| {
+                    descriptor.asset_type = request.asset_type.clone();
+                    descriptor
+                })
             }
         };
         let descriptor = match descriptor_result {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
-        let result =
-            self.application
-                .subscribe_static(subscription_id, request.strategy_id, descriptor);
+        let result = self.application.subscribe_static_with_selectors(
+            subscription_id,
+            request.strategy_id,
+            descriptor,
+            request.selectors.clone(),
+        );
         let command_id = request.request_id.clone();
         let selectors = request.selectors.clone();
         match result {
@@ -777,6 +912,20 @@ impl MarketEngine {
     }
 }
 
+macro_rules! finish_market_event {
+    ($builder:expr, $header:expr, $payload:expr, $message:ident, $args:ident, $finish:ident) => {{
+        let root = $message::create(
+            $builder,
+            &$args {
+                header: Some($header),
+                payload: Some($payload),
+            },
+        );
+        $finish($builder, root);
+        Ok($builder.finished_data().to_vec())
+    }};
+}
+
 fn encode_event(
     actor_id: &str,
     identity: &InstanceIdentity,
@@ -793,15 +942,15 @@ fn encode_event(
                 identity,
                 stream_id,
                 sequence,
-                value.observed_at_unix_nanos,
+                value.observed_at_unix_nanos.get(),
             );
             let instrument_id = builder.create_string(&value.instrument_id);
             let market_id = builder.create_string(&value.market_id);
             let source_id = builder.create_string(&value.source_id);
-            let bid_price = decimal64(value.bid_price.as_deref());
-            let bid_quantity = decimal64(value.bid_quantity.as_deref());
-            let ask_price = decimal64(value.ask_price.as_deref());
-            let ask_quantity = decimal64(value.ask_quantity.as_deref());
+            let bid_price = value.bid_price.map(decimal64_price);
+            let bid_quantity = value.bid_quantity.map(decimal64_quantity);
+            let ask_price = value.ask_price.map(decimal64_price);
+            let ask_quantity = value.ask_quantity.map(decimal64_quantity);
             let quote = FbQuote::create(
                 &mut builder,
                 &FbQuoteArgs {
@@ -811,7 +960,7 @@ fn encode_event(
                     bid_quantity: bid_quantity.as_ref(),
                     ask_price: ask_price.as_ref(),
                     ask_quantity: ask_quantity.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos,
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
                     source_id: Some(source_id),
                     ..Default::default()
                 },
@@ -834,15 +983,14 @@ fn encode_event(
                 identity,
                 stream_id,
                 sequence,
-                value.observed_at_unix_nanos,
+                value.observed_at_unix_nanos.get(),
             );
             let instrument_id = builder.create_string(&value.instrument_id);
             let market_id = builder.create_string(&value.market_id);
             let source_id = builder.create_string(&value.source_id);
-            let price = decimal64(Some(&value.price))
-                .ok_or_else(|| "trade price is not decimal".to_string())?;
-            let quantity = decimal64(Some(&value.quantity))
-                .ok_or_else(|| "trade quantity is not decimal".to_string())?;
+            let price = decimal64_price(value.price);
+            let quantity = decimal64_quantity(value.quantity);
+            let cost = value.cost.map(decimal64_money);
             let trade_id = value.trade_id.as_ref().map(|id| builder.create_string(id));
             let trade = FbTrade::create(
                 &mut builder,
@@ -852,9 +1000,10 @@ fn encode_event(
                     market_id: Some(market_id),
                     price: Some(&price),
                     quantity: Some(&quantity),
-                    event_time_unix_nanos: value.observed_at_unix_nanos,
+                    cost: cost.as_ref(),
+                    aggressor_side: aggressor_side(value.aggressor_side.as_deref()),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
                     source_id: Some(source_id),
-                    ..Default::default()
                 },
             );
             let root = TradeMessage::create(
@@ -875,25 +1024,25 @@ fn encode_event(
                 identity,
                 stream_id,
                 sequence,
-                value.observed_at_unix_nanos,
+                value.observed_at_unix_nanos.get(),
             );
             let market_id = builder.create_string(&value.market_id);
             let instrument_id = builder.create_string(&value.instrument_id);
             let timeframe = builder.create_string(&value.timeframe);
             let source_id = builder.create_string(&value.source_id);
             let derivation = builder.create_string(&value.derivation);
-            let open = decimal64(Some(&value.open))
-                .ok_or_else(|| "bar open is not decimal".to_string())?;
-            let high = decimal64(Some(&value.high))
-                .ok_or_else(|| "bar high is not decimal".to_string())?;
-            let low =
-                decimal64(Some(&value.low)).ok_or_else(|| "bar low is not decimal".to_string())?;
-            let close = decimal64(Some(&value.close))
-                .ok_or_else(|| "bar close is not decimal".to_string())?;
-            let volume = value
-                .volume
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
+            let bar_kind = builder.create_string(if value.derivation.starts_with("trade:") {
+                "trade_bar"
+            } else if value.derivation.starts_with("quote:") {
+                "quote_bar"
+            } else {
+                "bar"
+            });
+            let open = decimal64_price(value.open);
+            let high = decimal64_price(value.high);
+            let low = decimal64_price(value.low);
+            let close = decimal64_price(value.close);
+            let volume = value.volume.map(decimal64_quantity);
             let bar = FbBar::create(
                 &mut builder,
                 &FbBarArgs {
@@ -905,9 +1054,10 @@ fn encode_event(
                     low: Some(&low),
                     close: Some(&close),
                     volume: volume.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos,
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
                     source_id: Some(source_id),
                     derivation: Some(derivation),
+                    bar_kind: Some(bar_kind),
                 },
             );
             let root = BarMessage::create(
@@ -920,6 +1070,24 @@ fn encode_event(
             finish_bar_message_buffer(&mut builder, root);
             Ok(builder.finished_data().to_vec())
         }
+        MarketObservation::TradeBar(value) => {
+            let mut bar = value.bar.clone();
+            bar.derivation = if bar.derivation.is_empty() {
+                "trade".into()
+            } else {
+                format!("trade:{}", bar.derivation)
+            };
+            encode_event(actor_id, identity, sequence, &MarketObservation::Bar(bar))
+        }
+        MarketObservation::QuoteBar(value) => {
+            let mut bar = value.bar.clone();
+            bar.derivation = if bar.derivation.is_empty() {
+                "quote".into()
+            } else {
+                format!("quote:{}", bar.derivation)
+            };
+            encode_event(actor_id, identity, sequence, &MarketObservation::Bar(bar))
+        }
         MarketObservation::OptionGreeks(value) => {
             let mut builder = FlatBufferBuilder::new();
             let header = event_header(
@@ -928,49 +1096,31 @@ fn encode_event(
                 identity,
                 stream_id,
                 sequence,
-                value.observed_at_unix_nanos,
+                value.observed_at_unix_nanos.get(),
             );
             let market_id = builder.create_string(&value.market_id);
             let instrument_id = builder.create_string(&value.instrument_id);
             let source_id = builder.create_string(&value.source_id);
             let derivation = builder.create_string(&value.derivation);
-            let strike = value
-                .strike
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
-            let delta = value
-                .delta
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
-            let gamma = value
-                .gamma
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
-            let vega = value
-                .vega
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
-            let theta = value
-                .theta
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
-            let implied_volatility = value
-                .implied_volatility
-                .as_deref()
-                .and_then(|value| decimal64(Some(value)));
+            let strike = value.strike.map(decimal64_price);
+            let delta = value.delta.map(decimal64_rate);
+            let gamma = value.gamma.map(decimal64_rate);
+            let vega = value.vega.map(decimal64_rate);
+            let theta = value.theta.map(decimal64_rate);
+            let implied_volatility = value.implied_volatility.map(decimal64_rate);
             let greeks = FbGreeks::create(
                 &mut builder,
                 &FbGreeksArgs {
                     market_id: Some(market_id),
                     instrument_id: Some(instrument_id),
-                    expiry_unix_nanos: value.expiry_unix_nanos.unwrap_or_default(),
+                    expiry_unix_nanos: value.expiry_unix_nanos.map_or(0, Into::into),
                     strike: strike.as_ref(),
                     delta: delta.as_ref(),
                     gamma: gamma.as_ref(),
                     vega: vega.as_ref(),
                     theta: theta.as_ref(),
                     implied_volatility: implied_volatility.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos,
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
                     source_id: Some(source_id),
                     derivation: Some(derivation),
                 },
@@ -985,6 +1135,280 @@ fn encode_event(
             finish_greeks_message_buffer(&mut builder, root);
             Ok(builder.finished_data().to_vec())
         }
+        MarketObservation::Rate(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let rate_id = builder.create_string(&value.rate_id);
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let basis = builder.create_string(&value.basis);
+            let source_id = builder.create_string(&value.source_id);
+            let rate_value = decimal64_rate(value.value);
+            let mark_price = value.mark_price.map(decimal64_price);
+            let rate = FbRate::create(
+                &mut builder,
+                &FbRateArgs {
+                    rate_id: Some(rate_id),
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    basis: Some(basis),
+                    value: Some(&rate_value),
+                    mark_price: mark_price.as_ref(),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            let root = RateMessage::create(
+                &mut builder,
+                &RateMessageArgs {
+                    header: Some(header),
+                    payload: Some(rate),
+                },
+            );
+            finish_rate_message_buffer(&mut builder, root);
+            Ok(builder.finished_data().to_vec())
+        }
+        MarketObservation::Ticker24h(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let source_id = builder.create_string(&value.source_id);
+            let payload = FbTicker24h::create(
+                &mut builder,
+                &FbTicker24hArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    last_price: value.last_price.map(decimal64_price).as_ref(),
+                    bid_price: value.bid_price.map(decimal64_price).as_ref(),
+                    bid_quantity: value.bid_quantity.map(decimal64_quantity).as_ref(),
+                    ask_price: value.ask_price.map(decimal64_price).as_ref(),
+                    ask_quantity: value.ask_quantity.map(decimal64_quantity).as_ref(),
+                    open_price: value.open_price.map(decimal64_price).as_ref(),
+                    high_price: value.high_price.map(decimal64_price).as_ref(),
+                    low_price: value.low_price.map(decimal64_price).as_ref(),
+                    volume_base: value.volume_base.map(decimal64_quantity).as_ref(),
+                    volume_quote: value.volume_quote.map(decimal64_money).as_ref(),
+                    price_change_abs: value.price_change_abs.map(decimal64_money).as_ref(),
+                    price_change_pct: value.price_change_pct.map(decimal64_rate).as_ref(),
+                    vwap: value.vwap.map(decimal64_price).as_ref(),
+                    mark_price: value.mark_price.map(decimal64_price).as_ref(),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                Ticker24hMessage,
+                Ticker24hMessageArgs,
+                finish_ticker_24h_message_buffer
+            )
+        }
+        MarketObservation::MarkPrice(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let source_id = builder.create_string(&value.source_id);
+            let mark_price = decimal64_price(value.mark_price);
+            let index_price = value.index_price.map(decimal64_price);
+            let settlement = value.estimated_settlement_price.map(decimal64_price);
+            let funding = value.funding_rate.map(decimal64_rate);
+            let payload = FbMarkPrice::create(
+                &mut builder,
+                &FbMarkPriceArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    mark_price: Some(&mark_price),
+                    index_price: index_price.as_ref(),
+                    estimated_settlement_price: settlement.as_ref(),
+                    funding_rate: funding.as_ref(),
+                    next_funding_time_unix_nanos: value
+                        .next_funding_time_unix_nanos
+                        .map_or(0, Into::into),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                MarkPriceMessage,
+                MarkPriceMessageArgs,
+                finish_mark_price_message_buffer
+            )
+        }
+        MarketObservation::IndexPrice(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let source_id = builder.create_string(&value.source_id);
+            let payload = FbIndexPrice::create(
+                &mut builder,
+                &FbIndexPriceArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    spot_index_price: value.spot_index_price.map(decimal64_price).as_ref(),
+                    contract_index_price: value.contract_index_price.map(decimal64_price).as_ref(),
+                    index_price: value.index_price.map(decimal64_price).as_ref(),
+                    funding_rate: value.funding_rate.map(decimal64_rate).as_ref(),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                IndexPriceMessage,
+                IndexPriceMessageArgs,
+                finish_index_price_message_buffer
+            )
+        }
+        MarketObservation::FundingRate(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let source_id = builder.create_string(&value.source_id);
+            let rate = decimal64_rate(value.funding_rate);
+            let payload = FbFundingRate::create(
+                &mut builder,
+                &FbFundingRateArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    funding_rate: Some(&rate),
+                    funding_period_seconds: value.funding_period_seconds.unwrap_or_default(),
+                    next_funding_time_unix_nanos: value
+                        .next_funding_time_unix_nanos
+                        .map_or(0, Into::into),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                FundingRateMessage,
+                FundingRateMessageArgs,
+                finish_funding_rate_message_buffer
+            )
+        }
+        MarketObservation::OpenInterest(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let source_id = builder.create_string(&value.source_id);
+            let contracts = decimal64_quantity(value.contracts);
+            let payload = FbOpenInterest::create(
+                &mut builder,
+                &FbOpenInterestArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    contracts: Some(&contracts),
+                    quote_value: value.quote_value.map(decimal64_money).as_ref(),
+                    change_24h: value.change_24h.map(decimal64_money).as_ref(),
+                    change_pct_24h: value.change_pct_24h.map(decimal64_rate).as_ref(),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                OpenInterestMessage,
+                OpenInterestMessageArgs,
+                finish_open_interest_message_buffer
+            )
+        }
+        MarketObservation::InstrumentStatus(value) => {
+            let mut builder = FlatBufferBuilder::new();
+            let header = event_header(
+                &mut builder,
+                actor_id,
+                identity,
+                stream_id,
+                sequence,
+                value.observed_at_unix_nanos.get(),
+            );
+            let market_id = builder.create_string(&value.market_id);
+            let instrument_id = builder.create_string(&value.instrument_id);
+            let status = builder.create_string(value.status.as_str());
+            let reason = value
+                .reason
+                .as_ref()
+                .map(|value| builder.create_string(value));
+            let source_id = builder.create_string(&value.source_id);
+            let payload = FbInstrumentStatus::create(
+                &mut builder,
+                &FbInstrumentStatusArgs {
+                    market_id: Some(market_id),
+                    instrument_id: Some(instrument_id),
+                    status: Some(status),
+                    reason,
+                    effective_at_unix_nanos: value.effective_at_unix_nanos.map_or(0, Into::into),
+                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
+                    source_id: Some(source_id),
+                },
+            );
+            finish_market_event!(
+                &mut builder,
+                header,
+                payload,
+                InstrumentStatusMessage,
+                InstrumentStatusMessageArgs,
+                finish_instrument_status_message_buffer
+            )
+        }
     }
 }
 
@@ -997,48 +1421,67 @@ fn log_event(level: &str, message: &str, fields: Value) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{encode_event, forward_reference_events, EngineCommand, MarketProcess};
+    use super::{
+        encode_event, forward_reference_events, EngineCommand, MarketProcess,
+        MarketSnapshotPublisher,
+    };
     use crate::composition::MmapMarketSnapshotPublisher;
-    use crate::composition::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
     use crate::domain::freshness::FeedStatus;
     use crate::domain::market::MarketDescriptor;
-    use crate::domain::observations::{Bar, MarketObservation, OptionGreeks};
+    use crate::domain::observations::{
+        Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, OpenInterest, OptionGreeks,
+        Ticker24h,
+    };
+    use crate::services::composite::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
     use crate::services::feed::{MarketFeed, MarketOrderBookUpdate};
     use crate::{MarketApplication, MarketRuntime, SubscriptionId};
+    use axum::http::Method;
     use kairos_protocol::InstanceIdentity;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::collections::VecDeque;
     use std::time::Duration;
 
+    struct NullPublisher;
+
+    impl MarketSnapshotPublisher for NullPublisher {
+        fn publish(
+            &mut self,
+            _snapshot: &crate::domain::snapshot::MarketSnapshot,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn bar_and_greeks_have_event_wire_messages() {
         let identity = InstanceIdentity::new("workspace", "launch", "instance");
         let bar = MarketObservation::Bar(Bar {
-            market_id: "market:btc".into(),
-            instrument_id: "instrument:btc".into(),
+            market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
             timeframe: "1m".into(),
-            open: "1".into(),
-            high: "2".into(),
-            low: "0.5".into(),
-            close: "1.5".into(),
+            open: "1".parse().unwrap(),
+            high: "2".parse().unwrap(),
+            low: "0.5".parse().unwrap(),
+            close: "1.5".parse().unwrap(),
             volume: None,
-            observed_at_unix_nanos: 1,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
             source_id: "binance".into(),
             derivation: "aggregated".into(),
         });
         let greeks = MarketObservation::OptionGreeks(OptionGreeks {
-            market_id: "market:btc-option".into(),
-            instrument_id: "instrument:btc-option".into(),
+            market_id: kairos_domain_types::MarketId::new("market:btc-option").unwrap(),
+            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-option").unwrap(),
             expiry_unix_nanos: None,
             strike: None,
-            delta: Some("0.5".into()),
+            delta: Some("0.5".parse().unwrap()),
             gamma: None,
             vega: None,
             theta: None,
             implied_volatility: None,
-            observed_at_unix_nanos: 2,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(2),
             source_id: "deribit".into(),
             derivation: "direct".into(),
         });
@@ -1050,6 +1493,134 @@ mod tests {
             &encode_event("actor", &identity, 2, &greeks).unwrap()[4..8],
             b"MGR1"
         );
+    }
+
+    #[test]
+    fn derivative_observations_have_distinct_event_wire_messages() {
+        let identity = InstanceIdentity::new("workspace", "launch", "instance");
+        let common = (
+            kairos_domain_types::MarketId::new("market:btc").unwrap(),
+            kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            "source".to_string(),
+        );
+        let ticker = MarketObservation::Ticker24h(Ticker24h {
+            market_id: common.0.clone(),
+            instrument_id: common.1.clone(),
+            last_price: Some("1".parse().unwrap()),
+            bid_price: None,
+            bid_quantity: None,
+            ask_price: None,
+            ask_quantity: None,
+            open_price: None,
+            high_price: None,
+            low_price: None,
+            volume_base: None,
+            volume_quote: None,
+            price_change_abs: None,
+            price_change_pct: None,
+            vwap: None,
+            mark_price: None,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+            source_id: common.2.clone(),
+        });
+        let mark = MarketObservation::MarkPrice(MarkPrice {
+            market_id: common.0.clone(),
+            instrument_id: common.1.clone(),
+            mark_price: "1".parse().unwrap(),
+            index_price: None,
+            estimated_settlement_price: None,
+            funding_rate: None,
+            next_funding_time_unix_nanos: None,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(2),
+            source_id: common.2.clone(),
+        });
+        let index = MarketObservation::IndexPrice(IndexPrice {
+            market_id: common.0.clone(),
+            instrument_id: common.1.clone(),
+            spot_index_price: Some("1".parse().unwrap()),
+            contract_index_price: None,
+            index_price: None,
+            funding_rate: None,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(3),
+            source_id: common.2.clone(),
+        });
+        let funding = MarketObservation::FundingRate(FundingRate {
+            market_id: common.0.clone(),
+            instrument_id: common.1.clone(),
+            funding_rate: "0.001".parse().unwrap(),
+            funding_period_seconds: Some(28_800),
+            next_funding_time_unix_nanos: None,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(4),
+            source_id: common.2.clone(),
+        });
+        let open_interest = MarketObservation::OpenInterest(OpenInterest {
+            market_id: common.0,
+            instrument_id: common.1,
+            contracts: "10".parse().unwrap(),
+            quote_value: None,
+            change_24h: None,
+            change_pct_24h: None,
+            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(5),
+            source_id: common.2,
+        });
+        for (sequence, observation, identifier) in [
+            (1, ticker, b"MT24"),
+            (2, mark, b"MMP1"),
+            (3, index, b"MIP1"),
+            (4, funding, b"MFR1"),
+            (5, open_interest, b"MOI1"),
+        ] {
+            assert_eq!(
+                &encode_event("actor", &identity, sequence, &observation).unwrap()[4..8],
+                identifier
+            );
+        }
+    }
+
+    #[test]
+    fn command_idempotency_replays_same_result_and_rejects_payload_reuse() {
+        let root = tempfile::tempdir().unwrap();
+        let application = MarketApplication::new("test-market", 10).unwrap();
+        let mut process = MarketProcess::new(
+            MarketRuntime::new(application),
+            NullPublisher,
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
+            false,
+        )
+        .unwrap();
+        let body = serde_json::to_string(&json!({
+            "schema_version": 1,
+            "command_id": "command-1",
+            "idempotency_key": "idem-1",
+            "operation": "market.subscribe",
+            "strategy_id": "strategy-1",
+            "instance_id": "instance-1",
+            "payload": {
+                "subject": "market.BTCUSDT",
+                "selectors": ["quote"],
+                "exchange": "binance",
+                "market_type": "spot",
+                "asset_type": "crypto",
+                "params": {},
+                "dynamic": false
+            }
+        }))
+        .unwrap();
+        let first = process
+            .engine
+            .handle_request(&Method::POST, "/v1/subscribe", &body);
+        let second = process
+            .engine
+            .handle_request(&Method::POST, "/v1/subscribe", &body);
+        assert_eq!(first.status, second.status);
+        assert_eq!(first.payload, second.payload);
+        let conflict = body.replace("BTCUSDT", "ETHUSDT");
+        let response = process
+            .engine
+            .handle_request(&Method::POST, "/v1/subscribe", &conflict);
+        assert_eq!(response.status, axum::http::StatusCode::CONFLICT);
     }
 
     struct FakeFeed {
@@ -1097,9 +1668,9 @@ mod tests {
             ("okx", "options", "crypto"),
         ];
         let mut factories: BTreeMap<MarketRoute, MarketFeedFactory> = BTreeMap::new();
-        for (venue, market_type, asset_type) in routes {
+        for (exchange, market_type, asset_type) in routes {
             factories.insert(
-                MarketRoute::with_asset_type(venue, market_type, asset_type),
+                MarketRoute::with_asset_type(exchange, market_type, asset_type),
                 Box::new(|| Ok(Box::new(FakeFeed { next: 1 }) as Box<dyn MarketFeed>)),
             );
         }
@@ -1125,8 +1696,25 @@ mod tests {
             true,
         )
         .unwrap();
+        process.engine.reference_markets = Some(
+            routes
+                .iter()
+                .enumerate()
+                .map(|(index, (exchange, market_type, asset_type))| {
+                    MarketDescriptor::new_with_asset_type(
+                        format!("market-{index}"),
+                        format!("instrument-{index}"),
+                        *exchange,
+                        *market_type,
+                        *asset_type,
+                        format!("SYMBOL{index}"),
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        );
 
-        for (index, (venue, market_type, asset_type)) in routes.into_iter().enumerate() {
+        for (index, (exchange, market_type, asset_type)) in routes.into_iter().enumerate() {
             let body = json!({
                 "schema_version": 1,
                 "command_id": format!("command-{index}"),
@@ -1137,7 +1725,7 @@ mod tests {
                 "payload": {
                     "subject": format!("market.SYMBOL{index}"),
                     "selectors": ["quote"],
-                    "exchange": venue,
+                    "exchange": exchange,
                     "market_type": market_type,
                     "asset_type": asset_type,
                     "identity": null,
@@ -1146,7 +1734,7 @@ mod tests {
             })
             .to_string();
             let (status, _) = process.engine.subscribe(&body);
-            assert_eq!(status, 202, "route {venue}/{market_type}/{asset_type}");
+            assert_eq!(status, 202, "route {exchange}/{market_type}/{asset_type}");
         }
         assert_eq!(
             process.engine.application.snapshot().subscriptions.len(),
@@ -1169,12 +1757,12 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         sender
             .try_send(EngineCommand::ReferenceChanged {
-                sequence: 1,
+                sequence: 1.into(),
                 gap: false,
             })
             .unwrap();
         let mut source = Some(Box::new(TestReferenceSource {
-            events: [super::ReferenceEvent { sequence: 2 }]
+            events: [super::ReferenceEvent { sequence: 2.into() }]
                 .into_iter()
                 .collect(),
         }) as Box<dyn super::ReferenceChangeSource>);
@@ -1183,14 +1771,14 @@ mod tests {
 
         forward_reference_events(&mut source, &sender, &mut cursor, &mut pending).unwrap();
 
-        assert_eq!(pending, Some((2, true)));
-        assert_eq!(cursor, Some(2));
+        assert_eq!(pending, Some((2.into(), true)));
+        assert_eq!(cursor, Some(2.into()));
         let _ = receiver.recv().await;
         forward_reference_events(&mut source, &sender, &mut cursor, &mut pending).unwrap();
         assert!(pending.is_none());
         match receiver.recv().await {
             Some(EngineCommand::ReferenceChanged { sequence, gap }) => {
-                assert_eq!((sequence, gap), (2, true));
+                assert_eq!((sequence, gap), (2.into(), true));
             }
             _ => panic!("reference recovery command was not preserved"),
         }
@@ -1227,13 +1815,29 @@ fn event_header<'a, A: flatbuffers::Allocator + 'a>(
     )
 }
 
-fn decimal64(value: Option<&str>) -> Option<Decimal64> {
-    let value = value?;
-    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    Some(Decimal64::new(
-        format!("{whole}{fraction}").parse().ok()?,
-        fraction.len() as u8,
-    ))
+fn decimal64_price(value: kairos_domain_types::Price) -> Decimal64 {
+    Decimal64::new(value.mantissa(), value.scale())
+}
+
+fn decimal64_quantity(value: kairos_domain_types::Quantity) -> Decimal64 {
+    Decimal64::new(value.mantissa(), value.scale())
+}
+
+fn decimal64_money(value: kairos_domain_types::Money) -> Decimal64 {
+    Decimal64::new(value.mantissa(), value.scale())
+}
+
+fn decimal64_rate(value: kairos_domain_types::Rate) -> Decimal64 {
+    Decimal64::new(value.mantissa(), value.scale())
+}
+
+fn aggressor_side(value: Option<&str>) -> kairos_protocol::generated::kairos::common::v_1::Side {
+    use kairos_protocol::generated::kairos::common::v_1::Side;
+    match value.map(|value| value.to_ascii_lowercase()).as_deref() {
+        Some("buy") => Side::BUY,
+        Some("sell") => Side::SELL,
+        _ => Side::UNSPECIFIED,
+    }
 }
 
 fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
@@ -1247,6 +1851,56 @@ async fn market_http_handler(
     State(sender): State<Sender<EngineCommand>>,
     request: Request,
 ) -> Response {
+    let started = Instant::now();
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let span = tracing::info_span!(
+        "market.control_request",
+        component = "market",
+        method = %method,
+        path = %path,
+        status = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+        result = tracing::field::Empty,
+        error_code = tracing::field::Empty,
+        retryable = tracing::field::Empty,
+        trace_id = tracing::field::Empty,
+        span_id = tracing::field::Empty
+    );
+    kairos_workspace::logging::record_counter("kairos.control.request", 1);
+    kairos_workspace::logging::record_counter("kairos.operation", 1);
+    let queue_depth = sender.max_capacity() - sender.capacity();
+    kairos_workspace::logging::set_remote_parent(&span, request.headers());
+    let response = market_http_handler_inner(sender, request)
+        .instrument(span.clone())
+        .await;
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    span.record("status", response.status().as_u16());
+    span.record("duration_ms", duration_ms);
+    span.record(
+        "result",
+        if response.status().is_success() {
+            "accepted"
+        } else {
+            "rejected"
+        },
+    );
+    kairos_workspace::logging::record_duration_ms("kairos.control.request.duration", duration_ms);
+    kairos_workspace::logging::record_duration_ms("kairos.operation.duration", duration_ms);
+    kairos_workspace::logging::record_gauge("kairos.queue.depth", queue_depth as u64);
+    if response.status().is_server_error() {
+        kairos_workspace::logging::mark_span_error(&span, "control.internal_error", true);
+        kairos_workspace::logging::record_counter("kairos.control.request.failed", 1);
+        kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
+    } else if !response.status().is_success() {
+        span.record("error_code", "control.request_rejected");
+        span.record("retryable", false);
+    }
+    tracing::info!(parent: &span, event = "control_request_completed", component = "market", duration_ms, result = if response.status().is_success() { "accepted" } else { "rejected" }, "market control request completed");
+    response
+}
+
+async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Request) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let body = match to_bytes(
@@ -1293,8 +1947,8 @@ async fn market_http_handler(
 fn forward_reference_events(
     source: &mut Option<Box<dyn ReferenceChangeSource>>,
     sender: &Sender<EngineCommand>,
-    cursor: &mut Option<u64>,
-    pending: &mut Option<(u64, bool)>,
+    cursor: &mut Option<Sequence>,
+    pending: &mut Option<(Sequence, bool)>,
 ) -> Result<(), String> {
     let Some(source) = source.as_mut() else {
         return Ok(());
@@ -1311,10 +1965,10 @@ fn forward_reference_events(
             }
         }
     }
-    let mut latest_sequence: Option<u64> = None;
+    let mut latest_sequence: Option<Sequence> = None;
     let mut gap = false;
     while let Some(change) = source.next_event()? {
-        if cursor.is_some_and(|previous| change.sequence > previous.saturating_add(1)) {
+        if cursor.is_some_and(|previous| change.sequence.get() > previous.get().saturating_add(1)) {
             gap = true;
         }
         *cursor = Some(

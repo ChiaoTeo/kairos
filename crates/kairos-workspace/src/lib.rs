@@ -1,3 +1,4 @@
+pub mod account;
 pub mod cli;
 pub mod control;
 pub mod data;
@@ -11,6 +12,8 @@ pub use runtime::{
     STOPPING_STATUS, STOP_PATH,
 };
 pub use workspace::{
-    InstanceWorkspace, Workspace, WorkspaceManifest, WorkspaceMarketConfig, WorkspaceMassiveConfig,
-    WorkspaceProcessLock,
+    InstanceWorkspace, Workspace, WorkspaceManifest, WorkspaceMarketConfig,
+    WorkspaceMarketSourceConfig, WorkspaceMassiveConfig, WorkspaceProcessLock,
+    WorkspaceReferenceConfig, WorkspaceReferenceParticipantConfig, WorkspaceReferenceProductConfig,
+    WorkspaceReferenceProviderConfig,
 };

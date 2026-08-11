@@ -1,13 +1,13 @@
 use clap::{Args, Parser, Subcommand};
+use kairos_domain_types::{
+    AccountId, InstrumentId, IntentId, MarketId, OrderId, Price, Quantity, SegmentKey,
+};
 use kairos_execution::{
     application::{
         BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
         ExecutionFillReport, ExecutionOrderOptions, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
     },
-    composition::{
-        compose_execution_stream, compose_order_entry, compose_order_query,
-        ExecutionConnectionOptions, SqliteExecutionStore,
-    },
+    composition::{compose_execution_connections, ExecutionConnectionOptions, SqlxExecutionStore},
     credentials::load_workspace_credential,
     domain::{OrderSide, OrderType},
     ExecutionApplication,
@@ -54,6 +54,12 @@ struct Cli {
 
 #[derive(Clone, Debug, Args)]
 struct ConnectionArgs {
+    #[arg(long, global = true, default_value = "default")]
+    route_id: String,
+    #[arg(long, global = true, default_value = "main")]
+    account_id: String,
+    #[arg(long, global = true, default_value = "spot")]
+    segment_key: String,
     #[arg(long, global = true, default_value = "simulated")]
     provider: String,
     #[arg(long, global = true, default_value = "spot")]
@@ -68,6 +74,26 @@ struct ConnectionArgs {
     passphrase: String,
     #[arg(long, global = true, default_value = "https://api.binance.com")]
     base_url: String,
+    #[arg(
+        long,
+        global = true,
+        default_value = "wss://ws-api.binance.com:443/ws-api/v3"
+    )]
+    websocket_url: String,
+    #[arg(long, global = true, default_value_t = 1_000)]
+    request_weight_per_minute: u32,
+    #[arg(long, global = true, default_value_t = 50)]
+    cancel_reserve_weight: u32,
+    #[arg(long, global = true, default_value_t = 1_024)]
+    order_event_queue_capacity: usize,
+    #[arg(long, global = true, default_value = "default-egress")]
+    egress_scope_id: String,
+    #[arg(long, global = true, default_value = "execution-default")]
+    principal_scope_id: String,
+    #[arg(long, global = true, default_value_t = 50)]
+    orders_per_10_seconds: u32,
+    #[arg(long, global = true, default_value_t = 160_000)]
+    orders_per_day: u32,
     #[arg(long, global = true, default_value = "127.0.0.1")]
     host: String,
     #[arg(long, global = true, default_value_t = 4002)]
@@ -84,6 +110,9 @@ impl ConnectionArgs {
         let stored =
             load_workspace_credential(workspace, &self.provider, self.credential_id.as_deref())?;
         Ok(ExecutionConnectionOptions {
+            route_id: self.route_id.clone(),
+            account_id: self.account_id.clone(),
+            segment_key: self.segment_key.clone(),
             provider: self.provider.clone(),
             product: self.product.clone(),
             api_key: if self.api_key.is_empty() {
@@ -93,7 +122,8 @@ impl ConnectionArgs {
                     .unwrap_or_default()
             } else {
                 self.api_key.clone()
-            },
+            }
+            .into(),
             secret: if self.secret.is_empty() {
                 stored
                     .as_ref()
@@ -101,7 +131,8 @@ impl ConnectionArgs {
                     .unwrap_or_default()
             } else {
                 self.secret.clone()
-            },
+            }
+            .into(),
             passphrase: if self.passphrase.is_empty() {
                 stored
                     .as_ref()
@@ -109,8 +140,23 @@ impl ConnectionArgs {
                     .unwrap_or_default()
             } else {
                 self.passphrase.clone()
-            },
+            }
+            .into(),
             base_url: self.base_url.clone(),
+            websocket_url: self.websocket_url.clone(),
+            request_weight_per_minute: self.request_weight_per_minute,
+            cancel_reserve_weight: self.cancel_reserve_weight,
+            order_event_queue_capacity: self.order_event_queue_capacity,
+            shared_quota_ledger_path: Some(
+                workspace
+                    .state_root()
+                    .join("integration")
+                    .join("provider-quota.mmap"),
+            ),
+            egress_scope_id: self.egress_scope_id.clone(),
+            principal_scope_id: self.principal_scope_id.clone(),
+            orders_per_10_seconds: self.orders_per_10_seconds,
+            orders_per_day: self.orders_per_day,
             host: self.host.clone(),
             port: self.port,
             client_id: self.client_id,
@@ -150,6 +196,19 @@ enum Command {
         #[arg(long)]
         order_id: String,
     },
+    ReconcileRemote {
+        #[arg(long)]
+        symbol: Option<String>,
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    UnknownRemoteOrders,
+    LinkUnknown {
+        #[arg(long)]
+        remote_order_id: String,
+        #[arg(long)]
+        local_order_id: String,
+    },
     StreamNext,
     #[command(alias = "show")]
     Status {
@@ -172,7 +231,7 @@ enum Command {
         #[arg(long)]
         order_id: Option<String>,
         #[arg(long)]
-        venue_order_id: Option<String>,
+        remote_order_id: Option<String>,
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -283,12 +342,13 @@ fn run_direct_with_options(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let options = options.expect("direct execution options");
     let path = workspace.child(&["state", "execution", "execution-state.sqlite"])?;
+    let connections = compose_execution_connections(&options)?;
     let mut application = ExecutionApplication::with_dependencies_and_query_and_stream(
         "execution",
-        Some(compose_order_entry(&options)?),
-        compose_order_query(&options)?,
-        compose_execution_stream(&options)?,
-        Some(Box::new(SqliteExecutionStore::new(path)?)),
+        Some(connections.order_entry),
+        connections.order_query,
+        connections.execution_stream,
+        Some(Box::new(SqlxExecutionStore::new(path)?)),
     )?;
     application.configure_live_trading(
         !matches!(
@@ -315,23 +375,41 @@ fn run_direct_with_options(
         }
         Command::RemoteOpenOrders { symbol } => {
             serde_json::to_value(application.remote_open_orders(RemoteOrderQuery {
-                symbol,
+                symbol: symbol.map(kairos_domain_types::Symbol::new).transpose()?,
                 ..Default::default()
             })?)?
         }
         Command::RemoteHistory { symbol, limit } => {
             serde_json::to_value(application.remote_history(RemoteOrderQuery {
-                symbol,
+                symbol: symbol.map(kairos_domain_types::Symbol::new).transpose()?,
                 limit,
                 ..Default::default()
             })?)?
         }
         Command::RemoteInspect { order_id } => {
             serde_json::to_value(application.remote_detail(RemoteOrderQuery {
-                order_id: Some(order_id),
+                order_id: Some(kairos_domain_types::OrderId::new(order_id)?),
                 ..Default::default()
             })?)?
         }
+        Command::ReconcileRemote { symbol, limit } => serde_json::json!({
+            "changed": application.reconcile_remote_orders(RemoteOrderQuery {
+                symbol: symbol
+                    .map(kairos_domain_types::Symbol::new)
+                    .transpose()?,
+                limit,
+                ..Default::default()
+            })?
+        }),
+        Command::UnknownRemoteOrders => {
+            serde_json::json!({"orders": application.unknown_remote_orders()})
+        }
+        Command::LinkUnknown {
+            remote_order_id,
+            local_order_id,
+        } => serde_json::to_value(
+            application.link_unknown_remote_order(&remote_order_id, &local_order_id)?,
+        )?,
         Command::StreamNext => serde_json::to_value(application.consume_remote_execution_event()?)?,
         Command::Status { order_id } | Command::Inspect { order_id } => {
             let order = application
@@ -349,19 +427,25 @@ fn run_direct_with_options(
         }
         Command::Audit {
             order_id,
-            venue_order_id,
+            remote_order_id,
             status,
             limit,
-        } => serde_json::to_value(application.audit_events(ExecutionAuditQuery {
-            order_id,
-            venue_order_id,
-            status,
-            limit,
-            ..Default::default()
-        })?)?,
+        } => serde_json::to_value(
+            application.audit_events(ExecutionAuditQuery {
+                order_id: order_id
+                    .map(kairos_domain_types::OrderId::new)
+                    .transpose()?,
+                remote_order_id: remote_order_id
+                    .map(kairos_domain_types::RemoteOrderId::new)
+                    .transpose()?,
+                status,
+                limit,
+                ..Default::default()
+            })?,
+        )?,
         Command::Journal { order_id } => {
             serde_json::to_value(application.audit_events(ExecutionAuditQuery {
-                order_id: Some(order_id),
+                order_id: Some(kairos_domain_types::OrderId::new(order_id)?),
                 ..Default::default()
             })?)?
         }
@@ -374,15 +458,15 @@ fn run_direct_with_options(
         }
         Command::Fill(args) => {
             serde_json::to_value(application.record_fill(ExecutionFillReport {
-                fill_id: args.fill_id,
-                order_id: args.order_id,
-                quantity_mantissa: args.quantity_mantissa,
-                quantity_scale: args.quantity_scale,
-                price_mantissa: args.price_mantissa,
-                price_scale: args.price_scale,
-                fee_mantissa: args.fee_mantissa,
-                fee_scale: args.fee_scale,
-                occurred_at_unix_nanos: args.occurred_at_unix_nanos,
+                fill_id: kairos_domain_types::FillId::new(args.fill_id)?,
+                order_id: kairos_domain_types::OrderId::new(args.order_id)?,
+                quantity: kairos_domain_types::Quantity::new(
+                    args.quantity_mantissa,
+                    args.quantity_scale,
+                )?,
+                price: kairos_domain_types::Price::new(args.price_mantissa, args.price_scale)?,
+                fee: kairos_domain_types::Money::new(args.fee_mantissa, args.fee_scale),
+                occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
             })?)?
         }
         Command::Submit(args) => {
@@ -394,13 +478,16 @@ fn run_direct_with_options(
             }
         }
         Command::Cancel { order_id, reason } => {
-            serde_json::to_value(application.cancel(CancelOrder { order_id, reason })?)?
+            serde_json::to_value(application.cancel(CancelOrder {
+                order_id: OrderId::new(order_id)?,
+                reason,
+            })?)?
         }
         Command::Replace {
             order_id,
             replacement,
         } => serde_json::to_value(application.replace(ReplaceOrder {
-            order_id,
+            order_id: OrderId::new(order_id)?,
             replacement: submit_request(replacement)?,
         })?)?,
     };
@@ -410,18 +497,20 @@ fn run_direct_with_options(
 
 fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::Error>> {
     Ok(SubmitOrder {
-        order_id: args.order_id,
-        intent_id: args.intent_id,
-        account_id: args.account_id,
-        segment_key: args.segment_key,
-        instrument_id: args.instrument_id,
-        market_id: args.market_id,
+        order_id: OrderId::new(args.order_id)?,
+        intent_id: args.intent_id.map(IntentId::new).transpose()?,
+        account_id: AccountId::new(args.account_id)?,
+        segment_key: SegmentKey::new(args.segment_key)?,
+        instrument_id: InstrumentId::new(args.instrument_id)?,
+        market_id: args.market_id.map(MarketId::new).transpose()?,
         side: parse_side(&args.side)?,
         order_type: parse_order_type(&args.order_type)?,
-        quantity_mantissa: args.quantity_mantissa,
-        quantity_scale: args.quantity_scale,
-        limit_price_mantissa: args.limit_price_mantissa,
-        limit_price_scale: args.limit_price_scale,
+        quantity: Quantity::new(args.quantity_mantissa, args.quantity_scale)?,
+        limit_price: args
+            .limit_price_mantissa
+            .zip(args.limit_price_scale)
+            .map(|(mantissa, scale)| Price::new(mantissa, scale))
+            .transpose()?,
         options: ExecutionOrderOptions {
             time_in_force: args.time_in_force,
             reduce_only: args.reduce_only,
@@ -431,6 +520,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
             wallet_type: args.wallet_type,
             trading_session: args.trading_session,
             tokenize: args.tokenize,
+            ..ExecutionOrderOptions::default()
         },
     })
 }

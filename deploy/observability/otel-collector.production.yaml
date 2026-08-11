@@ -1,0 +1,109 @@
+## Production Collector configuration. All paths and credentials are injected
+## by the workload platform's secret store; none are committed to the repo.
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: ${env:KAIROS_OTLP_TLS_CERT_FILE}
+          key_file: ${env:KAIROS_OTLP_TLS_KEY_FILE}
+          client_ca_file: ${env:KAIROS_OTLP_TLS_CLIENT_CA_FILE}
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: ${env:KAIROS_OTLP_TLS_CERT_FILE}
+          key_file: ${env:KAIROS_OTLP_TLS_KEY_FILE}
+          client_ca_file: ${env:KAIROS_OTLP_TLS_CLIENT_CA_FILE}
+  filelog/kairos:
+    include: [/var/lib/kairos/logs/**/*.log]
+    start_at: end
+    operators:
+      - type: json_parser
+        parse_from: body
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+  batch:
+    send_batch_size: 512
+    timeout: 1s
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - name: retain-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: baseline-ten-percent
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+
+exporters:
+  otlp/tempo:
+    endpoint: ${env:KAIROS_TEMPO_OTLP_ENDPOINT}
+    tls:
+      ca_file: ${env:KAIROS_BACKEND_TLS_CA_FILE}
+      cert_file: ${env:KAIROS_BACKEND_TLS_CERT_FILE}
+      key_file: ${env:KAIROS_BACKEND_TLS_KEY_FILE}
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 2048
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  prometheusremotewrite:
+    endpoint: ${env:KAIROS_PROMETHEUS_REMOTE_WRITE_ENDPOINT}
+    tls:
+      ca_file: ${env:KAIROS_BACKEND_TLS_CA_FILE}
+    headers:
+      Authorization: ${env:KAIROS_PROMETHEUS_AUTHORIZATION}
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+  otlphttp/loki:
+    endpoint: ${env:KAIROS_LOKI_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:KAIROS_LOKI_AUTHORIZATION}
+    tls:
+      ca_file: ${env:KAIROS_BACKEND_TLS_CA_FILE}
+      cert_file: ${env:KAIROS_BACKEND_TLS_CERT_FILE}
+      key_file: ${env:KAIROS_BACKEND_TLS_KEY_FILE}
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 2048
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 5m
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp, filelog/kairos]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

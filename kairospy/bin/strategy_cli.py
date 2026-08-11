@@ -10,7 +10,9 @@ from kairospy.application.workspace import WorkspaceApplication
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="kairospy-strategy-cli")
-    parser.add_argument("command", choices=("status", "start", "enable", "pause", "resume", "stop"))
+    parser.add_argument(
+        "command", choices=("status", "start", "enable", "pause", "resume", "stop")
+    )
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--launch-id", required=True)
     parser.add_argument("--instance-id", required=True)
@@ -22,6 +24,7 @@ def main() -> int:
     path = "/v1/status" if args.command == "status" else f"/v1/{args.command}"
     value = asyncio.run(UnixRestClient(socket).request(method, path))
     import json
+
     print(json.dumps(value, indent=2, sort_keys=True))
     return 0
 

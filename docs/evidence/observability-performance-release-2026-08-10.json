@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "timestamp_unix": 1786338320.823324,
+  "binary": "/private/tmp/kairos-observability-release/release/kairos-risk-server",
+  "rounds": 500,
+  "disabled": {
+    "throughput_rps": 22188.569539816413,
+    "p95_ms": 0.07072083681123331,
+    "rss_kib": 8784.0
+  },
+  "enabled": {
+    "throughput_rps": 16445.655162332427,
+    "p95_ms": 0.13463785289786756,
+    "rss_kib": 10832.0
+  },
+  "throughput_rps_change_percent": -25.882310110972135,
+  "p95_ms_change_percent": 90.37932661521005,
+  "rss_kib_change_percent": 23.31511839708561
+}

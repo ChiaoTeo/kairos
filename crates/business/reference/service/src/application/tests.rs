@@ -1,10 +1,11 @@
+use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
 use kairos_reference::domain::{
     Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
     ReferenceCatalog, ReferenceResult,
 };
 use kairos_reference::services::providers::ReferenceSource;
-use kairos_reference::services::storage::CatalogStore;
+use kairos_reference::services::store::CatalogStore;
 use kairos_reference::{
     LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
     ReferenceRecord,
@@ -17,6 +18,26 @@ struct TestSource {
 struct SequenceSource {
     catalogs: Vec<ProviderCatalog>,
     index: usize,
+}
+
+fn instrument_id(value: &str) -> InstrumentId {
+    InstrumentId::new(value).unwrap()
+}
+
+fn listing_id(value: &str) -> ListingId {
+    ListingId::new(value).unwrap()
+}
+
+fn market_id(value: &str) -> MarketId {
+    MarketId::new(value).unwrap()
+}
+
+fn asset_id(value: &str) -> AssetId {
+    AssetId::new(value).unwrap()
+}
+
+fn symbol(value: &str) -> Symbol {
+    Symbol::new(value).unwrap()
 }
 
 impl ReferenceSource for SequenceSource {
@@ -73,62 +94,73 @@ fn application() -> ReferenceApplication {
 fn provider_catalog() -> ProviderCatalog {
     ProviderCatalog {
         entities: vec![Entity {
-            entity_id: "binance".into(),
-            entity_type: "venue".into(),
+            entity_id: "exchange:binance".into(),
+            entity_type: "exchange".into(),
             name: "Binance".into(),
             status: "active".into(),
+            ..Default::default()
         }],
-        assets: vec![Asset {
-            asset_id: "asset:btc".into(),
-            code: "BTC".into(),
-            name: Some("Bitcoin".into()),
-            asset_class: "crypto".into(),
-            status: "active".into(),
-        }],
+        assets: vec![
+            Asset {
+                asset_id: asset_id("asset:BTC"),
+                code: "BTC".into(),
+                name: Some("Bitcoin".into()),
+                asset_class: "crypto".into(),
+                status: "active".into(),
+                ..Default::default()
+            },
+            Asset {
+                asset_id: asset_id("asset:USDT"),
+                code: "USDT".into(),
+                asset_class: "crypto".into(),
+                status: "active".into(),
+                ..Default::default()
+            },
+        ],
         instruments: vec![Instrument {
-            instrument_id: "instrument:binance:spot:BTCUSDT".into(),
-            symbol: "BTC/USDT".into(),
-            name: Some("BTC/USDT spot".into()),
+            instrument_id: instrument_id("instrument:spot:BTC"),
+            symbol: symbol("BTC"),
+            name: Some("BTC spot instrument".into()),
             instrument_type: "spot".into(),
             product_family: Some("spot".into()),
             status: "active".into(),
             ..Default::default()
         }],
         listings: vec![Listing {
-            listing_id: "listing:binance:BTCUSDT".into(),
-            instrument_id: "instrument:binance:spot:BTCUSDT".into(),
-            venue_id: "binance".into(),
-            venue_symbol: "BTCUSDT".into(),
+            listing_id: listing_id("listing:binance:spot:BTC:USDT"),
+            instrument_id: instrument_id("instrument:spot:BTC"),
+            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_symbol: Symbol::new("BTCUSDT").unwrap(),
             status: "active".into(),
-            effective_from_unix_nanos: 1,
+            effective_from_unix_nanos: 1.into(),
             ..Default::default()
         }],
         markets: vec![Market {
-            market_id: "market:binance:spot:BTCUSDT".into(),
+            market_id: market_id("market:binance:spot:BTCUSDT"),
             market_key: "binance.spot.BTCUSDT".into(),
-            instrument_id: "instrument:binance:spot:BTCUSDT".into(),
-            listing_id: "listing:binance:BTCUSDT".into(),
-            venue_id: "binance".into(),
+            instrument_id: instrument_id("instrument:spot:BTC"),
+            listing_id: listing_id("listing:binance:spot:BTC:USDT"),
+            exchange_id: Exchange::new("exchange:binance").unwrap(),
             market_type: "spot".into(),
             asset_type: Some("crypto".into()),
-            source_symbol: "BTCUSDT".into(),
-            base_asset_id: Some("asset:btc".into()),
-            quote_asset_id: Some("asset:usdt".into()),
+            source_symbol: symbol("BTCUSDT"),
+            base_asset_id: Some(asset_id("asset:BTC")),
+            quote_asset_id: Some(asset_id("asset:USDT")),
             status: "active".into(),
             price_precision: 2,
             quantity_precision: 6,
-            effective_from_unix_nanos: 1,
+            effective_from_unix_nanos: 1.into(),
             ..Default::default()
         }],
         financial_products: vec![FinancialProduct {
             product_id: "product:binance:earn:btc".into(),
             product_type: "earn".into(),
             name: "BTC Earn".into(),
-            asset_id: "asset:btc".into(),
+            asset_id: asset_id("asset:BTC"),
             provider_product_id: "btc-earn".into(),
             provider_id: Some("binance".into()),
             status: "active".into(),
-            effective_from_unix_nanos: 1,
+            effective_from_unix_nanos: 1.into(),
             ..Default::default()
         }],
         ..Default::default()
@@ -139,8 +171,8 @@ fn provider_catalog() -> ProviderCatalog {
 fn application_reconciles_reference_catalog() {
     let mut application = application();
     let result = application.refresh().unwrap();
-    assert_eq!(result.events.len(), 1);
-    assert_eq!(result.generation, 1);
+    assert_eq!(result.events.len(), 7);
+    assert_eq!(result.generation, 1.into());
     assert_eq!(application.catalog().markets.len(), 1);
 }
 
@@ -150,10 +182,10 @@ fn application_exposes_read_only_market_queries() {
     application.refresh().unwrap();
 
     let query = MarketQuery {
-        venue_id: Some("binance".into()),
+        exchange_id: Some(Exchange::new("exchange:binance").unwrap()),
         market_type: Some("spot".into()),
         asset_type: Some("crypto".into()),
-        source_symbol: Some("btcusdt".into()),
+        source_symbol: Some(kairos_domain_types::Symbol::new("btcusdt").unwrap()),
         active_only: true,
         ..MarketQuery::default()
     };
@@ -176,12 +208,7 @@ fn default_reference_registry_composes_without_market_configuration() {
     let composition = build_application(
         &ReferenceCompositionConfig {
             workspace: Some(root.to_path_buf()),
-            provider: "default".into(),
-            endpoint: "https://example.invalid".into(),
             database: root.join("reference.sqlite"),
-            api_key: String::new(),
-            binance_api_key: String::new(),
-            secret: String::new(),
             aeron_dir: None,
             aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
             reference_changes_stream: kairos_transport::stream_ids::REFERENCE_CHANGES,
@@ -195,10 +222,73 @@ fn default_reference_registry_composes_without_market_configuration() {
 #[test]
 fn application_does_not_emit_duplicate_events_for_same_catalog() {
     let mut application = application();
-    assert_eq!(application.refresh().unwrap().events.len(), 1);
+    assert_eq!(application.refresh().unwrap().events.len(), 7);
     let second = application.refresh().unwrap();
     assert!(second.events.is_empty());
-    assert_eq!(second.event_sequence, 1);
+    assert_eq!(second.event_sequence, 7.into());
+}
+
+#[test]
+fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() {
+    let mut application = application();
+    application.refresh().unwrap();
+    let generation = application
+        .upsert_asset(Asset {
+            asset_id: asset_id("asset:sol"),
+            code: "SOL".into(),
+            asset_class: "crypto".into(),
+            status: "active".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(generation, 2.into());
+    let event = application
+        .catalog()
+        .lifecycle_events
+        .last()
+        .expect("asset upsert event");
+    assert_eq!(event.event_type, "asset_changed");
+    assert_eq!(event.record_kind.as_deref(), Some("asset"));
+    assert_eq!(event.record_id.as_deref(), Some("asset:sol"));
+    assert_eq!(application.catalog().event_sequence, 8.into());
+}
+
+#[test]
+fn administrative_instrument_and_listing_upserts_share_commit_path() {
+    let mut application = application();
+    application.refresh().unwrap();
+    let generation = application
+        .upsert_instrument(Instrument {
+            instrument_id: instrument_id("instrument:spot:ETH"),
+            symbol: symbol("ETH/USDT"),
+            instrument_type: "spot".into(),
+            status: "active".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(generation, 2.into());
+    let generation = application
+        .upsert_listing(Listing {
+            listing_id: listing_id("listing:binance:spot:ETH:USDT"),
+            instrument_id: instrument_id("instrument:spot:ETH"),
+            exchange_id: Exchange::new("exchange:binance").unwrap(),
+            exchange_symbol: Symbol::new("ETHUSDT").unwrap(),
+            status: "active".into(),
+            effective_from_unix_nanos: 1.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(generation, 3.into());
+    let events = application
+        .catalog()
+        .lifecycle_events
+        .iter()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>();
+    assert_eq!(events[0].record_kind.as_deref(), Some("listing"));
+    assert_eq!(events[1].record_kind.as_deref(), Some("instrument"));
+    assert_eq!(application.catalog().lifecycle_events.len(), 9);
 }
 
 #[test]
@@ -224,6 +314,12 @@ fn application_query_covers_each_reference_record_kind() {
     assert!(all
         .iter()
         .any(|record| matches!(record, ReferenceRecord::FinancialProduct(_))));
+    let asset_events = application.query(&ReferenceQuery {
+        kind: ReferenceKind::Event,
+        record_kind: Some("asset".into()),
+        ..ReferenceQuery::default()
+    });
+    assert_eq!(asset_events.len(), 2);
     assert!(application.record("market:binance:spot:BTCUSDT").is_ok());
 }
 
@@ -231,13 +327,13 @@ fn application_query_covers_each_reference_record_kind() {
 fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     let mut catalog = provider_catalog();
     catalog.instruments.push(Instrument {
-        instrument_id: "instrument:equity:SPY".into(),
-        symbol: "SPY".into(),
+        instrument_id: instrument_id("instrument:equity:SPY"),
+        symbol: symbol("SPY"),
         instrument_type: "equity".into(),
         status: "active".into(),
         ..Default::default()
     });
-    catalog.instruments[0].underlying_instrument_id = Some("instrument:equity:SPY".into());
+    catalog.instruments[0].underlying_instrument_id = Some(instrument_id("instrument:equity:SPY"));
     let mut application = ReferenceApplication::new(
         "reference-test",
         Box::new(TestSource { catalog }),
@@ -270,21 +366,27 @@ fn lifecycle_history_can_be_replayed_by_stable_sequence() {
     application.refresh().unwrap();
 
     let events = application
-        .replay_lifecycle_events(Some(1), Some(2))
+        .replay_lifecycle_events(Some(1.into()), Some(14.into()))
         .unwrap();
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].event_type, "listed");
-    assert_eq!(events[1].event_type, "delisted");
+    assert_eq!(events.len(), 14);
+    assert!(events.iter().any(
+        |event| event.event_type == "listed" && event.record_kind.as_deref() == Some("market")
+    ));
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "delisted"
+            && event.record_kind.as_deref() == Some("market")));
 
     let delisted = application
         .lifecycle_events(&LifecycleQuery {
             event_type: Some("delisted".into()),
-            sequence_from: Some(2),
+            sequence_from: Some(1.into()),
             ..LifecycleQuery::default()
         })
         .unwrap();
     assert_eq!(delisted.len(), 1);
-    assert_eq!(delisted[0].event_id, events[1].event_id);
+    assert_eq!(delisted[0].event_type, "delisted");
+    assert_eq!(delisted[0].record_kind.as_deref(), Some("market"));
 }
 
 #[test]

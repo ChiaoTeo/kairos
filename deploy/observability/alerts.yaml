@@ -1,0 +1,38 @@
+groups:
+  - name: kairos-observability
+    rules:
+      - alert: KairosCollectorDown
+        expr: up{job="otel-collector"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kairos OpenTelemetry Collector is unavailable
+      - alert: KairosCollectorExporterFailures
+        expr: increase(otelcol_exporter_send_failed_spans_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kairos Collector failed to export spans
+      - alert: KairosOperationFailures
+        expr: sum(rate(kairos_operation_failed_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kairos control operations are returning server errors
+      - alert: KairosControlQueueBacklog
+        expr: kairos_queue_depth > 128
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kairos control queue backlog is elevated
+      - alert: KairosMarketFreshnessDegraded
+        expr: kairos_event_lag > 60000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kairos market observations are more than one minute old

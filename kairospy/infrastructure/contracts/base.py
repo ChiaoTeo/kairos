@@ -22,7 +22,11 @@ class SnapshotMetadata:
     published_at_unix_nanos: int
 
     def __post_init__(self) -> None:
-        if self.generation < 0 or self.event_sequence < 0 or self.published_at_unix_nanos < 0:
+        if (
+            self.generation < 0
+            or self.event_sequence < 0
+            or self.published_at_unix_nanos < 0
+        ):
             raise ValueError("snapshot watermark fields cannot be negative")
 
 
@@ -113,5 +117,9 @@ class MmapSnapshotReader:
 
 
 __all__ = [
-    "CommandEnvelope", "ContractSnapshot", "MmapSnapshotReader", "QueryEnvelope", "SnapshotMetadata",
+    "CommandEnvelope",
+    "ContractSnapshot",
+    "MmapSnapshotReader",
+    "QueryEnvelope",
+    "SnapshotMetadata",
 ]

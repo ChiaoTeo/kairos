@@ -5,24 +5,24 @@ use std::time::Duration;
 use clap::Parser;
 
 use kairos_account::composition::account::{
-    attach_account_stream, compose_account_application_for_segments, compose_integration,
-    AccountBindingRecord, AccountOptions, AccountRegistry, CredentialStore,
+    attach_account_stream, compose_account_application_for_segments,
+    compose_binance_async_account_application, compose_blocking_account_stream,
+    compose_okx_async_account_application, AccountOptions,
 };
 use kairos_account::composition::MmapAccountPublisher;
-use kairos_account::AccountProcess;
-use kairos_integration::application::ConnectionSpec;
-use kairos_integration::domain::{
-    AccessScope, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind,
-};
-use kairos_integration::Integration;
 use kairos_protocol::InstanceIdentity;
+use kairos_workspace::account::{AccountBindingRecord, AccountRegistry, CredentialStore};
 use kairos_workspace::Workspace;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     kairos_workspace::logging::init("account");
-    if let Err(error) = run().await {
+    let result = run().await;
+    if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "account", error = %error, "account server failed");
+    }
+    kairos_workspace::logging::shutdown();
+    if let Err(error) = result {
         eprintln!("kairos-account-server: {error}");
         std::process::exit(1);
     }
@@ -94,8 +94,44 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         args.passphrase.clone()
     };
     let options = args.options(record.as_ref(), api_key, secret, passphrase);
-    let mut composition =
-        compose_account_application_for_segments(&options, &segments, Some(state))?;
+    let shared_quota_ledger = workspace
+        .state_root()
+        .join("integration")
+        .join("provider-quota.mmap");
+    let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
+        && segments.iter().all(|segment| {
+            matches!(
+                segment.trim().to_ascii_lowercase().as_str(),
+                "spot" | "funding"
+            )
+        });
+    let native_okx_account = matches!(
+        options.provider.trim().to_ascii_lowercase().as_str(),
+        "okx" | "okex"
+    );
+    let mut composition = if native_binance_account {
+        compose_binance_async_account_application(
+            &options,
+            &segments,
+            Some(state),
+            args.account_stream_endpoint
+                .as_deref()
+                .unwrap_or("wss://ws-api.binance.com:443/ws-api/v3"),
+            Some(shared_quota_ledger.clone()),
+            &args.egress_scope_id,
+        )?
+    } else if native_okx_account {
+        compose_okx_async_account_application(
+            &options,
+            &segments,
+            Some(state),
+            args.account_stream_endpoint.as_deref(),
+            Some(shared_quota_ledger.clone()),
+            &args.egress_scope_id,
+        )?
+    } else {
+        compose_account_application_for_segments(&options, &segments, Some(state))?
+    };
     composition
         .application
         .set_trade_enabled(record.as_ref().is_none_or(|value| {
@@ -105,31 +141,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .as_deref()
                     .is_some_and(|role| !role.eq_ignore_ascii_case("readonly"))
         }));
-    let provider = composition.provider;
-    let application = &mut composition.application;
     if args.account_stream_endpoint.is_some() {
         for segment in &segments {
+            if native_binance_account || native_okx_account {
+                continue;
+            }
             let mut stream_options = options.clone();
             stream_options.product = segment.clone();
-            let (integration, product) = compose_integration(&stream_options)?;
-            let integration = compose_account_stream(integration, &args, product, segment)?;
-            let stream_connection = integration.connect_account_stream(&ConnectionSpec {
-                connection_id: format!("account.{}.{}.private-stream", provider, segment),
-                route: if provider == "ibkr" {
-                    IntegrationRoute::broker("ibkr")
-                } else {
-                    IntegrationRoute::exchange(provider.clone())
-                },
-                product: Some(product),
-                access: AccessScope::Private,
-                transport: TransportKind::UserStream,
-                capability: IntegrationCapability::AccountStream,
-                credential_id: Some(provider.clone()),
-                asset_type: None,
-            })?;
+            if composition.try_add_async_account_stream(
+                &stream_options,
+                args.account_stream_endpoint
+                    .as_deref()
+                    .expect("checked account stream endpoint"),
+                segment,
+                Some(shared_quota_ledger.clone()),
+                &args.egress_scope_id,
+            )? {
+                continue;
+            }
+            let stream_connection = compose_blocking_account_stream(
+                &stream_options,
+                args.account_stream_endpoint.as_deref(),
+                segment,
+            )?;
             attach_account_stream(
-                application,
-                kairos_integration::application::IntegrationAccountStream::new(stream_connection)
+                &mut composition.application,
+                kairos_integration::blocking::IntegrationAccountStream::new(stream_connection)
                     .buffered(),
             );
         }
@@ -148,26 +185,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .expect("validated account lease path")
     });
-    AccountProcess::new(
-        composition.application,
+    let process = composition.into_process(
         args.account_id,
         socket.to_string_lossy().into_owned(),
         Duration::from_millis(args.refresh_ms),
         Some(health),
-        Some(MmapAccountPublisher::create(
+        Some(Box::new(MmapAccountPublisher::create(
             snapshot,
             1024 * 1024,
             "account",
             transport_identity,
-        )?),
-    )
-    .map(|process| match lease_file {
+        )?)),
+    )?;
+    let process = match lease_file {
         Some(path) => process.with_trade_lease(path, args.instance_id.clone()),
         None => process,
-    })
-    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
-    .run()
-    .await?;
+    };
+    process.run().await?;
     Ok(())
 }
 
@@ -210,6 +244,8 @@ struct Args {
     socket_name: Option<String>,
     #[arg(long, env = "ACCOUNT_STREAM_ENDPOINT")]
     account_stream_endpoint: Option<String>,
+    #[arg(long, default_value = "default-egress")]
+    egress_scope_id: String,
     #[arg(long, default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(1..))]
     refresh_ms: u64,
 }
@@ -251,9 +287,9 @@ impl Args {
         AccountOptions {
             provider,
             product,
-            api_key,
-            secret,
-            passphrase,
+            api_key: api_key.into(),
+            secret: secret.into(),
+            passphrase: passphrase.into(),
             base_url: self.base_url.clone(),
             account_id: self.account_id.clone(),
             segment: record
@@ -268,89 +304,5 @@ impl Args {
             port: self.port,
             client_id: self.client_id,
         }
-    }
-}
-
-fn compose_account_stream(
-    integration: Integration,
-    args: &Args,
-    product: ProductFamily,
-    segment_key: &str,
-) -> Result<Integration, String> {
-    let provider = args.provider.trim().to_ascii_lowercase();
-    if provider == "ibkr" {
-        return Ok(integration.with_ibkr_account_stream(
-            args.host.clone(),
-            args.port,
-            args.client_id,
-            args.account_id.clone(),
-            segment_key.to_owned(),
-        ));
-    }
-    let Some(endpoint) = args.account_stream_endpoint.clone() else {
-        return Ok(integration);
-    };
-    let provider = if provider == "okex" {
-        "okx"
-    } else {
-        provider.as_str()
-    };
-    match provider {
-        "binance" if product == ProductFamily::Spot => Ok(integration
-            .with_binance_spot_account_stream(
-                args.api_key.clone(),
-                args.secret.clone(),
-                args.base_url.clone(),
-                endpoint,
-                segment_key.to_owned(),
-            )),
-        "binance"
-            if matches!(
-                product,
-                ProductFamily::CrossMargin | ProductFamily::IsolatedMargin
-            ) =>
-        {
-            integration
-                .with_binance_margin_account_stream(
-                    product,
-                    args.api_key.clone(),
-                    args.secret.clone(),
-                    args.base_url.clone(),
-                    endpoint,
-                    segment_key.to_owned(),
-                )
-                .map_err(|error| error.to_string())
-        }
-        "binance"
-            if matches!(
-                product,
-                ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
-            ) =>
-        {
-            integration
-                .with_binance_futures_account_stream(
-                    product,
-                    args.api_key.clone(),
-                    args.secret.clone(),
-                    args.base_url.clone(),
-                    endpoint,
-                    segment_key.to_owned(),
-                )
-                .map_err(|error| error.to_string())
-        }
-        "okx" => integration
-            .with_okx_account_stream(
-                product,
-                args.api_key.clone(),
-                args.secret.clone(),
-                args.passphrase.clone(),
-                endpoint,
-                segment_key.to_owned(),
-            )
-            .map_err(|error| error.to_string()),
-        "binance" => Err(format!(
-            "Binance {segment_key} does not provide a configured private account stream"
-        )),
-        _ => Err(format!("unsupported account stream provider: {provider}")),
     }
 }

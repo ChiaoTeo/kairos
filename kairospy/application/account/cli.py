@@ -18,12 +18,15 @@ class AccountCliApplication:
     workspace: Workspace
     binaries: Mapping[str, str] = field(default_factory=dict)
 
-    def command(self, arguments: Sequence[str], *, output: str | None = "json") -> list[str]:
+    def command(
+        self, arguments: Sequence[str], *, output: str | None = "json"
+    ) -> list[str]:
         """Build a Rust command; only this adapter owns workspace binding."""
         reject_owned_options(arguments, {"--workspace"})
         command = [
             self.binaries.get("account") or resolve_binary("kairos-account-cli"),
-            "--workspace", str(self.workspace.paths.root),
+            "--workspace",
+            str(self.workspace.paths.root),
         ]
         if output is not None:
             command.extend(("--output", output))

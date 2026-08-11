@@ -4,6 +4,10 @@ from ..domain.messages import (
     CommandHandle,
     ContextRequest,
     MarketSubscriptionRequest,
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    QuoteProvisioningRequest,
+    QuoteRefreshRequest,
     StrategySignal,
     TargetPositionRequest,
 )
@@ -13,7 +17,9 @@ from ..protocol import ContextBus, IntentCommandPort, MarketCommandPort
 class StrategyContextBus(ContextBus):
     """Composition adapter routing strategy requests to owner applications."""
 
-    def __init__(self, *, market: MarketCommandPort, intents: IntentCommandPort) -> None:
+    def __init__(
+        self, *, market: MarketCommandPort, intents: IntentCommandPort
+    ) -> None:
         self._market = market
         self._intents = intents
         self._handles: dict[str, CommandHandle] = {}
@@ -58,6 +64,46 @@ class StrategyContextBus(ContextBus):
             if not isinstance(request.payload, TargetPositionRequest):
                 raise TypeError("intent.target_position requires TargetPositionRequest")
             return self._intents.target_position(
+                request.payload,
+                strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
+                request_id=request.request_id,
+            )
+        if request.operation == "intent.pair_arbitrage":
+            if not isinstance(request.payload, PairArbitrageRequest):
+                raise TypeError("intent.pair_arbitrage requires PairArbitrageRequest")
+            return self._intents.pair_arbitrage(
+                request.payload,
+                strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
+                request_id=request.request_id,
+            )
+        if request.operation == "intent.portfolio_rebalance":
+            if not isinstance(request.payload, PortfolioRebalanceRequest):
+                raise TypeError(
+                    "intent.portfolio_rebalance requires PortfolioRebalanceRequest"
+                )
+            return self._intents.portfolio_rebalance(
+                request.payload,
+                strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
+                request_id=request.request_id,
+            )
+        if request.operation == "intent.quote_provisioning":
+            if not isinstance(request.payload, QuoteProvisioningRequest):
+                raise TypeError(
+                    "intent.quote_provisioning requires QuoteProvisioningRequest"
+                )
+            return self._intents.quote_provisioning(
+                request.payload,
+                strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
+                request_id=request.request_id,
+            )
+        if request.operation == "intent.refresh_quote":
+            if not isinstance(request.payload, QuoteRefreshRequest):
+                raise TypeError("intent.refresh_quote requires QuoteRefreshRequest")
+            return self._intents.refresh_quote(
                 request.payload,
                 strategy_id=request.strategy_id,
                 instance_id=request.instance_id,

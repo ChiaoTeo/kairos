@@ -1,6 +1,7 @@
 //! Shared workspace identity and layout validation for Rust processes.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
@@ -38,8 +39,56 @@ pub struct WorkspaceMassiveConfig {
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceMarketConfig {
+    /// Named market-data connections. The map key is a stable source id and
+    /// is deliberately independent from exchange and provider names.
+    #[serde(default)]
+    pub sources: BTreeMap<String, WorkspaceMarketSourceConfig>,
     #[serde(default)]
     pub massive: WorkspaceMassiveConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMarketSourceConfig {
+    pub enabled: Option<bool>,
+    pub provider: String,
+    pub exchange: String,
+    pub market_type: String,
+    pub asset_type: Option<String>,
+    pub transport: Option<String>,
+    pub credential_id: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceReferenceProviderConfig {
+    pub enabled: Option<bool>,
+    pub credential_id: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceReferenceProductConfig {
+    pub enabled: Option<bool>,
+    pub credential_id: Option<String>,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceReferenceParticipantConfig {
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub name: String,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceReferenceConfig {
+    #[serde(default)]
+    pub providers: BTreeMap<String, WorkspaceReferenceProviderConfig>,
+    #[serde(default)]
+    pub products: BTreeMap<String, BTreeMap<String, WorkspaceReferenceProductConfig>>,
+    #[serde(default)]
+    pub participants: BTreeMap<String, WorkspaceReferenceParticipantConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -50,6 +99,8 @@ pub struct WorkspaceManifest {
     pub cli: WorkspaceCliConfig,
     #[serde(default)]
     pub market: WorkspaceMarketConfig,
+    #[serde(default)]
+    pub reference: WorkspaceReferenceConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -153,7 +204,7 @@ impl InstanceWorkspace {
     pub fn socket(&self, name: &str) -> io::Result<PathBuf> {
         let name = Self::component(name)?;
         let candidate = self.root().join("sockets").join(format!("{name}.sock"));
-        if candidate.to_string_lossy().as_bytes().len() <= 100 {
+        if candidate.to_string_lossy().len() <= 100 {
             return Ok(candidate);
         }
         let input = format!(
@@ -191,6 +242,7 @@ impl InstanceWorkspace {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(&path)?;
         #[cfg(unix)]
         {
@@ -377,6 +429,10 @@ impl Workspace {
         &self.manifest.market
     }
 
+    pub fn reference_config(&self) -> &WorkspaceReferenceConfig {
+        &self.manifest.reference
+    }
+
     pub fn config_root(&self) -> PathBuf {
         self.root.join("config")
     }
@@ -451,6 +507,7 @@ impl Workspace {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(&path)?;
 
         #[cfg(unix)]
@@ -495,7 +552,7 @@ impl Workspace {
             ));
         }
         let candidate = self.child(&["run", name, &format!("{name}.sock")])?;
-        if candidate.to_string_lossy().as_bytes().len() <= 100 {
+        if candidate.to_string_lossy().len() <= 100 {
             return Ok(candidate);
         }
         let input = format!("{}:{}", self.root.display(), name);
@@ -558,6 +615,32 @@ mod tests {
             .health_file("risk")
             .unwrap()
             .ends_with("run/risk/health.json"));
+    }
+
+    #[test]
+    fn parses_reference_provider_registry_from_workspace_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("workspace.toml"),
+            "version = 1\nworkspace_id = \"demo\"\n\n[reference.providers.massive]\nenabled = true\ncredential_id = \"massive-readonly\"\nendpoint = \"https://reference.example.test\"\n\n[reference.providers.okx]\nenabled = false\n",
+        )
+        .unwrap();
+        let workspace = Workspace::open(root.path()).unwrap();
+        let massive = workspace
+            .reference_config()
+            .providers
+            .get("massive")
+            .unwrap();
+        assert_eq!(massive.enabled, Some(true));
+        assert_eq!(massive.credential_id.as_deref(), Some("massive-readonly"));
+        assert_eq!(
+            massive.endpoint.as_deref(),
+            Some("https://reference.example.test")
+        );
+        assert_eq!(
+            workspace.reference_config().providers["okx"].enabled,
+            Some(false)
+        );
     }
 
     #[test]

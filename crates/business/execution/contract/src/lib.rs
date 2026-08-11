@@ -3,13 +3,23 @@
 pub mod encoding;
 pub mod event;
 pub mod model;
+pub mod plan;
 pub mod query;
 pub mod snapshot;
 pub mod transport;
 
-pub use event::EventEnvelope;
+pub use event::{EventEnvelope, ExecutionEventEnvelope};
 pub use model::{DependencyWatermarks, ExecutionSnapshot, SnapshotWatermark};
-pub use query::{CommandEnvelope, QueryEnvelope};
+pub use plan::{
+    CompletionPolicy, ExecutionIntentLeg, ExecutionLeg, ExecutionOrderOptions, ExecutionPlan,
+    FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy,
+    PairArbitrageIntent, PairArbitrageLeg, PortfolioRebalanceTarget, SplitOrderPolicy,
+};
+pub use query::{
+    CancelIntentCommand, CommandEnvelope, ExecutionIntentCommand, ExpireIntentCommand,
+    HedgeRequirementQuery, IntentCommandEnvelope, IntentEventQuery, IntentQuery, QueryEnvelope,
+    RefreshQuoteCommand, SubmitIntentPayload,
+};
 pub use snapshot::SnapshotEnvelope;
 
 #[derive(Debug)]

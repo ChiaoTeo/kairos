@@ -7,7 +7,11 @@ import json
 import os
 from pathlib import Path
 
-from kairospy.application.launch import LaunchIdentity, LaunchInstance, LaunchInstanceApplication
+from kairospy.application.launch import (
+    LaunchIdentity,
+    LaunchInstance,
+    LaunchInstanceApplication,
+)
 from kairospy.application.strategy import StrategyHost, StrategyLifecycle
 from kairospy.application.strategy.domain.messages import SnapshotEnvelope
 from kairospy.strategy import (
@@ -71,17 +75,32 @@ class GapThenRecoveryStream:
         self.calls += 1
         if self.calls == 1:
             raise EventStreamGap(self.stream_id, after_sequence + 1, after_sequence + 2)
-        yield EventEnvelope(self.stream_id, after_sequence + 1, "data", "quote", {"close": 100}, datetime.now(timezone.utc))
+        yield EventEnvelope(
+            self.stream_id,
+            after_sequence + 1,
+            "data",
+            "quote",
+            {"close": 100},
+            datetime.now(timezone.utc),
+        )
 
 
 def _host(tmp_path: Path, logger: StrategyLogger | None = None):
     bus = InMemoryContextBus()
     stream = InMemoryEventStream("market-events")
-    snapshots = InMemorySnapshotReader({
-        "market.current": SnapshotEnvelope(
-            "market.current", "snapshot-1", "market-actor", "market-events", 0, 1, {"BTCUSDT": 100},
-        ),
-    })
+    snapshots = InMemorySnapshotReader(
+        {
+            "market.current": SnapshotEnvelope(
+                "market.current",
+                "snapshot-1",
+                "market-actor",
+                "market-events",
+                0,
+                1,
+                {"BTCUSDT": 100},
+            ),
+        }
+    )
     strategy = UserStrategy()
     host = StrategyHost(
         strategy,
@@ -122,7 +141,16 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert host.enable().state is StrategyLifecycle.RUNNING
     assert host.status.data_health.value == "waiting_for_data"
 
-    host.dispatch(EventEnvelope("market-events", 1, "data", "bar", {"close": 100}, datetime.now(timezone.utc)))
+    host.dispatch(
+        EventEnvelope(
+            "market-events",
+            1,
+            "data",
+            "bar",
+            {"close": 100},
+            datetime.now(timezone.utc),
+        )
+    )
     assert strategy.events == [1]
     assert bus.requests[1].operation == "intent.target_position"
     assert bus.requests[1].payload.instrument_id == "BTCUSDT"
@@ -177,20 +205,34 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     assert host.status.last_event_kind == "quote"
 
     records = [json.loads(line) for line in output.getvalue().splitlines()]
-    dispatch = next(record for record in records if record["message"] == "dispatch on_data")
+    dispatch = next(
+        record for record in records if record["message"] == "dispatch on_data"
+    )
     assert dispatch["system_time"]
     assert dispatch["event_time"] == event_time.isoformat()
     assert dispatch["event_time_source"] == "market_event"
     assert dispatch["event_sequence"] == 1
     assert dispatch["data"]["event_kind"] == "quote"
-    requested = next(record for record in records if record.get("data", {}).get("event") == "market_subscription_requested")
+    requested = next(
+        record
+        for record in records
+        if record.get("event") == "market_subscription_requested"
+    )
     assert requested["data"]["market_type"] is None
-    assert any(record.get("data", {}).get("event") == "market_subscriptions_active" for record in records)
-    assert any(record.get("data", {}).get("event") == "first_data_event_received" for record in records)
-    submitted = next(record for record in records if record.get("data", {}).get("event") == "strategy_command_submitted")
-    assert submitted["data"]["operation"] == "market.subscribe"
+    assert any(
+        record.get("event") == "market_subscriptions_active" for record in records
+    )
+    assert any(record.get("event") == "first_data_event_received" for record in records)
+    submitted = next(
+        record
+        for record in records
+        if record.get("event") == "strategy_command_submitted"
+    )
+    assert submitted["operation"] == "market.subscribe"
     assert submitted["data"]["subject"] == "market.BTCUSDT"
-    result = next(record for record in records if record.get("data", {}).get("event") == "strategy_command_result")
+    result = next(
+        record for record in records if record.get("event") == "strategy_command_result"
+    )
     assert result["data"]["command_status"] == "pending"
 
 
@@ -297,3 +339,43 @@ def test_strategy_host_consumes_instance_event_stream(tmp_path: Path) -> None:
             pass
 
     asyncio.run(scenario())
+
+
+def test_backtest_callbacks_run_after_strategy_intent_and_record_equity(
+    tmp_path: Path,
+) -> None:
+    host, strategy, bus, stream = _host(tmp_path)
+    calls: list[str] = []
+
+    host.clients = host.clients.__class__(
+        commands=host.clients.commands,
+        market_commands=host.clients.market_commands,
+        execution_commands=host.clients.execution_commands,
+        market_snapshots=host.clients.market_snapshots,
+        market_events=host.clients.market_events,
+        reference=host.clients.reference,
+        backtest_market=lambda event: calls.append("execution"),
+        backtest_account_mark=lambda event: (
+            calls.append("account") or {"snapshot": {"equity": "101"}}
+        ),
+    )
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+    event = EventEnvelope(
+        "market-events",
+        1,
+        "data",
+        "quote",
+        {
+            "instrument_id": "BTCUSDT",
+            "bid_price": "100",
+            "ask_price": "102",
+            "event_time_unix_nanos": 1,
+        },
+    )
+    host.dispatch(event)
+    assert bus.requests[-1].operation == "intent.target_position"
+    assert calls == ["execution", "account"]
+    assert host.equity_curve[-1]["snapshot"] == {"equity": "101"}

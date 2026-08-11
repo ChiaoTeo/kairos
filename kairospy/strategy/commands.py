@@ -14,7 +14,11 @@ class CommandSource:
     snapshot_id: str | None = None
 
     def as_dict(self) -> dict[str, object] | None:
-        if self.stream_id is None and self.sequence is None and self.snapshot_id is None:
+        if (
+            self.stream_id is None
+            and self.sequence is None
+            and self.snapshot_id is None
+        ):
             return None
         return {
             "stream_id": self.stream_id,
@@ -39,7 +43,14 @@ class CommandEnvelope:
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ValueError("unsupported command schema version")
-        if not all((self.command_id.strip(), self.operation.strip(), self.strategy_id.strip(), self.instance_id.strip())):
+        if not all(
+            (
+                self.command_id.strip(),
+                self.operation.strip(),
+                self.strategy_id.strip(),
+                self.instance_id.strip(),
+            )
+        ):
             raise ValueError("command identity and operation are required")
         if self.issued_at_unix_nanos is not None and self.issued_at_unix_nanos < 0:
             raise ValueError("command timestamp cannot be negative")

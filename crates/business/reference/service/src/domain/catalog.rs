@@ -3,6 +3,10 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kairos_domain_types::{
+    ExecutionAccessId, Generation, InstrumentId, ListingId, MarketId, ReferenceStatus, Sequence,
+    UnixNanos,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -14,19 +18,19 @@ use super::{
 pub struct ReferenceCatalog {
     pub entities: BTreeMap<String, Entity>,
     pub assets: BTreeMap<String, Asset>,
-    pub instruments: BTreeMap<String, Instrument>,
-    pub listings: BTreeMap<String, Listing>,
-    pub markets: BTreeMap<String, Market>,
+    pub instruments: BTreeMap<InstrumentId, Instrument>,
+    pub listings: BTreeMap<ListingId, Listing>,
+    pub markets: BTreeMap<MarketId, Market>,
     pub financial_products: BTreeMap<String, FinancialProduct>,
     #[serde(default)]
-    pub execution_accesses: BTreeMap<String, ExecutionAccess>,
+    pub execution_accesses: BTreeMap<ExecutionAccessId, ExecutionAccess>,
     pub lifecycle_events: Vec<LifecycleEvent>,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
 }
 
 impl ReferenceCatalog {
-    pub fn apply(&mut self, incoming: ProviderCatalog, now: u64) -> Vec<LifecycleEvent> {
+    pub fn apply(&mut self, incoming: ProviderCatalog, now: UnixNanos) -> Vec<LifecycleEvent> {
         let previous_entities = self.entities.clone();
         let previous_assets = self.assets.clone();
         let previous_instruments = self.instruments.clone();
@@ -42,7 +46,7 @@ impl ReferenceCatalog {
         self.assets = incoming
             .assets
             .into_iter()
-            .map(|v| (v.asset_id.clone(), v))
+            .map(|v| (v.asset_id.to_string(), v))
             .collect();
         self.instruments = incoming
             .instruments
@@ -71,12 +75,60 @@ impl ReferenceCatalog {
             .map(|v| (v.market_id.clone(), v))
             .collect();
         let mut events = Vec::new();
+
+        macro_rules! diff_records {
+            ($kind:literal, $previous:expr, $current:expr) => {
+                for (id, next) in &$current {
+                    let event_type = match $previous.get(id) {
+                        None => Some(concat!($kind, "_added")),
+                        Some(previous) if previous != next => Some(concat!($kind, "_changed")),
+                        _ => None,
+                    };
+                    if let Some(event_type) = event_type {
+                        events.push(record_event(
+                            $kind,
+                            event_type,
+                            id,
+                            now,
+                            self.event_sequence.get() + events.len() as u64 + 1,
+                        ));
+                    }
+                }
+                for id in $previous.keys() {
+                    if !$current.contains_key(id) {
+                        events.push(record_event(
+                            $kind,
+                            concat!($kind, "_removed"),
+                            id,
+                            now,
+                            self.event_sequence.get() + events.len() as u64 + 1,
+                        ));
+                    }
+                }
+            };
+        }
+
+        diff_records!("entity", previous_entities, self.entities);
+        diff_records!("asset", previous_assets, self.assets);
+        diff_records!("instrument", previous_instruments, self.instruments);
+        diff_records!("listing", previous_listings, self.listings);
+        diff_records!(
+            "financial_product",
+            previous_financial_products,
+            self.financial_products
+        );
+        diff_records!(
+            "execution_access",
+            previous_execution_accesses,
+            self.execution_accesses
+        );
+
         for (id, next) in &next_markets {
             match self.markets.get(id) {
                 None => events.push(LifecycleEvent::listed(
                     next,
                     now,
-                    self.event_sequence + events.len() as u64 + 1,
+                    self.event_sequence.get() + events.len() as u64 + 1,
                 )),
                 Some(previous) if previous != next => {
                     let event_type = if previous.source_symbol != next.source_symbol {
@@ -89,19 +141,21 @@ impl ReferenceCatalog {
                     events.push(LifecycleEvent {
                         event_id: format!(
                             "reference:{:020}",
-                            self.event_sequence + events.len() as u64 + 1
+                            self.event_sequence.get() + events.len() as u64 + 1
                         ),
                         event_type: event_type.to_string(),
                         event_time_unix_nanos: now,
+                        record_kind: Some("market".to_string()),
+                        record_id: Some(id.to_string()),
                         market_id: Some(id.clone()),
                         instrument_id: Some(next.instrument_id.clone()),
                         listing_id: Some(next.listing_id.clone()),
-                        venue_id: Some(next.venue_id.clone()),
+                        exchange_id: Some(next.exchange_id.clone()),
                         source_symbol: Some(next.source_symbol.clone()),
-                        previous_status: Some(previous.status.clone()),
-                        current_status: Some(next.status.clone()),
-                        previous_symbol: Some(previous.source_symbol.clone()),
-                        current_symbol: Some(next.source_symbol.clone()),
+                        previous_status: Some(previous.status),
+                        current_status: Some(next.status),
+                        previous_symbol: Some(previous.source_symbol.to_string()),
+                        current_symbol: Some(next.source_symbol.to_string()),
                     });
                 }
                 _ => {}
@@ -109,24 +163,26 @@ impl ReferenceCatalog {
         }
         let mut delisted_records = Vec::new();
         for (id, previous) in &self.markets {
-            if !next_markets.contains_key(id) && previous.status != "delisted" {
+            if !next_markets.contains_key(id) && previous.status != ReferenceStatus::Delisted {
                 let mut delisted = previous.clone();
-                delisted.status = "delisted".to_string();
+                delisted.status = ReferenceStatus::Delisted;
                 delisted.effective_to_unix_nanos = Some(now);
                 events.push(LifecycleEvent {
                     event_id: format!(
                         "reference:{:020}",
-                        self.event_sequence + events.len() as u64 + 1
+                        self.event_sequence.get() + events.len() as u64 + 1
                     ),
                     event_type: "delisted".to_string(),
                     event_time_unix_nanos: now,
+                    record_kind: Some("market".to_string()),
+                    record_id: Some(id.to_string()),
                     market_id: Some(id.clone()),
                     instrument_id: Some(previous.instrument_id.clone()),
                     listing_id: Some(previous.listing_id.clone()),
-                    venue_id: Some(previous.venue_id.clone()),
+                    exchange_id: Some(previous.exchange_id.clone()),
                     source_symbol: Some(previous.source_symbol.clone()),
-                    previous_status: Some(previous.status.clone()),
-                    current_status: Some("delisted".to_string()),
+                    previous_status: Some(previous.status),
+                    current_status: Some(ReferenceStatus::Delisted),
                     previous_symbol: None,
                     current_symbol: None,
                 });
@@ -138,7 +194,11 @@ impl ReferenceCatalog {
             next_markets.insert(id, market);
         }
         self.markets = next_markets;
-        self.event_sequence += events.len() as u64;
+        self.event_sequence = Sequence::new(
+            self.event_sequence
+                .get()
+                .saturating_add(events.len() as u64),
+        );
         self.lifecycle_events.extend(events.iter().cloned());
         if previous_entities != self.entities
             || previous_assets != self.assets
@@ -148,7 +208,7 @@ impl ReferenceCatalog {
             || previous_financial_products != self.financial_products
             || previous_execution_accesses != self.execution_accesses
         {
-            self.generation += 1;
+            self.generation = Generation::new(self.generation.get().saturating_add(1));
         }
         events
     }
@@ -156,46 +216,66 @@ impl ReferenceCatalog {
     pub fn active_market_count(&self) -> usize {
         self.markets
             .values()
-            .filter(|market| market.status == "active" || market.status == "trading")
+            .filter(|market| {
+                matches!(
+                    market.status,
+                    ReferenceStatus::Active | ReferenceStatus::Trading
+                )
+            })
             .count()
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
         ReferenceCatalog,
     };
+    use kairos_domain_types::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+
+    fn instrument_id(value: &str) -> InstrumentId {
+        InstrumentId::new(value).unwrap()
+    }
+
+    fn listing_id(value: &str) -> ListingId {
+        ListingId::new(value).unwrap()
+    }
+
+    fn market_id(value: &str) -> MarketId {
+        MarketId::new(value).unwrap()
+    }
 
     fn catalog_with_market(status: &str) -> ProviderCatalog {
         ProviderCatalog {
             entities: vec![Entity {
-                entity_id: "venue:test".into(),
-                entity_type: "venue".into(),
-                name: "Test Venue".into(),
+                entity_id: "exchange:test".into(),
+                entity_type: "exchange".into(),
+                name: "Test Exchange".into(),
                 status: "active".into(),
+                ..Default::default()
             }],
             instruments: vec![Default::default()],
             listings: vec![Listing {
-                listing_id: "listing:test".into(),
-                instrument_id: "instrument:test".into(),
-                venue_id: "venue:test".into(),
-                venue_symbol: "TEST".into(),
+                listing_id: listing_id("listing:test"),
+                instrument_id: instrument_id("instrument:test"),
+                exchange_id: Exchange::new("exchange:test").unwrap(),
+                exchange_symbol: Symbol::new("TEST").unwrap(),
                 status: status.into(),
-                effective_from_unix_nanos: 1,
+                effective_from_unix_nanos: 1.into(),
                 ..Default::default()
             }],
             markets: vec![Market {
-                market_id: "market:test".into(),
+                market_id: market_id("market:test"),
                 market_key: "test.spot.TEST".into(),
-                instrument_id: "instrument:test".into(),
-                listing_id: "listing:test".into(),
-                venue_id: "venue:test".into(),
+                instrument_id: instrument_id("instrument:test"),
+                listing_id: listing_id("listing:test"),
+                exchange_id: Exchange::new("exchange:test").unwrap(),
                 market_type: "spot".into(),
-                source_symbol: "TEST".into(),
+                source_symbol: kairos_domain_types::Symbol::new("TEST").unwrap(),
                 status: status.into(),
-                effective_from_unix_nanos: 1,
+                effective_from_unix_nanos: 1.into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -205,38 +285,68 @@ mod tests {
     #[test]
     fn delisted_market_emits_only_one_delisted_event() {
         let mut catalog = ReferenceCatalog::default();
-        assert_eq!(catalog.apply(catalog_with_market("active"), 10).len(), 1);
-        assert_eq!(catalog.apply(ProviderCatalog::default(), 20).len(), 1);
-        assert!(catalog.apply(ProviderCatalog::default(), 30).is_empty());
-        assert_eq!(catalog.lifecycle_events.len(), 2);
+        assert_eq!(
+            catalog
+                .apply(catalog_with_market("active"), 10.into())
+                .len(),
+            4
+        );
+        assert_eq!(
+            catalog.apply(ProviderCatalog::default(), 20.into()).len(),
+            4
+        );
+        assert!(catalog
+            .apply(ProviderCatalog::default(), 30.into())
+            .is_empty());
+        assert_eq!(catalog.lifecycle_events.len(), 8);
+        assert_eq!(
+            catalog
+                .lifecycle_events
+                .iter()
+                .filter(|event| event.event_type == "delisted")
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn delisted_market_can_be_relisted() {
         let mut catalog = ReferenceCatalog::default();
-        catalog.apply(catalog_with_market("active"), 10);
-        catalog.apply(ProviderCatalog::default(), 20);
-        let events = catalog.apply(catalog_with_market("active"), 30);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "status_changed");
-        assert_eq!(catalog.markets["market:test"].status, "active");
+        catalog.apply(catalog_with_market("active"), 10.into());
+        catalog.apply(ProviderCatalog::default(), 20.into());
+        let events = catalog.apply(catalog_with_market("active"), 30.into());
+        assert_eq!(events.len(), 4);
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "status_changed"));
+        assert_eq!(catalog.markets["market:test"].status, "active".into());
     }
 
     #[test]
     fn validation_rejects_unresolved_reference_relationships() {
         let catalog = ProviderCatalog {
             assets: vec![Asset {
-                asset_id: "asset:btc".into(),
+                asset_id: kairos_domain_types::AssetId::new("asset:BTC").unwrap(),
+                code: "BTC".into(),
+                asset_class: "crypto".into(),
+                status: "active".into(),
                 ..Default::default()
             }],
             instruments: vec![Instrument {
-                instrument_id: "instrument:option".into(),
-                underlying_instrument_id: Some("instrument:missing".into()),
+                instrument_id: instrument_id("instrument:option"),
+                symbol: kairos_domain_types::Symbol::new("BTC-OPT").unwrap(),
+                instrument_type: "spot".into(),
+                status: "active".into(),
+                underlying_instrument_id: None,
                 ..Default::default()
             }],
             financial_products: vec![FinancialProduct {
                 product_id: "product:earn".into(),
-                asset_id: "asset:missing".into(),
+                product_type: "earn".into(),
+                name: "Earn".into(),
+                asset_id: kairos_domain_types::AssetId::new("asset:missing").unwrap(),
+                provider_product_id: "earn".into(),
+                status: "active".into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -244,28 +354,67 @@ mod tests {
         let error = catalog.validate().unwrap_err().to_string();
         assert!(error.contains("missing asset"));
     }
+
+    #[test]
+    fn validation_rejects_incomplete_option_identity() {
+        let error = ProviderCatalog {
+            instruments: vec![Instrument {
+                instrument_id: instrument_id("instrument:option"),
+                symbol: kairos_domain_types::Symbol::new("BTC-OPT").unwrap(),
+                instrument_type: "option".into(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("requires expiry, strike and call/put"));
+    }
 }
 
 impl LifecycleEvent {
-    fn listed(market: &Market, now: u64, sequence: u64) -> Self {
+    fn listed(market: &Market, now: UnixNanos, sequence: u64) -> Self {
         Self {
             event_id: format!("reference:{sequence:020}"),
             event_type: "listed".to_string(),
             event_time_unix_nanos: now,
+            record_kind: Some("market".to_string()),
+            record_id: Some(market.market_id.to_string()),
             market_id: Some(market.market_id.clone()),
             instrument_id: Some(market.instrument_id.clone()),
             listing_id: Some(market.listing_id.clone()),
-            venue_id: Some(market.venue_id.clone()),
+            exchange_id: Some(market.exchange_id.clone()),
             source_symbol: Some(market.source_symbol.clone()),
-            current_status: Some(market.status.clone()),
+            current_status: Some(market.status),
             ..Self::default()
         }
     }
 }
 
-pub(crate) fn unix_nanos() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
+fn record_event(
+    record_kind: &str,
+    event_type: &str,
+    record_id: &str,
+    now: UnixNanos,
+    sequence: u64,
+) -> LifecycleEvent {
+    LifecycleEvent {
+        event_id: format!("reference:{sequence:020}"),
+        event_type: event_type.to_string(),
+        event_time_unix_nanos: now,
+        record_kind: Some(record_kind.to_string()),
+        record_id: Some(record_id.to_string()),
+        ..LifecycleEvent::default()
+    }
+}
+
+pub(crate) fn unix_nanos() -> UnixNanos {
+    UnixNanos::from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+    )
 }

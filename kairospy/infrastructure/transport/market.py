@@ -6,9 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 import struct
 import sys
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, cast
 
-from kairospy.application.strategy.domain.messages import EventEnvelope, SnapshotEnvelope
+from kairospy.application.strategy.domain.messages import (
+    EventEnvelope,
+    SnapshotEnvelope,
+)
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
@@ -30,7 +33,7 @@ class DecimalValue:
         if self.scale == 0:
             result = digits
         else:
-            result = f"{digits[:-self.scale]}.{digits[-self.scale:]}"
+            result = f"{digits[: -self.scale]}.{digits[-self.scale :]}"
         return result if self.mantissa >= 0 else f"-{result}"
 
 
@@ -96,7 +99,10 @@ class MarketDataView:
     greeks: tuple[GreeksView, ...] = ()
 
     def current(self, instrument_id: str) -> QuoteView | None:
-        return next((quote for quote in self.quotes if quote.instrument_id == instrument_id), None)
+        return next(
+            (quote for quote in self.quotes if quote.instrument_id == instrument_id),
+            None,
+        )
 
 
 class EventStreamGap(RuntimeError):
@@ -128,7 +134,7 @@ class MmapMarketSnapshotReader:
         prefix = "market.view."
         if not view_key.startswith(prefix):
             raise KeyError(view_key)
-        parts = view_key[len(prefix):].split(".", 3)
+        parts = view_key[len(prefix) :].split(".", 3)
         if len(parts) not in (3, 4) or not all(parts):
             raise KeyError(view_key)
         source_id, market_id, kind, *qualifier = parts
@@ -140,23 +146,31 @@ class MmapMarketSnapshotReader:
 
     @staticmethod
     def _decode(payload: bytes) -> SnapshotEnvelope:
-        from kairospy.infrastructure.transport.generated.kairos.market.v1.MarketDataSnapshot import MarketDataSnapshot
+        from kairospy.infrastructure.transport.generated.kairos.market.v1.MarketDataSnapshot import (
+            MarketDataSnapshot,
+        )
 
         if payload[4:8] != b"PMC1":
             raise ValueError("invalid MarketDataSnapshot identifier")
         root = MarketDataSnapshot.GetRootAs(payload, 0)
-        header = root.Header()
-        data = root.Payload()
+        header = cast(Any, root.Header())
+        data = cast(Any, root.Payload())
         if header is None or data is None:
             raise ValueError("market snapshot is missing header or payload")
-        quotes = tuple(_decode_quote(data.Quotes(index)) for index in range(data.QuotesLength()))
-        bars = tuple(_decode_bar(data.Bars(index)) for index in range(data.BarsLength()))
-        greeks = tuple(_decode_greeks(data.Greeks(index)) for index in range(data.GreeksLength()))
+        quotes = tuple(
+            _decode_quote(data.Quotes(index)) for index in range(data.QuotesLength())
+        )
+        bars = tuple(
+            _decode_bar(data.Bars(index)) for index in range(data.BarsLength())
+        )
+        greeks = tuple(
+            _decode_greeks(data.Greeks(index)) for index in range(data.GreeksLength())
+        )
         return SnapshotEnvelope(
-            view_key=header.ViewKey().decode(),
-            snapshot_id=header.SnapshotId().decode(),
-            owner_actor_id=header.OwnerActorId().decode(),
-            event_stream_id=header.EventStreamId().decode(),
+            view_key=cast(bytes, header.ViewKey()).decode(),
+            snapshot_id=cast(bytes, header.SnapshotId()).decode(),
+            owner_actor_id=cast(bytes, header.OwnerActorId()).decode(),
+            event_stream_id=cast(bytes, header.EventStreamId()).decode(),
             event_sequence=header.EventSequence(),
             generation=header.Generation(),
             payload=MarketDataView(quotes=quotes, bars=bars, greeks=greeks),
@@ -164,6 +178,8 @@ class MmapMarketSnapshotReader:
 
 
 def _decode_quote(value: object) -> QuoteView:
+    value = cast(Any, value)
+
     def text(name: str) -> str | None:
         raw = getattr(value, name)()
         return None if raw is None else raw.decode()
@@ -179,12 +195,14 @@ def _decode_quote(value: object) -> QuoteView:
         bid_quantity=decimal("BidQuantity"),
         ask_price=decimal("AskPrice"),
         ask_quantity=decimal("AskQuantity"),
-        event_time_unix_nanos=value.EventTimeUnixNanos(),
+        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
         source_id=text("SourceId"),
     )
 
 
 def _decode_bar(value: object) -> BarView:
+    value = cast(Any, value)
+
     def text(name: str) -> str | None:
         raw = getattr(value, name)()
         return None if raw is None else raw.decode()
@@ -206,13 +224,15 @@ def _decode_bar(value: object) -> BarView:
         low=decimal("Low"),
         close=decimal("Close"),
         volume=optional_decimal("Volume"),
-        event_time_unix_nanos=value.EventTimeUnixNanos(),
+        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
         source_id=text("SourceId"),
         derivation=text("Derivation"),
     )
 
 
 def _decode_greeks(value: object) -> GreeksView:
+    value = cast(Any, value)
+
     def text(name: str) -> str | None:
         raw = getattr(value, name)()
         return None if raw is None else raw.decode()
@@ -224,14 +244,14 @@ def _decode_greeks(value: object) -> GreeksView:
     return GreeksView(
         instrument_id=text("InstrumentId") or "",
         market_id=text("MarketId"),
-        expiry_unix_nanos=value.ExpiryUnixNanos(),
+        expiry_unix_nanos=getattr(value, "ExpiryUnixNanos")(),
         strike=decimal("Strike"),
         delta=decimal("Delta"),
         gamma=decimal("Gamma"),
         vega=decimal("Vega"),
         theta=decimal("Theta"),
         implied_volatility=decimal("ImpliedVolatility"),
-        event_time_unix_nanos=value.EventTimeUnixNanos(),
+        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
         source_id=text("SourceId"),
         derivation=text("Derivation"),
     )
@@ -289,7 +309,8 @@ class UnixMarketEventStream:
                     cursor = event.sequence
                     yield event
             except asyncio.IncompleteReadError:
-                pass
+                if self.replayable:
+                    return
             finally:
                 writer.close()
                 try:
@@ -310,17 +331,23 @@ def _decode_market_event(payload: bytes) -> EventEnvelope:
 
 
 def _decode_quote_event(payload: bytes) -> EventEnvelope:
-    from kairospy.infrastructure.transport.generated.kairos.market.v1.QuoteMessage import QuoteMessage
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.QuoteMessage import (
+        QuoteMessage,
+    )
 
     if payload[4:8] != b"MQT1":
         raise ValueError("invalid QuoteMessage identifier")
     root = QuoteMessage.GetRootAs(payload, 0)
-    header = root.Header()
-    quote = root.Payload()
+    header = cast(Any, root.Header())
+    quote = cast(Any, root.Payload())
     if header is None or quote is None:
         raise ValueError("quote message is missing header or payload")
     event_time = header.EventTimeUnixNanos()
-    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
     return EventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
@@ -332,11 +359,13 @@ def _decode_quote_event(payload: bytes) -> EventEnvelope:
 
 
 def _decode_trade_event(payload: bytes) -> EventEnvelope:
-    from kairospy.infrastructure.transport.generated.kairos.market.v1.TradeMessage import TradeMessage
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.TradeMessage import (
+        TradeMessage,
+    )
 
     root = TradeMessage.GetRootAs(payload, 0)
-    header = root.Header()
-    trade = root.Payload()
+    header = cast(Any, root.Header())
+    trade = cast(Any, root.Payload())
     if header is None or trade is None:
         raise ValueError("trade message is missing header or payload")
 
@@ -349,7 +378,11 @@ def _decode_trade_event(payload: bytes) -> EventEnvelope:
         return None if raw is None else DecimalValue(raw.Mantissa(), raw.Scale())
 
     event_time = header.EventTimeUnixNanos()
-    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
     return EventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
@@ -369,15 +402,21 @@ def _decode_trade_event(payload: bytes) -> EventEnvelope:
 
 
 def _decode_bar_event(payload: bytes) -> EventEnvelope:
-    from kairospy.infrastructure.transport.generated.kairos.market.v1.BarMessage import BarMessage
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.BarMessage import (
+        BarMessage,
+    )
 
     root = BarMessage.GetRootAs(payload, 0)
-    header = root.Header()
-    bar = root.Payload()
+    header = cast(Any, root.Header())
+    bar = cast(Any, root.Payload())
     if header is None or bar is None:
         raise ValueError("bar message is missing header or payload")
     event_time = header.EventTimeUnixNanos()
-    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
     return EventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
@@ -389,15 +428,21 @@ def _decode_bar_event(payload: bytes) -> EventEnvelope:
 
 
 def _decode_greeks_event(payload: bytes) -> EventEnvelope:
-    from kairospy.infrastructure.transport.generated.kairos.market.v1.GreeksMessage import GreeksMessage
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.GreeksMessage import (
+        GreeksMessage,
+    )
 
     root = GreeksMessage.GetRootAs(payload, 0)
-    header = root.Header()
-    greeks = root.Payload()
+    header = cast(Any, root.Header())
+    greeks = cast(Any, root.Payload())
     if header is None or greeks is None:
         raise ValueError("greeks message is missing header or payload")
     event_time = header.EventTimeUnixNanos()
-    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
     return EventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),

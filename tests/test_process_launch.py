@@ -1,25 +1,37 @@
 from __future__ import annotations
 
+import json
 import stat
+import sys
 import textwrap
 import time
 from pathlib import Path
 
-from kairospy.application.system import ComponentProcessApplication, SystemRuntimeSupervisor
+import pytest
+
+from kairospy.application.system import (
+    ComponentProcessApplication,
+    SystemRuntimeSupervisor,
+)
 from kairospy.application.workspace import WorkspaceApplication
 
 
-def test_component_process_application_starts_bin_and_waits_for_health(tmp_path: Path) -> None:
+def test_component_process_application_starts_bin_and_waits_for_health(
+    tmp_path: Path,
+) -> None:
     short_root = Path("/tmp/kairos-process-launch-test")
     if short_root.exists():
         import shutil
+
         shutil.rmtree(short_root)
-    workspace = WorkspaceApplication().init(short_root / "w", workspace_id="launch-test")
+    workspace = WorkspaceApplication().init(
+        short_root / "w", workspace_id="launch-test"
+    )
     binary = short_root / "fake-execution"
     binary.write_text(
         textwrap.dedent(
-            """
-            #!/usr/bin/env python3
+            f"""
+            #!{sys.executable}
             import argparse, json, os, socket
             from pathlib import Path
             parser = argparse.ArgumentParser()
@@ -35,7 +47,7 @@ def test_component_process_application_starts_bin_and_waits_for_health(tmp_path:
                 client, _ = server.accept()
                 request = client.recv(65536).decode()
                 stopping = '/v1/stop' in request
-                body = json.dumps({'status': 'stopping' if stopping else 'ready'}).encode()
+                body = json.dumps({{'status': 'stopping' if stopping else 'ready'}}).encode()
                 client.sendall(b'HTTP/1.1 202 Accepted\\r\\nContent-Length: ' + str(len(body)).encode() + b'\\r\\n\\r\\n' + body)
                 client.close()
                 if stopping:
@@ -48,23 +60,62 @@ def test_component_process_application_starts_bin_and_waits_for_health(tmp_path:
     )
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
 
-    application = ComponentProcessApplication(workspace, binaries={"execution": str(binary)})
+    application = ComponentProcessApplication(
+        workspace, binaries={"execution": str(binary)}
+    )
     control = application.ensure_running("execution")
     assert control.status()["status"] == "ready"
     assert application.stop("execution")["status"] == "stopping"
     time.sleep(0.05)
     import shutil
+
     shutil.rmtree(short_root, ignore_errors=True)
 
 
+def test_component_start_reports_early_exit_and_log_detail(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="failed-start"
+    )
+    binary = tmp_path / "fail-execution"
+    binary.write_text(
+        textwrap.dedent(
+            f"""
+            #!{sys.executable}
+            import json
+            print(json.dumps({{"fields": {{"error": "database migration failed"}}}}), flush=True)
+            raise SystemExit(23)
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    application = ComponentProcessApplication(
+        workspace, binaries={"execution": str(binary)}, ready_timeout=10
+    )
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError) as captured:
+        application.ensure_running("execution")
+
+    assert time.monotonic() - started < 2
+    message = str(captured.value)
+    assert "exited during startup with code 23" in message
+    assert "database migration failed" in message
+    assert "kairos system logs execution" in message
+
+
 def test_component_status_does_not_start_a_missing_process(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="status")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="status"
+    )
     value = ComponentProcessApplication(workspace).status("market")
     assert value["status"] == "not_running"
     assert not workspace.paths.process_socket("market").exists()
 
 
-def test_component_list_reports_all_system_components_without_starting_them(tmp_path: Path) -> None:
+def test_component_list_reports_all_system_components_without_starting_them(
+    tmp_path: Path,
+) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="list")
 
     value = ComponentProcessApplication(workspace).list_status()
@@ -75,7 +126,9 @@ def test_component_list_reports_all_system_components_without_starting_them(tmp_
 
 
 def test_component_list_treats_a_stale_socket_as_not_running(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="stale")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="stale"
+    )
     socket = workspace.paths.process_socket("reference")
     socket.parent.mkdir(parents=True, exist_ok=True)
     socket.touch()
@@ -85,8 +138,12 @@ def test_component_list_treats_a_stale_socket_as_not_running(tmp_path: Path) -> 
     assert value["reference"]["status"] == "not_running"
 
 
-def test_component_list_includes_process_metadata_from_health_file(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="metadata")
+def test_component_list_includes_process_metadata_from_health_file(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="metadata"
+    )
     health = workspace.paths.health_file("market")
     health.parent.mkdir(parents=True, exist_ok=True)
     health.write_text('{"status":"ready","pid":999999}', encoding="utf-8")
@@ -100,7 +157,9 @@ def test_component_list_includes_process_metadata_from_health_file(tmp_path: Pat
 
 
 def test_component_list_marks_dead_health_pid_as_stale(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="stale-pid")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="stale-pid"
+    )
     health = workspace.paths.health_file("reference")
     health.parent.mkdir(parents=True, exist_ok=True)
     health.write_text('{"status":"ready","pid":999999}', encoding="utf-8")
@@ -113,6 +172,7 @@ def test_component_list_marks_dead_health_pid_as_stale(tmp_path: Path) -> None:
 
 def test_system_repair_removes_unlocked_stale_socket(tmp_path: Path) -> None:
     import shutil
+
     root = Path(f"/tmp/kairos-repair-{__import__('os').getpid()}")
     shutil.rmtree(root, ignore_errors=True)
     workspace = WorkspaceApplication().init(root, workspace_id="repair")
@@ -132,17 +192,20 @@ def test_system_repair_removes_unlocked_stale_socket(tmp_path: Path) -> None:
 
 def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None:
     import shutil
+
     root = Path(f"/tmp/kairos-repair-locked-{__import__('os').getpid()}")
     shutil.rmtree(root, ignore_errors=True)
     workspace = WorkspaceApplication().init(root, workspace_id="locked")
     socket_path = workspace.paths.process_socket("market")
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     import socket as socket_module
+
     listener = socket_module.socket(socket_module.AF_UNIX)
     listener.bind(str(socket_path))
     lock_path = workspace.paths.process_lock("market")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     import subprocess
+
     holder = subprocess.Popen(
         [
             __import__("sys").executable,
@@ -153,6 +216,7 @@ def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None
     )
     try:
         import time
+
         for _ in range(50):
             if lock_path.exists() and lock_path.read_text(encoding="utf-8"):
                 break
@@ -168,7 +232,9 @@ def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None
 
 
 def test_runtime_supervisor_does_not_manage_instance_components(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="supervisor")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="supervisor"
+    )
     socket = workspace.paths.process_socket("execution")
     socket.parent.mkdir(parents=True, exist_ok=True)
     socket.touch()
@@ -181,17 +247,26 @@ def test_runtime_supervisor_does_not_manage_instance_components(tmp_path: Path) 
     assert result["execution"]["status"] == "not_running"
 
 
-def test_runtime_supervisor_rejects_instance_component_registration(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="supervisor-boundary")
+def test_runtime_supervisor_rejects_instance_component_registration(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="supervisor-boundary"
+    )
     supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
 
     import pytest
+
     with pytest.raises(ValueError, match="launch-owned"):
         supervisor.register("execution")
 
 
-def test_runtime_supervisor_persists_and_removes_desired_components(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="desired")
+def test_runtime_supervisor_persists_and_removes_desired_components(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="desired"
+    )
     supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
 
     supervisor.register("market", {"market_provider": "workspace"})
@@ -201,22 +276,36 @@ def test_runtime_supervisor_persists_and_removes_desired_components(tmp_path: Pa
 
 
 def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
-    instance = workspace.instance("backtest", "btc-sma", "run-001")
-    command, _ = ComponentProcessApplication(workspace, binaries={"market": "market-bin"})._command(
-        "market", account_id=None, instance_workspace=instance
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="instance"
     )
+    instance = workspace.instance("backtest", "btc-sma", "run-001")
+    command, _ = ComponentProcessApplication(
+        workspace, binaries={"market": "market-bin"}
+    )._command("market", account_id=None, instance_workspace=instance)
 
     assert command[-8:] == [
-        "--launch-mode", "backtest", "--launch-id", "btc-sma", "--instance-id", "run-001",
-        "--provider", "workspace",
+        "--launch-mode",
+        "backtest",
+        "--launch-id",
+        "btc-sma",
+        "--instance-id",
+        "run-001",
+        "--provider",
+        "workspace",
     ]
 
 
 def test_market_command_passes_credential_reference_only(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="credential")
-    command, _ = ComponentProcessApplication(workspace, binaries={"market": "market-bin"})._command(
-        "market", account_id=None, market_provider="binance-equity-rest",
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="credential"
+    )
+    command, _ = ComponentProcessApplication(
+        workspace, binaries={"market": "market-bin"}
+    )._command(
+        "market",
+        account_id=None,
+        market_provider="binance-equity-rest",
         market_credential_id="binance-equity-readonly",
     )
 
@@ -226,19 +315,57 @@ def test_market_command_passes_credential_reference_only(tmp_path: Path) -> None
     assert "--secret" not in command
 
 
-def test_risk_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
-    instance = workspace.instance("paper", "btc-sma", "run-001")
-    command, _ = ComponentProcessApplication(workspace, binaries={"risk": "risk-bin"})._command(
-        "risk", account_id=None, instance_workspace=instance
+def test_execution_command_passes_non_secret_route_collection(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="execution-routes"
     )
+    routes = [
+        {
+            "route_id": "binance-spot",
+            "provider": "binance",
+            "product": "spot",
+            "credential_id": "binance-main",
+        },
+        {
+            "route_id": "okx-swap",
+            "provider": "okx",
+            "product": "swap",
+            "credential_id": "okx-main",
+        },
+    ]
+    command, _ = ComponentProcessApplication(
+        workspace, binaries={"execution": "execution-bin"}
+    )._command("execution", account_id=None, execution_routes=routes)
+
+    assert "--routes-json" in command
+    encoded = command[command.index("--routes-json") + 1]
+    assert json.loads(encoded) == routes
+    assert "--api-key" not in command
+    assert "--secret" not in command
+
+
+def test_risk_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="instance"
+    )
+    instance = workspace.instance("paper", "btc-sma", "run-001")
+    command, _ = ComponentProcessApplication(
+        workspace, binaries={"risk": "risk-bin"}
+    )._command("risk", account_id=None, instance_workspace=instance)
     assert command[-6:] == [
-        "--launch-mode", "paper", "--launch-id", "btc-sma", "--instance-id", "run-001"
+        "--launch-mode",
+        "paper",
+        "--launch-id",
+        "btc-sma",
+        "--instance-id",
+        "run-001",
     ]
 
 
 def test_component_status_and_stop_use_instance_workspace(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="instance"
+    )
     instance = workspace.instance("paper", "btc-sma", "run-001")
     application = ComponentProcessApplication(workspace)
 

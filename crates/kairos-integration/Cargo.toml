@@ -5,21 +5,33 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+kairos-domain-types = { path = "../kairos-domain-types" }
+clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "gzip", "rustls-tls"] }
+reqwest = { workspace = true }
 serde_json = "1"
 rust_decimal = { version = "1.42", default-features = false }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
+secrecy = { workspace = true }
 thiserror = "2"
+tracing = "0.1"
 kairos-network = { path = "../kairos-network" }
 hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"
 url = "2"
-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
+futures-util = { version = "0.3", features = ["sink"] }
 ibapi = { version = "3.3", default-features = false, features = ["sync"] }
+fs2 = "0.4"
+memmap2 = "0.9"
+
+[[bin]]
+name = "kairos-integration-cli"
+path = "src/bin/kairos-integration-cli.rs"
 
 [dev-dependencies]
 tempfile = "3"

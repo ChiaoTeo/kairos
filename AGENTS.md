@@ -1,9 +1,8 @@
 # Project Architecture and Agent Rules
 
 This repository uses one standard shape for every business module. The
-architecture baseline and ownership map are maintained in
-[`docs/module-boundaries.md`](docs/module-boundaries.md); read that file in
-full before adding, moving, or deleting code.
+architecture baseline, ownership map, and Agent-specific change rules are
+maintained in this file and apply before adding, moving, or deleting code.
 
 ## Standard module layout
 
@@ -138,9 +137,43 @@ For the current business modules:
   launch coordination.
 - Cross-business orchestration belongs in application or system composition.
 
+## Engineering quality and anti-overdesign rules
+
+Prefer the smallest change that solves the current problem. Engineering
+quality means clearer ownership, safer boundaries, fewer invalid states, and
+better evidence—not a larger number of layers or abstractions.
+
+- Do not add a manager, coordinator, registry, protocol, or compatibility
+  facade without a current caller, a concrete boundary, or a second real
+  implementation that needs it.
+- Prefer an existing owner or boundary over introducing a new layer. Do not
+  optimize for uniform file layouts when responsibility is already clear.
+- Introduce shared domain types only when the semantic meaning is genuinely
+  shared. Do not create universal types merely to remove every primitive.
+- Migrate one business slice at a time. After migration, delete obsolete
+  concepts, compatibility paths, and duplicate state owners.
+- Keep primitive representations at wire, persistence, and integration
+  boundaries. Use explicit conversions into domain types rather than implicit
+  primitive conversions.
+- Require benchmark or profiling evidence before introducing performance
+  abstractions such as caching, batching, zero-copy paths, or generalized
+  dispatch.
+- Treat behavior tests, boundary tests, architecture checks, and error
+  handling as part of the change, not as follow-up work.
+
+Before adding a non-trivial abstraction, answer these questions in the change
+description or design note:
+
+1. What concrete problem does it solve now?
+2. Who is its current caller?
+3. Which existing owner or boundary is insufficient?
+4. What is the simplest implementation that preserves the boundary?
+5. Which old concept will be removed after migration?
+6. What test or measurement will demonstrate that the change is useful?
+
 ## Change workflow
 
-1. Read `docs/module-boundaries.md` completely.
+1. Apply the architecture and ownership rules in this file.
 2. Identify ownership and verify the domain rule.
 3. Define or verify the application request/result API.
 4. Assign mutable state to exactly one Actor.
@@ -169,3 +202,67 @@ owners, unnecessary protocol mirrors, and generic orchestration layers.
 
 If an unrelated pre-existing failure blocks a full-repository check, report
 the exact failure and still run the narrowest meaningful checks.
+
+## Integration adapter migration
+
+`docs/integration-session-and-operation-design.md` is the authoritative
+design for Integration connection and operation migration. When this section
+and an older implementation disagree, follow the design document and record
+the migration status there.
+
+Treat mature upstream adapters, including NautilusTrader, as a reference
+implementation and engineering asset. Use them to recover provider behavior,
+failure handling, protocol details, and test cases. Do not copy their domain
+model, event bus, cache, engine runtime, Python bindings, or application
+architecture into Kairos.
+
+Migrate one provider/product/capability slice at a time:
+
+1. Read the official provider documentation and define the capability
+   inventory.
+2. Inspect the corresponding upstream adapter and record the repository,
+   branch or commit, relevant paths, and license.
+3. Build a provider-native concrete connection and separate provider/principal
+   contexts where the provider requires them.
+4. Expose independent capability projections such as order entry, order
+   query, order events, account, market data, or historical data.
+5. Map provider payloads into Kairos-owned application/domain types and retain
+   Kairos command, query, stream, error, and delivery-certainty semantics.
+6. Add focused normalizer, recovery, backpressure, and failure-path tests.
+7. Wire the slice through business composition.
+8. Delete the migrated slice's legacy registry, `ConnectionSpec`, or generic
+   lifecycle path after the new path passes its exit criteria.
+
+The existing generic `Connection` is a migration compatibility boundary, not
+the target abstraction for every new provider. Do not make HTTP clients look
+like sessions, do not hide command/query/stream semantics behind
+`start/stop/reconnect` or `execute(operation, payload)`, and do not introduce
+a universal provider adapter, session registry, or operation facade without a
+current caller and a documented boundary.
+
+Use the following semantic rules from the integration design:
+
+- commands must not be transparently retried after they may have been sent;
+- queries may use bounded retries when safe;
+- streams must define ordering, reconnect, backpressure, and resync behavior;
+- async APIs are the default and blocking APIs belong under
+  `kairos_integration::blocking`;
+- provider-native connections are defined by Integration, while route/source
+  selection and business state remain owned by business composition and its
+  Actor.
+
+For every upstream adapter used during migration, create or update a note
+under `docs/integration-adapter-references/`. Record the source repository and
+commit, copied or rewritten logic, Kairos mapping, deliberately uncopied
+areas, tests used, and license obligations. Preserve third-party copyright
+and license notices when source code is reused.
+
+A slice is not complete until the new path is tested and the old path for the
+same slice is removed. Refresh the migration baseline with:
+
+```text
+rg -l "Integration::new" crates
+rg -l "ConnectionSpec" crates
+rg -l "IntegrationCapability" crates
+rg -l "dyn Connection" crates
+```

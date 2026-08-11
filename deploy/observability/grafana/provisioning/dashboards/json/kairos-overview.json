@@ -1,0 +1,47 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "id": 1,
+      "title": "Control requests / second",
+      "targets": [{"expr": "sum(rate(kairos_control_request_total[5m]))", "refId": "A"}],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "id": 2,
+      "title": "Control request p95 latency",
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(kairos_control_request_duration_bucket[5m])) by (le))", "refId": "A"}],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "id": 3,
+      "title": "Control server failures / second",
+      "targets": [{"expr": "sum(rate(kairos_control_request_failed_total[5m]))", "refId": "A"}],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "id": 4,
+      "title": "Linked structured logs",
+      "targets": [{"expr": "{service_name=~\".+\"} | json", "refId": "A"}],
+      "type": "logs"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["kairos", "observability"],
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Kairos Observability Overview",
+  "uid": "kairos-observability-overview",
+  "version": 1
+}

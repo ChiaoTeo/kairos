@@ -59,6 +59,18 @@ class SystemRestClient:
     def stop(self) -> dict[str, Any]:
         return self.request("POST", "/v1/stop")
 
+    def subscribe(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/v1/subscribe", body)
+
+    def unsubscribe(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "/v1/unsubscribe", body)
+
+    def recover(self) -> dict[str, Any]:
+        return self.request("POST", "/v1/recover")
+
+    def command(self, component: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self.request("POST", f"/v1/{component}/command", body)
+
 
 def _query(path: str, values: Mapping[str, Any]) -> str:
     encoded = [(key, value) for key, value in values.items() if value is not None]
@@ -94,11 +106,16 @@ class AccountSystemClient(SystemRestClient):
         self, *, segments: list[str] | None = None, symbol: str | None = None
     ) -> dict[str, Any]:
         return self.request(
-            "GET", _query("/v1/positions", {"segment": segments or [], "symbol": symbol})
+            "GET",
+            _query("/v1/positions", {"segment": segments or [], "symbol": symbol}),
         )
 
-    def open_orders(self, *, symbol: str | None = None, limit: int | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/open-orders", {"symbol": symbol, "limit": limit}))
+    def open_orders(
+        self, *, symbol: str | None = None, limit: int | None = None
+    ) -> dict[str, Any]:
+        return self.request(
+            "GET", _query("/v1/open-orders", {"symbol": symbol, "limit": limit})
+        )
 
     def orders(self, *, order_id: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/orders", {"order_id": order_id}))
@@ -115,21 +132,39 @@ class AccountSystemClient(SystemRestClient):
     def fees(self) -> dict[str, Any]:
         return self.request("GET", "/v1/fees")
 
+
 class ExecutionSystemClient(SystemRestClient):
     def intents(self) -> dict[str, Any]:
         return self.request("GET", "/v1/intents")
 
+    def intent(self, intent_id: str) -> dict[str, Any]:
+        return self.request("GET", _query("/v1/intent", {"intent_id": intent_id}))
+
     def intent_events(self, *, intent_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/intent-events", {"intent_id": intent_id}))
+        return self.request(
+            "GET", _query("/v1/intent-events", {"intent_id": intent_id})
+        )
 
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/intents/submit", intent)
+
+    def cancel_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
+        return self.request(
+            "POST", "/v1/intents/cancel", {"intent_id": intent_id, "reason": reason}
+        )
+
+    def expire_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
+        return self.request(
+            "POST", "/v1/intents/expire", {"intent_id": intent_id, "reason": reason}
+        )
 
     def orders(self, *, account_id: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/orders", {"account_id": account_id}))
 
     def open_orders(self, *, account_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/open-orders", {"account_id": account_id}))
+        return self.request(
+            "GET", _query("/v1/open-orders", {"account_id": account_id})
+        )
 
     def history(self, *, account_id: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/history", {"account_id": account_id}))
@@ -137,8 +172,12 @@ class ExecutionSystemClient(SystemRestClient):
     def remote_open_orders(self, *, symbol: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/remote-open-orders", {"symbol": symbol}))
 
-    def remote_history(self, *, symbol: str | None = None, limit: int | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/remote-history", {"symbol": symbol, "limit": limit}))
+    def remote_history(
+        self, *, symbol: str | None = None, limit: int | None = None
+    ) -> dict[str, Any]:
+        return self.request(
+            "GET", _query("/v1/remote-history", {"symbol": symbol, "limit": limit})
+        )
 
     def remote_order(self, order_id: str) -> dict[str, Any]:
         return self.request("GET", _query("/v1/remote-order", {"order_id": order_id}))
@@ -149,14 +188,22 @@ class ExecutionSystemClient(SystemRestClient):
     def audit(self, **filters: Any) -> dict[str, Any]:
         return self.request("GET", _query("/v1/audit", filters))
 
-    def submit(self, request: Mapping[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
-        return self.request("POST", "/v1/preview-submit" if dry_run else "/v1/submit", request)
+    def submit(
+        self, request: Mapping[str, Any], *, dry_run: bool = False
+    ) -> dict[str, Any]:
+        return self.request(
+            "POST", "/v1/preview-submit" if dry_run else "/v1/submit", request
+        )
 
     def cancel(self, order_id: str, reason: str = "system cancel") -> dict[str, Any]:
-        return self.request("POST", "/v1/cancel", {"order_id": order_id, "reason": reason})
+        return self.request(
+            "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
+        )
 
     def replace(self, order_id: str, replacement: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/replace", {"order_id": order_id, "replacement": replacement})
+        return self.request(
+            "POST", "/v1/replace", {"order_id": order_id, "replacement": replacement}
+        )
 
 
 class MarketSystemClient(SystemRestClient):
@@ -190,18 +237,6 @@ class RiskSystemClient(SystemRestClient):
 class ReferenceSystemClient(SystemRestClient):
     def publish(self) -> dict[str, Any]:
         return self.request("POST", "/v1/publish")
-
-    def markets(self, **filters: Any) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/markets", filters))
-
-    def resolve_market(self, **filters: Any) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/markets/resolve", filters))
-
-    def query(self, **filters: Any) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/query", filters))
-
-    def show(self, identifier: str) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/show", {"identifier": identifier}))
 
     def add_asset(self, asset: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/assets", asset)

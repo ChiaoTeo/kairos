@@ -10,6 +10,7 @@ table Trade {
   market_id:string;
   price:kairos.common.v1.Decimal64 (required);
   quantity:kairos.common.v1.Decimal64 (required);
+  cost:kairos.common.v1.Decimal64;
   aggressor_side:kairos.common.v1.Side;
   event_time_unix_nanos:ulong;
   source_id:string;

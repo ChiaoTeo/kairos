@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application import LaunchConfigError, LaunchConfigurationApplication
+from kairospy.application.launch.application import (
+    LaunchConfigError,
+    LaunchConfigurationApplication,
+)
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import _launch_config_path
@@ -14,13 +17,13 @@ from io import StringIO
 
 def _write_config(path: Path, *, mode: str = "paper") -> Path:
     content = (
-        '[launch]\n'
+        "[launch]\n"
         'id = "demo-launch"\n'
         f'mode = "{mode}"\n'
         'strategy = "strategy:Factory"\n\n'
-        '[account]\n'
+        "[account]\n"
         'ref = "paper-account"\n\n'
-        f'[{mode}]\n'
+        f"[{mode}]\n"
     )
     if mode == "live":
         content += "\n[live.safety]\ntrading_enabled = false\n"
@@ -40,26 +43,44 @@ def test_launch_config_validates_and_explains_toml(tmp_path: Path) -> None:
     assert explanation["account_refs"] == ["paper-account"]
 
 
-def test_launch_environment_writes_normalized_config_inside_instance(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="launch")
+def test_launch_environment_writes_normalized_config_inside_instance(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch"
+    )
     config = _write_config(tmp_path / "demo.toml")
 
     environment = LaunchConfigurationApplication().environment(
         config, workspace_root=workspace.paths.root, instance_id="one"
     )
 
-    expected = workspace.paths.root / "launches" / "paper" / "demo-launch" / "instances" / "one"
+    expected = (
+        workspace.paths.root
+        / "launches"
+        / "paper"
+        / "demo-launch"
+        / "instances"
+        / "one"
+    )
     assert environment.instance_directory == expected
-    normalized = json.loads(environment.normalized_config_path.read_text(encoding="utf-8"))
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
     assert normalized["launch"]["mode"] == "paper"
     assert environment.process_environment["KAIROS_LAUNCH_INSTANCE_ID"] == "one"
-    assert environment.process_environment["KAIROS_LAUNCH_NORMALIZED_CONFIG"] == str(environment.normalized_config_path)
+    assert environment.process_environment["KAIROS_LAUNCH_NORMALIZED_CONFIG"] == str(
+        environment.normalized_config_path
+    )
     assert environment.process_environment["KAIROS_EXECUTION_DRY_RUN"] == "true"
 
 
 def test_live_requires_live_table(tmp_path: Path) -> None:
     config = _write_config(tmp_path / "demo.toml", mode="live")
-    config.write_text("[launch]\nid = 'demo-launch'\nmode = 'live'\nstrategy = 'strategy:Factory'\n\n[account]\nref = 'live-account'\n", encoding="utf-8")
+    config.write_text(
+        "[launch]\nid = 'demo-launch'\nmode = 'live'\nstrategy = 'strategy:Factory'\n\n[account]\nref = 'live-account'\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(LaunchConfigError, match="live.*table is required"):
         LaunchConfigurationApplication().environment(config, workspace_root=tmp_path)
@@ -78,7 +99,9 @@ def test_backtest_requires_market_window(tmp_path: Path) -> None:
     assert "backtest.market" in " ".join(report["issues"])
 
 
-def test_mode_plan_resolves_backtest_paths_and_defaults_execution(tmp_path: Path) -> None:
+def test_mode_plan_resolves_backtest_paths_and_defaults_execution(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "backtest.toml"
     config.write_text(
         '[launch]\nid = "backtest"\nmode = "backtest"\nstrategy = "strategy:Factory"\n\n'
@@ -92,6 +115,74 @@ def test_mode_plan_resolves_backtest_paths_and_defaults_execution(tmp_path: Path
     assert plan.backtest_data_root == (tmp_path / "data").resolve()
     assert plan.backtest_storage_format == "jsonl"
     assert plan.execution["dry_run"] is True
+
+
+def test_execution_routes_are_validated_without_inline_secrets(tmp_path: Path) -> None:
+    config = _write_config(tmp_path / "routes.toml")
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + """
+[execution]
+
+[[execution.routes]]
+route_id = "binance-spot"
+provider = "binance"
+product = "spot"
+credential_id = "binance-main"
+
+[[execution.routes]]
+route_id = "okx-swap"
+provider = "okx"
+product = "swap"
+credential_id = "okx-main"
+""",
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is True
+
+    forbidden = config.read_text(encoding="utf-8").replace(
+        'credential_id = "okx-main"', 'api_key = "must-not-be-here"'
+    )
+    config.write_text(forbidden, encoding="utf-8")
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is False
+    assert "use credential_id" in " ".join(report["issues"])
+
+
+def test_backtest_environment_serializes_resolved_paths(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="backtest"
+    )
+    config = workspace.paths.launch_config("backtest")
+    config.write_text(
+        """[launch]
+id = "backtest"
+mode = "backtest"
+strategy = "strategy:Factory"
+
+[backtest]
+data_root = "data"
+
+[backtest.market]
+start = "2024-01-01T00:00:00Z"
+end = "2024-01-02T00:00:00Z"
+events = "data/events.jsonl"
+""",
+        encoding="utf-8",
+    )
+
+    environment = LaunchConfigurationApplication().environment(
+        config, workspace_root=workspace.paths.root, instance_id="run"
+    )
+    normalized = json.loads(
+        environment.normalized_config_path.read_text(encoding="utf-8")
+    )
+
+    assert normalized["backtest_data_root"] == str(workspace.paths.root / "data")
+    assert normalized["backtest_replay_file"] == str(
+        workspace.paths.root / "data" / "events.jsonl"
+    )
 
 
 def test_backtest_plan_resolves_instance_replay_source(tmp_path: Path) -> None:
@@ -119,20 +210,31 @@ events = "data/events.jsonl"
     assert plan.backtest_replay_file == (tmp_path / "data/events.jsonl").resolve()
 
 
-def test_live_market_scope_defaults_shared_and_can_be_instance_local(tmp_path: Path) -> None:
+def test_live_market_scope_defaults_shared_and_can_be_instance_local(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "live.toml"
     config.write_text(
         '[launch]\nid = "live"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
         '[account]\nref = "live-account"\n\n'
         '[live.market]\nscope = "instance"\n\n'
-        '[live.safety]\ntrading_enabled = false\n',
+        "[live.safety]\ntrading_enabled = false\n",
         encoding="utf-8",
     )
     plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
     assert plan.market_scope == "instance"
 
-    config.write_text(config.read_text(encoding="utf-8").replace('scope = "instance"\n', ""), encoding="utf-8")
-    assert LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan().market_scope == "shared"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace('scope = "instance"\n', ""),
+        encoding="utf-8",
+    )
+    assert (
+        LaunchConfigurationApplication()
+        .load(config, workspace_root=tmp_path)
+        .plan()
+        .market_scope
+        == "shared"
+    )
 
 
 def test_replay_market_cannot_use_shared_scope(tmp_path: Path) -> None:
@@ -150,21 +252,37 @@ def test_replay_market_cannot_use_shared_scope(tmp_path: Path) -> None:
 
 
 def test_launch_diagnose_reads_workspace_launch_toml(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="launch")
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch"
+    )
     config_dir = workspace.paths.config / "launches"
     config_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config_dir / "demo-launch.toml")
     output = StringIO()
 
-    assert execute_argv(
-        ["launch", "diagnose", "validate", "demo-launch", "--workspace", str(workspace.paths.root)],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "diagnose",
+                "validate",
+                "demo-launch",
+                "--workspace",
+                str(workspace.paths.root),
+            ],
+            output,
+        )
+        == 0
+    )
     assert '"valid": true' in output.getvalue()
 
 
-def test_launch_id_resolves_workspace_owned_config_without_explicit_path(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="launch")
+def test_launch_id_resolves_workspace_owned_config_without_explicit_path(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="launch"
+    )
     config = workspace.paths.launch_config("demo-launch")
     _write_config(config)
 

@@ -1,0 +1,24 @@
+include "../../common/v1/header.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v1;
+
+table RiskDecision {
+  header:kairos.common.v1.MessageHeader (required);
+  decision_id:string (required);
+  request_id:string (required);
+  allowed:bool;
+  degraded:bool;
+  reason_codes:[string];
+  violations:[string];
+  allocations:[Allocation];
+  reservation:Reservation;
+  policy_version:ulong;
+  dependency_generation:ulong;
+  dependency_event_sequence:ulong;
+  context:RiskContext;
+  evaluated_at_unix_nanos:ulong;
+}
+
+root_type RiskDecision;
+file_identifier "RRD1";

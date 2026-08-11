@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from .supervisor import ProcessSpec, ProcessState, ProcessSupervisor, UnixRestClient
 from .clients import (
@@ -55,7 +55,9 @@ def _lock_is_held(path: Path) -> bool:
         return False
 
 
-def _runtime_lock_path(workspace: Any, component: str, instance_workspace: Any | None) -> Path:
+def _runtime_lock_path(
+    workspace: Any, component: str, instance_workspace: Any | None
+) -> Path:
     if instance_workspace is not None:
         return instance_workspace.lock(component)
     return workspace.paths.process_lock(component)
@@ -63,7 +65,7 @@ def _runtime_lock_path(workspace: Any, component: str, instance_workspace: Any |
 
 def _pid_is_alive(value: object) -> bool:
     try:
-        pid = int(value)
+        pid = int(str(value))
         if pid <= 0:
             return False
         os.kill(pid, 0)
@@ -82,7 +84,7 @@ def _process_details(value: object) -> dict[str, Any]:
     inspection also asks ``ps`` for the process state when available.
     """
     try:
-        pid = int(value)
+        pid = int(str(value))
         if pid <= 0:
             return {"alive": False, "state": None, "command": None}
     except (TypeError, ValueError):
@@ -127,8 +129,9 @@ class ComponentProcessApplication:
 
     workspace: Any
     binaries: Mapping[str, str] = field(default_factory=dict)
-    # Reference performs a full-universe refresh before creating its control
-    # socket. A cold SQLite/catalog refresh can exceed fifteen seconds.
+    # Reference exposes its control socket before the initial provider refresh
+    # completes; this covers process readiness and the first health check,
+    # rather than waiting for a full-universe download.
     ready_timeout: float = 60.0
     control_timeout: float = 3.0
 
@@ -144,23 +147,31 @@ class ComponentProcessApplication:
         market_replay_file: Path | None = None,
         provider: str | None = None,
         product: str | None = None,
+        execution_routes: list[Mapping[str, Any]] | None = None,
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
     ) -> SystemRestClient:
-        if component == "reference" or (component == "market" and market_provider in {None, "workspace"}):
+        if component == "reference" or (
+            component == "market" and market_provider in {None, "workspace"}
+        ):
             self._ensure_aeron_driver()
         runtime = instance_workspace
         runtime_name = socket_name or component
-        socket = runtime.socket(runtime_name) if runtime is not None else self.workspace.paths.process_socket(runtime_name)
+        socket = (
+            runtime.socket(runtime_name)
+            if runtime is not None
+            else self.workspace.paths.process_socket(runtime_name)
+        )
         client_component = "account" if component == "account" else component
         control = self.client(client_component, socket, timeout=self.control_timeout)
-        try:
-            health = control.status()
-            if health.get("status") in {"ok", "ready", "running"}:
-                return control
-        except Exception:
-            pass
+        if socket.exists():
+            try:
+                health = control.status()
+                if health.get("status") in {"ok", "ready", "running"}:
+                    return control
+            except Exception:
+                pass
 
         if socket.exists():
             lock = _runtime_lock_path(self.workspace, component, runtime)
@@ -199,15 +210,20 @@ class ComponentProcessApplication:
             market_replay_file=market_replay_file,
             provider=provider,
             product=product,
+            execution_routes=execution_routes,
             confirm_live=confirm_live,
             instance_workspace=runtime,
         )
-        log_dir = runtime.log("processes") if runtime is not None else self.workspace.paths.logs / "processes"
+        log_dir = (
+            runtime.log("processes")
+            if runtime is not None
+            else self.workspace.paths.logs / "processes"
+        )
         log_dir.mkdir(parents=True, exist_ok=True)
         log = (log_dir / f"{component}.log").open("ab")
         startup_log_offset = log.tell()
         try:
-            subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 cwd=str(self.workspace.paths.root),
                 env={**os.environ, **extra_environment},
@@ -218,12 +234,20 @@ class ComponentProcessApplication:
             )
         finally:
             log.close()
+        recovery_command = (
+            f"kairos launch artifacts {runtime.launch_id} "
+            f"--instance {runtime.instance_id} --workspace {self.workspace.paths.project_root}"
+            if runtime is not None
+            else f"kairos system logs {component} --workspace {self.workspace.paths.project_root}"
+        )
         return self._wait_ready(
             component,
             control,
+            process=process,
             log_path=log_dir / f"{component}.log",
             initial_log_offset=startup_log_offset,
             stream_logs=stream_startup_logs and component == "reference",
+            recovery_command=recovery_command,
         )
 
     def _ensure_aeron_driver(self) -> None:
@@ -264,13 +288,23 @@ class ComponentProcessApplication:
                 os.kill(pid, 0)
                 if value.get("status") == "ready":
                     return
-            except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+            except (
+                FileNotFoundError,
+                OSError,
+                ValueError,
+                TypeError,
+                json.JSONDecodeError,
+            ):
                 pass
             time.sleep(0.05)
-        raise TimeoutError("Aeron media driver did not become ready; inspect workspace logs")
+        raise TimeoutError(
+            "Aeron media driver did not become ready; inspect workspace logs"
+        )
 
     @staticmethod
-    def client(component: str, socket: Path, *, timeout: float = 3.0) -> SystemRestClient:
+    def client(
+        component: str, socket: Path, *, timeout: float = 3.0
+    ) -> SystemRestClient:
         clients = {
             "account": AccountSystemClient,
             "execution": ExecutionSystemClient,
@@ -278,18 +312,46 @@ class ComponentProcessApplication:
             "reference": ReferenceSystemClient,
             "risk": RiskSystemClient,
         }
-        return clients.get(component, ComponentControlApplication)(socket, timeout=timeout)
+        return clients.get(component, ComponentControlApplication)(
+            socket, timeout=timeout
+        )
 
-    def stop(self, component: str, *, instance_workspace: Any | None = None, socket_name: str | None = None) -> dict[str, Any]:
+    def stop(
+        self,
+        component: str,
+        *,
+        instance_workspace: Any | None = None,
+        socket_name: str | None = None,
+    ) -> dict[str, Any]:
         runtime_name = socket_name or component
-        socket = instance_workspace.socket(runtime_name) if instance_workspace is not None else self.workspace.paths.process_socket(runtime_name)
+        socket = (
+            instance_workspace.socket(runtime_name)
+            if instance_workspace is not None
+            else self.workspace.paths.process_socket(runtime_name)
+        )
         if not socket.exists():
-            return {"component": component, "status": "not_running", "control_socket": str(socket)}
-        return self.client("account" if component == "account" else component, socket).stop()
+            return {
+                "component": component,
+                "status": "not_running",
+                "control_socket": str(socket),
+            }
+        return self.client(
+            "account" if component == "account" else component, socket
+        ).stop()
 
-    def status(self, component: str, *, instance_workspace: Any | None = None, socket_name: str | None = None) -> dict[str, Any]:
+    def status(
+        self,
+        component: str,
+        *,
+        instance_workspace: Any | None = None,
+        socket_name: str | None = None,
+    ) -> dict[str, Any]:
         runtime_name = socket_name or component
-        socket = instance_workspace.socket(runtime_name) if instance_workspace is not None else self.workspace.paths.process_socket(runtime_name)
+        socket = (
+            instance_workspace.socket(runtime_name)
+            if instance_workspace is not None
+            else self.workspace.paths.process_socket(runtime_name)
+        )
         if not socket.exists():
             return {
                 "component": component,
@@ -336,7 +398,9 @@ class ComponentProcessApplication:
             "process_state": process["state"],
             "process_command": process["command"],
             "health_file": str(health_file),
-            "log_file": str(self.workspace.paths.logs / "processes" / f"{component}.log"),
+            "log_file": str(
+                self.workspace.paths.logs / "processes" / f"{component}.log"
+            ),
             "process_lock": str(self.workspace.paths.process_lock(component)),
         }
 
@@ -357,7 +421,9 @@ class ComponentProcessApplication:
             # stopped/unresponsive processes and older component versions.
             if status.get("pid") is None and metadata.get("pid") is not None:
                 status["pid"] = metadata["pid"]
-            status.update({key: value for key, value in metadata.items() if key not in status})
+            status.update(
+                {key: value for key, value in metadata.items() if key not in status}
+            )
             if status.get("pid") is not None:
                 process = _process_details(status["pid"])
                 status["pid_alive"] = process["alive"]
@@ -365,11 +431,14 @@ class ComponentProcessApplication:
                 status["process_command"] = process["command"]
                 if status.get("status") == "not_running":
                     status["status"] = "unhealthy" if process["alive"] else "stale"
-        return result
+        return cast(dict[str, dict[str, Any]], result)
 
     def doctor(self) -> dict[str, Any]:
         """Inspect runtime resources without mutating the workspace."""
-        report: dict[str, Any] = {"workspace": str(self.workspace.paths.root), "components": {}}
+        report: dict[str, Any] = {
+            "workspace": str(self.workspace.paths.root),
+            "components": {},
+        }
         statuses = self.list_status()
         for component in SYSTEM_COMPONENTS:
             socket = self.workspace.paths.process_socket(component)
@@ -377,7 +446,9 @@ class ComponentProcessApplication:
             lock = self.workspace.paths.process_lock(component)
             socket_kind = "missing"
             if socket.exists():
-                socket_kind = "socket" if stat.S_ISSOCK(socket.stat().st_mode) else "other"
+                socket_kind = (
+                    "socket" if stat.S_ISSOCK(socket.stat().st_mode) else "other"
+                )
             health_value: dict[str, Any] | None = None
             if health.is_file():
                 try:
@@ -399,7 +470,8 @@ class ComponentProcessApplication:
                 "lock_held": _lock_is_held(lock),
                 "repairable": (
                     socket_kind == "socket"
-                    and statuses[component].get("status") in {"stale", "not_running", "unresponsive"}
+                    and statuses[component].get("status")
+                    in {"stale", "not_running", "unresponsive"}
                     and not _lock_is_held(lock)
                 ),
             }
@@ -434,11 +506,12 @@ class ComponentProcessApplication:
         market_replay_file: Path | None = None,
         provider: str | None = None,
         product: str | None = None,
+        execution_routes: list[Mapping[str, Any]] | None = None,
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
         if component == "reference":
-            config = reference_config or ReferenceProcessConfig(self.workspace, provider="default")
+            config = reference_config or ReferenceProcessConfig(self.workspace)
             configured = self.binaries.get("reference")
             if configured is not None or config.binary == "kairos-reference-server":
                 config = replace(
@@ -448,7 +521,19 @@ class ComponentProcessApplication:
                     ),
                 )
             spec = config.process_spec()
-            return list(spec.command), spec.environment
+            return list(spec.command), {
+                **spec.environment,
+                "KAIROS_WORKSPACE_ID": self.workspace.workspace_id,
+                **(
+                    {
+                        "KAIROS_INSTANCE_ID": instance_workspace.instance_id,
+                        "KAIROS_LAUNCH_ID": instance_workspace.launch_id,
+                        "KAIROS_LAUNCH_MODE": instance_workspace.mode,
+                    }
+                    if instance_workspace is not None
+                    else {}
+                ),
+            }
         binary_name = {
             "account": "kairos-account-server",
             "control": "kairos-control-server",
@@ -459,8 +544,27 @@ class ComponentProcessApplication:
         binary = self.binaries.get(component) or resolve_binary(binary_name)
         command = [binary, "--workspace", str(self.workspace.paths.root)]
         if instance_workspace is not None:
-            command.extend(("--launch-mode", instance_workspace.mode, "--launch-id", instance_workspace.launch_id, "--instance-id", instance_workspace.instance_id))
-        child_environment: dict[str, str] = {}
+            command.extend(
+                (
+                    "--launch-mode",
+                    instance_workspace.mode,
+                    "--launch-id",
+                    instance_workspace.launch_id,
+                    "--instance-id",
+                    instance_workspace.instance_id,
+                )
+            )
+        child_environment: dict[str, str] = {
+            "KAIROS_WORKSPACE_ID": self.workspace.workspace_id,
+        }
+        if instance_workspace is not None:
+            child_environment.update(
+                {
+                    "KAIROS_INSTANCE_ID": instance_workspace.instance_id,
+                    "KAIROS_LAUNCH_ID": instance_workspace.launch_id,
+                    "KAIROS_LAUNCH_MODE": instance_workspace.mode,
+                }
+            )
         if component == "market":
             command.extend(("--provider", market_provider or "workspace"))
             if market_credential_id is not None:
@@ -468,16 +572,25 @@ class ComponentProcessApplication:
             if market_replay_file is not None:
                 command.extend(("--replay-file", str(market_replay_file)))
         if component == "execution":
-            if provider is not None:
+            if execution_routes:
+                command.extend(
+                    (
+                        "--routes-json",
+                        json.dumps(execution_routes, separators=(",", ":")),
+                    )
+                )
+            elif provider is not None:
                 command.extend(("--provider", provider))
-            if product is not None:
+            if not execution_routes and product is not None:
                 command.extend(("--product", product))
             if confirm_live:
                 command.append("--confirm-live")
         if component == "account":
             resolved_account = account_id or os.environ.get("KAIROS_ACCOUNT_ID")
             if not resolved_account:
-                raise RuntimeError("account process requires --account-id or KAIROS_ACCOUNT_ID")
+                raise RuntimeError(
+                    "account process requires --account-id or KAIROS_ACCOUNT_ID"
+                )
             command.extend(("--account-id", resolved_account))
             if socket_name and socket_name != "account":
                 command.extend(("--socket-name", socket_name))
@@ -490,9 +603,11 @@ class ComponentProcessApplication:
         component: str,
         control: SystemRestClient,
         *,
+        process: Any | None = None,
         log_path: Path | None = None,
         initial_log_offset: int | None = None,
         stream_logs: bool = False,
+        recovery_command: str | None = None,
     ) -> SystemRestClient:
         deadline = time.monotonic() + self.ready_timeout
         log_offset = (
@@ -525,13 +640,51 @@ class ComponentProcessApplication:
                     return control
             except Exception:
                 pass
+            return_code = process.poll() if process is not None else None
+            if return_code is not None:
+                stream_new_logs()
+                detail = _startup_log_detail(log_path, log_offset)
+                raise RuntimeError(
+                    f"{component} process exited during startup with code {return_code}; "
+                    f"log={log_path}"
+                    + (f"; last_error={detail}" if detail else "")
+                    + (f"; next: {recovery_command}" if recovery_command else "")
+                )
             if time.monotonic() >= deadline:
                 stream_new_logs()
                 raise TimeoutError(
                     f"{component} process did not become ready within "
-                    f"{self.ready_timeout:g}s; inspect workspace logs"
+                    f"{self.ready_timeout:g}s; log={log_path}"
+                    + (f"; next: {recovery_command}" if recovery_command else "")
                 )
             time.sleep(0.05)
+
+
+def _startup_log_detail(path: Path | None, offset: int) -> str | None:
+    if path is None:
+        return None
+    try:
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            payload = stream.read(16 * 1024).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = [line.strip() for line in payload.splitlines() if line.strip()]
+    for line in reversed(lines):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, Mapping):
+            fields = value.get("fields")
+            if isinstance(fields, Mapping):
+                detail = fields.get("error") or fields.get("message")
+                if detail:
+                    return str(detail)[:800]
+        lowered = line.lower()
+        if any(token in lowered for token in ("error", "failed", "panic")):
+            return line[:800]
+    return lines[-1][:800] if lines else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,7 +694,9 @@ class NativeCliApplication:
     workspace: Any
     binaries: Mapping[str, str] = field(default_factory=dict)
 
-    def command(self, component: str, arguments: list[str], *, output: str | None = "json") -> list[str]:
+    def command(
+        self, component: str, arguments: list[str], *, output: str | None = "json"
+    ) -> list[str]:
         if component != "execution":
             raise ValueError(f"unsupported native CLI component: {component}")
         binary_name = "kairos-execution-cli"
@@ -556,7 +711,9 @@ class NativeCliApplication:
         command.extend(arguments)
         return command
 
-    def invoke(self, component: str, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    def invoke(
+        self, component: str, arguments: list[str]
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             self.command(component, arguments, output=None),
             cwd=str(self.workspace.paths.root),
@@ -584,6 +741,7 @@ class NativeCliApplication:
             raise ValueError(f"{component} CLI must return a JSON object")
         return value
 
+
 __all__ = [
     "ProcessSpec",
     "ProcessState",
@@ -604,6 +762,10 @@ __all__ = [
     "resolve_binary",
 ]
 
-from .runtime import DEFAULT_RESTART_POLICIES, RestartPolicy, SystemRuntimeSupervisor
+from .runtime import (  # noqa: E402
+    DEFAULT_RESTART_POLICIES,
+    RestartPolicy,
+    SystemRuntimeSupervisor,
+)
 
 __all__ += ["DEFAULT_RESTART_POLICIES", "RestartPolicy", "SystemRuntimeSupervisor"]

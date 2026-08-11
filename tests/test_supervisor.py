@@ -19,13 +19,11 @@ def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
         workspace=workspace,
-        provider="default",
         run_mode="once",
     ).process_spec()
     assert spec.name == "reference"
     assert spec.command[spec.command.index("--run-mode") + 1] == "once"
-    assert "--provider" in spec.command
-    assert spec.command[spec.command.index("--provider") + 1] == "default"
+    assert "--provider" not in spec.command
     assert "--database" not in spec.command
     assert "--aeron-channel" in spec.command
     assert "--reference-changes-stream" in spec.command
@@ -39,7 +37,9 @@ def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -
 def test_process_supervisor_starts_and_stops_child_process() -> None:
     async def scenario() -> None:
         supervisor = ProcessSupervisor()
-        spec = ProcessSpec("worker", (sys.executable, "-c", "import time; time.sleep(30)"))
+        spec = ProcessSpec(
+            "worker", (sys.executable, "-c", "import time; time.sleep(30)")
+        )
         await supervisor.start(spec)
         assert supervisor.statuses()["worker"] is ProcessState.RUNNING
         await supervisor.stop("worker")
@@ -54,7 +54,9 @@ def test_supervisor_can_wait_for_process_owned_health(tmp_path: Path) -> None:
         health = tmp_path / "health.json"
         code = "import json,sys,time; f=open(sys.argv[1], 'w'); json.dump({'status':'ready','actor_id':'test'}, f); f.close(); time.sleep(30)"
         supervisor = ProcessSupervisor()
-        spec = ProcessSpec("healthy", (sys.executable, "-c", code, str(health)), health_file=health)
+        spec = ProcessSpec(
+            "healthy", (sys.executable, "-c", code, str(health)), health_file=health
+        )
         result = await supervisor.start_ready(spec, timeout=2)
         assert result["actor_id"] == "test"
         await supervisor.stop("healthy")
@@ -71,7 +73,7 @@ def test_supervisor_stops_reference_through_control_socket_before_signal() -> No
             "p=sys.argv[1]; "
             "s=socket.socket(socket.AF_UNIX); s.bind(p); s.listen(1); "
             "c,_=s.accept(); c.recv(65536); "
-            "b=b'{\"status\":\"stopping\"}'; "
+            'b=b\'{"status":"stopping"}\'; '
             "c.sendall(b'HTTP/1.1 202 Accepted\\r\\nContent-Length: '+str(len(b)).encode()+b'\\r\\n\\r\\n'+b); "
             "c.close(); s.close(); os.unlink(p)"
         )
@@ -95,49 +97,16 @@ def test_supervisor_stops_reference_through_control_socket_before_signal() -> No
     asyncio.run(scenario())
 
 
-def test_reference_process_leaves_provider_endpoint_defaults_to_rust(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace")
-    spec = ReferenceProcessConfig(
-        workspace=workspace,
-        provider="binance-options",
-    ).process_spec()
-    assert "--endpoint" not in spec.command
-
-
-def test_reference_process_forwards_explicit_endpoint(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace")
-    spec = ReferenceProcessConfig(
-        workspace=workspace,
-        provider="binance-options",
-        endpoint="https://reference.example.test",
-    ).process_spec()
-    endpoint_index = spec.command.index("--endpoint") + 1
-    assert spec.command[endpoint_index] == "https://reference.example.test"
-
-
-def test_reference_process_forwards_duration_and_credential_reference(tmp_path: Path) -> None:
+def test_reference_process_forwards_duration_without_provider_configuration(
+    tmp_path: Path,
+) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
         workspace=workspace,
         refresh_interval="15m",
-        credential_id="massive-primary",
     ).process_spec()
     assert spec.command[spec.command.index("--refresh-interval") + 1] == "15m"
-    assert spec.command[spec.command.index("--credential-id") + 1] == "massive-primary"
-
-
-def test_massive_reference_spec_uses_full_universe_without_underlying_filter(tmp_path: Path) -> None:
-    workspace = WorkspaceApplication().init(tmp_path / "workspace")
-    spec = ReferenceProcessConfig(
-        workspace=workspace,
-        provider="massive-options",
-        api_key="massive-secret",
-    ).process_spec()
-    assert "massive-secret" not in spec.command
-    assert "MASSIVE_API_KEY" not in spec.environment
-    assert "MASSIVE_OPTION_UNDERLYING" not in spec.environment
-    assert spec.health_file == workspace.paths.reference_health()
-    assert "--endpoint" not in spec.command
+    assert "--credential-id" not in spec.command
 
 
 def test_risk_process_spec_contains_only_process_controls(tmp_path: Path) -> None:
@@ -149,7 +118,9 @@ def test_risk_process_spec_contains_only_process_controls(tmp_path: Path) -> Non
     ).process_spec()
     assert spec.name == "risk"
     assert spec.command[:2] == ("kairos-risk", "--workspace")
-    assert spec.command[spec.command.index("--workspace") + 1] == str(workspace.paths.root)
+    assert spec.command[spec.command.index("--workspace") + 1] == str(
+        workspace.paths.root
+    )
     assert "--interval-ms" in spec.command
     assert "--socket" not in spec.command
     assert "--health" not in spec.command
@@ -160,7 +131,9 @@ def test_unix_rest_client_round_trips_http_over_socket(tmp_path: Path) -> None:
     async def scenario() -> None:
         socket = Path(f"/tmp/kairos-supervisor-test-{os.getpid()}.sock")
 
-        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async def handler(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
             await reader.readuntil(b"\r\n\r\n")
             body = b'{"status":"ok","generation":3}'
             writer.write(
@@ -189,7 +162,9 @@ def test_unix_rest_client_times_out_on_unresponsive_socket(tmp_path: Path) -> No
     async def scenario() -> None:
         socket = Path(f"/tmp/kairos-unresponsive-{os.getpid()}.sock")
 
-        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async def handler(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
             await reader.read(65536)
             await asyncio.sleep(0.2)
 

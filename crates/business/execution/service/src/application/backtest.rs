@@ -6,34 +6,52 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::OrderSide;
+use crate::services::simulator::{
+    ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
+};
+use kairos_domain_types::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
+use kairos_market_contract::model::MarketObservation;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BacktestEquityPoint {
-    pub observed_at_unix_nanos: u64,
-    pub equity: String,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub equity: Money,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BacktestFill {
-    pub instrument_id: String,
+    pub instrument_id: InstrumentId,
     pub side: OrderSide,
-    pub quantity: String,
-    pub price: String,
-    #[serde(default = "zero_string")]
-    pub fee: String,
-    pub occurred_at_unix_nanos: u64,
+    pub quantity: Quantity,
+    pub price: Price,
+    #[serde(default)]
+    pub fee: Money,
+    pub occurred_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct BacktestRequest {
-    pub initial_equity: String,
+    pub initial_equity: Money,
     #[serde(default)]
     pub equity_curve: Vec<BacktestEquityPoint>,
     #[serde(default)]
     pub fills: Vec<BacktestFill>,
-    #[serde(default = "zero_string")]
-    pub risk_free_rate: String,
+    #[serde(default)]
+    pub risk_free_rate: Rate,
     pub annualization_periods: Option<f64>,
+    #[serde(default)]
+    pub market_events: Vec<MarketObservation>,
+    #[serde(default)]
+    pub orders: Vec<SimulationOrderRequest>,
+    #[serde(default)]
+    pub simulation: SimulationConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BacktestRunResult {
+    pub metrics: BacktestMetrics,
+    pub orders: Vec<SimulationOrder>,
+    pub fills: Vec<SimulationFill>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -53,12 +71,42 @@ pub struct BacktestMetrics {
 pub struct BacktestApplication;
 
 impl BacktestApplication {
+    /// Runs the deterministic execution part of a backtest.
+    ///
+    /// Account settlement remains the owner of balances, positions and
+    /// equity. This method returns normalized simulation fills so the
+    /// composition/application layer can hand them to Account.
+    pub fn run(request: BacktestRequest) -> Result<BacktestRunResult, String> {
+        let mut simulator = ExecutionSimulator::new(request.simulation.clone())?;
+        for order in request.orders.iter().cloned() {
+            simulator.submit(order)?;
+        }
+        for event in request.market_events.iter().cloned() {
+            simulator.apply_market_event(event)?;
+        }
+        let result = simulator.result();
+        let fills = result
+            .fills
+            .iter()
+            .map(backtest_fill)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut metric_request = request;
+        metric_request.fills = fills;
+        metric_request.market_events = Vec::new();
+        metric_request.orders = Vec::new();
+        Ok(BacktestRunResult {
+            metrics: Self::evaluate(metric_request)?,
+            orders: result.orders,
+            fills: result.fills,
+        })
+    }
+
     pub fn evaluate(request: BacktestRequest) -> Result<BacktestMetrics, String> {
-        let initial_equity = number(&request.initial_equity, "initial_equity")?;
+        let initial_equity = number(&request.initial_equity.to_string(), "initial_equity")?;
         let equity = request
             .equity_curve
             .iter()
-            .map(|point| number(&point.equity, "equity"))
+            .map(|point| number(&point.equity.to_string(), "equity"))
             .collect::<Result<Vec<_>, _>>()?;
         let trades = closed_trades(&request.fills)?;
         let gross_profit = trades
@@ -81,10 +129,10 @@ impl BacktestApplication {
         } else {
             0.0
         };
-        let risk_free_rate = if request.risk_free_rate.trim().is_empty() {
+        let risk_free_rate = if request.risk_free_rate.mantissa() == 0 {
             0.0
         } else {
-            number(&request.risk_free_rate, "risk_free_rate")?
+            number(&request.risk_free_rate.to_string(), "risk_free_rate")?
         };
         let sharpe = sharpe(&equity, risk_free_rate, request.annualization_periods);
         Ok(BacktestMetrics {
@@ -106,6 +154,17 @@ impl BacktestApplication {
     }
 }
 
+fn backtest_fill(fill: &SimulationFill) -> Result<BacktestFill, String> {
+    Ok(BacktestFill {
+        instrument_id: fill.instrument_id.clone(),
+        side: fill.side,
+        quantity: fill.quantity,
+        price: fill.price,
+        fee: fill.fee,
+        occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct OpenTrade {
     quantity: f64,
@@ -122,14 +181,14 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
     let mut open: std::collections::BTreeMap<String, OpenTrade> = std::collections::BTreeMap::new();
     let mut trades = Vec::new();
     for fill in fills {
-        let quantity = number(&fill.quantity, "fill.quantity")?;
-        let price = number(&fill.price, "fill.price")?;
-        let fee = number(&fill.fee, "fill.fee")?;
+        let quantity = number(&fill.quantity.to_string(), "fill.quantity")?;
+        let price = number(&fill.price.to_string(), "fill.price")?;
+        let fee = number(&fill.fee.to_string(), "fill.fee")?;
         if quantity <= 0.0 || price <= 0.0 || fee < 0.0 {
             return Err("fill quantity and price must be positive; fee cannot be negative".into());
         }
         match fill.side {
-            OrderSide::Buy => match open.get_mut(&fill.instrument_id) {
+            OrderSide::Buy => match open.get_mut(fill.instrument_id.as_str()) {
                 Some(current) => {
                     let total = current.quantity + quantity;
                     current.entry_price =
@@ -139,7 +198,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                 }
                 None => {
                     open.insert(
-                        fill.instrument_id.clone(),
+                        fill.instrument_id.to_string(),
                         OpenTrade {
                             quantity,
                             entry_price: price,
@@ -149,7 +208,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                 }
             },
             OrderSide::Sell => {
-                let Some(mut current) = open.remove(&fill.instrument_id) else {
+                let Some(mut current) = open.remove(fill.instrument_id.as_str()) else {
                     continue;
                 };
                 let close_quantity = quantity.min(current.quantity);
@@ -163,7 +222,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                 current.quantity -= close_quantity;
                 current.fees -= opening_fee;
                 if current.quantity > 0.0 {
-                    open.insert(fill.instrument_id.clone(), current);
+                    open.insert(fill.instrument_id.to_string(), current);
                 }
             }
         }
@@ -224,8 +283,4 @@ fn format_number(value: f64) -> String {
         text.pop();
     }
     text
-}
-
-fn zero_string() -> String {
-    "0".into()
 }

@@ -18,7 +18,9 @@ from .domain import Workspace
 class OperationJournal:
     workspace: Workspace
 
-    def append(self, operation: str, *, subject: str | None = None, **details: Any) -> dict[str, Any]:
+    def append(
+        self, operation: str, *, subject: str | None = None, **details: Any
+    ) -> dict[str, Any]:
         if not operation.strip():
             raise ValueError("operation is required")
         value: dict[str, Any] = {
@@ -39,7 +41,11 @@ class OperationJournal:
         path = self.workspace.paths.operations_journal()
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
 
 __all__ = ["OperationJournal"]

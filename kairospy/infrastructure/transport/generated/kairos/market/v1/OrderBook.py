@@ -71,15 +71,36 @@ class OrderBook(object):
         return None
 
     # OrderBook
-    def Synchronized(self):
+    def DepthPolicy(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # OrderBook
+    def FirstSequence(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # OrderBook
+    def LastSequence(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # OrderBook
+    def Synchronized(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return False
 
     # OrderBook
     def Bids(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -92,19 +113,19 @@ class OrderBook(object):
 
     # OrderBook
     def BidsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # OrderBook
     def BidsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         return o == 0
 
     # OrderBook
     def Asks(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -117,18 +138,18 @@ class OrderBook(object):
 
     # OrderBook
     def AsksLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # OrderBook
     def AsksIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         return o == 0
 
 def OrderBookStart(builder):
-    builder.StartObject(9)
+    builder.StartObject(12)
 
 def Start(builder):
     OrderBookStart(builder)
@@ -169,14 +190,32 @@ def OrderBookAddChecksum(builder, checksum):
 def AddChecksum(builder, checksum):
     OrderBookAddChecksum(builder, checksum)
 
+def OrderBookAddDepthPolicy(builder, depthPolicy):
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(depthPolicy), 0)
+
+def AddDepthPolicy(builder, depthPolicy):
+    OrderBookAddDepthPolicy(builder, depthPolicy)
+
+def OrderBookAddFirstSequence(builder, firstSequence):
+    builder.PrependUint64Slot(7, firstSequence, 0)
+
+def AddFirstSequence(builder, firstSequence):
+    OrderBookAddFirstSequence(builder, firstSequence)
+
+def OrderBookAddLastSequence(builder, lastSequence):
+    builder.PrependUint64Slot(8, lastSequence, 0)
+
+def AddLastSequence(builder, lastSequence):
+    OrderBookAddLastSequence(builder, lastSequence)
+
 def OrderBookAddSynchronized(builder, synchronized):
-    builder.PrependBoolSlot(6, synchronized, 0)
+    builder.PrependBoolSlot(9, synchronized, 0)
 
 def AddSynchronized(builder, synchronized):
     OrderBookAddSynchronized(builder, synchronized)
 
 def OrderBookAddBids(builder, bids):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(bids), 0)
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(bids), 0)
 
 def AddBids(builder, bids):
     OrderBookAddBids(builder, bids)
@@ -188,7 +227,7 @@ def StartBidsVector(builder, numElems):
     return OrderBookStartBidsVector(builder, numElems)
 
 def OrderBookAddAsks(builder, asks):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(asks), 0)
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(asks), 0)
 
 def AddAsks(builder, asks):
     OrderBookAddAsks(builder, asks)

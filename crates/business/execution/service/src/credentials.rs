@@ -1,10 +1,21 @@
 use kairos_workspace::workspace::Workspace;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct WorkspaceCredential {
     pub api_key: String,
     pub secret: String,
     pub passphrase: String,
+}
+
+impl std::fmt::Debug for WorkspaceCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceCredential")
+            .field("api_key", &"[REDACTED]")
+            .field("secret", &"[REDACTED]")
+            .field("passphrase", &"[REDACTED]")
+            .finish()
+    }
 }
 
 pub fn load_workspace_credential(

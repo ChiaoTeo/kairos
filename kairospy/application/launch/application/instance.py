@@ -10,7 +10,10 @@ class LaunchInstanceApplication:
     """Launch-owned lifecycle facade for one instance-owned StrategyHost."""
 
     def __init__(self, instance: LaunchInstance, strategy_host: StrategyHost) -> None:
-        if strategy_host.launch_id != instance.identity.launch_id or strategy_host.instance_id != instance.instance_id:
+        if (
+            strategy_host.launch_id != instance.identity.launch_id
+            or strategy_host.instance_id != instance.instance_id
+        ):
             raise ValueError("strategy host does not belong to launch instance")
         self.instance = instance
         self.strategy_host = strategy_host
@@ -60,8 +63,12 @@ class LaunchInstanceApplication:
             "subscription_count": value.subscription_count,
             "active_subscription_count": value.active_subscription_count,
             "first_event_received": value.first_event_received,
-            "last_event_time": value.last_event_time.isoformat() if value.last_event_time else None,
+            "last_event_time": value.last_event_time.isoformat()
+            if value.last_event_time
+            else None,
             "last_event_kind": value.last_event_kind,
             "event_count": value.event_count,
-            "subscriptions": [dict(subscription) for subscription in value.subscriptions],
+            "subscriptions": [
+                dict(subscription) for subscription in value.subscriptions
+            ],
         }

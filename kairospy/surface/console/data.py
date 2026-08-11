@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
 from kairospy.application.system import ComponentProcessApplication
+from kairospy.application.launch.application import LaunchRegistryApplication
 from kairospy.surface.console.models import ObserveSnapshot
 
 
@@ -13,7 +14,7 @@ class ObserveReader(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SystemObserveReader:
-    """Read-only adapter over the System application boundary."""
+    """Read-only adapter over System and Launch application boundaries."""
 
     processes: ComponentProcessApplication
     workspace_id: str
@@ -25,11 +26,14 @@ class SystemObserveReader:
         if market.get("status") in {"ok", "ready", "running", "degraded"}:
             try:
                 socket = self.processes.workspace.paths.process_socket("market")
-                market_snapshot = self.processes.client("market", socket, timeout=self.processes.control_timeout).snapshot()
+                market_snapshot = self.processes.client(
+                    "market", socket, timeout=self.processes.control_timeout
+                ).snapshot()
             except Exception as error:
                 market_snapshot = {"error": str(error)}
         return ObserveSnapshot(
             workspace_id=self.workspace_id,
             components=components,
+            launches=tuple(LaunchRegistryApplication(self.processes.workspace).list()),
             market_snapshot=market_snapshot,
         )

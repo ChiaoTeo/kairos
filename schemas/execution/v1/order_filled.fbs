@@ -11,7 +11,7 @@ table OrderFilled {
   side:kairos.common.v1.Side;
   fill_quantity:kairos.common.v1.Decimal64 (required);
   fill_price:kairos.common.v1.Decimal64 (required);
-  venue_order_id:string;
+  remote_order_id:string;
 }
 
 table OrderFilledMessage {

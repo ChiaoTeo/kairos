@@ -1,3 +1,5 @@
+# pyright: reportUnsupportedDunderAll=false
+
 """Python adapters for versioned Kairos process-boundary transports.
 
 Exports are resolved lazily so a contract client can be imported without
@@ -18,6 +20,7 @@ _EXPORTS = {
     "TradeView": (".market", "TradeView"),
     "UnixMarketEventStream": (".market", "UnixMarketEventStream"),
     "ExecutionIntentCommandPort": (".commands", "ExecutionIntentCommandPort"),
+    "ExecutionIntentQueryPort": (".commands", "ExecutionIntentQueryPort"),
     "MarketUnixCommandPort": (".commands", "MarketUnixCommandPort"),
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "SharedSnapshotPayload": (".shared_snapshot", "SharedSnapshotPayload"),

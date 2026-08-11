@@ -9,6 +9,13 @@ pub trait ExecutionPreflight: Send {
         &mut self,
         intent: &crate::application::ExecuteStrategyIntent,
     ) -> Result<Vec<crate::application::SubmitOrder>, String>;
+    fn latest_quote(
+        &mut self,
+        _instrument_id: &str,
+        _market_id: Option<&str>,
+    ) -> Result<Option<crate::application::QuoteObservation>, String> {
+        Ok(None)
+    }
     fn dependency_watermarks(&self) -> crate::application::DependencyWatermarks {
         crate::application::DependencyWatermarks::default()
     }

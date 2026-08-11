@@ -8,15 +8,33 @@ import struct
 from pathlib import Path
 
 from kairospy.infrastructure.contracts.base import MmapSnapshotReader
-from kairospy.infrastructure.contracts.market import snapshot_reader as contract_snapshot_reader
-from kairospy.infrastructure.transport import EventStreamGap, MmapMarketSnapshotReader, SharedSnapshotReader, UnixMarketEventStream
-from kairospy.infrastructure.transport.generated.kairos.common.v1 import MessageHeader, SnapshotHeader
-from kairospy.infrastructure.transport.generated.kairos.market.v1 import MarketData, MarketDataSnapshot, Quote, QuoteMessage
-from kairospy.infrastructure.transport.generated.kairos.market.v1.MarketDataSnapshot import MarketDataSnapshot as MarketDataSnapshotTable
+from kairospy.infrastructure.contracts.market import (
+    snapshot_reader as contract_snapshot_reader,
+)
+from kairospy.infrastructure.transport import (
+    EventStreamGap,
+    MmapMarketSnapshotReader,
+    SharedSnapshotReader,
+    UnixMarketEventStream,
+)
+from kairospy.infrastructure.transport.generated.kairos.common.v1 import (
+    MessageHeader,
+    SnapshotHeader,
+)
+from kairospy.infrastructure.transport.generated.kairos.market.v1 import (
+    MarketData,
+    MarketDataSnapshot,
+    Quote,
+    QuoteMessage,
+)
+from kairospy.infrastructure.transport.generated.kairos.market.v1.MarketDataSnapshot import (
+    MarketDataSnapshot as MarketDataSnapshotTable,
+)
 
 
 def _empty_market_snapshot(view_key_value: str = "market.current") -> bytes:
     builder = flatbuffers.Builder(1024)
+
     def string(value: str) -> int:
         return builder.CreateString(value)
 
@@ -48,7 +66,7 @@ def _write_shared_snapshot(path: Path, payload: bytes) -> None:
     data = bytearray(64 + 2 * slot_size)
     data[:4] = b"KSS1"
     struct.pack_into("<HHI", data, 4, 1, 2, slot_size)
-    data[64:64 + len(payload)] = payload
+    data[64 : 64 + len(payload)] = payload
     struct.pack_into("<I", data, 24, len(payload))
     struct.pack_into("<Q", data, 32, 7)
     path.write_bytes(data)
@@ -56,6 +74,7 @@ def _write_shared_snapshot(path: Path, payload: bytes) -> None:
 
 def _quote_message(sequence: int = 1) -> bytes:
     builder = flatbuffers.Builder(1024)
+
     def string(value: str) -> int:
         return builder.CreateString(value)
 
@@ -110,28 +129,42 @@ def test_python_reads_rust_market_snapshot_contract(tmp_path: Path) -> None:
 
 def test_python_reads_deterministic_market_view_path(tmp_path: Path) -> None:
     path = tmp_path / "market.snapshot"
-    view_path = tmp_path / "views" / "binance" / "market:btc" / "quote" / "current.snapshot"
+    view_path = (
+        tmp_path / "views" / "binance" / "market:btc" / "quote" / "current.snapshot"
+    )
     view_path.parent.mkdir(parents=True)
     _write_shared_snapshot(
         view_path,
         _empty_market_snapshot("market.view.binance.market:btc.quote"),
     )
 
-    snapshot = MmapMarketSnapshotReader(path).read("market.view.binance.market:btc.quote")
+    snapshot = MmapMarketSnapshotReader(path).read(
+        "market.view.binance.market:btc.quote"
+    )
 
     assert snapshot.view_key == "market.view.binance.market:btc.quote"
 
 
 def test_python_reads_qualified_market_view_path(tmp_path: Path) -> None:
     path = tmp_path / "market.snapshot"
-    view_path = tmp_path / "views" / "binance" / "market:btc" / "bar" / "1m" / "current.snapshot"
+    view_path = (
+        tmp_path
+        / "views"
+        / "binance"
+        / "market:btc"
+        / "bar"
+        / "1m"
+        / "current.snapshot"
+    )
     view_path.parent.mkdir(parents=True)
     _write_shared_snapshot(
         view_path,
         _empty_market_snapshot("market.view.binance.market:btc.bar.1m"),
     )
 
-    snapshot = MmapMarketSnapshotReader(path).read("market.view.binance.market:btc.bar.1m")
+    snapshot = MmapMarketSnapshotReader(path).read(
+        "market.view.binance.market:btc.bar.1m"
+    )
 
     assert snapshot.view_key == "market.view.binance.market:btc.bar.1m"
 
@@ -205,6 +238,33 @@ def test_python_market_stream_rejects_sequence_gaps(tmp_path: Path) -> None:
             with pytest.raises(EventStreamGap, match="expected sequence 2"):
                 await anext(events)
             await events.aclose()
+        finally:
+            server.close()
+            await server.wait_closed()
+            socket.unlink(missing_ok=True)
+
+    asyncio.run(scenario())
+
+
+def test_python_replay_market_stream_finishes_at_eof() -> None:
+    async def scenario() -> None:
+        socket = Path(f"/tmp/kairos-market-replay-{os.getpid()}.sock")
+        socket.unlink(missing_ok=True)
+        payload = _quote_message(sequence=1)
+
+        async def handler(reader, writer) -> None:
+            writer.write(struct.pack(">I", len(payload)) + payload)
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(handler, path=str(socket))
+        try:
+            stream = UnixMarketEventStream(socket, replayable=True, reconnect_delay=0)
+            events = stream.events()
+            assert (await anext(events)).sequence == 1
+            with pytest.raises(StopAsyncIteration):
+                await anext(events)
         finally:
             server.close()
             await server.wait_closed()

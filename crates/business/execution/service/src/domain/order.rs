@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum OrderSide {
-    Buy,
-    Sell,
-}
+pub use kairos_domain_types::IntentId;
+pub use kairos_domain_types::{
+    AccountId, FillId, InstrumentId, LegId, MarketId, Money, OrderId, OrderSide, PlanId, Price,
+    Quantity, RemoteOrderId, SegmentKey, UnixNanos,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OrderType {
@@ -36,32 +36,49 @@ impl ExecutionOrderStatus {
     }
 }
 
+impl From<ExecutionOrderStatus> for kairos_domain_types::OrderStatus {
+    fn from(status: ExecutionOrderStatus) -> Self {
+        match status {
+            ExecutionOrderStatus::Pending | ExecutionOrderStatus::Submitting => Self::Pending,
+            ExecutionOrderStatus::Accepted => Self::Accepted,
+            ExecutionOrderStatus::PartiallyFilled => Self::PartiallyFilled,
+            ExecutionOrderStatus::Filled => Self::Filled,
+            ExecutionOrderStatus::CancelRequested | ExecutionOrderStatus::Canceled => {
+                Self::Canceled
+            }
+            ExecutionOrderStatus::Rejected | ExecutionOrderStatus::Failed => Self::Rejected,
+            ExecutionOrderStatus::Expired => Self::Expired,
+            ExecutionOrderStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionOrder {
-    pub order_id: String,
-    pub intent_id: Option<String>,
-    pub account_id: String,
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub market_id: Option<String>,
+    pub order_id: OrderId,
+    #[serde(default)]
+    pub plan_id: Option<PlanId>,
+    #[serde(default)]
+    pub leg_id: Option<LegId>,
+    pub intent_id: Option<IntentId>,
+    pub account_id: AccountId,
+    pub segment_key: SegmentKey,
+    pub instrument_id: InstrumentId,
+    pub market_id: Option<MarketId>,
     pub side: OrderSide,
     pub order_type: OrderType,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
-    pub venue_order_id: Option<String>,
-    #[serde(default)]
-    pub filled_quantity_mantissa: i64,
-    #[serde(default)]
-    pub filled_quantity_scale: u8,
+    pub quantity: Quantity,
+    pub limit_price: Option<Price>,
+    pub remote_order_id: Option<RemoteOrderId>,
+    pub filled_quantity: Quantity,
     pub status: ExecutionOrderStatus,
-    pub submitted_at_unix_nanos: u64,
-    pub updated_at_unix_nanos: u64,
+    pub submitted_at_unix_nanos: UnixNanos,
+    pub updated_at_unix_nanos: UnixNanos,
     pub reason: String,
 }
 
 impl ExecutionOrder {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         order_id: impl Into<String>,
         account_id: impl Into<String>,
@@ -74,33 +91,27 @@ impl ExecutionOrder {
         at_unix_nanos: u64,
     ) -> Result<Self, String> {
         let order = Self {
-            order_id: order_id.into(),
+            order_id: OrderId::new(order_id).map_err(|error| error.to_string())?,
+            plan_id: None,
+            leg_id: None,
             intent_id: None,
-            account_id: account_id.into(),
-            segment_key: segment_key.into(),
-            instrument_id: instrument_id.into(),
+            account_id: AccountId::new(account_id).map_err(|error| error.to_string())?,
+            segment_key: SegmentKey::new(segment_key.into()).map_err(|error| error.to_string())?,
+            instrument_id: InstrumentId::new(instrument_id.into())
+                .map_err(|error| error.to_string())?,
             market_id: None,
             side,
             order_type,
-            quantity_mantissa,
-            quantity_scale,
-            limit_price_mantissa: None,
-            limit_price_scale: None,
-            venue_order_id: None,
-            filled_quantity_mantissa: 0,
-            filled_quantity_scale: quantity_scale,
+            quantity: Quantity::positive(quantity_mantissa, quantity_scale)
+                .map_err(|error| error.to_string())?,
+            limit_price: None,
+            remote_order_id: None,
+            filled_quantity: Quantity::new(0, quantity_scale).map_err(|error| error.to_string())?,
             status: ExecutionOrderStatus::Pending,
-            submitted_at_unix_nanos: at_unix_nanos,
-            updated_at_unix_nanos: at_unix_nanos,
+            submitted_at_unix_nanos: UnixNanos::new(at_unix_nanos),
+            updated_at_unix_nanos: UnixNanos::new(at_unix_nanos),
             reason: String::new(),
         };
-        if order.order_id.trim().is_empty()
-            || order.account_id.trim().is_empty()
-            || order.segment_key.trim().is_empty()
-            || order.instrument_id.trim().is_empty()
-        {
-            return Err("execution order identity is required".into());
-        }
         if quantity_mantissa <= 0 {
             return Err("execution order quantity must be positive".into());
         }
@@ -110,18 +121,17 @@ impl ExecutionOrder {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionFill {
-    pub fill_id: String,
-    pub order_id: String,
-    pub intent_id: Option<String>,
-    pub instrument_id: String,
+    pub fill_id: FillId,
+    pub order_id: OrderId,
+    #[serde(default)]
+    pub plan_id: Option<PlanId>,
+    #[serde(default)]
+    pub leg_id: Option<LegId>,
+    pub intent_id: Option<IntentId>,
+    pub instrument_id: InstrumentId,
     pub side: OrderSide,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub price_mantissa: i64,
-    pub price_scale: u8,
-    #[serde(default)]
-    pub fee_mantissa: i64,
-    #[serde(default)]
-    pub fee_scale: u8,
-    pub occurred_at_unix_nanos: u64,
+    pub quantity: Quantity,
+    pub price: Price,
+    pub fee: Money,
+    pub occurred_at_unix_nanos: UnixNanos,
 }

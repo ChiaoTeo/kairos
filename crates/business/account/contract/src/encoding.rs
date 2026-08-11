@@ -164,8 +164,8 @@ impl FlatbuffersAccountPublisher {
             let mut open_order_offsets = Vec::new();
             for order in &account.open_orders {
                 let order_id = builder.create_string(&order.order_id);
-                let venue_order_id = order
-                    .venue_order_id
+                let remote_order_id = order
+                    .remote_order_id
                     .as_ref()
                     .map(|value| builder.create_string(value));
                 let instrument_id = builder.create_string(&order.instrument_id);
@@ -177,7 +177,7 @@ impl FlatbuffersAccountPublisher {
                     &mut builder,
                     &account_fb::OpenOrderArgs {
                         order_id: Some(order_id),
-                        venue_order_id,
+                        remote_order_id,
                         instrument_id: Some(instrument_id),
                         side: Some(side),
                         quantity: Some(&quantity),

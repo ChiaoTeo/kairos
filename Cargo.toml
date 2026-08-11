@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/kairos-workspace",
+    "crates/kairos-domain-types",
     "crates/business/market/service",
     "crates/kairos-integration",
     "crates/kairos-network",
@@ -17,3 +18,15 @@ members = [
     "crates/business/risk/contract",
     "crates/business/execution/contract",
 ]
+
+[workspace.dependencies]
+criterion = "0.8"
+opentelemetry = { version = "0.31", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client"] }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "metrics"] }
+proptest = "1.11"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "query", "gzip", "rustls"] }
+secrecy = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "native-tls"] }
+tracing-opentelemetry = "0.32"

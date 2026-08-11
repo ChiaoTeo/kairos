@@ -64,8 +64,43 @@ class MarketData(object):
         return 0
 
     # MarketData
-    def Quotes(self, j):
+    def Ticker24hCount(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketData
+    def MarkPriceCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketData
+    def IndexPriceCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketData
+    def FundingRateCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketData
+    def OpenInterestCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketData
+    def Quotes(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -78,19 +113,19 @@ class MarketData(object):
 
     # MarketData
     def QuotesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketData
     def QuotesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         return o == 0
 
     # MarketData
     def Trades(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -103,19 +138,19 @@ class MarketData(object):
 
     # MarketData
     def TradesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketData
     def TradesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         return o == 0
 
     # MarketData
     def Bars(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -128,19 +163,19 @@ class MarketData(object):
 
     # MarketData
     def BarsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketData
     def BarsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         return o == 0
 
     # MarketData
     def Rates(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -153,19 +188,19 @@ class MarketData(object):
 
     # MarketData
     def RatesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketData
     def RatesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         return o == 0
 
     # MarketData
     def Greeks(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -178,18 +213,193 @@ class MarketData(object):
 
     # MarketData
     def GreeksLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketData
     def GreeksIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        return o == 0
+
+    # MarketData
+    def Ticker24h(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.Ticker24h import Ticker24h
+            obj = Ticker24h()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def Ticker24hLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def Ticker24hIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        return o == 0
+
+    # MarketData
+    def MarkPrices(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.MarkPrice import MarkPrice
+            obj = MarkPrice()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def MarkPricesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def MarkPricesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        return o == 0
+
+    # MarketData
+    def IndexPrices(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.IndexPrice import IndexPrice
+            obj = IndexPrice()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def IndexPricesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def IndexPricesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        return o == 0
+
+    # MarketData
+    def FundingRates(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.FundingRate import FundingRate
+            obj = FundingRate()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def FundingRatesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def FundingRatesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        return o == 0
+
+    # MarketData
+    def OpenInterests(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.OpenInterest import OpenInterest
+            obj = OpenInterest()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def OpenInterestsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def OpenInterestsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        return o == 0
+
+    # MarketData
+    def Freshness(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.MarketFreshness import MarketFreshness
+            obj = MarketFreshness()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def FreshnessLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def FreshnessIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        return o == 0
+
+    # MarketData
+    def InstrumentStatuses(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.InstrumentStatus import InstrumentStatus
+            obj = InstrumentStatus()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketData
+    def InstrumentStatusesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketData
+    def InstrumentStatusesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
         return o == 0
 
 def MarketDataStart(builder):
-    builder.StartObject(10)
+    builder.StartObject(22)
 
 def Start(builder):
     MarketDataStart(builder)
@@ -224,8 +434,38 @@ def MarketDataAddGreeksCount(builder, greeksCount):
 def AddGreeksCount(builder, greeksCount):
     MarketDataAddGreeksCount(builder, greeksCount)
 
+def MarketDataAddTicker24hCount(builder, ticker24hCount):
+    builder.PrependUint64Slot(5, ticker24hCount, 0)
+
+def AddTicker24hCount(builder, ticker24hCount):
+    MarketDataAddTicker24hCount(builder, ticker24hCount)
+
+def MarketDataAddMarkPriceCount(builder, markPriceCount):
+    builder.PrependUint64Slot(6, markPriceCount, 0)
+
+def AddMarkPriceCount(builder, markPriceCount):
+    MarketDataAddMarkPriceCount(builder, markPriceCount)
+
+def MarketDataAddIndexPriceCount(builder, indexPriceCount):
+    builder.PrependUint64Slot(7, indexPriceCount, 0)
+
+def AddIndexPriceCount(builder, indexPriceCount):
+    MarketDataAddIndexPriceCount(builder, indexPriceCount)
+
+def MarketDataAddFundingRateCount(builder, fundingRateCount):
+    builder.PrependUint64Slot(8, fundingRateCount, 0)
+
+def AddFundingRateCount(builder, fundingRateCount):
+    MarketDataAddFundingRateCount(builder, fundingRateCount)
+
+def MarketDataAddOpenInterestCount(builder, openInterestCount):
+    builder.PrependUint64Slot(9, openInterestCount, 0)
+
+def AddOpenInterestCount(builder, openInterestCount):
+    MarketDataAddOpenInterestCount(builder, openInterestCount)
+
 def MarketDataAddQuotes(builder, quotes):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(quotes), 0)
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(quotes), 0)
 
 def AddQuotes(builder, quotes):
     MarketDataAddQuotes(builder, quotes)
@@ -237,7 +477,7 @@ def StartQuotesVector(builder, numElems):
     return MarketDataStartQuotesVector(builder, numElems)
 
 def MarketDataAddTrades(builder, trades):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(trades), 0)
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(trades), 0)
 
 def AddTrades(builder, trades):
     MarketDataAddTrades(builder, trades)
@@ -249,7 +489,7 @@ def StartTradesVector(builder, numElems):
     return MarketDataStartTradesVector(builder, numElems)
 
 def MarketDataAddBars(builder, bars):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(bars), 0)
+    builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(bars), 0)
 
 def AddBars(builder, bars):
     MarketDataAddBars(builder, bars)
@@ -261,7 +501,7 @@ def StartBarsVector(builder, numElems):
     return MarketDataStartBarsVector(builder, numElems)
 
 def MarketDataAddRates(builder, rates):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(rates), 0)
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(rates), 0)
 
 def AddRates(builder, rates):
     MarketDataAddRates(builder, rates)
@@ -273,7 +513,7 @@ def StartRatesVector(builder, numElems):
     return MarketDataStartRatesVector(builder, numElems)
 
 def MarketDataAddGreeks(builder, greeks):
-    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(greeks), 0)
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(greeks), 0)
 
 def AddGreeks(builder, greeks):
     MarketDataAddGreeks(builder, greeks)
@@ -283,6 +523,90 @@ def MarketDataStartGreeksVector(builder, numElems):
 
 def StartGreeksVector(builder, numElems):
     return MarketDataStartGreeksVector(builder, numElems)
+
+def MarketDataAddTicker24h(builder, ticker24h):
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(ticker24h), 0)
+
+def AddTicker24h(builder, ticker24h):
+    MarketDataAddTicker24h(builder, ticker24h)
+
+def MarketDataStartTicker24hVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartTicker24hVector(builder, numElems):
+    return MarketDataStartTicker24hVector(builder, numElems)
+
+def MarketDataAddMarkPrices(builder, markPrices):
+    builder.PrependUOffsetTRelativeSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(markPrices), 0)
+
+def AddMarkPrices(builder, markPrices):
+    MarketDataAddMarkPrices(builder, markPrices)
+
+def MarketDataStartMarkPricesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartMarkPricesVector(builder, numElems):
+    return MarketDataStartMarkPricesVector(builder, numElems)
+
+def MarketDataAddIndexPrices(builder, indexPrices):
+    builder.PrependUOffsetTRelativeSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(indexPrices), 0)
+
+def AddIndexPrices(builder, indexPrices):
+    MarketDataAddIndexPrices(builder, indexPrices)
+
+def MarketDataStartIndexPricesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartIndexPricesVector(builder, numElems):
+    return MarketDataStartIndexPricesVector(builder, numElems)
+
+def MarketDataAddFundingRates(builder, fundingRates):
+    builder.PrependUOffsetTRelativeSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(fundingRates), 0)
+
+def AddFundingRates(builder, fundingRates):
+    MarketDataAddFundingRates(builder, fundingRates)
+
+def MarketDataStartFundingRatesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartFundingRatesVector(builder, numElems):
+    return MarketDataStartFundingRatesVector(builder, numElems)
+
+def MarketDataAddOpenInterests(builder, openInterests):
+    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(openInterests), 0)
+
+def AddOpenInterests(builder, openInterests):
+    MarketDataAddOpenInterests(builder, openInterests)
+
+def MarketDataStartOpenInterestsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartOpenInterestsVector(builder, numElems):
+    return MarketDataStartOpenInterestsVector(builder, numElems)
+
+def MarketDataAddFreshness(builder, freshness):
+    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(freshness), 0)
+
+def AddFreshness(builder, freshness):
+    MarketDataAddFreshness(builder, freshness)
+
+def MarketDataStartFreshnessVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartFreshnessVector(builder, numElems):
+    return MarketDataStartFreshnessVector(builder, numElems)
+
+def MarketDataAddInstrumentStatuses(builder, instrumentStatuses):
+    builder.PrependUOffsetTRelativeSlot(21, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentStatuses), 0)
+
+def AddInstrumentStatuses(builder, instrumentStatuses):
+    MarketDataAddInstrumentStatuses(builder, instrumentStatuses)
+
+def MarketDataStartInstrumentStatusesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartInstrumentStatusesVector(builder, numElems):
+    return MarketDataStartInstrumentStatusesVector(builder, numElems)
 
 def MarketDataEnd(builder):
     return builder.EndObject()

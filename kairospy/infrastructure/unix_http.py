@@ -8,6 +8,8 @@ import socket
 from pathlib import Path
 from typing import Any, Mapping
 
+from kairospy.application.observability import inject_trace_headers, start_span
+
 
 def request_sync(
     socket_path: str | Path,
@@ -18,12 +20,16 @@ def request_sync(
     timeout: float = 3.0,
 ) -> tuple[int, dict[str, Any]]:
     payload = _encode_body(body)
-    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.settimeout(timeout)
-    connection.connect(str(socket_path))
-    with connection:
-        connection.sendall(_request_bytes(method, path, payload))
-        status, response_body = _read_response(connection)
+    with start_span(
+        "unix_http.request",
+        attributes={"http.request.method": method.upper(), "url.path": path},
+    ):
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(timeout)
+        connection.connect(str(socket_path))
+        with connection:
+            connection.sendall(_request_bytes(method, path, payload))
+            status, response_body = _read_response(connection)
     return _decode_json_response(status, response_body)
 
 
@@ -36,16 +42,20 @@ async def request_async(
     timeout: float = 3.0,
 ) -> dict[str, Any]:
     payload = _encode_body(body)
-    reader, writer = await asyncio.wait_for(
-        asyncio.open_unix_connection(str(socket_path)), timeout=timeout
-    )
-    try:
-        writer.write(_request_bytes(method, path, payload))
-        await asyncio.wait_for(writer.drain(), timeout=timeout)
-        status, response_body = await _read_response_async(reader, timeout)
-    finally:
-        writer.close()
-        await writer.wait_closed()
+    with start_span(
+        "unix_http.request",
+        attributes={"http.request.method": method.upper(), "url.path": path},
+    ):
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(str(socket_path)), timeout=timeout
+        )
+        try:
+            writer.write(_request_bytes(method, path, payload))
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
+            status, response_body = await _read_response_async(reader, timeout)
+        finally:
+            writer.close()
+            await writer.wait_closed()
     status, value = _decode_json_response(status, response_body)
     if not 200 <= status < 300:
         raise RuntimeError(f"Unix HTTP request failed ({status}): {value}")
@@ -67,7 +77,12 @@ def _request_bytes(method: str, path: str, payload: bytes) -> bytes:
         "Connection: close",
     ]
     if payload:
-        headers.extend(("content-type: application/json", f"content-length: {len(payload)}"))
+        headers.extend(
+            ("content-type: application/json", f"content-length: {len(payload)}")
+        )
+    trace_headers: dict[str, str] = {}
+    inject_trace_headers(trace_headers)
+    headers.extend(f"{name}: {value}" for name, value in trace_headers.items())
     return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + payload
 
 
@@ -87,12 +102,20 @@ def _read_response(connection: socket.socket) -> tuple[int, bytes]:
     return status, _read_body(connection.recv, body, headers)
 
 
-async def _read_response_async(reader: asyncio.StreamReader, timeout: float) -> tuple[int, bytes]:
-    header_bytes = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=timeout)
+async def _read_response_async(
+    reader: asyncio.StreamReader, timeout: float
+) -> tuple[int, bytes]:
+    header_bytes = await asyncio.wait_for(
+        reader.readuntil(b"\r\n\r\n"), timeout=timeout
+    )
     status, headers = _parse_headers(header_bytes[:-4])
     if "content-length" in headers:
         size = int(headers["content-length"])
-        body = await asyncio.wait_for(reader.readexactly(size), timeout=timeout) if size else b""
+        body = (
+            await asyncio.wait_for(reader.readexactly(size), timeout=timeout)
+            if size
+            else b""
+        )
     else:
         body = await asyncio.wait_for(reader.read(), timeout=timeout)
     return status, body

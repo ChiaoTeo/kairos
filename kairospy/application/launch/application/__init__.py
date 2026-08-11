@@ -14,8 +14,15 @@ from .configuration import (
 from ..domain.identity import new_instance_id
 
 __all__ = [
-    "InstanceControlTarget", "LaunchConfig", "LaunchConfigError", "LaunchConfigReport",
-    "LaunchConfigurationApplication", "LaunchControlApplication", "LaunchEnvironment", "LaunchPlan",
-    "LaunchInstanceApplication", "LaunchRegistryApplication",
+    "InstanceControlTarget",
+    "LaunchConfig",
+    "LaunchConfigError",
+    "LaunchConfigReport",
+    "LaunchConfigurationApplication",
+    "LaunchControlApplication",
+    "LaunchEnvironment",
+    "LaunchPlan",
+    "LaunchInstanceApplication",
+    "LaunchRegistryApplication",
     "new_instance_id",
 ]

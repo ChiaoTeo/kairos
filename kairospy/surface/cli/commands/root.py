@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from typing import cast
 
 import typer
 
@@ -15,7 +16,12 @@ from decimal import Decimal
 from decimal import InvalidOperation
 from kairospy.application.timeline import TimelineApplication
 from kairospy.application.config import ConfigApplication
-from kairospy.application.account import AccountAdminApplication, AccountCliApplication, CredentialApplication, TradeLeaseApplication
+from kairospy.application.account import (
+    AccountAdminApplication,
+    AccountCliApplication,
+    CredentialApplication,
+    TradeLeaseApplication,
+)
 from kairospy.application.market import MarketCliApplication, MarketDataApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, effective_output, render
@@ -46,8 +52,11 @@ def _required_decimal(value: str, name: str) -> Decimal:
 
 def _decimal_payload(value: Decimal) -> tuple[int, int]:
     normalized = value.normalize()
-    scale = max(0, -normalized.as_tuple().exponent)
-    return int(normalized * (10 ** scale)), scale
+    exponent = normalized.as_tuple().exponent
+    if not isinstance(exponent, int):
+        raise ValueError("decimal payload must be finite")
+    scale = max(0, -exponent)
+    return int(normalized * (10**scale)), scale
 
 
 def _execution_submit_args(
@@ -63,16 +72,32 @@ def _execution_submit_args(
     intent_id: str | None = None,
     market_id: str | None = None,
 ) -> list[str]:
-    provider = str(account.get("broker") or account.get("venue") or "simulated")
+    provider = str(account.get("broker") or account.get("exchange") or "simulated")
     provider = "okx" if provider == "okex" else provider
     segment = str(account.get("product_family") or account.get("segment") or "spot")
     quantity_mantissa, quantity_scale = _decimal_payload(quantity)
     arguments = [
-        "submit", "--order-id", order_id, "--account-id", account_id,
-        "--segment-key", segment, "--instrument-id", instrument_id,
-        "--quantity-mantissa", str(quantity_mantissa), "--quantity-scale", str(quantity_scale),
-        "--side", side, "--order-type", order_type,
-        "--provider", provider, "--product", segment,
+        "submit",
+        "--order-id",
+        order_id,
+        "--account-id",
+        account_id,
+        "--segment-key",
+        segment,
+        "--instrument-id",
+        instrument_id,
+        "--quantity-mantissa",
+        str(quantity_mantissa),
+        "--quantity-scale",
+        str(quantity_scale),
+        "--side",
+        side,
+        "--order-type",
+        order_type,
+        "--provider",
+        provider,
+        "--product",
+        segment,
     ]
     credential = account.get("credential")
     if credential:
@@ -82,7 +107,9 @@ def _execution_submit_args(
         arguments.append("--confirm-live")
     if limit_price is not None:
         mantissa, scale = _decimal_payload(limit_price)
-        arguments.extend(("--limit-price-mantissa", str(mantissa), "--limit-price-scale", str(scale)))
+        arguments.extend(
+            ("--limit-price-mantissa", str(mantissa), "--limit-price-scale", str(scale))
+        )
     if intent_id:
         arguments.extend(("--intent-id", intent_id))
     if market_id:
@@ -114,13 +141,16 @@ def _status_command(component: str):
     The public account/market surfaces are registered as canonical passthrough
     commands from ``app.py``. Order status remains a cross-module input adapter.
     """
+
     def status(
         workspace: Path = typer.Option(None, "--workspace"),
         account_id: str | None = typer.Option(None, "--account-id"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         if component != "order":
-            raise typer.BadParameter("account and market commands are canonical passthroughs")
+            raise typer.BadParameter(
+                "account and market commands are canonical passthroughs"
+            )
         owner = WorkspaceApplication().open(workspace)
         arguments = ["snapshot"]
         if account_id:
@@ -133,6 +163,7 @@ def _status_command(component: str):
 
 def _socket_action(component: str, action: str):
     """Fail clearly if an unregistered process command is reached."""
+
     def command() -> None:
         raise typer.BadParameter(
             f"{component} process control belongs to kairos system; use system commands"
@@ -142,7 +173,9 @@ def _socket_action(component: str, action: str):
     return command
 
 
-def _add_group(parent: typer.Typer, name: str, commands: tuple[str, ...]) -> typer.Typer:
+def _add_group(
+    parent: typer.Typer, name: str, commands: tuple[str, ...]
+) -> typer.Typer:
     group = typer.Typer(no_args_is_help=True, help=f"{name} commands")
     parent.add_typer(group, name=name)
     del commands
@@ -158,19 +191,32 @@ system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
 timeline_app = typer.Typer(no_args_is_help=True, help="Timeline commands")
 
 
-@project_app.command("init")
+@project_app.command(
+    "init", help="Create a Kairos project, optionally with a runnable starter."
+)
 def project_init(
-    root: Path | None = typer.Argument(None, help="Project directory (prompted when omitted)"),
+    root: Path | None = typer.Argument(
+        None, help="Project directory (prompted when omitted)"
+    ),
     workspace_id: str | None = typer.Option(None, "--id"),
     non_interactive: bool = typer.Option(
         False,
         "--non-interactive",
         help="Do not prompt; require the project directory and --id",
     ),
+    template: str | None = typer.Option(
+        None,
+        "--template",
+        help="Install a runnable starter; currently supported: backtest.",
+    ),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    template_name = template.strip().lower() if template is not None else None
     if root is None:
         if non_interactive:
-            raise typer.BadParameter("project directory is required with --non-interactive")
+            raise typer.BadParameter(
+                "project directory is required with --non-interactive"
+            )
         root = Path(typer.prompt("项目目录", default="."))
     else:
         root = Path(root)
@@ -181,11 +227,34 @@ def project_init(
             raise typer.BadParameter("--id is required with --non-interactive")
         workspace_id = typer.prompt("项目名", default=default_id)
 
-    workspace = WorkspaceApplication().init_project(root, workspace_id=workspace_id)
-    _emit({"status": "initialized", "workspace_id": workspace.workspace_id, "root": str(workspace.paths.root)}, OutputFormat.JSON)
+    try:
+        workspace = WorkspaceApplication().init_project(
+            root, workspace_id=workspace_id, template=template_name
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--template") from error
+    next_steps = (
+        [
+            "cd " + str(workspace.paths.project_root),
+            "kairos launch start demo-backtest",
+            "kairos launch wait demo-backtest",
+        ]
+        if template_name == "backtest"
+        else ["add a launch config under .kairos/config/launches"]
+    )
+    _emit(
+        {
+            "status": "initialized",
+            "workspace_id": workspace.workspace_id,
+            "root": str(workspace.paths.root),
+            "template": template_name,
+            "next_steps": next_steps,
+        },
+        output,
+    )
 
 
-@project_app.command("status")
+@project_app.command("status", help="Show the resolved project and workspace paths.")
 def project_status(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
@@ -194,7 +263,36 @@ def project_status(
     _emit({"workspace_id": value.workspace_id, "root": str(value.paths.root)}, output)
 
 
-@project_app.command("doctor")
+@project_app.command("scaffold")
+def project_scaffold(
+    template: str = typer.Option(
+        "backtest", "--template", help="Starter to install; currently: backtest."
+    ),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Install a runnable starter into an existing project."""
+
+    owner = WorkspaceApplication().open(workspace)
+    try:
+        created = WorkspaceApplication().install_template(owner, template=template)
+    except (ValueError, FileExistsError) as error:
+        raise typer.BadParameter(str(error), param_hint="--template") from error
+    _emit(
+        {
+            "status": "scaffolded",
+            "template": template.strip().lower(),
+            "created": [str(path) for path in created],
+            "next_steps": [
+                "kairos launch start demo-backtest",
+                "kairos launch wait demo-backtest",
+            ],
+        },
+        output,
+    )
+
+
+@project_app.command("doctor", help="Check project readiness and show the next action.")
 def project_doctor(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
@@ -237,17 +335,31 @@ for _command_name in ("status", "snapshot", "refresh", "recover", "stop"):
 
 @market_app.command("validate")
 def market_validate(
-    market_id: str = typer.Option("market:binance:spot:BTCUSDT", "--market-id"),
-    instrument_id: str = typer.Option("instrument:binance:spot:BTCUSDT", "--instrument-id"),
-    venue_id: str = typer.Option("binance", "--venue-id"),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    exchange_id: str = typer.Option("binance", "--exchange-id"),
     market_type: str = typer.Option("spot", "--market-type"),
     source_symbol: str = typer.Option("BTCUSDT", "--source-symbol"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    value = MarketCliApplication().run([
-        "validate", "--market-id", market_id, "--instrument-id", instrument_id,
-        "--venue-id", venue_id, "--market-type", market_type, "--source-symbol", source_symbol,
-    ])
+    value = MarketCliApplication().run(
+        cast(
+            list[str],
+            [
+                "validate",
+                "--market-id",
+                market_id,
+                "--instrument-id",
+                instrument_id,
+                "--exchange-id",
+                exchange_id,
+                "--market-type",
+                market_type,
+                "--source-symbol",
+                source_symbol,
+            ],
+        )
+    )
     _emit(value, output)
 
 
@@ -274,6 +386,7 @@ def market_replay(
     value = MarketCliApplication().run(["replay", "--file", str(file)])
     _emit(value, output)
 
+
 def _account_admin(action: str):
     def command(
         account_id: str | None = typer.Option(None, "--account-id", "--id"),
@@ -286,7 +399,9 @@ def _account_admin(action: str):
         alias: str | None = typer.Option(None, "--alias"),
         product_family: str | None = typer.Option(None, "--product-family"),
         account_model: str | None = typer.Option(None, "--account-model"),
-        balance: list[str] = typer.Option([], "--balance", help="Initial simulated asset quantity, e.g. USDT=10000."),
+        balance: list[str] = typer.Option(
+            [], "--balance", help="Initial simulated asset quantity, e.g. USDT=10000."
+        ),
         fee_rate: str | None = typer.Option(None, "--fee-rate"),
         force: bool = typer.Option(False, "--force"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
@@ -305,15 +420,50 @@ def _account_admin(action: str):
         elif action == "connect":
             if not account_id:
                 raise typer.BadParameter("--account-id is required")
-            value = app.connect(account_id, broker=broker or "binance", segment=segment or "spot", environment=environment or "live", credential=credential, credential_role=credential_role, alias=alias, product_family=product_family, account_model=account_model, force=force)
+            value = app.connect(
+                account_id,
+                broker=broker or "binance",
+                segment=segment or "spot",
+                environment=environment or "live",
+                credential=credential,
+                credential_role=credential_role,
+                alias=alias,
+                product_family=product_family,
+                account_model=account_model,
+                force=force,
+            )
         elif action == "simulate":
             if not account_id:
                 raise typer.BadParameter("--account-id is required")
-            value = app.simulate(account_id, broker=broker or "paper", segment=segment or "spot", environment=environment or "paper", account_model=account_model, initial_balances=tuple(balance), fee_rate=fee_rate or "0", force=force)
+            value = app.simulate(
+                account_id,
+                broker=broker or "paper",
+                segment=segment or "spot",
+                environment=environment or "paper",
+                account_model=account_model,
+                initial_balances=tuple(balance),
+                fee_rate=fee_rate or "0",
+                force=force,
+            )
         elif action == "modify":
             if not account_id:
                 raise typer.BadParameter("--account-id is required")
-            changes = {key: value for key, value in {"broker": broker, "segment": segment, "environment": environment, "credential": credential, "credential_role": credential_role, "alias": alias, "product_family": product_family, "account_model": account_model, "fee_rate": fee_rate, "initial_balances": balance or None}.items() if value is not None}
+            changes = {
+                key: value
+                for key, value in {
+                    "broker": broker,
+                    "segment": segment,
+                    "environment": environment,
+                    "credential": credential,
+                    "credential_role": credential_role,
+                    "alias": alias,
+                    "product_family": product_family,
+                    "account_model": account_model,
+                    "fee_rate": fee_rate,
+                    "initial_balances": balance or None,
+                }.items()
+                if value is not None
+            }
             value = app.modify(account_id, **changes)
         elif action in {"delete", "remove"}:
             if not account_id:
@@ -324,15 +474,35 @@ def _account_admin(action: str):
         else:
             raise typer.BadParameter(f"unsupported account admin operation: {action}")
         _emit(value, output)
+
     command.__name__ = f"account_{action}"
     return command
 
 
-for _command_name in ("list", "browse", "schemas", "schema", "inspect", "connect", "simulate", "modify", "delete", "remove", "show", "doctor"):
+for _command_name in (
+    "list",
+    "browse",
+    "schemas",
+    "schema",
+    "inspect",
+    "connect",
+    "simulate",
+    "modify",
+    "delete",
+    "remove",
+    "show",
+    "doctor",
+):
     account_app.command(_command_name)(_account_admin(_command_name))
-account_credential_app = _add_group(account_app, "credential", ("add", "list", "create", "show", "delete", "remove"))
-account_query_app = _add_group(account_app, "query", ("balance", "positions", "open-orders", "snapshot"))
-account_trade_lock_app = _add_group(account_app, "trade-lock", ("status", "list", "show", "release"))
+account_credential_app = _add_group(
+    account_app, "credential", ("add", "list", "create", "show", "delete", "remove")
+)
+account_query_app = _add_group(
+    account_app, "query", ("balance", "positions", "open-orders", "snapshot")
+)
+account_trade_lock_app = _add_group(
+    account_app, "trade-lock", ("status", "list", "show", "release")
+)
 account_model_app = _add_group(account_app, "model", ("switch",))
 
 
@@ -343,12 +513,18 @@ def _account_query(view: str):
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         owner = WorkspaceApplication().open(workspace)
-        arguments = {"balance": "balances", "positions": "positions", "open-orders": "open-orders", "snapshot": "snapshot"}[view]
+        arguments = {
+            "balance": "balances",
+            "positions": "positions",
+            "open-orders": "open-orders",
+            "snapshot": "snapshot",
+        }[view]
         if account_id:
             arguments = ["--account-id", account_id, arguments]
         else:
             arguments = [arguments]
         _emit(AccountCliApplication(owner).run(arguments), output)
+
     command.__name__ = f"account_query_{view.replace('-', '_')}"
     return command
 
@@ -377,12 +553,20 @@ def _trade_lock(action: str):
         elif action == "show":
             value = app.for_account(account_id or owner)
         elif action == "acquire":
-            value = app.acquire(broker=broker, account_id=account, environment=environment, launch_id=launch_id, launch_instance_id=launch_instance_id, mode=mode)
+            value = app.acquire(
+                broker=broker,
+                account_id=account,
+                environment=environment,
+                launch_id=launch_id,
+                launch_instance_id=launch_instance_id,
+                mode=mode,
+            )
         elif action == "heartbeat":
             value = app.heartbeat(key, launch_instance_id=launch_instance_id)
         else:
             value = app.release(key, force=True)
         _emit(value, output)
+
     command.__name__ = f"trade_lock_{action.replace('-', '_')}"
     return command
 
@@ -396,26 +580,53 @@ def _credential(action: str):
         credential_id: str | None = typer.Option(None, "--credential-id", "--id"),
         provider: str = typer.Option("binance", "--provider"),
         kind: str | None = typer.Option(None, "--kind"),
-        api_key: str | None = typer.Option(None, "--api-key", help="Secret value is never persisted; use an external secret store."),
-        api_secret: str | None = typer.Option(None, "--api-secret", help="Secret value is never persisted; use an external secret store."),
-        passphrase: str | None = typer.Option(None, "--passphrase", help="Secret value is never persisted; use an external secret store."),
+        api_key: str | None = typer.Option(
+            None,
+            "--api-key",
+            help="Secret value is never persisted; use an external secret store.",
+        ),
+        api_secret: str | None = typer.Option(
+            None,
+            "--api-secret",
+            help="Secret value is never persisted; use an external secret store.",
+        ),
+        passphrase: str | None = typer.Option(
+            None,
+            "--passphrase",
+            help="Secret value is never persisted; use an external secret store.",
+        ),
         field: list[str] = typer.Option([], "--field"),
         workspace: Path = typer.Option(None, "--workspace"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         app = CredentialApplication(WorkspaceApplication().open(workspace))
-        if action == "list": value = app.list()
+        if action == "list":
+            value = app.list()
         elif action in {"add", "create"}:
-            if not credential_id: raise typer.BadParameter("--credential-id is required")
-            secret_fields = tuple(field) + tuple(name for name, secret in (("api_key", api_key), ("api_secret", api_secret), ("passphrase", passphrase)) if secret is not None)
-            value = app.add(credential_id, provider=provider, kind=kind, fields=secret_fields)
+            if not credential_id:
+                raise typer.BadParameter("--credential-id is required")
+            secret_fields = tuple(field) + tuple(
+                name
+                for name, secret in (
+                    ("api_key", api_key),
+                    ("api_secret", api_secret),
+                    ("passphrase", passphrase),
+                )
+                if secret is not None
+            )
+            value = app.add(
+                credential_id, provider=provider, kind=kind, fields=secret_fields
+            )
         elif action == "show":
-            if not credential_id: raise typer.BadParameter("--credential-id is required")
+            if not credential_id:
+                raise typer.BadParameter("--credential-id is required")
             value = app.show(credential_id)
         else:
-            if not credential_id: raise typer.BadParameter("--credential-id is required")
+            if not credential_id:
+                raise typer.BadParameter("--credential-id is required")
             value = app.delete(credential_id)
         _emit(value, output)
+
     command.__name__ = f"credential_{action}"
     return command
 
@@ -431,19 +642,32 @@ def account_model_switch(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    value = AccountAdminApplication(WorkspaceApplication().open(workspace)).switch_model(account_id, model)
+    value = AccountAdminApplication(
+        WorkspaceApplication().open(workspace)
+    ).switch_model(account_id, model)
     _emit(value, output)
 
-market_source_app = _add_group(market_app, "source", ("capabilities", "check", "doctor"))
+
+market_source_app = _add_group(
+    market_app, "source", ("capabilities", "check", "doctor")
+)
 market_data_app = _add_group(market_app, "data", ("download", "prefetch"))
-market_dataset_app = _add_group(market_app, "dataset", ("list", "inspect", "alias", "prune", "read"))
+market_dataset_app = _add_group(
+    market_app, "dataset", ("list", "inspect", "alias", "prune", "read")
+)
 market_stream_app = _add_group(market_app, "stream", ("replay", "watch", "persist"))
+
+
 def _market_source(action: str):
-    def command(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+    def command(
+        workspace: Path = typer.Option(None, "--workspace"),
+        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+    ) -> None:
         owner = WorkspaceApplication().open(workspace)
         value = ComponentProcessApplication(owner).ensure_running("market").status()
         value["operation"] = action
         _emit(value, output)
+
     command.__name__ = f"market_source_{action}"
     return command
 
@@ -452,23 +676,85 @@ for _action in ("capabilities", "check", "doctor"):
     market_source_app.command(_action)(_market_source(_action))
 
 
-def _market_data(action: str):
+def _market_data_ingest(action: str):
     def command(
         name: str = typer.Option(..., "--name"),
         source_file: Path = typer.Option(..., "--source-file"),
+        storage_format: str | None = typer.Option(
+            None,
+            "--storage-format",
+            help="jsonl or parquet (defaults to source suffix)",
+        ),
         workspace: Path = typer.Option(None, "--workspace"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         owner = WorkspaceApplication().open(workspace)
-        value = MarketDataApplication(owner.paths.state / "market").ingest(name, source_file)
+        value = MarketDataApplication(owner.paths.state / "market").ingest(
+            name, source_file, format=storage_format
+        )
         value["operation"] = action
         _emit(value, output)
+
     command.__name__ = f"market_data_{action}"
     return command
 
 
-for _action in ("download", "prefetch"):
-    market_data_app.command(_action)(_market_data(_action))
+market_data_app.command("prefetch")(_market_data_ingest("prefetch"))
+
+
+@market_data_app.command("download")
+def market_data_download(
+    provider: str = typer.Option("binance", "--provider"),
+    symbol: str = typer.Option(..., "--symbol"),
+    start: int = typer.Option(..., "--start", help="Unix milliseconds, inclusive"),
+    end: int = typer.Option(..., "--end", help="Unix milliseconds, exclusive"),
+    name: str = typer.Option("market-history", "--name"),
+    file: Path = typer.Option(..., "--file"),
+    market_id: str | None = typer.Option(None, "--market-id"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    interval: str = typer.Option("1m", "--interval"),
+    api_key: str | None = typer.Option(None, "--api-key"),
+    endpoint: str | None = typer.Option(None, "--endpoint"),
+    storage_format: str = typer.Option("parquet", "--storage-format"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Download normalized bars and register a workspace dataset."""
+    owner = WorkspaceApplication().open(workspace)
+    arguments = [
+        "download",
+        "--provider",
+        provider,
+        "--symbol",
+        symbol,
+        "--start",
+        str(start),
+        "--end",
+        str(end),
+        "--dataset-id",
+        name,
+        "--file",
+        str(file),
+        "--interval",
+        interval,
+    ]
+    if market_id:
+        arguments.extend(("--market-id", market_id))
+    if instrument_id:
+        arguments.extend(("--instrument-id", instrument_id))
+    if api_key:
+        arguments.extend(("--api-key", api_key))
+    if endpoint:
+        arguments.extend(("--endpoint", endpoint))
+    result = MarketCliApplication(owner).run(arguments)
+    if storage_format == "parquet":
+        entry = MarketDataApplication(owner.paths.state / "market").ingest(
+            name, Path(result["path"]), format="parquet"
+        )
+        result = {**result, "dataset": entry, "storage_format": "parquet"}
+    elif storage_format != "jsonl":
+        raise typer.BadParameter("--storage-format must be parquet or jsonl")
+    _emit(result, output)
 
 
 def _market_dataset(action: str):
@@ -478,22 +764,29 @@ def _market_dataset(action: str):
         workspace: Path = typer.Option(None, "--workspace"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
-        app = MarketDataApplication(WorkspaceApplication().open(workspace).paths.state / "market")
+        app = MarketDataApplication(
+            WorkspaceApplication().open(workspace).paths.state / "market"
+        )
         if action == "list":
             value = app.list()
         elif action == "inspect":
-            if not name: raise typer.BadParameter("--name is required")
+            if not name:
+                raise typer.BadParameter("--name is required")
             value = app.inspect(name)
         elif action == "alias":
-            if not name or not alias: raise typer.BadParameter("--name and --alias are required")
+            if not name or not alias:
+                raise typer.BadParameter("--name and --alias are required")
             value = app.alias(name, alias)
         elif action == "prune":
-            if not name: raise typer.BadParameter("--name is required")
+            if not name:
+                raise typer.BadParameter("--name is required")
             value = app.prune(name)
         else:
-            if not name: raise typer.BadParameter("--name is required")
+            if not name:
+                raise typer.BadParameter("--name is required")
             value = {"name": name, "content": app.read(name)}
         _emit(value, output)
+
     command.__name__ = f"market_dataset_{action}"
     return command
 
@@ -508,18 +801,32 @@ def _market_stream(action: str):
         workspace: Path = typer.Option(None, "--workspace"),
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
-        app = MarketDataApplication(WorkspaceApplication().open(workspace).paths.state / "market")
+        app = MarketDataApplication(
+            WorkspaceApplication().open(workspace).paths.state / "market"
+        )
         _emit({"operation": action, "name": name, "content": app.read(name)}, output)
+
     command.__name__ = f"market_stream_{action}"
     return command
 
 
 for _action in ("replay", "watch", "persist"):
     market_stream_app.command(_action)(_market_stream(_action))
-for _command_name in ("events", "trace", "open", "list", "browse", "history", "closed", "show", "inspect"):
+for _command_name in (
+    "events",
+    "trace",
+    "open",
+    "list",
+    "browse",
+    "history",
+    "closed",
+    "show",
+    "inspect",
+):
     order_app.command(_command_name)(_order_query_action(_command_name))
 for _command_name in ("place", "cancel", "replace"):
     if _command_name == "place":
+
         @order_app.command("place")
         def order_place(
             order_id: str = typer.Option(..., "--order-id", "--id"),
@@ -532,29 +839,46 @@ for _command_name in ("place", "cancel", "replace"):
             intent_id: str | None = typer.Option(None, "--intent-id"),
             market_id: str | None = typer.Option(None, "--market-id"),
             workspace: Path = typer.Option(None, "--workspace"),
-            output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+            output: OutputFormat = typer.Option(
+                OutputFormat.TEXT, "--output", "--format"
+            ),
         ) -> None:
             owner = WorkspaceApplication().open(workspace)
             account = AccountAdminApplication(owner).show(account_id)
-            value = NativeCliApplication(owner).run("execution", _execution_submit_args(
-                account, order_id=order_id, account_id=account_id, instrument_id=instrument_id,
-                quantity=_required_decimal(quantity, "quantity"), side=side, order_type=order_type,
-                limit_price=_decimal_option(limit_price, "limit-price"), intent_id=intent_id,
-                market_id=market_id,
-            ))
+            value = NativeCliApplication(owner).run(
+                "execution",
+                _execution_submit_args(
+                    account,
+                    order_id=order_id,
+                    account_id=account_id,
+                    instrument_id=instrument_id,
+                    quantity=_required_decimal(quantity, "quantity"),
+                    side=side,
+                    order_type=order_type,
+                    limit_price=_decimal_option(limit_price, "limit-price"),
+                    intent_id=intent_id,
+                    market_id=market_id,
+                ),
+            )
             _emit(value, output)
     elif _command_name == "cancel":
+
         @order_app.command("cancel")
         def order_cancel(
             order_id: str = typer.Option(..., "--order-id", "--id"),
             workspace: Path = typer.Option(None, "--workspace"),
             reason: str = typer.Option("cli cancel", "--reason"),
-            output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+            output: OutputFormat = typer.Option(
+                OutputFormat.TEXT, "--output", "--format"
+            ),
         ) -> None:
             owner = WorkspaceApplication().open(workspace)
-            value = NativeCliApplication(owner).run("execution", ["cancel", "--order-id", order_id, "--reason", reason])
+            value = NativeCliApplication(owner).run(
+                "execution", ["cancel", "--order-id", order_id, "--reason", reason]
+            )
             _emit(value, output)
     else:
+
         @order_app.command("replace")
         def order_replace(
             old_order_id: str = typer.Option(..., "--old-order-id"),
@@ -566,34 +890,72 @@ for _command_name in ("place", "cancel", "replace"):
             order_type: str = typer.Option("market", "--order-type"),
             limit_price: str | None = typer.Option(None, "--limit-price"),
             workspace: Path = typer.Option(None, "--workspace"),
-            output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+            output: OutputFormat = typer.Option(
+                OutputFormat.TEXT, "--output", "--format"
+            ),
         ) -> None:
             owner = WorkspaceApplication().open(workspace)
             account = AccountAdminApplication(owner).show(account_id)
             replacement = _execution_submit_args(
-                account, order_id=order_id, account_id=account_id, instrument_id=instrument_id,
-                quantity=_required_decimal(quantity, "quantity"), side=side, order_type=order_type,
+                account,
+                order_id=order_id,
+                account_id=account_id,
+                instrument_id=instrument_id,
+                quantity=_required_decimal(quantity, "quantity"),
+                side=side,
+                order_type=order_type,
                 limit_price=_decimal_option(limit_price, "limit-price"),
             )
-            value = NativeCliApplication(owner).run("execution", ["replace", "--order-id", old_order_id, *replacement[1:]])
+            value = NativeCliApplication(owner).run(
+                "execution", ["replace", "--order-id", old_order_id, *replacement[1:]]
+            )
             _emit(value, output)
-system_account_app = _add_group(system_app, "account", ("trade-status", "current", "balances", "positions", "trade-acquire", "trade-release"))
+
+
+system_account_app = _add_group(
+    system_app,
+    "account",
+    (
+        "trade-status",
+        "current",
+        "balances",
+        "positions",
+        "trade-acquire",
+        "trade-release",
+    ),
+)
 
 
 @system_app.command("inspect")
-def system_inspect(component: str = typer.Option(..., "--component"), workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def system_inspect(
+    component: str = typer.Option(..., "--component"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     owner = WorkspaceApplication().open(workspace)
     _emit(ComponentProcessApplication(owner).status(component), output)
 
 
 @system_app.command("attach")
-def system_attach(component: str = typer.Option(..., "--component"), workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def system_attach(
+    component: str = typer.Option(..., "--component"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     owner = WorkspaceApplication().open(workspace)
-    _emit({"component": component, "socket": str(owner.paths.process_socket(component))}, output)
+    _emit(
+        {"component": component, "socket": str(owner.paths.process_socket(component))},
+        output,
+    )
 
 
 @system_app.command("command")
-def system_command(component: str = typer.Option(..., "--component"), command: str = typer.Option(..., "--command"), workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def system_command(
+    component: str = typer.Option(..., "--component"),
+    command: str = typer.Option(..., "--command"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     owner = WorkspaceApplication().open(workspace)
     control = ComponentProcessApplication(owner).ensure_running("control")
     _emit(control.command(component, {"type": command}), output)
@@ -614,7 +976,14 @@ def _system_account(action: str):
             if action == "trade-status":
                 value = lock.list()
             elif action == "trade-acquire":
-                value = lock.acquire(broker="binance", account_id=account, environment="live", launch_id="system", launch_instance_id=owner_id, mode="live")
+                value = lock.acquire(
+                    broker="binance",
+                    account_id=account,
+                    environment="live",
+                    launch_id="system",
+                    launch_instance_id=owner_id,
+                    mode="live",
+                )
             else:
                 value = lock.release(key, force=True)
         else:
@@ -623,11 +992,19 @@ def _system_account(action: str):
                 arguments = ["--account-id", account_id, "snapshot"]
             value = AccountCliApplication(workspace_owner).run(arguments)
         _emit(value, output)
+
     command.__name__ = f"system_account_{action.replace('-', '_')}"
     return command
 
 
-for _action in ("trade-status", "current", "balances", "positions", "trade-acquire", "trade-release"):
+for _action in (
+    "trade-status",
+    "current",
+    "balances",
+    "positions",
+    "trade-acquire",
+    "trade-release",
+):
     system_account_app.command(_action)(_system_account(_action))
 
 
@@ -648,7 +1025,8 @@ def system_up(
     control = process.ensure_running(
         component,
         account_id=account_id,
-        stream_startup_logs=component == "reference" and effective_output(output) is OutputFormat.TEXT,
+        stream_startup_logs=component == "reference"
+        and effective_output(output) is OutputFormat.TEXT,
     )
     supervisor = SystemRuntimeSupervisor(process)
     supervisor.register(component, {"account_id": account_id} if account_id else {})
@@ -695,40 +1073,67 @@ def system_restart(
     control = process.ensure_running(
         component,
         account_id=account_id,
-        stream_startup_logs=component == "reference" and effective_output(output) is OutputFormat.TEXT,
+        stream_startup_logs=component == "reference"
+        and effective_output(output) is OutputFormat.TEXT,
     )
     supervisor = SystemRuntimeSupervisor(process)
     supervisor.register(component, {"account_id": account_id} if account_id else {})
     supervisor.start_background()
     _emit(control.status(), output)
+
+
 @config_app.command("paths")
-def config_paths(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def config_paths(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).paths(), output)
 
 
 @config_app.command("manifest")
-def config_manifest(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def config_manifest(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).manifest(), output)
 
 
 @config_app.command("show")
-def config_show(workspace: Path = typer.Option(None, "--workspace"), name: str | None = typer.Option(None, "--name"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def config_show(
+    workspace: Path = typer.Option(None, "--workspace"),
+    name: str | None = typer.Option(None, "--name"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).show(name), output)
 
 
 @config_app.command("doctor")
-def config_doctor(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def config_doctor(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).doctor(), output)
 
 
 @config_app.command("explain")
-def config_explain(name: str, workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
-    _emit(ConfigApplication(WorkspaceApplication().open(workspace)).explain(name), output)
+def config_explain(
+    name: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _emit(
+        ConfigApplication(WorkspaceApplication().open(workspace)).explain(name), output
+    )
 
 
 @config_app.command("operations")
-def config_operations(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
-    _emit(ConfigApplication(WorkspaceApplication().open(workspace)).operations(), output)
+def config_operations(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _emit(
+        ConfigApplication(WorkspaceApplication().open(workspace)).operations(), output
+    )
 
 
 profile_app = typer.Typer(no_args_is_help=True, help="Configuration profiles")
@@ -736,18 +1141,48 @@ config_app.add_typer(profile_app, name="profile")
 
 
 @profile_app.command("list")
-def profile_list(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
+def profile_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).profiles(), output)
 
 
 @profile_app.command("create")
-def profile_create(name: str, workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
-    _emit({"path": str(ConfigApplication(WorkspaceApplication().open(workspace)).create_profile(name))}, output)
+def profile_create(
+    name: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _emit(
+        {
+            "path": str(
+                ConfigApplication(
+                    WorkspaceApplication().open(workspace)
+                ).create_profile(name)
+            )
+        },
+        output,
+    )
 
 
 @profile_app.command("use")
-def profile_use(name: str, workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
-    _emit({"path": str(ConfigApplication(WorkspaceApplication().open(workspace)).use_profile(name)), "profile": name}, output)
+def profile_use(
+    name: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    _emit(
+        {
+            "path": str(
+                ConfigApplication(WorkspaceApplication().open(workspace)).use_profile(
+                    name
+                )
+            ),
+            "profile": name,
+        },
+        output,
+    )
 
 
 @config_app.command("status")
@@ -756,7 +1191,9 @@ def config_status(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    _emit({"workspace_id": owner.workspace_id, "config": str(owner.paths.config)}, output)
+    _emit(
+        {"workspace_id": owner.workspace_id, "config": str(owner.paths.config)}, output
+    )
 
 
 @timeline_app.command("status")
@@ -765,7 +1202,10 @@ def timeline_status(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    _emit({"workspace_id": owner.workspace_id, "timeline_root": str(owner.paths.run)}, output)
+    _emit(
+        {"workspace_id": owner.workspace_id, "timeline_root": str(owner.paths.run)},
+        output,
+    )
 
 
 @system_app.command("status")
@@ -809,14 +1249,28 @@ def system_list(
 
 @system_app.command("logs")
 def system_logs(
-    component: str = typer.Argument(..., help="Component name, for example account or execution."),
-    lines: int = typer.Option(100, "--lines", min=0, help="Number of recent lines to show."),
-    follow: bool = typer.Option(False, "-f", "--follow", help="Continue printing new output."),
+    component: str = typer.Argument(
+        ..., help="Component name, for example account or execution."
+    ),
+    lines: int = typer.Option(
+        100, "--lines", min=0, help="Number of recent lines to show."
+    ),
+    follow: bool = typer.Option(
+        False, "-f", "--follow", help="Continue printing new output."
+    ),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Show a component's combined stdout/stderr log."""
-    components = {"reference", "market", "account", "risk", "execution", "aeron", "system-supervisor"}
+    components = {
+        "reference",
+        "market",
+        "account",
+        "risk",
+        "execution",
+        "aeron",
+        "system-supervisor",
+    }
     if component not in components:
         raise typer.BadParameter(f"unsupported component: {component}")
     if follow and effective_output(output) is not OutputFormat.TEXT:
@@ -828,12 +1282,20 @@ def system_logs(
             "component": component,
             "path": str(path),
             "exists": path.is_file(),
-            "lines": path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:] if path.is_file() and lines else [],
+            "lines": path.read_text(encoding="utf-8", errors="replace").splitlines()[
+                -lines:
+            ]
+            if path.is_file() and lines
+            else [],
         }
         _emit(value, output)
         return
     if path.is_file() and lines:
-        typer.echo("\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]))
+        typer.echo(
+            "\n".join(
+                path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+            )
+        )
     elif not path.is_file():
         typer.echo(f"log file does not exist: {path}")
     if not follow:
@@ -900,6 +1362,8 @@ def system_supervise(
         _emit(value[component], output)
         return
     supervisor.run_forever(interval=interval)
+
+
 @timeline_app.command("list")
 def timeline_list(
     file: Path = typer.Option(..., "--file"),

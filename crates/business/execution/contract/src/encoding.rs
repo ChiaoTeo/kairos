@@ -76,8 +76,8 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
             let status = builder.create_string(order_status_name(order.status));
             let intent_id = order.intent_id.as_ref().map(|v| builder.create_string(v));
             let market_id = order.market_id.as_ref().map(|v| builder.create_string(v));
-            let venue_order_id = order
-                .venue_order_id
+            let remote_order_id = order
+                .remote_order_id
                 .as_ref()
                 .map(|v| builder.create_string(v));
             let reason = (!order.reason.is_empty()).then(|| builder.create_string(&order.reason));
@@ -103,7 +103,7 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
                     account_id: Some(account_id),
                     instrument_id: Some(instrument_id),
                     market_id,
-                    venue_order_id,
+                    remote_order_id,
                     status: Some(status),
                     side: if order.side == OrderSide::Buy {
                         FbSide::BUY
@@ -296,18 +296,25 @@ fn intent_terminal(status: IntentStatus) -> bool {
             | IntentStatus::Canceled
             | IntentStatus::Failed
             | IntentStatus::Rejected
+            | IntentStatus::Expired
+            | IntentStatus::ReconciliationRequired
     )
 }
 fn intent_status_name(status: IntentStatus) -> &'static str {
     match status {
         IntentStatus::Accepted => "accepted",
         IntentStatus::Planning => "planning",
+        IntentStatus::Planned => "planned",
         IntentStatus::Executing => "executing",
         IntentStatus::PartiallyFilled => "partially_filled",
+        IntentStatus::CancelRequested => "cancel_requested",
         IntentStatus::Satisfied => "satisfied",
         IntentStatus::Rejected => "rejected",
         IntentStatus::Canceled => "canceled",
+        IntentStatus::Expired => "expired",
         IntentStatus::Failed => "failed",
+        IntentStatus::Compensating => "compensating",
+        IntentStatus::ReconciliationRequired => "reconciliation_required",
     }
 }
 fn order_status_name(status: ExecutionOrderStatus) -> &'static str {

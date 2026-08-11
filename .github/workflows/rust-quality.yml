@@ -1,0 +1,142 @@
+name: Rust Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Format, lint and test Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Install FlatBuffers compiler
+        run: sudo apt-get update && sudo apt-get install -y flatbuffers-compiler
+
+      - name: Verify generated contract code
+        run: |
+          ./scripts/generate_flatbuffers.sh
+          git diff --exit-code -- kairospy/infrastructure/transport/generated crates/kairos-protocol/src/generated
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run integration tests with nextest
+        run: cargo nextest run --workspace --all-targets
+
+      - name: Run Rust doctests
+        run: cargo test --workspace --doc
+
+      - name: Check diff whitespace
+        run: git diff --check
+
+      - name: Check domain architecture
+        run: python3 scripts/check_domain_architecture.py
+
+      - name: Check async HTTP boundaries
+        run: python3 scripts/check_async_boundaries.py
+
+  observability:
+    name: Cross-language OpenTelemetry verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync observability test environment
+        run: uv sync --locked --group dev --extra observability
+
+      - name: Build OTLP-enabled Risk control service
+        run: cargo build -p kairos-risk-service --bin kairos-risk-server
+
+      - name: Validate production Collector configuration
+        env:
+          KAIROS_OTLP_TLS_CERT_FILE: /run/secrets/server-cert
+          KAIROS_OTLP_TLS_KEY_FILE: /run/secrets/server-key
+          KAIROS_OTLP_TLS_CLIENT_CA_FILE: /run/secrets/client-ca
+          KAIROS_BACKEND_TLS_CA_FILE: /run/secrets/backend-ca
+          KAIROS_BACKEND_TLS_CERT_FILE: /run/secrets/backend-cert
+          KAIROS_BACKEND_TLS_KEY_FILE: /run/secrets/backend-key
+          KAIROS_TEMPO_OTLP_ENDPOINT: tempo:4317
+          KAIROS_PROMETHEUS_REMOTE_WRITE_ENDPOINT: https://prometheus.example/write
+          KAIROS_PROMETHEUS_AUTHORIZATION: Bearer test
+          KAIROS_LOKI_OTLP_ENDPOINT: https://loki.example/otlp
+          KAIROS_LOKI_AUTHORIZATION: Bearer test
+        run: >-
+          docker run --rm
+          -v "$GITHUB_WORKSPACE/deploy/observability/otel-collector.production.yaml:/etc/otelcol-contrib/config.yaml:ro"
+          -e KAIROS_OTLP_TLS_CERT_FILE -e KAIROS_OTLP_TLS_KEY_FILE
+          -e KAIROS_OTLP_TLS_CLIENT_CA_FILE -e KAIROS_BACKEND_TLS_CA_FILE
+          -e KAIROS_BACKEND_TLS_CERT_FILE -e KAIROS_BACKEND_TLS_KEY_FILE
+          -e KAIROS_TEMPO_OTLP_ENDPOINT -e KAIROS_PROMETHEUS_REMOTE_WRITE_ENDPOINT
+          -e KAIROS_PROMETHEUS_AUTHORIZATION -e KAIROS_LOKI_OTLP_ENDPOINT
+          -e KAIROS_LOKI_AUTHORIZATION
+          otel/opentelemetry-collector-contrib:0.121.0 validate
+          --config=/etc/otelcol-contrib/config.yaml
+
+      - name: Verify Python to Rust W3C propagation and OTLP export
+        env:
+          KAIROS_RUN_RUST_OTEL_INTEGRATION: "1"
+          KAIROS_RUST_OTEL_BIN: target/debug/kairos-risk-server
+        run: >-
+          uv run pytest -qs tests/test_rust_otel_integration.py
+          tests/test_rust_otel_unavailable.py | tee observability-python-rust.txt
+
+      - name: Start local observability stack
+        run: |
+          echo "KAIROS_LOG_ROOT=$RUNNER_TEMP/kairos-observability-logs" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/kairos-observability-logs"
+          docker compose -f deploy/observability/compose.yaml up -d --wait
+
+      - name: Verify Collector configuration, health, metrics, and OTLP intake
+        env:
+          KAIROS_RUN_COLLECTOR_SMOKE: "1"
+        run: uv run pytest -qs tests/test_collector_smoke.py | tee observability-collector.txt
+
+      - name: Save observability acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-acceptance-evidence
+          path: |
+            observability-python-rust.txt
+            observability-collector.txt
+          if-no-files-found: warn
+
+      - name: Collect observability stack logs on failure
+        if: failure()
+        run: docker compose -f deploy/observability/compose.yaml logs --no-color
+
+      - name: Stop local observability stack
+        if: always()
+        run: docker compose -f deploy/observability/compose.yaml down --volumes

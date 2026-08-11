@@ -61,25 +61,11 @@ pub struct PositionsResponse {
     pub accounts: Vec<PositionGroup>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct OrderPlan {
-    pub order_id: String,
-    pub intent_id: Option<String>,
-    pub account_id: String,
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub market_id: Option<String>,
-    pub side: String,
-    pub quantity: DecimalValue,
-    pub order_type: String,
-    pub limit_price: Option<DecimalValue>,
-}
-
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrderEvent {
     pub order_id: String,
     pub status: String,
-    pub venue_order_id: Option<String>,
+    pub remote_order_id: Option<String>,
     pub filled_quantity: DecimalValue,
     pub occurred_at_unix_nanos: u64,
     pub reason: String,
@@ -94,6 +80,22 @@ pub struct Fill {
     pub quantity: DecimalValue,
     pub price: DecimalValue,
     pub side: String,
+    pub occurred_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SimulatedFill {
+    pub fill_id: String,
+    pub order_id: String,
+    pub segment_key: String,
+    pub instrument_id: String,
+    pub quantity: DecimalValue,
+    pub price: DecimalValue,
+    pub side: String,
+    pub settlement_asset: String,
+    pub settlement_delta: DecimalValue,
+    pub fee_asset: String,
+    pub fee_amount: DecimalValue,
     pub occurred_at_unix_nanos: u64,
 }
 
@@ -137,16 +139,16 @@ impl AccountContractClient {
         self.get(&path)
     }
 
-    pub fn plan_order(&self, command: &OrderPlan) -> ContractResult<()> {
-        self.post("/v1/plan-order", command)
-    }
-
     pub fn publish_order_event(&self, event: &OrderEvent) -> ContractResult<()> {
         self.post("/v1/order-event", event)
     }
 
     pub fn publish_fill(&self, fill: &Fill) -> ContractResult<()> {
         self.post("/v1/fill", fill)
+    }
+
+    pub fn publish_simulated_fill(&self, fill: &SimulatedFill) -> ContractResult<()> {
+        self.post("/v1/simulated-fill", fill)
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> ContractResult<T> {

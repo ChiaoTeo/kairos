@@ -23,15 +23,17 @@ impl<'a> LifecycleEvent<'a> {
     pub const VT_EVENT_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_EVENT_TYPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 8;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 14;
-    pub const VT_VENUE_ID: ::flatbuffers::VOffsetT = 16;
-    pub const VT_SOURCE_SYMBOL: ::flatbuffers::VOffsetT = 18;
-    pub const VT_PREVIOUS_STATUS: ::flatbuffers::VOffsetT = 20;
-    pub const VT_CURRENT_STATUS: ::flatbuffers::VOffsetT = 22;
-    pub const VT_PREVIOUS_SYMBOL: ::flatbuffers::VOffsetT = 24;
-    pub const VT_CURRENT_SYMBOL: ::flatbuffers::VOffsetT = 26;
+    pub const VT_RECORD_KIND: ::flatbuffers::VOffsetT = 10;
+    pub const VT_RECORD_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 16;
+    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 18;
+    pub const VT_EXCHANGE_ID: ::flatbuffers::VOffsetT = 20;
+    pub const VT_SOURCE_SYMBOL: ::flatbuffers::VOffsetT = 22;
+    pub const VT_PREVIOUS_STATUS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_CURRENT_STATUS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_PREVIOUS_SYMBOL: ::flatbuffers::VOffsetT = 28;
+    pub const VT_CURRENT_SYMBOL: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -64,8 +66,8 @@ impl<'a> LifecycleEvent<'a> {
         if let Some(x) = args.source_symbol {
             builder.add_source_symbol(x);
         }
-        if let Some(x) = args.venue_id {
-            builder.add_venue_id(x);
+        if let Some(x) = args.exchange_id {
+            builder.add_exchange_id(x);
         }
         if let Some(x) = args.listing_id {
             builder.add_listing_id(x);
@@ -75,6 +77,12 @@ impl<'a> LifecycleEvent<'a> {
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
+        }
+        if let Some(x) = args.record_id {
+            builder.add_record_id(x);
+        }
+        if let Some(x) = args.record_kind {
+            builder.add_record_kind(x);
         }
         if let Some(x) = args.event_type {
             builder.add_event_type(x);
@@ -119,6 +127,26 @@ impl<'a> LifecycleEvent<'a> {
         }
     }
     #[inline]
+    pub fn record_kind(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(LifecycleEvent::VT_RECORD_KIND, None)
+        }
+    }
+    #[inline]
+    pub fn record_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(LifecycleEvent::VT_RECORD_ID, None)
+        }
+    }
+    #[inline]
     pub fn market_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
@@ -149,13 +177,13 @@ impl<'a> LifecycleEvent<'a> {
         }
     }
     #[inline]
-    pub fn venue_id(&self) -> Option<&'a str> {
+    pub fn exchange_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(LifecycleEvent::VT_VENUE_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(LifecycleEvent::VT_EXCHANGE_ID, None)
         }
     }
     #[inline]
@@ -241,6 +269,16 @@ impl ::flatbuffers::Verifiable for LifecycleEvent<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "record_kind",
+                Self::VT_RECORD_KIND,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "record_id",
+                Self::VT_RECORD_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "market_id",
                 Self::VT_MARKET_ID,
                 false,
@@ -256,8 +294,8 @@ impl ::flatbuffers::Verifiable for LifecycleEvent<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_id",
-                Self::VT_VENUE_ID,
+                "exchange_id",
+                Self::VT_EXCHANGE_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -293,10 +331,12 @@ pub struct LifecycleEventArgs<'a> {
     pub event_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub event_type: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub event_time_unix_nanos: u64,
+    pub record_kind: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub record_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub listing_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub venue_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub exchange_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub source_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub previous_status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub current_status: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -310,10 +350,12 @@ impl<'a> Default for LifecycleEventArgs<'a> {
             event_id: None,   // required field
             event_type: None, // required field
             event_time_unix_nanos: 0,
+            record_kind: None,
+            record_id: None,
             market_id: None,
             instrument_id: None,
             listing_id: None,
-            venue_id: None,
+            exchange_id: None,
             source_symbol: None,
             previous_status: None,
             current_status: None,
@@ -349,6 +391,20 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> LifecycleEventBuilder<'a, 'b,
         );
     }
     #[inline]
+    pub fn add_record_kind(&mut self, record_kind: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            LifecycleEvent::VT_RECORD_KIND,
+            record_kind,
+        );
+    }
+    #[inline]
+    pub fn add_record_id(&mut self, record_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            LifecycleEvent::VT_RECORD_ID,
+            record_id,
+        );
+    }
+    #[inline]
     pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             LifecycleEvent::VT_MARKET_ID,
@@ -370,9 +426,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> LifecycleEventBuilder<'a, 'b,
         );
     }
     #[inline]
-    pub fn add_venue_id(&mut self, venue_id: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(LifecycleEvent::VT_VENUE_ID, venue_id);
+    pub fn add_exchange_id(&mut self, exchange_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            LifecycleEvent::VT_EXCHANGE_ID,
+            exchange_id,
+        );
     }
     #[inline]
     pub fn add_source_symbol(&mut self, source_symbol: ::flatbuffers::WIPOffset<&'b str>) {
@@ -436,10 +494,12 @@ impl ::core::fmt::Debug for LifecycleEvent<'_> {
         ds.field("event_id", &self.event_id());
         ds.field("event_type", &self.event_type());
         ds.field("event_time_unix_nanos", &self.event_time_unix_nanos());
+        ds.field("record_kind", &self.record_kind());
+        ds.field("record_id", &self.record_id());
         ds.field("market_id", &self.market_id());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("listing_id", &self.listing_id());
-        ds.field("venue_id", &self.venue_id());
+        ds.field("exchange_id", &self.exchange_id());
         ds.field("source_symbol", &self.source_symbol());
         ds.field("previous_status", &self.previous_status());
         ds.field("current_status", &self.current_status());

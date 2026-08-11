@@ -64,8 +64,43 @@ class MarketHistory(object):
         return 0
 
     # MarketHistory
-    def Quotes(self, j):
+    def Ticker24hCount(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketHistory
+    def MarkPriceCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketHistory
+    def IndexPriceCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketHistory
+    def FundingRateCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketHistory
+    def OpenInterestCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # MarketHistory
+    def Quotes(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -78,19 +113,19 @@ class MarketHistory(object):
 
     # MarketHistory
     def QuotesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketHistory
     def QuotesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         return o == 0
 
     # MarketHistory
     def Trades(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -103,19 +138,19 @@ class MarketHistory(object):
 
     # MarketHistory
     def TradesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketHistory
     def TradesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         return o == 0
 
     # MarketHistory
     def Bars(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -128,19 +163,19 @@ class MarketHistory(object):
 
     # MarketHistory
     def BarsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketHistory
     def BarsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         return o == 0
 
     # MarketHistory
     def Rates(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -153,19 +188,19 @@ class MarketHistory(object):
 
     # MarketHistory
     def RatesLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketHistory
     def RatesIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         return o == 0
 
     # MarketHistory
     def Greeks(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -178,18 +213,193 @@ class MarketHistory(object):
 
     # MarketHistory
     def GreeksLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # MarketHistory
     def GreeksIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        return o == 0
+
+    # MarketHistory
+    def Ticker24h(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.Ticker24h import Ticker24h
+            obj = Ticker24h()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def Ticker24hLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def Ticker24hIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        return o == 0
+
+    # MarketHistory
+    def MarkPrices(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.MarkPrice import MarkPrice
+            obj = MarkPrice()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def MarkPricesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def MarkPricesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        return o == 0
+
+    # MarketHistory
+    def IndexPrices(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.IndexPrice import IndexPrice
+            obj = IndexPrice()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def IndexPricesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def IndexPricesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        return o == 0
+
+    # MarketHistory
+    def FundingRates(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.FundingRate import FundingRate
+            obj = FundingRate()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def FundingRatesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def FundingRatesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        return o == 0
+
+    # MarketHistory
+    def OpenInterests(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.OpenInterest import OpenInterest
+            obj = OpenInterest()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def OpenInterestsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def OpenInterestsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        return o == 0
+
+    # MarketHistory
+    def Freshness(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.MarketFreshness import MarketFreshness
+            obj = MarketFreshness()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def FreshnessLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def FreshnessIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        return o == 0
+
+    # MarketHistory
+    def InstrumentStatuses(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.market.v1.InstrumentStatus import InstrumentStatus
+            obj = InstrumentStatus()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # MarketHistory
+    def InstrumentStatusesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # MarketHistory
+    def InstrumentStatusesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
         return o == 0
 
 def MarketHistoryStart(builder):
-    builder.StartObject(10)
+    builder.StartObject(22)
 
 def Start(builder):
     MarketHistoryStart(builder)
@@ -224,8 +434,38 @@ def MarketHistoryAddGreeksCount(builder, greeksCount):
 def AddGreeksCount(builder, greeksCount):
     MarketHistoryAddGreeksCount(builder, greeksCount)
 
+def MarketHistoryAddTicker24hCount(builder, ticker24hCount):
+    builder.PrependUint64Slot(5, ticker24hCount, 0)
+
+def AddTicker24hCount(builder, ticker24hCount):
+    MarketHistoryAddTicker24hCount(builder, ticker24hCount)
+
+def MarketHistoryAddMarkPriceCount(builder, markPriceCount):
+    builder.PrependUint64Slot(6, markPriceCount, 0)
+
+def AddMarkPriceCount(builder, markPriceCount):
+    MarketHistoryAddMarkPriceCount(builder, markPriceCount)
+
+def MarketHistoryAddIndexPriceCount(builder, indexPriceCount):
+    builder.PrependUint64Slot(7, indexPriceCount, 0)
+
+def AddIndexPriceCount(builder, indexPriceCount):
+    MarketHistoryAddIndexPriceCount(builder, indexPriceCount)
+
+def MarketHistoryAddFundingRateCount(builder, fundingRateCount):
+    builder.PrependUint64Slot(8, fundingRateCount, 0)
+
+def AddFundingRateCount(builder, fundingRateCount):
+    MarketHistoryAddFundingRateCount(builder, fundingRateCount)
+
+def MarketHistoryAddOpenInterestCount(builder, openInterestCount):
+    builder.PrependUint64Slot(9, openInterestCount, 0)
+
+def AddOpenInterestCount(builder, openInterestCount):
+    MarketHistoryAddOpenInterestCount(builder, openInterestCount)
+
 def MarketHistoryAddQuotes(builder, quotes):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(quotes), 0)
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(quotes), 0)
 
 def AddQuotes(builder, quotes):
     MarketHistoryAddQuotes(builder, quotes)
@@ -237,7 +477,7 @@ def StartQuotesVector(builder, numElems):
     return MarketHistoryStartQuotesVector(builder, numElems)
 
 def MarketHistoryAddTrades(builder, trades):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(trades), 0)
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(trades), 0)
 
 def AddTrades(builder, trades):
     MarketHistoryAddTrades(builder, trades)
@@ -249,7 +489,7 @@ def StartTradesVector(builder, numElems):
     return MarketHistoryStartTradesVector(builder, numElems)
 
 def MarketHistoryAddBars(builder, bars):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(bars), 0)
+    builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(bars), 0)
 
 def AddBars(builder, bars):
     MarketHistoryAddBars(builder, bars)
@@ -261,7 +501,7 @@ def StartBarsVector(builder, numElems):
     return MarketHistoryStartBarsVector(builder, numElems)
 
 def MarketHistoryAddRates(builder, rates):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(rates), 0)
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(rates), 0)
 
 def AddRates(builder, rates):
     MarketHistoryAddRates(builder, rates)
@@ -273,7 +513,7 @@ def StartRatesVector(builder, numElems):
     return MarketHistoryStartRatesVector(builder, numElems)
 
 def MarketHistoryAddGreeks(builder, greeks):
-    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(greeks), 0)
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(greeks), 0)
 
 def AddGreeks(builder, greeks):
     MarketHistoryAddGreeks(builder, greeks)
@@ -283,6 +523,90 @@ def MarketHistoryStartGreeksVector(builder, numElems):
 
 def StartGreeksVector(builder, numElems):
     return MarketHistoryStartGreeksVector(builder, numElems)
+
+def MarketHistoryAddTicker24h(builder, ticker24h):
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(ticker24h), 0)
+
+def AddTicker24h(builder, ticker24h):
+    MarketHistoryAddTicker24h(builder, ticker24h)
+
+def MarketHistoryStartTicker24hVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartTicker24hVector(builder, numElems):
+    return MarketHistoryStartTicker24hVector(builder, numElems)
+
+def MarketHistoryAddMarkPrices(builder, markPrices):
+    builder.PrependUOffsetTRelativeSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(markPrices), 0)
+
+def AddMarkPrices(builder, markPrices):
+    MarketHistoryAddMarkPrices(builder, markPrices)
+
+def MarketHistoryStartMarkPricesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartMarkPricesVector(builder, numElems):
+    return MarketHistoryStartMarkPricesVector(builder, numElems)
+
+def MarketHistoryAddIndexPrices(builder, indexPrices):
+    builder.PrependUOffsetTRelativeSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(indexPrices), 0)
+
+def AddIndexPrices(builder, indexPrices):
+    MarketHistoryAddIndexPrices(builder, indexPrices)
+
+def MarketHistoryStartIndexPricesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartIndexPricesVector(builder, numElems):
+    return MarketHistoryStartIndexPricesVector(builder, numElems)
+
+def MarketHistoryAddFundingRates(builder, fundingRates):
+    builder.PrependUOffsetTRelativeSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(fundingRates), 0)
+
+def AddFundingRates(builder, fundingRates):
+    MarketHistoryAddFundingRates(builder, fundingRates)
+
+def MarketHistoryStartFundingRatesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartFundingRatesVector(builder, numElems):
+    return MarketHistoryStartFundingRatesVector(builder, numElems)
+
+def MarketHistoryAddOpenInterests(builder, openInterests):
+    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(openInterests), 0)
+
+def AddOpenInterests(builder, openInterests):
+    MarketHistoryAddOpenInterests(builder, openInterests)
+
+def MarketHistoryStartOpenInterestsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartOpenInterestsVector(builder, numElems):
+    return MarketHistoryStartOpenInterestsVector(builder, numElems)
+
+def MarketHistoryAddFreshness(builder, freshness):
+    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(freshness), 0)
+
+def AddFreshness(builder, freshness):
+    MarketHistoryAddFreshness(builder, freshness)
+
+def MarketHistoryStartFreshnessVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartFreshnessVector(builder, numElems):
+    return MarketHistoryStartFreshnessVector(builder, numElems)
+
+def MarketHistoryAddInstrumentStatuses(builder, instrumentStatuses):
+    builder.PrependUOffsetTRelativeSlot(21, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentStatuses), 0)
+
+def AddInstrumentStatuses(builder, instrumentStatuses):
+    MarketHistoryAddInstrumentStatuses(builder, instrumentStatuses)
+
+def MarketHistoryStartInstrumentStatusesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartInstrumentStatusesVector(builder, numElems):
+    return MarketHistoryStartInstrumentStatusesVector(builder, numElems)
 
 def MarketHistoryEnd(builder):
     return builder.EndObject()

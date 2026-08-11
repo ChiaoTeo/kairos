@@ -32,7 +32,7 @@ class OpenOrder(object):
         return None
 
     # OpenOrder
-    def VenueOrderId(self):
+    def RemoteOrderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -93,11 +93,11 @@ def OpenOrderAddOrderId(builder, orderId):
 def AddOrderId(builder, orderId):
     OpenOrderAddOrderId(builder, orderId)
 
-def OpenOrderAddVenueOrderId(builder, venueOrderId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(venueOrderId), 0)
+def OpenOrderAddRemoteOrderId(builder, remoteOrderId):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
-def AddVenueOrderId(builder, venueOrderId):
-    OpenOrderAddVenueOrderId(builder, venueOrderId)
+def AddRemoteOrderId(builder, remoteOrderId):
+    OpenOrderAddRemoteOrderId(builder, remoteOrderId)
 
 def OpenOrderAddInstrumentId(builder, instrumentId):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)

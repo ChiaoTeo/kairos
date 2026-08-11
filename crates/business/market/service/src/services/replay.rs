@@ -34,12 +34,18 @@ impl ReplayMarketFeed {
         let mut events: Vec<_> = events
             .into_iter()
             .filter(|event| {
-                let time = event.observed_at_unix_nanos();
+                let time = event.observed_at_unix_nanos().get();
                 start_unix_nanos.is_none_or(|start| time >= start)
                     && end_unix_nanos.is_none_or(|end| time <= end)
             })
             .collect();
-        events.sort_by_key(|event| event.observed_at_unix_nanos());
+        events.sort_by(|left, right| {
+            left.observed_at_unix_nanos()
+                .cmp(&right.observed_at_unix_nanos())
+                .then_with(|| left.source_id().cmp(right.source_id()))
+                .then_with(|| left.market_id().cmp(right.market_id()))
+                .then_with(|| left.view_kind().cmp(right.view_kind()))
+        });
         Self {
             events: events.into_iter().collect(),
             subscribed: false,
@@ -83,17 +89,17 @@ impl ReplayMarketFeed {
     pub fn remaining(&self) -> usize {
         self.events.len()
     }
-
-    pub fn virtual_time_unix_nanos(&self) -> Option<u64> {
-        self.virtual_time_unix_nanos
-    }
-
-    pub fn completed(&self) -> bool {
-        self.completed
-    }
 }
 
 impl MarketFeed for ReplayMarketFeed {
+    fn remaining(&self) -> usize {
+        self.remaining()
+    }
+
+    fn is_complete(&self) -> bool {
+        self.completed && self.events.is_empty()
+    }
+
     fn status(&self) -> FeedStatus {
         if self.subscribed {
             FeedStatus::Ready
@@ -121,7 +127,7 @@ impl MarketFeed for ReplayMarketFeed {
         }
         let events: Vec<_> = self.events.drain(..).collect();
         if let Some(last) = events.last() {
-            self.virtual_time_unix_nanos = Some(last.observed_at_unix_nanos());
+            self.virtual_time_unix_nanos = Some(last.observed_at_unix_nanos().get());
         }
         self.completed = self.events.is_empty();
         self.cursor += events.len();

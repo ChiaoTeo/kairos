@@ -1,7 +1,7 @@
 # Reference Runtime Architecture
 
 Reference is a single-writer catalog service with parallel provider ingestion,
-durable incremental commits, asynchronous publication, and generation-based
+durable incremental commits, isolated publication, and generation-based
 read models.
 
 The Reference change stream is a transport-registered resource. Runtime
@@ -27,7 +27,9 @@ writer remains the only owner allowed to mutate the catalog.
 ## Provider rules
 
 - Every provider has an independent worker and a bounded request slot.
-- Provider pagination has a refresh deadline of 45 seconds per run.
+- Provider pagination has a refresh deadline of 150 seconds per run, aligned
+  with the current 120-second integration request timeout plus coordination
+  overhead.
 - Provider failures use exponential backoff and a bounded open circuit before
   recovery probing.
 - A provider transport failure uses its last-known-good snapshot.

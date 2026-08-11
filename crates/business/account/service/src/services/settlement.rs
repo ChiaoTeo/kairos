@@ -1,7 +1,7 @@
 use crate::application::AccountProjection;
 use crate::domain::{
-    AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, Decimal, FillSide,
-    Position, SegmentKey, SnapshotKind,
+    AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, FillSide, Money, Position,
+    SignedQuantity, SnapshotKind,
 };
 
 /// Builds authoritative account deltas for deterministic paper/simulated fills.
@@ -13,15 +13,11 @@ pub(crate) fn settle_paper_fill(
 ) -> Result<AccountSnapshot, AccountDomainError> {
     if account.segment_key != fill.segment_key {
         return Err(AccountDomainError::SegmentMismatch {
-            expected: account.segment_key.clone(),
+            expected: account.segment_key.to_string(),
             observed: fill.segment_key.to_string(),
         });
     }
 
-    let signed_quantity = match fill.side {
-        FillSide::Buy => fill.quantity,
-        FillSide::Sell => fill.quantity.checked_neg()?,
-    };
     let mut position = account
         .positions
         .iter()
@@ -30,15 +26,73 @@ pub(crate) fn settle_paper_fill(
         .unwrap_or_else(|| Position {
             instrument_id: fill.instrument_id.clone(),
             market_id: None,
-            quantity: Decimal::ZERO,
+            quantity: SignedQuantity::new(0, fill.quantity.scale()),
             average_price: None,
             mark_price: None,
             unrealized_pnl: None,
             realized_pnl: None,
-            updated_at_unix_nanos: 0,
+            updated_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
         });
-    position.quantity = position.quantity.checked_add(signed_quantity)?;
-    position.average_price = Some(fill.price);
+    let previous_quantity = position.quantity;
+    let previous_average = position
+        .average_price
+        .unwrap_or_else(|| kairos_domain_types::Price::new(1, 0).expect("positive fallback price"));
+    let fill_quantity = SignedQuantity::new(fill.quantity.mantissa(), fill.quantity.scale());
+    let (next_quantity, next_average, realized_pnl) = match fill.side {
+        FillSide::Buy => {
+            let next_quantity = previous_quantity.checked_add(fill_quantity)?;
+            let next_average =
+                if previous_quantity.is_positive() && position.average_price.is_some() {
+                    previous_quantity
+                        .checked_mul(previous_average)?
+                        .checked_add(fill.price.checked_mul(fill.quantity)?)?
+                        .checked_div(next_quantity)?
+                } else {
+                    fill.price
+                };
+            (next_quantity, next_average, Money::new(0, 0))
+        }
+        FillSide::Sell => {
+            let next_quantity = previous_quantity.checked_sub(fill_quantity)?;
+            let closing_quantity = if previous_quantity.is_positive() {
+                if fill_quantity.cmp_value(previous_quantity)? == std::cmp::Ordering::Greater {
+                    previous_quantity
+                } else {
+                    fill_quantity
+                }
+            } else {
+                SignedQuantity::new(0, fill_quantity.scale())
+            };
+            let realized_pnl = if closing_quantity.is_positive() && position.average_price.is_some()
+            {
+                fill.price
+                    .checked_sub(previous_average)?
+                    .checked_mul(closing_quantity)?
+            } else {
+                Money::new(0, 0)
+            };
+            let next_average = if next_quantity.is_positive() {
+                previous_average
+            } else if next_quantity.is_negative() {
+                fill.price
+            } else {
+                kairos_domain_types::Price::new(1, 0).expect("positive fallback price")
+            };
+            (next_quantity, next_average, realized_pnl)
+        }
+    };
+    position.quantity = next_quantity;
+    position.average_price = if next_quantity.is_zero() {
+        None
+    } else {
+        Some(next_average)
+    };
+    position.realized_pnl = Some(
+        position
+            .realized_pnl
+            .unwrap_or(Money::new(0, 0))
+            .checked_add(realized_pnl)?,
+    );
     position.updated_at_unix_nanos = fill.occurred_at_unix_nanos;
 
     let mut balances = Vec::new();
@@ -64,13 +118,13 @@ pub(crate) fn settle_paper_fill(
     }
 
     Ok(AccountSnapshot {
-        segment_key: SegmentKey::new(account.segment_key.clone())?,
+        segment_key: account.segment_key.clone(),
         balances,
         collateral: Vec::new(),
         positions: vec![position],
         open_orders: Vec::new(),
         status: account.status,
-        observed_at_unix_nanos: fill.occurred_at_unix_nanos,
+        observed_at_unix_nanos: fill.occurred_at_unix_nanos.get().into(),
         equity: None,
         initial_equity: None,
         net_profit: None,
@@ -84,7 +138,7 @@ pub(crate) fn settle_paper_fill(
 fn balance_after_delta(
     account: &AccountProjection,
     asset: &str,
-    delta: Decimal,
+    delta: SignedQuantity,
 ) -> Result<Balance, AccountDomainError> {
     let asset_code = asset.trim().to_ascii_uppercase();
     if asset_code.is_empty() {
@@ -100,8 +154,8 @@ fn balance_after_delta(
         .cloned()
         .unwrap_or(Balance {
             asset_id,
-            asset_code,
-            total: Decimal::ZERO,
+            asset_code: kairos_domain_types::Currency::new(asset_code)?,
+            total: SignedQuantity::new(0, delta.scale()),
             available: None,
             locked: None,
             borrowed: None,

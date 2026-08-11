@@ -12,9 +12,10 @@ from typer.main import get_command
 
 from .commands.launch import launch_app
 from .commands.reference import reference_app
-from .commands.account import HELP as ACCOUNT_HELP, account_passthrough
-from .commands.market import HELP as MARKET_HELP, market_passthrough
-from .commands.order import HELP as ORDER_HELP, order_passthrough
+from .commands.account import account_passthrough
+from .commands.integration import integration_passthrough
+from .commands.market import market_passthrough
+from .commands.order import order_passthrough
 from .commands.root import (
     config_app,
     project_app,
@@ -25,13 +26,32 @@ from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.system import ComponentProcessApplication
 from kairospy.surface.console import ObserveApp
 from kairospy.surface.console.data import SystemObserveReader
+from kairospy.surface.console.models import recommended_action
 from .options import OutputFormat, reset_command_output, set_command_output
 
 
-app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
-app.add_typer(launch_app, name="launch")
-app.add_typer(project_app, name="project")
-app.add_typer(config_app, name="config")
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Build, run, and diagnose reproducible trading strategies.",
+)
+app.add_typer(
+    launch_app,
+    name="launch",
+    help="Run strategies and inspect their status, logs, and reports.",
+    rich_help_panel="Daily workflow",
+)
+app.add_typer(
+    project_app,
+    name="project",
+    help="Create, scaffold, and diagnose a Kairos project.",
+    rich_help_panel="Daily workflow",
+)
+app.add_typer(
+    config_app,
+    name="config",
+    help="Inspect advanced workspace configuration.",
+    rich_help_panel="Advanced tools",
+)
 app.command(
     "account",
     context_settings={
@@ -39,8 +59,19 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help=ACCOUNT_HELP,
+    help="Configure accounts and inspect balances, positions, and orders.",
+    rich_help_panel="Operations",
 )(account_passthrough)
+app.command(
+    "integration",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help="Inspect provider capabilities and run provider operations.",
+    rich_help_panel="Operations",
+)(integration_passthrough)
 app.command(
     "market",
     context_settings={
@@ -48,7 +79,8 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help=MARKET_HELP,
+    help="Validate market data, manage subscriptions, and read snapshots.",
+    rich_help_panel="Operations",
 )(market_passthrough)
 app.command(
     "order",
@@ -57,11 +89,27 @@ app.command(
         "ignore_unknown_options": True,
         "help_option_names": [],
     },
-    help=ORDER_HELP,
+    help="Submit and inspect execution orders.",
+    rich_help_panel="Operations",
 )(order_passthrough)
-app.add_typer(system_app, name="system")
-app.add_typer(timeline_app, name="timeline")
-app.add_typer(reference_app, name="reference")
+app.add_typer(
+    system_app,
+    name="system",
+    help="Diagnose and control workspace runtime components.",
+    rich_help_panel="Operations",
+)
+app.add_typer(
+    timeline_app,
+    name="timeline",
+    help="Inspect and export event timelines.",
+    rich_help_panel="Advanced tools",
+)
+app.add_typer(
+    reference_app,
+    name="reference",
+    help="Query reference assets, listings, and markets.",
+    rich_help_panel="Operations",
+)
 
 
 def _cli_format(argv: Sequence[str]) -> str:
@@ -71,7 +119,12 @@ def _cli_format(argv: Sequence[str]) -> str:
             return argv[index + 1]
         for option in ("--output=", "--format="):
             if item.startswith(option):
-                return item[len(option):]
+                return item[len(option) :]
+    # Project creation targets a workspace that does not exist yet. Its output
+    # must not inherit the format of an unrelated workspace discovered from
+    # the caller's current directory.
+    if list(argv[:2]) == ["project", "init"]:
+        return "text"
     workspace: str | None = None
     for index, item in enumerate(argv):
         if item == "--workspace" and index + 1 < len(argv):
@@ -84,26 +137,35 @@ def _cli_format(argv: Sequence[str]) -> str:
         return "json"
 
 
-@app.command("shell")
-def shell(workspace: str | None = typer.Option(None, "--workspace")) -> None:
-    value = WorkspaceApplication().resolve(workspace)
-    typer.echo(f"kairos shell session for {value.workspace_id}; use subcommands with --workspace {value.paths.root}")
-
-
-@app.command("observe")
+@app.command("observe", rich_help_panel="Daily workflow")
 def observe(
     workspace: str | None = typer.Option(None, "--workspace"),
-    refresh: float = typer.Option(2.0, "--refresh", min=0.2, help="Refresh interval in seconds"),
-    once: bool = typer.Option(False, "--once", help="Print one JSON observation and exit"),
+    refresh: float = typer.Option(
+        2.0, "--refresh", min=0.2, help="Refresh interval in seconds"
+    ),
+    once: bool = typer.Option(
+        False, "--once", help="Print one JSON observation and exit"
+    ),
 ) -> None:
-    """Open the read-only system and market observation console."""
+    """Open the project, launch, runtime, and market observation console."""
     value = WorkspaceApplication().resolve(workspace)
     reader = SystemObserveReader(ComponentProcessApplication(value), value.workspace_id)
     if once:
         import json
 
         snapshot = reader.read()
-        typer.echo(json.dumps({"workspace_id": snapshot.workspace_id, "components": snapshot.components, "market_snapshot": snapshot.market_snapshot}, default=str))
+        typer.echo(
+            json.dumps(
+                {
+                    "workspace_id": snapshot.workspace_id,
+                    "components": snapshot.components,
+                    "launches": snapshot.launches,
+                    "market_snapshot": snapshot.market_snapshot,
+                    "next_action": recommended_action(snapshot),
+                },
+                default=str,
+            )
+        )
         return
     ObserveApp(reader, refresh_seconds=refresh).run()
 
@@ -114,15 +176,17 @@ def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
     observe(workspace=workspace)
 
 
-@app.command("browse")
+@app.command("browse", rich_help_panel="Advanced tools")
 def browse(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+    """List workspace-owned files for low-level inspection."""
     value = WorkspaceApplication().resolve(workspace)
     for path in sorted(value.paths.root.rglob("*")):
         typer.echo(str(path.relative_to(value.paths.root)))
 
 
-@app.command("version")
+@app.command("version", rich_help_panel="Advanced tools")
 def version() -> None:
+    """Print the installed KairosPy version."""
     typer.echo("kairospy 0.1.0")
 
 

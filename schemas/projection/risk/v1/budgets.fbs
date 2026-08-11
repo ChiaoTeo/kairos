@@ -6,8 +6,10 @@ namespace kairos.risk.v1;
 table Risk {
   budget_count:ulong;
   reservation_count:ulong;
+  circuit_count:ulong;
   budgets:[kairos.risk.v1.Budget];
   reservations:[kairos.risk.v1.Reservation];
+  circuits:[CircuitState];
 }
 
 table RiskSnapshot {

@@ -18,7 +18,9 @@ class MarketCliApplication:
     workspace: Workspace | None = None
     binary: str | None = None
 
-    def command(self, arguments: Sequence[str], *, output: str | None = "json") -> list[str]:
+    def command(
+        self, arguments: Sequence[str], *, output: str | None = "json"
+    ) -> list[str]:
         """Build a Rust command; output is explicit adapter configuration."""
         reject_owned_options(arguments, {"--workspace"})
         command = [self.binary or resolve_binary("kairos-market-cli")]

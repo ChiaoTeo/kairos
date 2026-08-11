@@ -39,36 +39,43 @@ class Reservation(object):
         return None
 
     # Reservation
-    def IntentId(self):
+    def IdempotencyKey(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Reservation
-    def AccountId(self):
+    def IntentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Reservation
-    def InstrumentId(self):
+    def AccountId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Reservation
-    def Metric(self):
+    def InstrumentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Reservation
-    def Amount(self):
+    def Metric(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Reservation
+    def Amount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v1.Decimal64 import Decimal64
@@ -79,7 +86,7 @@ class Reservation(object):
 
     # Reservation
     def Allocations(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -92,39 +99,53 @@ class Reservation(object):
 
     # Reservation
     def AllocationsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # Reservation
     def AllocationsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         return o == 0
 
     # Reservation
     def Status(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Reservation
     def CreatedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Reservation
     def UpdatedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Reservation
+    def ExpiresAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Reservation
+    def PolicyVersion(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def ReservationStart(builder):
-    builder.StartObject(11)
+    builder.StartObject(14)
 
 def Start(builder):
     ReservationStart(builder)
@@ -141,38 +162,44 @@ def ReservationAddOwnerId(builder, ownerId):
 def AddOwnerId(builder, ownerId):
     ReservationAddOwnerId(builder, ownerId)
 
+def ReservationAddIdempotencyKey(builder, idempotencyKey):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(idempotencyKey), 0)
+
+def AddIdempotencyKey(builder, idempotencyKey):
+    ReservationAddIdempotencyKey(builder, idempotencyKey)
+
 def ReservationAddIntentId(builder, intentId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(intentId), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(intentId), 0)
 
 def AddIntentId(builder, intentId):
     ReservationAddIntentId(builder, intentId)
 
 def ReservationAddAccountId(builder, accountId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(accountId), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(accountId), 0)
 
 def AddAccountId(builder, accountId):
     ReservationAddAccountId(builder, accountId)
 
 def ReservationAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
 
 def AddInstrumentId(builder, instrumentId):
     ReservationAddInstrumentId(builder, instrumentId)
 
 def ReservationAddMetric(builder, metric):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(metric), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(metric), 0)
 
 def AddMetric(builder, metric):
     ReservationAddMetric(builder, metric)
 
 def ReservationAddAmount(builder, amount):
-    builder.PrependStructSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(amount), 0)
+    builder.PrependStructSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(amount), 0)
 
 def AddAmount(builder, amount):
     ReservationAddAmount(builder, amount)
 
 def ReservationAddAllocations(builder, allocations):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(allocations), 0)
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(allocations), 0)
 
 def AddAllocations(builder, allocations):
     ReservationAddAllocations(builder, allocations)
@@ -184,22 +211,34 @@ def StartAllocationsVector(builder, numElems):
     return ReservationStartAllocationsVector(builder, numElems)
 
 def ReservationAddStatus(builder, status):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
 
 def AddStatus(builder, status):
     ReservationAddStatus(builder, status)
 
 def ReservationAddCreatedAtUnixNanos(builder, createdAtUnixNanos):
-    builder.PrependUint64Slot(9, createdAtUnixNanos, 0)
+    builder.PrependUint64Slot(10, createdAtUnixNanos, 0)
 
 def AddCreatedAtUnixNanos(builder, createdAtUnixNanos):
     ReservationAddCreatedAtUnixNanos(builder, createdAtUnixNanos)
 
 def ReservationAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
-    builder.PrependUint64Slot(10, updatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(11, updatedAtUnixNanos, 0)
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     ReservationAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)
+
+def ReservationAddExpiresAtUnixNanos(builder, expiresAtUnixNanos):
+    builder.PrependUint64Slot(12, expiresAtUnixNanos, 0)
+
+def AddExpiresAtUnixNanos(builder, expiresAtUnixNanos):
+    ReservationAddExpiresAtUnixNanos(builder, expiresAtUnixNanos)
+
+def ReservationAddPolicyVersion(builder, policyVersion):
+    builder.PrependUint64Slot(13, policyVersion, 0)
+
+def AddPolicyVersion(builder, policyVersion):
+    ReservationAddPolicyVersion(builder, policyVersion)
 
 def ReservationEnd(builder):
     return builder.EndObject()

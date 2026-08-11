@@ -21,7 +21,7 @@ impl<'a> ::flatbuffers::Follow<'a> for ExecutionAccess<'a> {
 
 impl<'a> ExecutionAccess<'a> {
     pub const VT_ACCESS_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_PROVIDER_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_PRODUCT_FAMILY: ::flatbuffers::VOffsetT = 10;
     pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 12;
@@ -62,8 +62,8 @@ impl<'a> ExecutionAccess<'a> {
         if let Some(x) = args.provider_id {
             builder.add_provider_id(x);
         }
-        if let Some(x) = args.instrument_id {
-            builder.add_instrument_id(x);
+        if let Some(x) = args.market_id {
+            builder.add_market_id(x);
         }
         if let Some(x) = args.access_id {
             builder.add_access_id(x);
@@ -83,16 +83,13 @@ impl<'a> ExecutionAccess<'a> {
         }
     }
     #[inline]
-    pub fn instrument_id(&self) -> &'a str {
+    pub fn market_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    ExecutionAccess::VT_INSTRUMENT_ID,
-                    None,
-                )
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAccess::VT_MARKET_ID, None)
                 .unwrap()
         }
     }
@@ -195,8 +192,8 @@ impl ::flatbuffers::Verifiable for ExecutionAccess<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "instrument_id",
-                Self::VT_INSTRUMENT_ID,
+                "market_id",
+                Self::VT_MARKET_ID,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -236,7 +233,7 @@ impl ::flatbuffers::Verifiable for ExecutionAccess<'_> {
 }
 pub struct ExecutionAccessArgs<'a> {
     pub access_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub product_family: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -250,7 +247,7 @@ impl<'a> Default for ExecutionAccessArgs<'a> {
     fn default() -> Self {
         ExecutionAccessArgs {
             access_id: None,       // required field
-            instrument_id: None,   // required field
+            market_id: None,       // required field
             provider_id: None,     // required field
             product_family: None,  // required field
             provider_symbol: None, // required field
@@ -275,10 +272,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionAccessBuilder<'a, 'b
         );
     }
     #[inline]
-    pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            ExecutionAccess::VT_INSTRUMENT_ID,
-            instrument_id,
+            ExecutionAccess::VT_MARKET_ID,
+            market_id,
         );
     }
     #[inline]
@@ -349,7 +346,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionAccessBuilder<'a, 'b
         self.fbb_
             .required(o, ExecutionAccess::VT_ACCESS_ID, "access_id");
         self.fbb_
-            .required(o, ExecutionAccess::VT_INSTRUMENT_ID, "instrument_id");
+            .required(o, ExecutionAccess::VT_MARKET_ID, "market_id");
         self.fbb_
             .required(o, ExecutionAccess::VT_PROVIDER_ID, "provider_id");
         self.fbb_
@@ -365,7 +362,7 @@ impl ::core::fmt::Debug for ExecutionAccess<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("ExecutionAccess");
         ds.field("access_id", &self.access_id());
-        ds.field("instrument_id", &self.instrument_id());
+        ds.field("market_id", &self.market_id());
         ds.field("provider_id", &self.provider_id());
         ds.field("product_family", &self.product_family());
         ds.field("provider_symbol", &self.provider_symbol());

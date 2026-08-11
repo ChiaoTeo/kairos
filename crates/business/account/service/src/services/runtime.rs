@@ -1,12 +1,17 @@
+use crate::application::MarkToMarket;
 use crate::application::{
     AccountProjection, AccountRefreshIssue, AccountRefreshReport, AccountsSnapshot,
 };
-use crate::domain::{AccountEvent, AccountFill, AccountSegment, ApplyOutcome, SegmentKey};
+use crate::domain::{
+    AccountEvent, AccountFill, AccountSegment, AccountSnapshot, ApplyOutcome, Money, Position,
+    SegmentKey, SignedQuantity, SnapshotKind,
+};
 use crate::services::actor::AccountActor;
 use crate::services::integration::AccountEventStream;
 use crate::services::persistence::JsonAccountStore;
 use crate::services::persistence_worker::AccountPersistenceWorker;
 use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
+use kairos_domain_types::ActorId;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use tracing::info;
@@ -20,6 +25,7 @@ pub(crate) struct AccountRuntime {
     pending_refresh: Option<(String, Receiver<Vec<RefreshFetch>>)>,
     persistence: Option<AccountPersistenceWorker>,
     streams: Vec<AccountEventStream>,
+    stream_wakeup: Arc<tokio::sync::Notify>,
     next_stream_index: usize,
     journal_events_since_checkpoint: usize,
 }
@@ -34,9 +40,9 @@ impl AccountRuntime {
             Some(store) => store.load()?,
             None => crate::services::persistence::PersistedAccounts {
                 schema_version: 1,
-                actor_id: "account".into(),
-                generation: 0,
-                event_sequence: 0,
+                actor_id: ActorId::new("account").expect("valid account actor ID"),
+                generation: 0.into(),
+                event_sequence: 0.into(),
                 accounts: Vec::new(),
             },
         };
@@ -73,13 +79,19 @@ impl AccountRuntime {
             pending_refresh: None,
             persistence: store.map(AccountPersistenceWorker::new),
             streams: Vec::new(),
+            stream_wakeup: Arc::new(tokio::sync::Notify::new()),
             next_stream_index: 0,
             journal_events_since_checkpoint,
         })
     }
 
-    pub(crate) fn attach_stream(&mut self, stream: AccountEventStream) {
+    pub(crate) fn attach_stream(&mut self, mut stream: AccountEventStream) {
+        stream.register_wakeup(Arc::clone(&self.stream_wakeup));
         self.streams.push(stream);
+    }
+
+    pub(crate) fn stream_wakeup(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.stream_wakeup)
     }
 
     pub(crate) fn has_stream(&self) -> bool {
@@ -186,6 +198,85 @@ impl AccountRuntime {
         Ok(ApplyOutcome::Applied)
     }
 
+    pub(crate) fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), String> {
+        let segment_key = request.segment_key.clone();
+        let projection = self
+            .actor
+            .projection(&segment_key)
+            .ok_or_else(|| format!("mark segment is not configured: {}", request.segment_key))?;
+        let mut positions = projection.positions.clone();
+        let mut found = false;
+        for position in &mut positions {
+            if position.instrument_id == request.instrument_id {
+                position.mark_price = Some(request.mark_price);
+                position.unrealized_pnl = Some(unrealized_pnl(position)?);
+                position.updated_at_unix_nanos = request.observed_at_unix_nanos;
+                found = true;
+            }
+        }
+        if !found {
+            return Err(format!(
+                "mark instrument is not present in account: {}",
+                request.instrument_id
+            ));
+        }
+        let equity = calculate_equity(&projection, &positions, &request.quote_asset)?;
+        let initial_equity = projection.initial_equity.or(Some(equity));
+        let net_profit = initial_equity
+            .map(|initial| {
+                equity
+                    .checked_sub(initial)
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+        let snapshot = AccountSnapshot {
+            segment_key,
+            balances: Vec::new(),
+            collateral: Vec::new(),
+            positions,
+            open_orders: Vec::new(),
+            status: projection.status,
+            observed_at_unix_nanos: request.observed_at_unix_nanos,
+            equity: Some(equity),
+            initial_equity,
+            net_profit,
+            account_model: projection.observed_account_model,
+            margin_mode: projection.margin_mode,
+            position_mode: projection.position_mode,
+            kind: SnapshotKind::Delta,
+        };
+        self.apply_event(AccountEvent::Snapshot(snapshot))?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_event(&mut self, event: AccountEvent) -> Result<usize, String> {
+        let events = match event {
+            AccountEvent::Batch(events) => events,
+            event => vec![event],
+        };
+        let undo = self.actor.undo_for_events(&events);
+        let mut applied = 0;
+        for event in events.iter().cloned() {
+            match self.actor.apply_events(event) {
+                Ok(value) => applied += value as usize,
+                Err(error) => {
+                    self.actor.restore_undo(undo);
+                    return Err(error);
+                }
+            }
+        }
+        if applied == 0 {
+            return Ok(0);
+        }
+        let persisted = AccountEvent::Batch(events);
+        if let Err(error) = self.persist_events(std::slice::from_ref(&persisted)) {
+            self.actor.restore_undo(undo);
+            return Err(error);
+        }
+        self.cached_snapshot = Arc::new(self.actor.snapshot());
+        Ok(applied)
+    }
+
     pub(crate) fn refresh(
         &mut self,
         account_id: &str,
@@ -264,7 +355,7 @@ impl AccountRuntime {
             match fetch.result {
                 Ok(snapshot) => match candidate.apply_snapshot(snapshot) {
                     Ok((ApplyOutcome::Applied, observed_differences)) => {
-                        refreshed.push(key.to_string());
+                        refreshed.push(key);
                         differences.extend(observed_differences);
                     }
                     Ok((_, observed_differences)) => differences.extend(observed_differences),
@@ -277,7 +368,8 @@ impl AccountRuntime {
             self.commit_candidate(candidate)?;
         }
         Ok(AccountRefreshReport {
-            account_id: account_id.into(),
+            account_id: kairos_domain_types::AccountId::new(account_id)
+                .map_err(|error| error.to_string())?,
             refreshed_segments: refreshed,
             issues,
             differences,
@@ -326,11 +418,11 @@ impl AccountRuntime {
     }
 
     pub(crate) fn generation(&self) -> u64 {
-        self.actor.persistence_metadata().1
+        self.actor.persistence_metadata().1.get()
     }
 
     pub(crate) fn event_sequence(&self) -> u64 {
-        self.actor.persistence_metadata().2
+        self.actor.persistence_metadata().2.get()
     }
 
     pub(crate) fn take_persistence_error(&self) -> Option<String> {
@@ -354,8 +446,8 @@ impl AccountRuntime {
             let (actor_id, generation, event_sequence) = candidate.persistence_metadata();
             persistence.checkpoint(
                 actor_id.to_string(),
-                generation,
-                event_sequence,
+                generation.get(),
+                event_sequence.get(),
                 candidate.persistent_accounts(),
             )?;
         }
@@ -387,9 +479,49 @@ impl AccountRuntime {
     }
 }
 
+fn unrealized_pnl(position: &Position) -> Result<Money, String> {
+    let Some(average_price) = position.average_price else {
+        return Ok(Money::new(0, 0));
+    };
+    let Some(mark_price) = position.mark_price else {
+        return Ok(Money::new(0, 0));
+    };
+    mark_price
+        .checked_sub(average_price)
+        .and_then(|delta| delta.checked_mul(position.quantity))
+        .map_err(|error| error.to_string())
+}
+
+fn calculate_equity(
+    projection: &crate::application::AccountProjection,
+    positions: &[Position],
+    quote_asset: &str,
+) -> Result<Money, String> {
+    let balance = projection
+        .balances
+        .iter()
+        .find(|value| value.asset_code.eq_ignore_ascii_case(quote_asset))
+        .map(|value| value.total)
+        .unwrap_or(SignedQuantity::new(0, 0));
+    let mut equity = Money::new(balance.mantissa(), balance.scale());
+    for position in positions {
+        if let Some(mark_price) = position.mark_price {
+            equity = equity
+                .checked_add(
+                    position
+                        .quantity
+                        .checked_mul(mark_price)
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(equity)
+}
+
 fn event_requires_durability(event: &AccountEvent) -> bool {
     match event {
-        AccountEvent::Fill(_) => true,
+        AccountEvent::Fill(_) | AccountEvent::ObservedFill(_) => true,
         AccountEvent::Batch(events) => events.iter().any(event_requires_durability),
         AccountEvent::Snapshot(_) | AccountEvent::OrderObserved(_) => false,
     }
@@ -397,7 +529,7 @@ fn event_requires_durability(event: &AccountEvent) -> bool {
 
 fn refresh_issue(segment_key: &SegmentKey, error: String, elapsed_ms: u64) -> AccountRefreshIssue {
     AccountRefreshIssue {
-        segment_key: segment_key.to_string(),
+        segment_key: segment_key.clone(),
         error,
         elapsed_ms,
         diagnostic_id: format!("account-refresh-{segment_key}-{elapsed_ms}"),

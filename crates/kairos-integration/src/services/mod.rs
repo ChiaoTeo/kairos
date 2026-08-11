@@ -1,8 +1,5 @@
-//! Private integration implementations and provider gateways.
+//! Private participant implementations and participant-neutral mechanisms.
 
-pub(crate) mod auth;
-pub(crate) mod connections;
-pub(crate) mod drivers;
-pub(crate) mod factories;
-pub(crate) mod gateways;
-pub(crate) mod streams;
+pub(crate) mod participants;
+pub(crate) mod quota;
+pub(crate) mod transport;

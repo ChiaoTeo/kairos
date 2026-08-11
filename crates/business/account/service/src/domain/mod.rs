@@ -1,14 +1,17 @@
 use std::collections::BTreeMap;
 
+use kairos_domain_types::{
+    Currency, DurationNanos, Generation, MarketId, OrderId, OrderSide, OrderStatus, RemoteOrderId,
+    Sequence, UnixNanos,
+};
 use serde::{Deserialize, Serialize};
 
-mod decimal;
 mod error;
 mod identity;
 mod market_profile;
-pub use decimal::Decimal;
 pub use error::AccountDomainError;
 pub use identity::{AccountId, AssetId, ExternalOrderId, FillId, InstrumentId, SegmentKey};
+pub use kairos_domain_types::{Money, Price, Quantity, Rate, SignedQuantity};
 pub use market_profile::AccountMarketProfile;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -91,40 +94,35 @@ impl AccountSegment {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Balance {
     pub asset_id: AssetId,
-    pub asset_code: String,
-    pub total: Decimal,
-    pub available: Option<Decimal>,
-    pub locked: Option<Decimal>,
-    pub borrowed: Option<Decimal>,
-    pub interest: Option<Decimal>,
+    pub asset_code: Currency,
+    pub total: SignedQuantity,
+    pub available: Option<SignedQuantity>,
+    pub locked: Option<SignedQuantity>,
+    pub borrowed: Option<SignedQuantity>,
+    pub interest: Option<SignedQuantity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Position {
     pub instrument_id: InstrumentId,
-    pub market_id: Option<String>,
-    pub quantity: Decimal,
-    pub average_price: Option<Decimal>,
-    pub mark_price: Option<Decimal>,
-    pub unrealized_pnl: Option<Decimal>,
-    pub realized_pnl: Option<Decimal>,
-    pub updated_at_unix_nanos: u64,
+    pub market_id: Option<MarketId>,
+    pub quantity: SignedQuantity,
+    pub average_price: Option<Price>,
+    pub mark_price: Option<Price>,
+    pub unrealized_pnl: Option<Money>,
+    pub realized_pnl: Option<Money>,
+    pub updated_at_unix_nanos: UnixNanos,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountStatus {
+    #[default]
     Unknown,
     Ready,
     Reconciling,
     TypeMismatch,
     Suspended,
     Unavailable,
-}
-
-impl Default for AccountStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl AccountStatus {
@@ -145,28 +143,30 @@ pub struct AccountState {
     balances: BTreeMap<AssetId, Balance>,
     collateral: BTreeMap<AssetId, Balance>,
     positions: BTreeMap<InstrumentId, Position>,
-    open_orders: BTreeMap<String, OpenOrder>,
+    open_orders: BTreeMap<OrderId, OpenOrder>,
     status: AccountStatus,
     stale: bool,
-    observed_at_unix_nanos: u64,
-    generation: u64,
-    event_sequence: u64,
-    equity: Option<Decimal>,
-    initial_equity: Option<Decimal>,
-    net_profit: Option<Decimal>,
+    observed_at_unix_nanos: UnixNanos,
+    generation: Generation,
+    event_sequence: Sequence,
+    equity: Option<Money>,
+    initial_equity: Option<Money>,
+    net_profit: Option<Money>,
     observed_account_model: Option<AccountModel>,
     margin_mode: Option<MarginMode>,
     position_mode: Option<PositionMode>,
     #[serde(default)]
-    snapshot_watermark_unix_nanos: u64,
+    snapshot_watermark_unix_nanos: UnixNanos,
     #[serde(default)]
-    fill_watermark_unix_nanos: u64,
+    fill_watermark_unix_nanos: UnixNanos,
     #[serde(default)]
-    order_watermarks_unix_nanos: BTreeMap<String, u64>,
+    order_watermarks_unix_nanos: BTreeMap<OrderId, UnixNanos>,
     #[serde(default)]
     applied_fill_ids: std::collections::BTreeSet<FillId>,
     #[serde(default)]
     fills: BTreeMap<FillId, AccountFill>,
+    #[serde(default)]
+    observed_fills: BTreeMap<FillId, AccountObservedFill>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -188,7 +188,7 @@ impl AccountState {
         &self.positions
     }
 
-    pub fn open_orders(&self) -> &BTreeMap<String, OpenOrder> {
+    pub fn open_orders(&self) -> &BTreeMap<OrderId, OpenOrder> {
         &self.open_orders
     }
 
@@ -200,27 +200,27 @@ impl AccountState {
         self.stale
     }
 
-    pub fn observed_at_unix_nanos(&self) -> u64 {
+    pub fn observed_at_unix_nanos(&self) -> UnixNanos {
         self.observed_at_unix_nanos
     }
 
-    pub fn generation(&self) -> u64 {
+    pub fn generation(&self) -> Generation {
         self.generation
     }
 
-    pub fn event_sequence(&self) -> u64 {
+    pub fn event_sequence(&self) -> Sequence {
         self.event_sequence
     }
 
-    pub fn equity(&self) -> Option<Decimal> {
+    pub fn equity(&self) -> Option<Money> {
         self.equity
     }
 
-    pub fn initial_equity(&self) -> Option<Decimal> {
+    pub fn initial_equity(&self) -> Option<Money> {
         self.initial_equity
     }
 
-    pub fn net_profit(&self) -> Option<Decimal> {
+    pub fn net_profit(&self) -> Option<Money> {
         self.net_profit
     }
 
@@ -254,6 +254,10 @@ impl Account {
         &self.state
     }
 
+    pub fn status(&self) -> AccountStatus {
+        self.state.status()
+    }
+
     pub(crate) fn restore_state(&mut self, state: AccountState) {
         self.state = state;
     }
@@ -269,9 +273,9 @@ impl Account {
         ApplyOutcome::Applied
     }
 
-    pub fn evaluate_staleness(&mut self, now_unix_nanos: u64, max_age_nanos: u64) {
-        self.state.stale =
-            now_unix_nanos.saturating_sub(self.state.observed_at_unix_nanos) > max_age_nanos;
+    pub fn evaluate_staleness(&mut self, now_unix_nanos: UnixNanos, max_age_nanos: DurationNanos) {
+        self.state.stale = now_unix_nanos.saturating_sub(self.state.observed_at_unix_nanos)
+            > UnixNanos::new(max_age_nanos.get());
     }
 
     pub fn apply_snapshot(
@@ -287,7 +291,7 @@ impl Account {
         if self.state.snapshot_watermark_unix_nanos > snapshot.observed_at_unix_nanos {
             return Ok(ApplyOutcome::Stale);
         }
-        if self.state.snapshot_watermark_unix_nanos != 0
+        if self.state.snapshot_watermark_unix_nanos != UnixNanos::new(0)
             && self.state.snapshot_watermark_unix_nanos == snapshot.observed_at_unix_nanos
         {
             return Ok(ApplyOutcome::Duplicate);
@@ -381,6 +385,7 @@ pub enum SnapshotKind {
 pub enum ApplyOutcome {
     Applied,
     Duplicate,
+    Conflict,
     Stale,
     NoChange,
 }
@@ -395,10 +400,10 @@ pub struct AccountSnapshot {
     #[serde(default)]
     pub open_orders: Vec<OpenOrder>,
     pub status: AccountStatus,
-    pub observed_at_unix_nanos: u64,
-    pub equity: Option<Decimal>,
-    pub initial_equity: Option<Decimal>,
-    pub net_profit: Option<Decimal>,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub equity: Option<Money>,
+    pub initial_equity: Option<Money>,
+    pub net_profit: Option<Money>,
     #[serde(default)]
     pub account_model: Option<AccountModel>,
     #[serde(default)]
@@ -409,60 +414,73 @@ pub struct AccountSnapshot {
     pub kind: SnapshotKind,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OpenOrder {
-    pub order_id: String,
-    pub venue_order_id: Option<String>,
-    pub instrument_id: String,
-    pub side: String,
-    pub quantity: Decimal,
-    pub filled_quantity: Decimal,
-    pub status: String,
+    pub order_id: OrderId,
+    pub remote_order_id: Option<RemoteOrderId>,
+    pub instrument_id: InstrumentId,
+    pub side: OrderSide,
+    pub quantity: Quantity,
+    pub filled_quantity: Quantity,
+    pub status: OrderStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountFill {
     pub fill_id: FillId,
     #[serde(default)]
-    pub order_id: Option<String>,
+    pub order_id: Option<OrderId>,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
-    pub quantity: Decimal,
-    pub price: Decimal,
+    pub quantity: Quantity,
+    pub price: Price,
     pub side: FillSide,
     #[serde(default)]
-    pub settlement_asset: Option<String>,
+    pub settlement_asset: Option<Currency>,
     #[serde(default)]
-    pub settlement_delta: Option<Decimal>,
+    pub settlement_delta: Option<SignedQuantity>,
     #[serde(default)]
-    pub fee_asset: Option<String>,
+    pub fee_asset: Option<Currency>,
     #[serde(default)]
-    pub fee_amount: Option<Decimal>,
-    pub occurred_at_unix_nanos: u64,
+    pub fee_amount: Option<SignedQuantity>,
+    pub occurred_at_unix_nanos: UnixNanos,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum FillSide {
-    Buy,
-    Sell,
+/// A fill observed by the account-side private stream before Execution has
+/// confirmed the exchange order. This is an audit/reconciliation fact, not a
+/// settlement command and must not mutate balances or positions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AccountObservedFill {
+    pub fill_id: FillId,
+    pub order_id: Option<OrderId>,
+    pub remote_order_id: Option<RemoteOrderId>,
+    pub segment_key: SegmentKey,
+    pub instrument_id: InstrumentId,
+    pub quantity: Quantity,
+    pub price: Price,
+    pub side: FillSide,
+    pub occurred_at_unix_nanos: UnixNanos,
 }
+
+pub use kairos_domain_types::OrderSide as FillSide;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountEvent {
     Snapshot(AccountSnapshot),
     Fill(AccountFill),
+    ObservedFill(AccountObservedFill),
     OrderObserved(AccountOrderObservation),
     Batch(Vec<AccountEvent>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountOrderObservation {
-    pub order_id: String,
-    pub venue_order_id: Option<String>,
-    pub status: String,
-    pub filled_quantity: Option<Decimal>,
+    pub order_id: OrderId,
+    pub remote_order_id: Option<RemoteOrderId>,
+    pub status: OrderStatus,
+    pub filled_quantity: Option<Quantity>,
     pub active: bool,
-    pub observed_at_unix_nanos: u64,
+    pub observed_at_unix_nanos: UnixNanos,
 }
 
 impl Account {
@@ -487,8 +505,29 @@ impl Account {
                 observed: fill.segment_key.to_string(),
             });
         }
-        if self.state.applied_fill_ids.contains(&fill.fill_id) {
-            return Ok(ApplyOutcome::Duplicate);
+        if let Some(existing) = self.state.fills.get(&fill.fill_id) {
+            if existing == &fill {
+                return Ok(ApplyOutcome::Duplicate);
+            }
+            self.state.status = AccountStatus::Reconciling;
+            self.state.generation += 1;
+            self.state.event_sequence += 1;
+            return Ok(ApplyOutcome::Conflict);
+        }
+        if let Some(observed) = self.state.observed_fills.get(&fill.fill_id) {
+            let same_fact = observed.order_id == fill.order_id
+                && observed.segment_key == fill.segment_key
+                && observed.instrument_id == fill.instrument_id
+                && observed.quantity == fill.quantity
+                && observed.price == fill.price
+                && observed.side == fill.side
+                && observed.occurred_at_unix_nanos == fill.occurred_at_unix_nanos;
+            if !same_fact {
+                self.state.status = AccountStatus::Reconciling;
+                self.state.generation += 1;
+                self.state.event_sequence += 1;
+                return Ok(ApplyOutcome::Conflict);
+            }
         }
         if fill.occurred_at_unix_nanos < self.state.fill_watermark_unix_nanos {
             return Ok(ApplyOutcome::Stale);
@@ -510,7 +549,8 @@ impl Account {
         let occurred_at_unix_nanos = fill.occurred_at_unix_nanos;
         let fill_id = fill.fill_id.clone();
         self.state.applied_fill_ids.insert(fill_id.clone());
-        self.state.fills.insert(fill_id, fill);
+        self.state.fills.insert(fill_id.clone(), fill);
+        self.state.observed_fills.remove(&fill_id);
         self.state.fill_watermark_unix_nanos = self
             .state
             .fill_watermark_unix_nanos
@@ -518,6 +558,40 @@ impl Account {
         self.state.event_sequence += 1;
         self.state.generation += 1;
         Ok(ApplyOutcome::Applied)
+    }
+
+    pub fn observe_fill(
+        &mut self,
+        fill: AccountObservedFill,
+    ) -> Result<ApplyOutcome, AccountDomainError> {
+        if fill.segment_key != self.segment.segment_key {
+            return Err(AccountDomainError::SegmentMismatch {
+                expected: self.segment.segment_key.to_string(),
+                observed: fill.segment_key.to_string(),
+            });
+        }
+        if let Some(existing) = self.state.observed_fills.get(&fill.fill_id) {
+            if existing == &fill {
+                return Ok(ApplyOutcome::Duplicate);
+            }
+            self.state.status = AccountStatus::Reconciling;
+            self.state.generation += 1;
+            self.state.event_sequence += 1;
+            return Ok(ApplyOutcome::Conflict);
+        }
+        if self.state.fills.contains_key(&fill.fill_id) {
+            return Ok(ApplyOutcome::Duplicate);
+        }
+        self.state.observed_fills.insert(fill.fill_id.clone(), fill);
+        self.state.status = AccountStatus::Reconciling;
+        self.state.stale = true;
+        self.state.generation += 1;
+        self.state.event_sequence += 1;
+        Ok(ApplyOutcome::Applied)
+    }
+
+    pub fn observed_fills(&self) -> &BTreeMap<FillId, AccountObservedFill> {
+        &self.state.observed_fills
     }
 
     pub fn apply_order_observation(
@@ -533,26 +607,26 @@ impl Account {
         if observation.observed_at_unix_nanos < watermark {
             return ApplyOutcome::Stale;
         }
-        if watermark != 0 && observation.observed_at_unix_nanos == watermark {
+        if watermark != UnixNanos::new(0) && observation.observed_at_unix_nanos == watermark {
             return ApplyOutcome::Duplicate;
         }
-        let Some(order) = self.state.open_orders.get_mut(&observation.order_id) else {
+        let order_id = observation.order_id.clone();
+        let Some(order) = self.state.open_orders.get_mut(&order_id) else {
             return ApplyOutcome::NoChange;
         };
-        self.state.order_watermarks_unix_nanos.insert(
-            observation.order_id.clone(),
-            observation.observed_at_unix_nanos,
-        );
+        self.state
+            .order_watermarks_unix_nanos
+            .insert(observation.order_id, observation.observed_at_unix_nanos);
         if observation.active {
             order.status = observation.status;
-            if observation.venue_order_id.is_some() {
-                order.venue_order_id = observation.venue_order_id;
+            if observation.remote_order_id.is_some() {
+                order.remote_order_id = observation.remote_order_id;
             }
             if let Some(quantity) = observation.filled_quantity {
                 order.filled_quantity = quantity;
             }
         } else {
-            self.state.open_orders.remove(&observation.order_id);
+            self.state.open_orders.remove(&order_id);
         }
         self.state.event_sequence += 1;
         self.state.generation += 1;

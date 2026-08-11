@@ -26,9 +26,12 @@ impl<'a> OrderBook<'a> {
     pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 10;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 12;
     pub const VT_CHECKSUM: ::flatbuffers::VOffsetT = 14;
-    pub const VT_SYNCHRONIZED: ::flatbuffers::VOffsetT = 16;
-    pub const VT_BIDS: ::flatbuffers::VOffsetT = 18;
-    pub const VT_ASKS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_DEPTH_POLICY: ::flatbuffers::VOffsetT = 16;
+    pub const VT_FIRST_SEQUENCE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_LAST_SEQUENCE: ::flatbuffers::VOffsetT = 20;
+    pub const VT_SYNCHRONIZED: ::flatbuffers::VOffsetT = 22;
+    pub const VT_BIDS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_ASKS: ::flatbuffers::VOffsetT = 26;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -45,6 +48,8 @@ impl<'a> OrderBook<'a> {
         args: &'args OrderBookArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<OrderBook<'bldr>> {
         let mut builder = OrderBookBuilder::new(_fbb);
+        builder.add_last_sequence(args.last_sequence);
+        builder.add_first_sequence(args.first_sequence);
         builder.add_event_time_unix_nanos(args.event_time_unix_nanos);
         builder.add_sequence(args.sequence);
         if let Some(x) = args.asks {
@@ -52,6 +57,9 @@ impl<'a> OrderBook<'a> {
         }
         if let Some(x) = args.bids {
             builder.add_bids(x);
+        }
+        if let Some(x) = args.depth_policy {
+            builder.add_depth_policy(x);
         }
         if let Some(x) = args.checksum {
             builder.add_checksum(x);
@@ -134,6 +142,38 @@ impl<'a> OrderBook<'a> {
         }
     }
     #[inline]
+    pub fn depth_policy(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(OrderBook::VT_DEPTH_POLICY, None)
+        }
+    }
+    #[inline]
+    pub fn first_sequence(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(OrderBook::VT_FIRST_SEQUENCE, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn last_sequence(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(OrderBook::VT_LAST_SEQUENCE, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn synchronized(&self) -> bool {
         // Safety:
         // Created from valid Table for this object
@@ -205,6 +245,13 @@ impl ::flatbuffers::Verifiable for OrderBook<'_> {
                 Self::VT_CHECKSUM,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "depth_policy",
+                Self::VT_DEPTH_POLICY,
+                false,
+            )?
+            .visit_field::<u64>("first_sequence", Self::VT_FIRST_SEQUENCE, false)?
+            .visit_field::<u64>("last_sequence", Self::VT_LAST_SEQUENCE, false)?
             .visit_field::<bool>("synchronized", Self::VT_SYNCHRONIZED, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<OrderBookLevel>>,
@@ -223,6 +270,9 @@ pub struct OrderBookArgs<'a> {
     pub event_time_unix_nanos: u64,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub checksum: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub depth_policy: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub first_sequence: u64,
+    pub last_sequence: u64,
     pub synchronized: bool,
     pub bids: Option<
         ::flatbuffers::WIPOffset<
@@ -245,6 +295,9 @@ impl<'a> Default for OrderBookArgs<'a> {
             event_time_unix_nanos: 0,
             source_id: None,
             checksum: None,
+            depth_policy: None,
+            first_sequence: 0,
+            last_sequence: 0,
             synchronized: false,
             bids: None,
             asks: None,
@@ -291,6 +344,23 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderBookBuilder<'a, 'b, A> {
     pub fn add_checksum(&mut self, checksum: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(OrderBook::VT_CHECKSUM, checksum);
+    }
+    #[inline]
+    pub fn add_depth_policy(&mut self, depth_policy: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            OrderBook::VT_DEPTH_POLICY,
+            depth_policy,
+        );
+    }
+    #[inline]
+    pub fn add_first_sequence(&mut self, first_sequence: u64) {
+        self.fbb_
+            .push_slot::<u64>(OrderBook::VT_FIRST_SEQUENCE, first_sequence, 0);
+    }
+    #[inline]
+    pub fn add_last_sequence(&mut self, last_sequence: u64) {
+        self.fbb_
+            .push_slot::<u64>(OrderBook::VT_LAST_SEQUENCE, last_sequence, 0);
     }
     #[inline]
     pub fn add_synchronized(&mut self, synchronized: bool) {
@@ -346,6 +416,9 @@ impl ::core::fmt::Debug for OrderBook<'_> {
         ds.field("event_time_unix_nanos", &self.event_time_unix_nanos());
         ds.field("source_id", &self.source_id());
         ds.field("checksum", &self.checksum());
+        ds.field("depth_policy", &self.depth_policy());
+        ds.field("first_sequence", &self.first_sequence());
+        ds.field("last_sequence", &self.last_sequence());
         ds.field("synchronized", &self.synchronized());
         ds.field("bids", &self.bids());
         ds.field("asks", &self.asks());

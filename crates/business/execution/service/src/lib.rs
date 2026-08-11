@@ -12,16 +12,25 @@ mod services;
 
 pub use application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
-    CancelOrder, DependencyWatermarks, ExecuteStrategyIntent, ExecutionApplication,
-    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink, ExecutionError, ExecutionEvent,
-    ExecutionFillReport, ExecutionOrderOptions, ExecutionProcess, ExecutionSnapshot, IntentEvent,
-    IntentState, IntentStatus, ReplaceOrder, SnapshotWatermark, SubmitOrder,
+    BacktestRunResult, CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,
+    ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
+    ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionProcess,
+    ExecutionSnapshot, ExecutionSnapshotPublisher, ExpireIntent, HedgeRequirement, IntentEvent,
+    IntentLegRequest, IntentSnapshotPublisher, IntentState, IntentStatus, QuoteObservation,
+    RefreshQuoteIntent, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
+    UnknownRemoteOrderResolution,
 };
 pub use composition::{
-    compose_order_entry, ExecutionConnectionOptions, FileExecutionStore, QueuedExecutionPreflight,
+    compose_execution_connections, compose_order_entry, ExecutionConnectionOptions,
+    ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionPreflight,
     SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulatedOrderEntry,
-    SocketExecutionPreflight, SqliteExecutionAudit, SqliteExecutionStore,
+    SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
+    SimulationOrderStatus, SimulationResult, SocketExecutionPreflight,
 };
-pub use domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
-pub use services::actor::VenueOrderEvent;
-pub use services::persistence::ExecutionStateStore;
+pub use domain::{
+    CompletionPolicy, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,
+    ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle,
+    MakerExecutionPolicy, OrderSide, OrderType, RouteProduct, SplitOrderPolicy,
+};
+pub use services::sqlx_audit::SqlxExecutionAudit;
+pub use services::sqlx_persistence::SqlxExecutionStore;

@@ -38,11 +38,11 @@ fn feed_worker_moves_polling_out_of_market_callers() {
     let event = MarketObservation::Quote(Quote {
         market_id: descriptor.market_id.clone(),
         instrument_id: descriptor.instrument_id.clone(),
-        bid_price: Some("100".into()),
-        bid_quantity: Some("1".into()),
-        ask_price: Some("101".into()),
-        ask_quantity: Some("1".into()),
-        observed_at_unix_nanos: 1,
+        bid_price: Some("100".parse().unwrap()),
+        bid_quantity: Some("1".parse().unwrap()),
+        ask_price: Some("101".parse().unwrap()),
+        ask_quantity: Some("1".parse().unwrap()),
+        observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
         source_id: "fake".into(),
     });
     let application = MarketApplication::new("market-1", 10).unwrap();

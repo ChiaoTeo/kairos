@@ -9,6 +9,8 @@ pub enum ExecutionOutboxEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutionOutboxEntry {
     pub id: u64,
+    /// Wall-clock creation time retained only for backlog-age telemetry.
+    pub created_at_unix_nanos: u64,
     pub event: ExecutionOutboxEvent,
 }
 
@@ -51,5 +53,12 @@ pub trait ExecutionStateStore: Send {
 
     fn acknowledge_outbox(&mut self, _ids: &[u64]) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Returns the timestamp of the most recently durable checkpoint, if this
+    /// store persists checkpoints. This is operational metadata, not business
+    /// state, and is used only to expose checkpoint freshness.
+    fn latest_checkpoint_unix_nanos(&mut self) -> Result<Option<u64>, String> {
+        Ok(None)
     }
 }

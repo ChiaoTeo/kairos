@@ -1,0 +1,42 @@
+name: Python Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Lint and test Python
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync development environment
+        run: uv sync --locked --group dev --extra observability
+
+      - name: Check Python lint
+        run: uv run ruff check kairospy tests
+
+      - name: Check Python formatting
+        run: uv run ruff format --check kairospy tests
+
+      - name: Check Python types
+        run: uv run pyright
+
+      - name: Run Python tests
+        run: uv run pytest -q

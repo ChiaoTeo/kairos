@@ -22,15 +22,18 @@ impl<'a> ::flatbuffers::Follow<'a> for Reservation<'a> {
 impl<'a> Reservation<'a> {
     pub const VT_RESERVATION_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_OWNER_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_INTENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_ACCOUNT_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_METRIC: ::flatbuffers::VOffsetT = 14;
-    pub const VT_AMOUNT: ::flatbuffers::VOffsetT = 16;
-    pub const VT_ALLOCATIONS: ::flatbuffers::VOffsetT = 18;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 20;
-    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
-    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_IDEMPOTENCY_KEY: ::flatbuffers::VOffsetT = 8;
+    pub const VT_INTENT_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_ACCOUNT_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_METRIC: ::flatbuffers::VOffsetT = 16;
+    pub const VT_AMOUNT: ::flatbuffers::VOffsetT = 18;
+    pub const VT_ALLOCATIONS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_EXPIRES_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
+    pub const VT_POLICY_VERSION: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -47,6 +50,8 @@ impl<'a> Reservation<'a> {
         args: &'args ReservationArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<Reservation<'bldr>> {
         let mut builder = ReservationBuilder::new(_fbb);
+        builder.add_policy_version(args.policy_version);
+        builder.add_expires_at_unix_nanos(args.expires_at_unix_nanos);
         builder.add_updated_at_unix_nanos(args.updated_at_unix_nanos);
         builder.add_created_at_unix_nanos(args.created_at_unix_nanos);
         if let Some(x) = args.status {
@@ -69,6 +74,9 @@ impl<'a> Reservation<'a> {
         }
         if let Some(x) = args.intent_id {
             builder.add_intent_id(x);
+        }
+        if let Some(x) = args.idempotency_key {
+            builder.add_idempotency_key(x);
         }
         if let Some(x) = args.owner_id {
             builder.add_owner_id(x);
@@ -99,6 +107,16 @@ impl<'a> Reservation<'a> {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Reservation::VT_OWNER_ID, None)
                 .unwrap()
+        }
+    }
+    #[inline]
+    pub fn idempotency_key(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Reservation::VT_IDEMPOTENCY_KEY, None)
         }
     }
     #[inline]
@@ -199,6 +217,28 @@ impl<'a> Reservation<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn expires_at_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Reservation::VT_EXPIRES_AT_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn policy_version(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Reservation::VT_POLICY_VERSION, Some(0))
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Reservation<'_> {
@@ -217,6 +257,11 @@ impl ::flatbuffers::Verifiable for Reservation<'_> {
                 "owner_id",
                 Self::VT_OWNER_ID,
                 true,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "idempotency_key",
+                Self::VT_IDEMPOTENCY_KEY,
+                false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "intent_id",
@@ -249,6 +294,12 @@ impl ::flatbuffers::Verifiable for Reservation<'_> {
                 Self::VT_UPDATED_AT_UNIX_NANOS,
                 false,
             )?
+            .visit_field::<u64>(
+                "expires_at_unix_nanos",
+                Self::VT_EXPIRES_AT_UNIX_NANOS,
+                false,
+            )?
+            .visit_field::<u64>("policy_version", Self::VT_POLICY_VERSION, false)?
             .finish();
         Ok(())
     }
@@ -256,6 +307,7 @@ impl ::flatbuffers::Verifiable for Reservation<'_> {
 pub struct ReservationArgs<'a> {
     pub reservation_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub owner_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub idempotency_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub intent_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub account_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -269,6 +321,8 @@ pub struct ReservationArgs<'a> {
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub created_at_unix_nanos: u64,
     pub updated_at_unix_nanos: u64,
+    pub expires_at_unix_nanos: u64,
+    pub policy_version: u64,
 }
 impl<'a> Default for ReservationArgs<'a> {
     #[inline]
@@ -276,6 +330,7 @@ impl<'a> Default for ReservationArgs<'a> {
         ReservationArgs {
             reservation_id: None, // required field
             owner_id: None,       // required field
+            idempotency_key: None,
             intent_id: None,
             account_id: None,
             instrument_id: None,
@@ -285,6 +340,8 @@ impl<'a> Default for ReservationArgs<'a> {
             status: None, // required field
             created_at_unix_nanos: 0,
             updated_at_unix_nanos: 0,
+            expires_at_unix_nanos: 0,
+            policy_version: 0,
         }
     }
 }
@@ -305,6 +362,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ReservationBuilder<'a, 'b, A>
     pub fn add_owner_id(&mut self, owner_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Reservation::VT_OWNER_ID, owner_id);
+    }
+    #[inline]
+    pub fn add_idempotency_key(&mut self, idempotency_key: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Reservation::VT_IDEMPOTENCY_KEY,
+            idempotency_key,
+        );
     }
     #[inline]
     pub fn add_intent_id(&mut self, intent_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -372,6 +436,19 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ReservationBuilder<'a, 'b, A>
         );
     }
     #[inline]
+    pub fn add_expires_at_unix_nanos(&mut self, expires_at_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            Reservation::VT_EXPIRES_AT_UNIX_NANOS,
+            expires_at_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_policy_version(&mut self, policy_version: u64) {
+        self.fbb_
+            .push_slot::<u64>(Reservation::VT_POLICY_VERSION, policy_version, 0);
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> ReservationBuilder<'a, 'b, A> {
@@ -399,6 +476,7 @@ impl ::core::fmt::Debug for Reservation<'_> {
         let mut ds = f.debug_struct("Reservation");
         ds.field("reservation_id", &self.reservation_id());
         ds.field("owner_id", &self.owner_id());
+        ds.field("idempotency_key", &self.idempotency_key());
         ds.field("intent_id", &self.intent_id());
         ds.field("account_id", &self.account_id());
         ds.field("instrument_id", &self.instrument_id());
@@ -408,6 +486,8 @@ impl ::core::fmt::Debug for Reservation<'_> {
         ds.field("status", &self.status());
         ds.field("created_at_unix_nanos", &self.created_at_unix_nanos());
         ds.field("updated_at_unix_nanos", &self.updated_at_unix_nanos());
+        ds.field("expires_at_unix_nanos", &self.expires_at_unix_nanos());
+        ds.field("policy_version", &self.policy_version());
         ds.finish()
     }
 }

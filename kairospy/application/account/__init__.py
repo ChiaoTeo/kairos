@@ -1,8 +1,8 @@
 """Account-facing adapters.
 
-Account state and account administration are owned by the Rust account
-application.  This module only adapts Python callers and keeps workspace
-lease handling in the system layer until that protocol is moved there.
+Account state is owned by the Rust account application. Account configuration,
+credentials, and launch leases are persisted by the Workspace layer; these
+classes remain compatibility adapters for existing Python callers.
 """
 
 from __future__ import annotations
@@ -57,16 +57,24 @@ class AccountAdminApplication:
 
     def list(self) -> list[dict[str, Any]]:
         value = _cli(self.workspace).run(["list"])
-        return list(value) if isinstance(value, list) else list(value.get("accounts", []))
+        return (
+            list(value) if isinstance(value, list) else list(value.get("accounts", []))
+        )
 
     def show(self, account_id: str) -> dict[str, Any]:
-        return _account(_cli(self.workspace).run(["show", "--account-id", _text(account_id, "account_id")]))
+        return _account(
+            _cli(self.workspace).run(
+                ["show", "--account-id", _text(account_id, "account_id")]
+            )
+        )
 
     def schemas(self) -> dict[str, Any]:
         return dict(_cli(self.workspace).run(["schemas"]))
 
     def schema(self, broker: str) -> dict[str, Any]:
-        return dict(_cli(self.workspace).run(["schema", "--provider", _text(broker, "broker")]))
+        return dict(
+            _cli(self.workspace).run(["schema", "--provider", _text(broker, "broker")])
+        )
 
     def connect(
         self,
@@ -83,22 +91,44 @@ class AccountAdminApplication:
         force: bool = False,
     ) -> dict[str, Any]:
         account_id = _text(account_id, "account_id")
-        if environment == "live" and broker not in {"paper", "ibkr"} and not credential and not force:
+        if (
+            environment == "live"
+            and broker not in {"paper", "ibkr"}
+            and not credential
+            and not force
+        ):
             raise ValueError("live account requires --credential or --force")
-        _cli(self.workspace).run([
-            "register", "--account-id", account_id, "--provider", broker,
-            "--segment", segment, "--environment", environment,
-            *(["--account-model", account_model] if account_model else []),
-            *(["--venue", broker] if product_family is None else ["--venue", product_family]),
-        ])
+        _cli(self.workspace).run(
+            [
+                "register",
+                "--account-id",
+                account_id,
+                "--provider",
+                broker,
+                "--segment",
+                segment,
+                "--environment",
+                environment,
+                *(["--account-model", account_model] if account_model else []),
+            ]
+        )
         if credential:
-            _cli(self.workspace).run([
-                "modify", "--account-id", account_id,
-                "--credential-id", credential, "--credential-role", credential_role,
-                *(["--alias", alias] if alias else []),
-            ])
+            _cli(self.workspace).run(
+                [
+                    "modify",
+                    "--account-id",
+                    account_id,
+                    "--credential-id",
+                    credential,
+                    "--credential-role",
+                    credential_role,
+                    *(["--alias", alias] if alias else []),
+                ]
+            )
         elif alias:
-            _cli(self.workspace).run(["modify", "--account-id", account_id, "--alias", alias])
+            _cli(self.workspace).run(
+                ["modify", "--account-id", account_id, "--alias", alias]
+            )
         return self.show(account_id)
 
     def simulate(
@@ -113,24 +143,37 @@ class AccountAdminApplication:
         fee_rate: str = "0",
         force: bool = False,
     ) -> dict[str, Any]:
-        value = _cli(self.workspace).run([
-            "simulate", "--account-id", _text(account_id, "account_id"),
-            "--segment", segment,
-            *(["--account-model", account_model] if account_model else []),
-            *sum((["--balance", balance] for balance in initial_balances), []),
-            "--fee-rate", fee_rate,
-        ])
+        value = _cli(self.workspace).run(
+            [
+                "simulate",
+                "--account-id",
+                _text(account_id, "account_id"),
+                "--segment",
+                segment,
+                *(["--account-model", account_model] if account_model else []),
+                *sum((["--balance", balance] for balance in initial_balances), []),
+                "--fee-rate",
+                fee_rate,
+            ]
+        )
         result = _account(value)
         result["mode"] = "paper"
         return result
 
-    def modify(self, account_id: str, *, _force: bool = False, **changes: Any) -> dict[str, Any]:
+    def modify(
+        self, account_id: str, *, _force: bool = False, **changes: Any
+    ) -> dict[str, Any]:
         account_id = _text(account_id, "account_id")
         flags = {
-            "broker": "--provider", "venue": "--venue", "alias": "--alias",
-            "environment": "--environment", "segment": "--segment",
-            "account_model": "--account-model", "credential": "--credential-id",
-            "credential_role": "--credential-role", "status": "--status",
+            "broker": "--provider",
+            "exchange": "--exchange",
+            "alias": "--alias",
+            "environment": "--environment",
+            "segment": "--segment",
+            "account_model": "--account-model",
+            "credential": "--credential-id",
+            "credential_role": "--credential-role",
+            "status": "--status",
             "fee_rate": "--fee-rate",
         }
         arguments = ["modify", "--account-id", account_id]
@@ -142,26 +185,59 @@ class AccountAdminApplication:
             arguments.extend(["--balance", str(balance)])
         return _account(_cli(self.workspace).run(arguments))
 
-    def bind_credential(self, account_id: str, *, name: str, ref: str, role: str = "readonly") -> dict[str, Any]:
-        value = _cli(self.workspace).run([
-            "credential", "add", "--account-id", _text(account_id, "account_id"),
-            "--name", _text(name, "name"), "--credential-id", _text(ref, "credential_ref"),
-            "--role", role, "--force",
-        ])
+    def bind_credential(
+        self, account_id: str, *, name: str, ref: str, role: str = "readonly"
+    ) -> dict[str, Any]:
+        value = _cli(self.workspace).run(
+            [
+                "credential",
+                "add",
+                "--account-id",
+                _text(account_id, "account_id"),
+                "--name",
+                _text(name, "name"),
+                "--credential-id",
+                _text(ref, "credential_ref"),
+                "--role",
+                role,
+                "--force",
+            ]
+        )
         return _account(value)
 
-    def switch_model(self, account_id: str, target: str, *, reason: str = "") -> dict[str, Any]:
-        return dict(_cli(self.workspace).run([
-            "model", "switch", "--account-id", _text(account_id, "account_id"),
-            "--target", _text(target, "target"), "--reason", reason,
-        ]))
+    def switch_model(
+        self, account_id: str, target: str, *, reason: str = ""
+    ) -> dict[str, Any]:
+        return dict(
+            _cli(self.workspace).run(
+                [
+                    "model",
+                    "switch",
+                    "--account-id",
+                    _text(account_id, "account_id"),
+                    "--target",
+                    _text(target, "target"),
+                    "--reason",
+                    reason,
+                ]
+            )
+        )
 
     def delete(self, account_id: str, *, force: bool = False) -> dict[str, Any]:
-        value = dict(_cli(self.workspace).run([
-            "remove", "--account-id", _text(account_id, "account_id"),
-            *(["--force"] if force else []),
-        ]))
-        return {"account_id": account_id, "status": "deleted" if value.get("removed") else "not_found"}
+        value = dict(
+            _cli(self.workspace).run(
+                [
+                    "remove",
+                    "--account-id",
+                    _text(account_id, "account_id"),
+                    *(["--force"] if force else []),
+                ]
+            )
+        )
+        return {
+            "account_id": account_id,
+            "status": "deleted" if value.get("removed") else "not_found",
+        }
 
     def doctor(self, account_id: str | None = None) -> dict[str, Any]:
         value = dict(_cli(self.workspace).run(["doctor"]))
@@ -173,7 +249,7 @@ class AccountAdminApplication:
 
 @dataclass(frozen=True, slots=True)
 class CredentialApplication:
-    """Thin Python adapter over account credential use cases."""
+    """Thin Python adapter over Workspace-owned credential use cases."""
 
     workspace: Workspace
 
@@ -183,24 +259,61 @@ class CredentialApplication:
 
     def list(self) -> list[dict[str, Any]]:
         value = _cli(self.workspace).run(["credential-list"])
-        return list(value) if isinstance(value, list) else list(value.get("credentials", []))
+        return (
+            list(value)
+            if isinstance(value, list)
+            else list(value.get("credentials", []))
+        )
 
-    def add(self, credential_id: str, *, provider: str, fields: tuple[str, ...] = (), kind: str | None = None, force: bool = True) -> dict[str, Any]:
-        _cli(self.workspace).run([
-            "credential-create", "--credential-id", _text(credential_id, "credential_id"),
-            "--provider", _text(provider, "provider"),
-        ])
-        return {"credential_id": credential_id, "provider": provider, "kind": kind or "api", "fields": list(fields), "secret_storage": "environment-or-external-secret-store"}
+    def add(
+        self,
+        credential_id: str,
+        *,
+        provider: str,
+        fields: tuple[str, ...] = (),
+        kind: str | None = None,
+        force: bool = True,
+    ) -> dict[str, Any]:
+        _cli(self.workspace).run(
+            [
+                "credential-create",
+                "--credential-id",
+                _text(credential_id, "credential_id"),
+                "--provider",
+                _text(provider, "provider"),
+            ]
+        )
+        return {
+            "credential_id": credential_id,
+            "provider": provider,
+            "kind": kind or "api",
+            "fields": list(fields),
+            "secret_storage": "environment-or-external-secret-store",
+        }
 
     def show(self, credential_id: str) -> dict[str, Any]:
-        return dict(_cli(self.workspace).run(["credential-show", "--credential-id", _text(credential_id, "credential_id")]))
+        return dict(
+            _cli(self.workspace).run(
+                [
+                    "credential-show",
+                    "--credential-id",
+                    _text(credential_id, "credential_id"),
+                ]
+            )
+        )
 
     def delete(self, credential_id: str, *, force: bool = False) -> dict[str, Any]:
         try:
-            value = dict(_cli(self.workspace).run([
-                "credential-delete", "--credential-id", _text(credential_id, "credential_id"),
-                *(["--force"] if force else []),
-            ]))
+            value = dict(
+                _cli(self.workspace).run(
+                    [
+                        "credential-delete",
+                        "--credential-id",
+                        _text(credential_id, "credential_id"),
+                        *(["--force"] if force else []),
+                    ]
+                )
+            )
         except RuntimeError as error:
             if "bound to an account" in str(error):
                 raise ValueError(str(error)) from error
@@ -212,8 +325,14 @@ class CredentialApplication:
     def environment(self, credential_id: str) -> dict[str, str]:
         entry = self.show(credential_id)
         provider = str(entry.get("provider", "")).lower()
-        fields = ("api_key", "api_secret", "passphrase") if provider in {"okx", "okex"} else ("api_key", "api_secret")
-        prefix = "KAIROS_CREDENTIAL_" + "".join(c if c.isalnum() else "_" for c in credential_id.upper())
+        fields = (
+            ("api_key", "api_secret", "passphrase")
+            if provider in {"okx", "okex"}
+            else ("api_key", "api_secret")
+        )
+        prefix = "KAIROS_CREDENTIAL_" + "".join(
+            c if c.isalnum() else "_" for c in credential_id.upper()
+        )
         return {
             field.upper(): os.environ[name]
             for field in fields
@@ -224,7 +343,9 @@ class CredentialApplication:
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -260,16 +381,39 @@ class TradeLeaseApplication:
             rows.append(record)
         return rows
 
-    def acquire(self, *, broker: str, account_id: str, environment: str, launch_id: str, launch_instance_id: str, mode: str, pid: int | None = None) -> dict[str, Any]:
+    def acquire(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        environment: str,
+        launch_id: str,
+        launch_instance_id: str,
+        mode: str,
+        pid: int | None = None,
+    ) -> dict[str, Any]:
         key = self._key(broker, account_id)
         path = self.path / key
         self.path.mkdir(parents=True, exist_ok=True)
         now = datetime.now(timezone.utc).isoformat()
-        record = {"broker": broker, "account_id": account_id, "environment": environment, "launch_id": launch_id, "launch_instance_id": launch_instance_id, "mode": mode, "pid": pid or os.getpid(), "host": socket.gethostname(), "acquired_at": now, "heartbeat_at": now}
+        record = {
+            "broker": broker,
+            "account_id": account_id,
+            "environment": environment,
+            "launch_id": launch_id,
+            "launch_instance_id": launch_instance_id,
+            "mode": mode,
+            "pid": pid or os.getpid(),
+            "host": socket.gethostname(),
+            "acquired_at": now,
+            "heartbeat_at": now,
+        }
         try:
             path.mkdir()
         except FileExistsError as error:
-            existing = next((item for item in self.list() if item["account_key"] == key), None)
+            existing = next(
+                (item for item in self.list() if item["account_key"] == key), None
+            )
             if existing and existing.get("stale"):
                 shutil.rmtree(path)
                 path.mkdir()
@@ -285,7 +429,14 @@ class TradeLeaseApplication:
         """Return the canonical workspace key for an account lease."""
         return cls._key(broker, account_id)
 
-    def release_account(self, broker: str, account_id: str, *, launch_instance_id: str | None = None, force: bool = False) -> dict[str, Any]:
+    def release_account(
+        self,
+        broker: str,
+        account_id: str,
+        *,
+        launch_instance_id: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
         """Release a lease using the same canonical key as acquisition."""
         return self.release(
             self.account_key(broker, account_id),
@@ -298,14 +449,32 @@ class TradeLeaseApplication:
         if record.get("launch_instance_id") != launch_instance_id:
             raise ValueError(f"account {account_key} is leased by another instance")
         record["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
-        _write_json(Path(record["path"]) / "owner.json", {key: value for key, value in record.items() if key not in {"account_key", "path", "stale"}})
+        _write_json(
+            Path(record["path"]) / "owner.json",
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"account_key", "path", "stale"}
+            },
+        )
         return record
 
-    def release(self, account_key: str, *, launch_instance_id: str | None = None, force: bool = False, stale_only: bool = False) -> dict[str, Any]:
+    def release(
+        self,
+        account_key: str,
+        *,
+        launch_instance_id: str | None = None,
+        force: bool = False,
+        stale_only: bool = False,
+    ) -> dict[str, Any]:
         record = self._find(account_key)
         if stale_only and not record.get("stale"):
             raise ValueError(f"account {account_key} trading lease is not stale")
-        if not force and launch_instance_id and record.get("launch_instance_id") != launch_instance_id:
+        if (
+            not force
+            and launch_instance_id
+            and record.get("launch_instance_id") != launch_instance_id
+        ):
             raise ValueError(f"account {account_key} is leased by another instance")
         shutil.rmtree(record["path"])
         return {"account_key": account_key, "status": "released"}
@@ -318,7 +487,10 @@ class TradeLeaseApplication:
 
     def _stale(self, record: dict[str, Any]) -> bool:
         try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(record["heartbeat_at"])).total_seconds()
+            age = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(record["heartbeat_at"])
+            ).total_seconds()
         except (KeyError, ValueError):
             return True
         if age <= self.stale_after_seconds:
@@ -333,11 +505,20 @@ class TradeLeaseApplication:
 
     @staticmethod
     def _key(broker: str, account_id: str) -> str:
-        return ".".join("_".join("".join(c if c.isalnum() else "_" for c in value.lower()).split("_")) for value in (broker, account_id) if value)
+        return ".".join(
+            "_".join(
+                "".join(c if c.isalnum() else "_" for c in value.lower()).split("_")
+            )
+            for value in (broker, account_id)
+            if value
+        )
 
 
-TradeLockApplication = TradeLeaseApplication
+from .cli import AccountCliApplication  # noqa: E402
 
-from .cli import AccountCliApplication
-
-__all__ = ["AccountAdminApplication", "AccountCliApplication", "CredentialApplication", "TradeLeaseApplication", "TradeLockApplication"]
+__all__ = [
+    "AccountAdminApplication",
+    "AccountCliApplication",
+    "CredentialApplication",
+    "TradeLeaseApplication",
+]

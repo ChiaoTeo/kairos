@@ -8,10 +8,10 @@
 
 KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运行、回测、纸交易、账户/订单/行情投影、交易所集成和时间线数据能力。
 
-交易所接入说明：
+进一步说明：
 
-- [Binance 产品](docs/binance-products.md)
 - [策略运行可观测性](docs/strategy-observability.md)
+- [Account 目标架构](docs/account-target-architecture.md)
 
 ## ✨ 功能亮点
 
@@ -60,21 +60,26 @@ python -m pip install pytest
 
 ## ⚡ 快速开始
 
-查看 CLI 帮助：
+创建一个包含离线行情、模拟账户、示例策略和 launch 配置的回测项目：
 
 ```bash
-uv run kairospy --help
-uv run kairos --help
+uv run kairos project init my-project --id my-project --non-interactive --template backtest
+cd my-project
+uv run kairos launch diagnose validate demo-backtest
+uv run kairos launch start demo-backtest
+uv run kairos launch wait demo-backtest
 ```
 
-打开只读系统观测台（需要一个已经初始化的 workspace）：
+这条路径不需要交易所凭据或网络连接。生成的 `KAIROS_QUICKSTART.md` 会说明示例资产和下一步操作。
+
+打开项目观测台（需要一个已经初始化的 workspace）：
 
 ```bash
 uv run kairos observe --workspace my-project
 ```
 
-观测台不会自动启动业务进程；它读取 System health、组件状态和可用的
-Market snapshot。无界面或脚本场景可以使用一次性 JSON 输出：
+观测台不会自动启动业务进程；它读取 launch、System health、组件状态和可用的
+Market snapshot，并根据最近状态提示下一条安全命令。无界面或脚本场景可以使用一次性 JSON 输出：
 
 ```bash
 uv run kairos observe --workspace my-project --once
@@ -246,42 +251,34 @@ launch 停止后保留共享服务供下一次运行复用。
 uv run kairospy launch timeline export --latest binance-spot-btc-sma-backtest
 ```
 
-进入交互式命令 shell：
-
-```bash
-uv run kairospy shell
-```
-
 Reference 验证 CLI
 
 Reference CLI 是一次性命令，所有结构化结果写入 stdout；它不会启动或连接长驻
 Reference server：
 
 ```bash
-uv run kairospy catalog status --workspace my-project --format json
-uv run kairospy catalog sync --workspace my-project --format json
-uv run kairospy catalog query-market --venue binance --active-only --workspace my-project
-uv run kairospy catalog search BTCUSDT --workspace my-project --format json
-uv run kairospy catalog show market:binance:spot:BTCUSDT --workspace my-project
-uv run kairospy catalog events sync --ticker BTCUSDT --workspace my-project
+uv run kairospy reference health --workspace my-project --format json
+uv run kairospy reference refresh --workspace my-project --format json
+uv run kairospy reference markets --exchange binance --active-only --workspace my-project
+uv run kairospy reference markets --symbol BTCUSDT --workspace my-project --format json
+uv run kairospy reference catalog --workspace my-project --format json
 ```
 
 原生 binary 也可以直接调用：`kairos-reference-cli --workspace <workspace> query`。
 长驻 server 则由 `kairos-reference-server` 运行，两者共享同一个 Reference application
 和 production provider composition。
 
-Shell 层级约定：
+CLI 层级约定：
 
-- CLI 路径按 `product resource action` 组织，例如 `catalog assets browse`、`system attach`、`launch targets list`。
-- `product` 和 `resource` 可以成为 `kairospy shell` 的上下文；`list`、`browse`、`show`、`attach`、`start`、`stop`、`logs` 等 action 只执行命令，不成为新的 shell 上下文。
+- CLI 路径按 `product resource action` 组织，例如 `reference assets`、`system attach`、`launch targets list`。
 - `system` 是内置 system runtime 的顶层产品入口。需要连接正在运行的 system runtime 时使用 `system attach`。
 - system daemon 的健康心跳写入 launch `state.json`；attach 会把状态心跳以 `[system/heartbeat]` 展示出来。普通脚本输出仍保持无状态、可解析。
 
-`kairospy tui` 目前是实验入口，项目默认推荐使用普通 CLI 和 `kairospy shell`。
+`kairospy tui` 目前是 `observe` 的兼容入口，项目默认推荐使用普通 CLI。
 
 ## 账户、Scope 与交易锁
 
-账户状态所有权、刷新与查询契约见 [`docs/account-read-design.md`](docs/account-read-design.md)。
+账户状态所有权、刷新与查询契约见 [`docs/account-target-architecture.md`](docs/account-target-architecture.md)。
 
 领域模型把交易所账户身份和账户内 segment 分开表达：
 
@@ -303,7 +300,7 @@ trade = false
 
 账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。launch account 默认展开已发现的全部 segment；如果某个 launch 只想管理少数 segment，可以额外写 `segments = ["spot"]` 作为过滤。
 
-Binance 产品按账户 book 分开管理：`spot`、`usd_m_futures`、`options` 和 `earn`。行情、账户和订单均使用明确的交易所连接能力；BTC 期权和 Simple Earn 使用 Binance 原生 API，因为它们分别包含期权合约/结算语义和理财产品申赎语义。示例见 [`examples/configs/binance_products_live.toml`](examples/configs/binance_products_live.toml)。
+Binance 产品按账户 book 分开管理：`spot`、`usd_m_futures`、`options` 和 `earn`。行情、账户和订单均使用明确的交易所连接能力；BTC 期权和 Simple Earn 使用 Binance 原生 API，因为它们分别包含期权合约/结算语义和理财产品申赎语义。
 
 内置 system runtime 的 launch id 固定为 `kairos-system`。它启动后会加载 workspace 中的全部账户，并尝试占有当前未被锁定的可交易账户；被其他 launch 锁定的账户仍可读取状态，但 system 下单前会重新检查账户锁，只有锁归当前 system instance 时才允许交易。
 
@@ -331,7 +328,7 @@ ref = "binance_trade"
 
 如果需要交易权限，应将 trade credential 作为同一远端账户的另一个访问凭据绑定；credential 不是另一个账户。连接时系统会校验私有读取权限，并记录远端身份和已发现 segment。
 
-API key 不通过环境变量注入。`account credential create` 只保存凭据；`account connect` 才建立本地远端账户 binding。`--alias` 只是本地显示名，不是交易所账户 ID。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的 binding 文件默认只写发现所需字段。
+API key 不通过环境变量注入。`account credential create` 只保存凭据；`account connect` 才建立本地远端账户 binding。`--alias` 只是本地显示名，不是交易所账户 ID。旧的 `provider`、`exchange`、`market`、`currency` 字段仍可读取；新生成的 binding 文件默认只写发现所需字段。
 
 查询交易所实际返回的账号类型、权限和可用分区：
 
@@ -383,28 +380,25 @@ uv run kairospy system account positions main
 
 ## 🧪 示例配置
 
-`examples/` 中包含三类与当前架构对应的示例：
+示例通过 Workspace starter 生成，避免仓库内静态示例与当前 contract 漂移：
 
-| 文件 | 用途 |
-| --- | --- |
-| `examples/market/binance_spot_trade_stream.py` | Integration connection 直接监听 Binance Spot trade |
-| `examples/market/binance_spot_runtime.py` | Market runtime 订阅并消费 Binance Spot trade |
-| `examples/strategies/btc_sma.py` | 最小 SMA strategy |
-| `examples/configs/btc_sma_backtest.toml` | 使用 composition/launch 运行 SMA 回测 |
+```bash
+uv run kairos project init demo --id demo --non-interactive --template backtest
+```
 
-更多运行说明见 [`examples/README.md`](examples/README.md)。
+生成内容包括 `kairos_demo/strategy.py`、模拟账户、五条确定性 Market Bar、
+`demo-backtest.toml` 和 `KAIROS_QUICKSTART.md`。
 
 ## 🗂️ 项目结构
 
 ```text
 kairospy/
-  application/        # CLI facade、launch、runtime orchestration、strategy entrypoint
-  core/               # account、execution、intent、market、order、reference 等领域模型
-  infrastructure/     # integrations 与 persistence adapters（market data、reference、runtime state、artifacts）
-  surface/            # CLI、interactive shell、Textual 与渲染层
-examples/
-  configs/            # launch 配置示例
-  strategies/         # 策略示例
+  application/        # Python application facade 与跨模块运行编排
+  strategy/           # 用户策略协议、事件与请求类型
+  infrastructure/     # contract、transport 与边界 adapter
+  surface/            # CLI、Textual 与渲染层
+crates/business/      # Account、Execution、Market、Reference、Risk 服务
+schemas/              # FlatBuffers contract 与 projection schema
 tests/                # pytest 测试
 ```
 
@@ -419,13 +413,13 @@ uv run pytest
 运行单个测试文件：
 
 ```bash
-uv run pytest tests/test_backtest_config_launcher.py
+uv run pytest tests/test_cli_surface.py
 ```
 
 查看项目入口：
 
 ```bash
-uv run kairospy shell
+uv run kairospy --help
 ```
 
 ## 📌 说明

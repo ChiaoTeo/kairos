@@ -1,0 +1,30 @@
+# Production overlay: no host-port publication and bounded container resources.
+# Deploy this with platform-provided TLS/auth at the workload ingress; do not
+# put credentials in this repository or in a Compose environment file.
+services:
+  otel-collector:
+    ports: !reset []
+    volumes:
+      - ./otel-collector.production.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ${KAIROS_LOG_ROOT}:/var/lib/kairos/logs:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+  tempo:
+    ports: !reset []
+    restart: unless-stopped
+  loki:
+    ports: !reset []
+    restart: unless-stopped
+  prometheus:
+    ports: !reset []
+    restart: unless-stopped
+  grafana:
+    ports: !reset []
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}

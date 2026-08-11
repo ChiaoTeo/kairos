@@ -1,0 +1,58 @@
+## Local development Collector. Applications export OTLP/HTTP to :4318.
+## The filelog receiver reads supervisor-managed JSONL process logs mounted at
+## /var/lib/kairos/logs. Production credentials and TLS material are supplied
+## by the production deployment, never by business processes.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+  filelog/kairos:
+    include: [/var/lib/kairos/logs/**/*.log]
+    start_at: end
+    operators:
+      - type: json_parser
+        parse_from: body
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch:
+    send_batch_size: 512
+    timeout: 1s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp, filelog/kairos]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

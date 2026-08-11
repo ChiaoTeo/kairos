@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use super::{AccountId, AccountModel, Decimal, MarginMode, PositionMode, SegmentKey};
+use kairos_domain_types::{Currency, UnixNanos};
+
+use super::{AccountId, AccountModel, MarginMode, MarketId, PositionMode, Rate, SegmentKey};
 
 /// Account-specific market terms observed from the provider.
 /// Generic instrument rules remain owned by Market/Reference.
@@ -8,15 +10,15 @@ use super::{AccountId, AccountModel, Decimal, MarginMode, PositionMode, SegmentK
 pub struct AccountMarketProfile {
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
-    pub market_id: String,
+    pub market_id: MarketId,
     pub account_model: Option<AccountModel>,
     pub margin_mode: Option<MarginMode>,
     pub position_mode: Option<PositionMode>,
-    pub maker_fee: Option<Decimal>,
-    pub taker_fee: Option<Decimal>,
-    pub fee_currency: Option<String>,
-    pub fee_discount: Option<Decimal>,
+    pub maker_fee: Option<Rate>,
+    pub taker_fee: Option<Rate>,
+    pub fee_currency: Option<Currency>,
+    pub fee_discount: Option<Rate>,
     pub fee_tier: Option<String>,
     pub source: String,
-    pub observed_at_unix_nanos: u64,
+    pub observed_at_unix_nanos: UnixNanos,
 }

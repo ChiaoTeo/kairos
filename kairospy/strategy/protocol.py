@@ -3,10 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from . import StrategyLogger
 
 from .events import EventEnvelope
-from .requests import SubscriptionRequest, TargetPositionRequest
+from .requests import (
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    QuoteProvisioningRequest,
+    QuoteRefreshRequest,
+    SubscriptionRequest,
+    TargetPositionRequest,
+)
 from .results import CommandResult
 
 
@@ -38,7 +48,6 @@ class StrategyContextProtocol(Protocol):
         dynamic: bool = False,
     ) -> CommandResult: ...
 
-
     def unsubscribe(self, subscription: object) -> CommandResult: ...
 
     def target_position(
@@ -53,6 +62,18 @@ class StrategyContextProtocol(Protocol):
         intent_id: str | None = None,
     ) -> CommandResult: ...
 
+    def pair_arbitrage(self, request: PairArbitrageRequest) -> CommandResult: ...
+
+    def portfolio_rebalance(
+        self, request: PortfolioRebalanceRequest
+    ) -> CommandResult: ...
+
+    def quote_provisioning(
+        self, request: QuoteProvisioningRequest
+    ) -> CommandResult: ...
+
+    def refresh_quote(self, request: QuoteRefreshRequest) -> CommandResult: ...
+
     def view(self, view_key: str, default: object = None) -> object: ...
 
     def require_view(self, view_key: str) -> object: ...
@@ -64,10 +85,18 @@ class StrategyProtocol(Protocol):
     strategy_id: str
 
     def on_start(self, context: StrategyContextProtocol) -> None: ...
-    def on_data(self, context: StrategyContextProtocol, event: EventEnvelope) -> None: ...
-    def on_intent(self, context: StrategyContextProtocol, event: EventEnvelope) -> None: ...
-    def on_clock(self, context: StrategyContextProtocol, event: EventEnvelope) -> None: ...
-    def on_system(self, context: StrategyContextProtocol, event: EventEnvelope) -> None: ...
+    def on_data(
+        self, context: StrategyContextProtocol, event: EventEnvelope
+    ) -> None: ...
+    def on_intent(
+        self, context: StrategyContextProtocol, event: EventEnvelope
+    ) -> None: ...
+    def on_clock(
+        self, context: StrategyContextProtocol, event: EventEnvelope
+    ) -> None: ...
+    def on_system(
+        self, context: StrategyContextProtocol, event: EventEnvelope
+    ) -> None: ...
     def on_end(self, context: StrategyContextProtocol) -> None: ...
 
 

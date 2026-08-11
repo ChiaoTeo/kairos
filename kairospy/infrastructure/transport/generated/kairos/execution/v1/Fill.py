@@ -81,7 +81,7 @@ class Fill(object):
         return None
 
     # Fill
-    def VenueOrderId(self):
+    def RemoteOrderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -206,11 +206,11 @@ def FillAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     FillAddMarketId(builder, marketId)
 
-def FillAddVenueOrderId(builder, venueOrderId):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(venueOrderId), 0)
+def FillAddRemoteOrderId(builder, remoteOrderId):
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
-def AddVenueOrderId(builder, venueOrderId):
-    FillAddVenueOrderId(builder, venueOrderId)
+def AddRemoteOrderId(builder, remoteOrderId):
+    FillAddRemoteOrderId(builder, remoteOrderId)
 
 def FillAddSide(builder, side):
     builder.PrependUint8Slot(9, side, 0)

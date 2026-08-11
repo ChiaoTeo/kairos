@@ -25,9 +25,10 @@ impl<'a> Trade<'a> {
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_PRICE: ::flatbuffers::VOffsetT = 10;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 12;
-    pub const VT_AGGRESSOR_SIDE: ::flatbuffers::VOffsetT = 14;
-    pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 16;
-    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 18;
+    pub const VT_COST: ::flatbuffers::VOffsetT = 14;
+    pub const VT_AGGRESSOR_SIDE: ::flatbuffers::VOffsetT = 16;
+    pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 18;
+    pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 20;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -47,6 +48,9 @@ impl<'a> Trade<'a> {
         builder.add_event_time_unix_nanos(args.event_time_unix_nanos);
         if let Some(x) = args.source_id {
             builder.add_source_id(x);
+        }
+        if let Some(x) = args.cost {
+            builder.add_cost(x);
         }
         if let Some(x) = args.quantity {
             builder.add_quantity(x);
@@ -121,6 +125,16 @@ impl<'a> Trade<'a> {
         }
     }
     #[inline]
+    pub fn cost(&self) -> Option<&'a super::super::common::v_1::Decimal64> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<super::super::common::v_1::Decimal64>(Trade::VT_COST, None)
+        }
+    }
+    #[inline]
     pub fn aggressor_side(&self) -> super::super::common::v_1::Side {
         // Safety:
         // Created from valid Table for this object
@@ -185,6 +199,7 @@ impl ::flatbuffers::Verifiable for Trade<'_> {
                 Self::VT_QUANTITY,
                 true,
             )?
+            .visit_field::<super::super::common::v_1::Decimal64>("cost", Self::VT_COST, false)?
             .visit_field::<super::super::common::v_1::Side>(
                 "aggressor_side",
                 Self::VT_AGGRESSOR_SIDE,
@@ -210,6 +225,7 @@ pub struct TradeArgs<'a> {
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub price: Option<&'a super::super::common::v_1::Decimal64>,
     pub quantity: Option<&'a super::super::common::v_1::Decimal64>,
+    pub cost: Option<&'a super::super::common::v_1::Decimal64>,
     pub aggressor_side: super::super::common::v_1::Side,
     pub event_time_unix_nanos: u64,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -223,6 +239,7 @@ impl<'a> Default for TradeArgs<'a> {
             market_id: None,
             price: None,    // required field
             quantity: None, // required field
+            cost: None,
             aggressor_side: super::super::common::v_1::Side::UNSPECIFIED,
             event_time_unix_nanos: 0,
             source_id: None,
@@ -264,6 +281,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
                 Trade::VT_QUANTITY,
                 quantity,
             );
+    }
+    #[inline]
+    pub fn add_cost(&mut self, cost: &super::super::common::v_1::Decimal64) {
+        self.fbb_
+            .push_slot_always::<&super::super::common::v_1::Decimal64>(Trade::VT_COST, cost);
     }
     #[inline]
     pub fn add_aggressor_side(&mut self, aggressor_side: super::super::common::v_1::Side) {
@@ -310,6 +332,7 @@ impl ::core::fmt::Debug for Trade<'_> {
         ds.field("market_id", &self.market_id());
         ds.field("price", &self.price());
         ds.field("quantity", &self.quantity());
+        ds.field("cost", &self.cost());
         ds.field("aggressor_side", &self.aggressor_side());
         ds.field("event_time_unix_nanos", &self.event_time_unix_nanos());
         ds.field("source_id", &self.source_id());

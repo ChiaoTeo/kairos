@@ -12,7 +12,9 @@ from typing import Any, Iterator
 class TimelineApplication:
     """Reads append-only JSONL records without owning the event stream."""
 
-    def list(self, path: str | Path, *, limit: int | None = None) -> list[dict[str, Any]]:
+    def list(
+        self, path: str | Path, *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
         records = list(self._records(Path(path)))
         if limit is not None:
             if limit < 0:
@@ -25,7 +27,9 @@ class TimelineApplication:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("w", encoding="utf-8") as stream:
             for record in self._records(Path(path)):
-                stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+                stream.write(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                )
         return output
 
     @staticmethod

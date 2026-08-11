@@ -6,9 +6,10 @@ mod result;
 mod service;
 
 pub use crate::domain::AccountMarketProfile;
-pub use command::{ReconcileAccount, RefreshAccount};
+pub use crate::domain::{AccountEvent, AccountObservedFill};
+pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
 pub use error::AccountError;
-pub use process::AccountProcess;
+pub use process::{AccountProcess, AccountSnapshotPublisher};
 pub use query::{AccountDataQuery, AccountMarketProfileRequest, AccountQuery};
 pub use result::{
     AccountBalanceRow, AccountCapability, AccountDifference, AccountFeeSchedule, AccountProjection,

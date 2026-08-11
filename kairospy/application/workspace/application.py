@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .domain import Workspace, WorkspaceIdentity, WorkspacePaths
+from .templates import (
+    install_project_template,
+    project_template_paths,
+    validate_project_template,
+)
 
 
 class WorkspaceApplication:
@@ -24,11 +29,12 @@ class WorkspaceApplication:
             return self.open(candidate)
         current = Path.cwd().resolve()
         for directory in (current, *current.parents):
-            if (directory / self.MANIFEST_NAME).is_file() or (directory / ".kairos" / "kairos.toml").is_file():
+            if (directory / self.MANIFEST_NAME).is_file() or (
+                directory / ".kairos" / "kairos.toml"
+            ).is_file():
                 return self.open(directory)
         raise FileNotFoundError(
-            "workspace not found; run 'kairos project init' "
-            "or pass --workspace"
+            "workspace not found; run 'kairos project init' or pass --workspace"
         )
 
     def init(self, root: str | Path, *, workspace_id: str | None = None) -> Workspace:
@@ -43,24 +49,46 @@ class WorkspaceApplication:
             encoding="utf-8",
         )
         workspace = self.open(root_path)
-        for directory in (workspace.paths.config, workspace.paths.config / "launches", workspace.paths.state, workspace.paths.run,
-                          workspace.paths.logs, workspace.paths.launches,
-                          workspace.paths.data_root(), workspace.paths.reference_root(),
-                          workspace.paths.market_connections_root(),
-                          workspace.paths.orders_root(),
-                          workspace.paths.operations_journal().parent,
-                          workspace.paths.launch_index().parent,
-                          workspace.paths.account_config().parent,
-                          workspace.paths.credential_config().parent,
-                          workspace.paths.account_state().parent,
-                          workspace.paths.account_log().parent,
-                          workspace.paths.account_leases()):
+        for directory in (
+            workspace.paths.config,
+            workspace.paths.config / "launches",
+            workspace.paths.state,
+            workspace.paths.run,
+            workspace.paths.logs,
+            workspace.paths.launches,
+            workspace.paths.data_root(),
+            workspace.paths.reference_root(),
+            workspace.paths.market_connections_root(),
+            workspace.paths.orders_root(),
+            workspace.paths.operations_journal().parent,
+            workspace.paths.launch_index().parent,
+            workspace.paths.account_config().parent,
+            workspace.paths.credential_config().parent,
+            workspace.paths.account_state().parent,
+            workspace.paths.account_log().parent,
+            workspace.paths.account_leases(),
+        ):
             directory.mkdir(parents=True, exist_ok=True)
         return workspace
 
-    def init_project(self, project_root: str | Path, *, workspace_id: str | None = None) -> Workspace:
+    def init_project(
+        self,
+        project_root: str | Path,
+        *,
+        workspace_id: str | None = None,
+        template: str | None = None,
+    ) -> Workspace:
         """Initialize the recommended project/.kairos workspace layout."""
         project = Path(project_root).expanduser().resolve()
+        template = validate_project_template(template)
+        conflicts = [
+            path for path in project_template_paths(project, template) if path.exists()
+        ]
+        if conflicts:
+            joined = ", ".join(str(path) for path in conflicts)
+            raise FileExistsError(
+                f"project template would overwrite existing files: {joined}"
+            )
         legacy_manifest = project / self.MANIFEST_NAME
         if legacy_manifest.is_file():
             raise FileExistsError(
@@ -80,16 +108,33 @@ class WorkspaceApplication:
         # The legacy root-level manifest was rejected above, so open() will
         # discover and return the project/.kairos storage root.
         workspace = self.open(project)
-        for directory in (workspace.paths.config, workspace.paths.config / "launches", workspace.paths.state, workspace.paths.run,
-                          workspace.paths.logs, workspace.paths.launches,
-                          workspace.paths.data_root(), workspace.paths.reference_root(),
-                          workspace.paths.market_connections_root(),
-                          workspace.paths.orders_root(), workspace.paths.account_config().parent,
-                          workspace.paths.credential_config().parent,
-                          workspace.paths.account_state().parent, workspace.paths.account_log().parent,
-                          workspace.paths.account_leases()):
+        for directory in (
+            workspace.paths.config,
+            workspace.paths.config / "launches",
+            workspace.paths.state,
+            workspace.paths.run,
+            workspace.paths.logs,
+            workspace.paths.launches,
+            workspace.paths.data_root(),
+            workspace.paths.reference_root(),
+            workspace.paths.market_connections_root(),
+            workspace.paths.orders_root(),
+            workspace.paths.account_config().parent,
+            workspace.paths.credential_config().parent,
+            workspace.paths.account_state().parent,
+            workspace.paths.account_log().parent,
+            workspace.paths.account_leases(),
+        ):
             directory.mkdir(parents=True, exist_ok=True)
+        install_project_template(workspace, template)
         return workspace
+
+    def install_template(
+        self, workspace: Workspace, *, template: str
+    ) -> tuple[Path, ...]:
+        """Install a starter into an existing project without overwriting files."""
+
+        return install_project_template(workspace, validate_project_template(template))
 
     def open(self, root: str | Path | None) -> Workspace:
         if root is None:
@@ -106,7 +151,9 @@ class WorkspaceApplication:
         try:
             values = tomllib.loads(manifest.read_text(encoding="utf-8"))
         except FileNotFoundError as error:
-            raise FileNotFoundError(f"workspace manifest is required: {manifest}") from error
+            raise FileNotFoundError(
+                f"workspace manifest is required: {manifest}"
+            ) from error
         if values.get("version") != 1:
             raise ValueError("workspace.toml version must be 1")
         identity = WorkspaceIdentity(values.get("workspace_id", ""))
@@ -125,7 +172,9 @@ class WorkspaceApplication:
         )
         return Workspace(identity, paths, cli_format=cli_format)
 
-    def market_connection(self, workspace: Workspace, connection_id: str) -> dict[str, Any]:
+    def market_connection(
+        self, workspace: Workspace, connection_id: str
+    ) -> dict[str, Any]:
         """Resolve a Workspace-owned Market connection profile."""
         connection_id = connection_id.strip()
         if not connection_id or any(
@@ -135,7 +184,9 @@ class WorkspaceApplication:
             raise ValueError("market connection id must be a path-safe name")
         values = tomllib.loads(workspace.paths.manifest.read_text(encoding="utf-8"))
         market = values.get("market", {})
-        connections = market.get("connections", {}) if isinstance(market, Mapping) else {}
+        connections = (
+            market.get("connections", {}) if isinstance(market, Mapping) else {}
+        )
         if isinstance(connections, Mapping):
             configured = connections.get(connection_id)
             if isinstance(configured, Mapping):

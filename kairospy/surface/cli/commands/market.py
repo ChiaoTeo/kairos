@@ -12,7 +12,7 @@ import typer
 
 from kairospy.application.market.cli import MarketCliApplication
 from kairospy.application.system import ComponentProcessApplication
-from kairospy.application.workspace import WorkspaceApplication
+from kairospy.application.workspace import Workspace, WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, render
 
 
@@ -67,7 +67,13 @@ def _workspace_and_arguments(argv: Sequence[str]) -> tuple[Path | None, list[str
 
 def market_passthrough(ctx: typer.Context) -> None:
     workspace, arguments = _workspace_and_arguments(ctx.args)
-    if arguments and arguments[0] in {"status", "snapshot", "refresh", "recover", "stop"}:
+    if arguments and arguments[0] in {
+        "status",
+        "snapshot",
+        "refresh",
+        "recover",
+        "stop",
+    }:
         _run_control_command(arguments, workspace)
         return
     if arguments and arguments[0] in {"subscribe", "unsubscribe"}:
@@ -84,9 +90,19 @@ def market_passthrough(ctx: typer.Context) -> None:
 
 def _run_control_command(arguments: Sequence[str], workspace: Path | None) -> None:
     parser = argparse.ArgumentParser(prog=f"kairospy market {arguments[0]}")
-    parser.add_argument("--output", "--format", choices=[value.value for value in OutputFormat], default="json")
+    parser.add_argument(
+        "--output",
+        "--format",
+        choices=[value.value for value in OutputFormat],
+        default="json",
+    )
     if arguments[0] == "snapshot":
-        parser.add_argument("kind", nargs="?", choices=["all", "quote", "trade", "orderbook", "bar", "greeks", "chain"], default=None)
+        parser.add_argument(
+            "kind",
+            nargs="?",
+            choices=["all", "quote", "trade", "orderbook", "bar", "greeks", "chain"],
+            default=None,
+        )
         parser.add_argument("--symbol")
         parser.add_argument("--exchange", default="binance")
         parser.add_argument("--market-type", default="spot")
@@ -156,7 +172,11 @@ def _select_snapshot(
                 if isinstance(item, dict) and item.get("market_id") in market_ids:
                     quotes.append(item)
         quotes.sort(key=lambda item: str(item.get("market_id", "")))
-        return {"underlying": underlying.upper(), "quotes": quotes, "count": len(quotes)}
+        return {
+            "underlying": underlying.upper(),
+            "quotes": quotes,
+            "count": len(quotes),
+        }
     if not symbol:
         raise typer.BadParameter("snapshot business views require --symbol")
     market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
@@ -207,7 +227,12 @@ def _select_snapshot(
 def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) -> None:
     parser = argparse.ArgumentParser(prog=f"kairospy market {arguments[0]}")
     parser.add_argument("--workspace", help=argparse.SUPPRESS)
-    parser.add_argument("--output", "--format", choices=[value.value for value in OutputFormat], default="json")
+    parser.add_argument(
+        "--output",
+        "--format",
+        choices=[value.value for value in OutputFormat],
+        default="json",
+    )
     parser.add_argument("--subscription-id", required=True)
     if arguments[0] == "subscribe":
         parser.add_argument("--subject", required=True)
@@ -240,38 +265,42 @@ def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) 
                 params[key] = value
         if parsed.chain:
             params["mode"] = "chain"
-        value = client.subscribe({
-            "schema_version": 1,
-            "command_id": command_id,
-            "idempotency_key": parsed.subscription_id,
-            "operation": "market.subscribe",
-            "strategy_id": parsed.strategy_id,
-            "instance_id": parsed.instance_id,
-            "payload": {
-                "subject": parsed.subject,
-                "selectors": parsed.selector,
-                "exchange": parsed.exchange,
-                "market_type": parsed.market_type,
-                "asset_type": parsed.asset_type,
-                "identity": parsed.identity,
-                "params": params,
-                "dynamic": parsed.chain,
-            },
-        })
+        value = client.subscribe(
+            {
+                "schema_version": 1,
+                "command_id": command_id,
+                "idempotency_key": parsed.subscription_id,
+                "operation": "market.subscribe",
+                "strategy_id": parsed.strategy_id,
+                "instance_id": parsed.instance_id,
+                "payload": {
+                    "subject": parsed.subject,
+                    "selectors": parsed.selector,
+                    "exchange": parsed.exchange,
+                    "market_type": parsed.market_type,
+                    "asset_type": parsed.asset_type,
+                    "identity": parsed.identity,
+                    "params": params,
+                    "dynamic": parsed.chain,
+                },
+            }
+        )
     else:
-        value = client.unsubscribe({
-            "schema_version": 1,
-            "command_id": command_id,
-            "idempotency_key": parsed.subscription_id,
-            "operation": "market.unsubscribe",
-            "strategy_id": "cli",
-            "instance_id": "cli",
-            "payload": {"subscription_id": parsed.subscription_id},
-        })
+        value = client.unsubscribe(
+            {
+                "schema_version": 1,
+                "command_id": command_id,
+                "idempotency_key": parsed.subscription_id,
+                "operation": "market.unsubscribe",
+                "strategy_id": "cli",
+                "instance_id": "cli",
+                "payload": {"subscription_id": parsed.subscription_id},
+            }
+        )
     typer.echo(render(value, OutputFormat(parsed.output)))
 
 
-def _market_client(owner: object):
+def _market_client(owner: Workspace):
     # A first subscription may open a provider connection and warm its
     # initial snapshot (notably Binance order books), which can exceed the
     # short health-check timeout used by generic system controls.

@@ -79,7 +79,7 @@ class OrderFilled(object):
         return None
 
     # OrderFilled
-    def VenueOrderId(self):
+    def RemoteOrderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -127,11 +127,11 @@ def OrderFilledAddFillPrice(builder, fillPrice):
 def AddFillPrice(builder, fillPrice):
     OrderFilledAddFillPrice(builder, fillPrice)
 
-def OrderFilledAddVenueOrderId(builder, venueOrderId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(venueOrderId), 0)
+def OrderFilledAddRemoteOrderId(builder, remoteOrderId):
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
-def AddVenueOrderId(builder, venueOrderId):
-    OrderFilledAddVenueOrderId(builder, venueOrderId)
+def AddRemoteOrderId(builder, remoteOrderId):
+    OrderFilledAddRemoteOrderId(builder, remoteOrderId)
 
 def OrderFilledEnd(builder):
     return builder.EndObject()

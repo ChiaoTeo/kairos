@@ -1,15 +1,16 @@
+use kairos_domain_types::MarketId;
 use serde::{Deserialize, Serialize};
 
 /// Stable identity for one current market-data projection.
 ///
 /// The source is deliberately part of the identity: the same instrument may
-/// be observed from several venues or provider connections, and quote/trade
+/// be observed from several exchanges or provider connections, and quote/trade
 /// projections must not overwrite one another. Qualifiers distinguish
 /// standard variants such as bar timeframes.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct MarketViewKey {
     pub source_id: String,
-    pub market_id: String,
+    pub market_id: MarketId,
     pub kind: String,
     pub qualifier: String,
 }
@@ -22,17 +23,22 @@ impl MarketViewKey {
     ) -> Result<Self, String> {
         let value = Self {
             source_id: source_id.into(),
-            market_id: market_id.into(),
+            market_id: MarketId::new(market_id.into()).map_err(|error| error.to_string())?,
             kind: kind.into(),
             qualifier: String::new(),
         };
         for (name, field) in [
-            ("source_id", &value.source_id),
-            ("market_id", &value.market_id),
-            ("kind", &value.kind),
+            ("source_id", value.source_id.as_str()),
+            ("market_id", value.market_id.as_str()),
+            ("kind", value.kind.as_str()),
         ] {
             if field.trim().is_empty() {
                 return Err(format!("market view {name} is required"));
+            }
+            if field.contains('/') || field.contains('\\') || field == "." || field == ".." {
+                return Err(format!(
+                    "market view {name} contains an invalid path component"
+                ));
             }
         }
         Ok(value)
@@ -48,6 +54,13 @@ impl MarketViewKey {
         value.qualifier = qualifier.into();
         if value.qualifier.trim().is_empty() {
             return Err("market view qualifier cannot be blank".into());
+        }
+        if value.qualifier.contains('/')
+            || value.qualifier.contains('\\')
+            || value.qualifier == "."
+            || value.qualifier == ".."
+        {
+            return Err("market view qualifier contains an invalid path component".into());
         }
         Ok(value)
     }

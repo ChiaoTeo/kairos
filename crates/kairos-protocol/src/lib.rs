@@ -1,5 +1,15 @@
 //! Generated process-boundary contracts.
 
+// FlatBuffers emits these implementations and unsafe constructors. Keep the
+// generated boundary checked by rustc while excluding lints that the
+// generator cannot currently satisfy without hand-editing generated files.
+#![allow(
+    clippy::derivable_impls,
+    clippy::extra_unused_lifetimes,
+    clippy::missing_safety_doc,
+    clippy::unnecessary_cast
+)]
+
 pub mod generated;
 
 /// Runtime ownership identity carried by instance-scoped transport headers.

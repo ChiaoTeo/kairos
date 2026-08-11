@@ -40,17 +40,28 @@ class InMemoryContextBus:
         return handle
 
     def status(self, request_id: str) -> CommandHandle:
-        return self._handles.get(request_id, CommandHandle(request_id, "missing", error="request not found"))
+        return self._handles.get(
+            request_id, CommandHandle(request_id, "missing", error="request not found")
+        )
 
-    def resolve(self, request_id: str, *, status: str = "ready", result: Mapping[str, object] | None = None, error: str | None = None) -> None:
+    def resolve(
+        self,
+        request_id: str,
+        *,
+        status: str = "ready",
+        result: Mapping[str, object] | None = None,
+        error: str | None = None,
+    ) -> None:
         if request_id not in self._handles:
             raise KeyError(request_id)
-        self._handles[request_id] = CommandHandle(request_id, status, result or {}, error)
+        self._handles[request_id] = CommandHandle(
+            request_id, status, result or {}, error
+        )
 
 
 class InMemorySnapshotReader:
-    def __init__(self, snapshots: Mapping[str, SnapshotEnvelope] = ()) -> None:
-        self.snapshots = dict(snapshots)
+    def __init__(self, snapshots: Mapping[str, SnapshotEnvelope] | None = None) -> None:
+        self.snapshots = dict(snapshots or {})
 
     def read(self, view_key: str) -> SnapshotEnvelope:
         return self.snapshots[view_key]
@@ -96,4 +107,3 @@ class InMemoryLifecycleJournal:
 
     def append(self, record: LifecycleRecord) -> None:
         self.records.append(record)
-

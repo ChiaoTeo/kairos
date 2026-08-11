@@ -67,7 +67,7 @@ class Order(object):
         return None
 
     # Order
-    def VenueOrderId(self):
+    def RemoteOrderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -212,11 +212,11 @@ def OrderAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     OrderAddMarketId(builder, marketId)
 
-def OrderAddVenueOrderId(builder, venueOrderId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(venueOrderId), 0)
+def OrderAddRemoteOrderId(builder, remoteOrderId):
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
-def AddVenueOrderId(builder, venueOrderId):
-    OrderAddVenueOrderId(builder, venueOrderId)
+def AddRemoteOrderId(builder, remoteOrderId):
+    OrderAddRemoteOrderId(builder, remoteOrderId)
 
 def OrderAddStatus(builder, status):
     builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)

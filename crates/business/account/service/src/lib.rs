@@ -11,6 +11,7 @@ mod services;
 
 pub use application::AccountsSnapshot;
 pub use application::{
-    AccountApplication, AccountDataQuery, AccountError, AccountProcess, AccountQuery,
-    ReconcileAccount, RefreshAccount,
+    AccountApplication, AccountDataQuery, AccountError, AccountEvent, AccountObservedFill,
+    AccountProcess, AccountQuery, AccountSnapshotPublisher, MarkToMarket, ReconcileAccount,
+    RefreshAccount,
 };

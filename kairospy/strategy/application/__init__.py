@@ -6,7 +6,19 @@ for concise strategy imports. Runtime implementations live elsewhere.
 
 from ..events import EventEnvelope
 from ..protocol import StrategyBase, StrategyContextProtocol, StrategyProtocol
-from ..requests import SubscriptionRequest, TargetPositionRequest
+from ..requests import (
+    ArbitrageLegRequest,
+    HedgePolicy,
+    MakerExecutionPolicy,
+    PairArbitrageRequest,
+    PortfolioRebalanceRequest,
+    PortfolioRebalanceTarget,
+    QuoteProvisioningRequest,
+    QuoteRefreshRequest,
+    SplitOrderPolicy,
+    SubscriptionRequest,
+    TargetPositionRequest,
+)
 from ..results import CommandResult
 from ..validation import StrategyContractError, validate_strategy
 
@@ -19,5 +31,14 @@ __all__ = [
     "StrategyProtocol",
     "SubscriptionRequest",
     "TargetPositionRequest",
+    "ArbitrageLegRequest",
+    "HedgePolicy",
+    "MakerExecutionPolicy",
+    "PairArbitrageRequest",
+    "PortfolioRebalanceRequest",
+    "PortfolioRebalanceTarget",
+    "QuoteProvisioningRequest",
+    "QuoteRefreshRequest",
+    "SplitOrderPolicy",
     "validate_strategy",
 ]

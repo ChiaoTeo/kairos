@@ -31,6 +31,7 @@ impl<'a> Bar<'a> {
     pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 22;
     pub const VT_DERIVATION: ::flatbuffers::VOffsetT = 24;
+    pub const VT_BAR_KIND: ::flatbuffers::VOffsetT = 26;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -48,6 +49,9 @@ impl<'a> Bar<'a> {
     ) -> ::flatbuffers::WIPOffset<Bar<'bldr>> {
         let mut builder = BarBuilder::new(_fbb);
         builder.add_event_time_unix_nanos(args.event_time_unix_nanos);
+        if let Some(x) = args.bar_kind {
+            builder.add_bar_kind(x);
+        }
         if let Some(x) = args.derivation {
             builder.add_derivation(x);
         }
@@ -199,6 +203,16 @@ impl<'a> Bar<'a> {
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Bar::VT_DERIVATION, None)
         }
     }
+    #[inline]
+    pub fn bar_kind(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Bar::VT_BAR_KIND, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Bar<'_> {
@@ -243,6 +257,11 @@ impl ::flatbuffers::Verifiable for Bar<'_> {
                 Self::VT_DERIVATION,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "bar_kind",
+                Self::VT_BAR_KIND,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -259,6 +278,7 @@ pub struct BarArgs<'a> {
     pub event_time_unix_nanos: u64,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub derivation: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub bar_kind: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for BarArgs<'a> {
     #[inline]
@@ -275,6 +295,7 @@ impl<'a> Default for BarArgs<'a> {
             event_time_unix_nanos: 0,
             source_id: None,
             derivation: None,
+            bar_kind: None,
         }
     }
 }
@@ -340,6 +361,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> BarBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Bar::VT_DERIVATION, derivation);
     }
     #[inline]
+    pub fn add_bar_kind(&mut self, bar_kind: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Bar::VT_BAR_KIND, bar_kind);
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> BarBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         BarBuilder {
@@ -376,6 +402,7 @@ impl ::core::fmt::Debug for Bar<'_> {
         ds.field("event_time_unix_nanos", &self.event_time_unix_nanos());
         ds.field("source_id", &self.source_id());
         ds.field("derivation", &self.derivation());
+        ds.field("bar_kind", &self.bar_kind());
         ds.finish()
     }
 }

@@ -23,6 +23,7 @@ impl<'a> Entity<'a> {
     pub const VT_ENTITY_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_ENTITY_TYPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_NAME: ::flatbuffers::VOffsetT = 8;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 10;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -39,6 +40,9 @@ impl<'a> Entity<'a> {
         args: &'args EntityArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<Entity<'bldr>> {
         let mut builder = EntityBuilder::new(_fbb);
+        if let Some(x) = args.status {
+            builder.add_status(x);
+        }
         if let Some(x) = args.name {
             builder.add_name(x);
         }
@@ -84,6 +88,16 @@ impl<'a> Entity<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn status(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Entity::VT_STATUS, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Entity<'_> {
@@ -104,6 +118,7 @@ impl ::flatbuffers::Verifiable for Entity<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("name", Self::VT_NAME, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, false)?
             .finish();
         Ok(())
     }
@@ -112,6 +127,7 @@ pub struct EntityArgs<'a> {
     pub entity_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub entity_type: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub name: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for EntityArgs<'a> {
     #[inline]
@@ -120,6 +136,7 @@ impl<'a> Default for EntityArgs<'a> {
             entity_id: None,   // required field
             entity_type: None, // required field
             name: None,        // required field
+            status: None,
         }
     }
 }
@@ -145,6 +162,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> EntityBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Entity::VT_NAME, name);
     }
     #[inline]
+    pub fn add_status(&mut self, status: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Entity::VT_STATUS, status);
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> EntityBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         EntityBuilder {
@@ -168,6 +190,7 @@ impl ::core::fmt::Debug for Entity<'_> {
         ds.field("entity_id", &self.entity_id());
         ds.field("entity_type", &self.entity_type());
         ds.field("name", &self.name());
+        ds.field("status", &self.status());
         ds.finish()
     }
 }

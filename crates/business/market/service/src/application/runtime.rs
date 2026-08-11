@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use super::MarketDataKey;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::market::{MarketDescriptor, MarketSelectionQuery};
 use crate::domain::reference::ReferenceChanged;
@@ -64,6 +65,17 @@ impl MarketRuntime {
         self.application.subscribe_static(id, owner_id, market)
     }
 
+    pub fn subscribe_static_with_selectors(
+        &mut self,
+        id: SubscriptionId,
+        owner_id: impl Into<String>,
+        market: MarketDescriptor,
+        selectors: Vec<String>,
+    ) -> Result<(), MarketError> {
+        self.application
+            .subscribe_static_with_selectors(id, owner_id, market, selectors)
+    }
+
     pub fn subscribe_dynamic(
         &mut self,
         id: SubscriptionId,
@@ -73,6 +85,18 @@ impl MarketRuntime {
     ) -> Result<ReconcileResult, MarketError> {
         self.application
             .subscribe_dynamic(id, owner_id, query, markets)
+    }
+
+    pub fn subscribe_dynamic_with_selectors(
+        &mut self,
+        id: SubscriptionId,
+        owner_id: impl Into<String>,
+        query: MarketSelectionQuery,
+        markets: Vec<MarketDescriptor>,
+        selectors: Vec<String>,
+    ) -> Result<ReconcileResult, MarketError> {
+        self.application
+            .subscribe_dynamic_with_selectors(id, owner_id, query, markets, selectors)
     }
 
     pub fn reconcile_reference(
@@ -134,6 +158,12 @@ impl MarketRuntime {
         result
     }
 
+    pub fn feed_complete(&self) -> bool {
+        self.connection
+            .as_ref()
+            .is_some_and(MarketConnectionManager::is_complete)
+    }
+
     /// Retry provider reconciliation without changing business intent. A
     /// transient provider failure must not permanently leave actual
     /// subscriptions behind the actor's desired state.
@@ -177,7 +207,8 @@ impl MarketRuntime {
             self.application.ingest(observation)?;
         }
         for update in batch.orderbooks {
-            let market_id = update.market_id.clone();
+            let key = MarketDataKey::new(update.source_id.clone(), update.market_id.clone())
+                .map_err(MarketError::Invalid)?;
             if let Err(error) = self.apply_orderbook_update(update) {
                 if !is_orderbook_resync_error(&error.to_string()) {
                     return Err(error);
@@ -185,24 +216,25 @@ impl MarketRuntime {
                 self.application
                     .actor
                     .set_feed_status(FeedStatus::WarmingUp);
-                match self.resync_orderbook(&market_id) {
+                match self.resync_orderbook(&key) {
                     Ok(()) => tracing::warn!(
                         event = "market_orderbook_resync_requested",
                         component = "market",
-                        market_id = %market_id,
+                        market_id = %key.market_id,
                         "requested single market order book resync"
                     ),
                     Err(resync_error) => {
                         tracing::warn!(
                             event = "market_orderbook_resync_unavailable",
                             component = "market",
-                            market_id = %market_id,
+                        market_id = %key.market_id,
                             error = %resync_error,
                             "single market order book resync is unavailable"
                         );
                         self.application.actor.set_feed_status(FeedStatus::Degraded);
                         return Err(MarketError::Invalid(format!(
-                            "order book resync unavailable for {market_id}: {resync_error}"
+                            "order book resync unavailable for {}: {resync_error}",
+                            key.market_id
                         )));
                     }
                 }
@@ -211,21 +243,22 @@ impl MarketRuntime {
         Ok(count)
     }
 
-    pub fn resync_orderbook(&mut self, market_id: &str) -> Result<(), MarketError> {
+    pub fn resync_orderbook(&mut self, key: &MarketDataKey) -> Result<(), MarketError> {
         let connection = self
             .connection
             .as_mut()
             .ok_or_else(|| MarketError::Invalid("market feed is not configured".into()))?;
         connection
-            .resync_orderbook(market_id)
+            .resync_orderbook(key)
             .map_err(MarketError::Invalid)
     }
 
     fn apply_orderbook_update(&mut self, update: MarketOrderBookUpdate) -> Result<(), MarketError> {
         if update.snapshot {
-            let book = crate::domain::orderbook::OrderBook::snapshot(
-                update.market_id,
-                update.instrument_id,
+            let book = crate::domain::orderbook::OrderBook::snapshot_with_source(
+                update.source_id,
+                update.market_id.to_string(),
+                update.instrument_id.to_string(),
                 update.last_sequence,
                 update.event_time_unix_nanos,
                 update.bids,
@@ -236,6 +269,7 @@ impl MarketRuntime {
         } else {
             self.application
                 .ingest_orderbook_delta(crate::domain::orderbook::OrderBookDelta {
+                    source_id: update.source_id,
                     market_id: update.market_id,
                     instrument_id: update.instrument_id,
                     first_sequence: update.first_sequence,
@@ -243,6 +277,7 @@ impl MarketRuntime {
                     event_time_unix_nanos: update.event_time_unix_nanos,
                     bids: update.bids,
                     asks: update.asks,
+                    checksum: None,
                 })
                 .map(|_| ())
         }

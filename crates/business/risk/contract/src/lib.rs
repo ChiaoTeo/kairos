@@ -17,6 +17,7 @@ pub use snapshot::SnapshotEnvelope;
 pub enum ContractError {
     Invalid(String),
     Transport(String),
+    Rejected(String),
 }
 
 impl std::fmt::Display for ContractError {
@@ -24,6 +25,7 @@ impl std::fmt::Display for ContractError {
         match self {
             Self::Invalid(value) => write!(f, "invalid risk contract data: {value}"),
             Self::Transport(value) => write!(f, "risk contract transport failed: {value}"),
+            Self::Rejected(value) => write!(f, "risk contract request rejected: {value}"),
         }
     }
 }

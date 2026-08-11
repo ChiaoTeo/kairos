@@ -72,28 +72,39 @@ class Trade(object):
         return None
 
     # Trade
-    def AggressorSide(self):
+    def Cost(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v1.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Trade
+    def AggressorSide(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # Trade
     def EventTimeUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Trade
     def SourceId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def TradeStart(builder):
-    builder.StartObject(8)
+    builder.StartObject(9)
 
 def Start(builder):
     TradeStart(builder)
@@ -128,20 +139,26 @@ def TradeAddQuantity(builder, quantity):
 def AddQuantity(builder, quantity):
     TradeAddQuantity(builder, quantity)
 
+def TradeAddCost(builder, cost):
+    builder.PrependStructSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(cost), 0)
+
+def AddCost(builder, cost):
+    TradeAddCost(builder, cost)
+
 def TradeAddAggressorSide(builder, aggressorSide):
-    builder.PrependUint8Slot(5, aggressorSide, 0)
+    builder.PrependUint8Slot(6, aggressorSide, 0)
 
 def AddAggressorSide(builder, aggressorSide):
     TradeAddAggressorSide(builder, aggressorSide)
 
 def TradeAddEventTimeUnixNanos(builder, eventTimeUnixNanos):
-    builder.PrependUint64Slot(6, eventTimeUnixNanos, 0)
+    builder.PrependUint64Slot(7, eventTimeUnixNanos, 0)
 
 def AddEventTimeUnixNanos(builder, eventTimeUnixNanos):
     TradeAddEventTimeUnixNanos(builder, eventTimeUnixNanos)
 
 def TradeAddSourceId(builder, sourceId):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(sourceId), 0)
 
 def AddSourceId(builder, sourceId):
     TradeAddSourceId(builder, sourceId)

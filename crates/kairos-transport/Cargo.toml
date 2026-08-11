@@ -14,6 +14,7 @@ rusteron-media-driver = { version = "0.2.4", default-features = false, features 
 memmap2 = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+kairos-workspace = { path = "../kairos-workspace", features = ["otel"] }
 
 [[bin]]
 name = "kairos-aeron-driver"

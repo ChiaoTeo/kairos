@@ -22,8 +22,10 @@ impl<'a> ::flatbuffers::Follow<'a> for Risk<'a> {
 impl<'a> Risk<'a> {
     pub const VT_BUDGET_COUNT: ::flatbuffers::VOffsetT = 4;
     pub const VT_RESERVATION_COUNT: ::flatbuffers::VOffsetT = 6;
-    pub const VT_BUDGETS: ::flatbuffers::VOffsetT = 8;
-    pub const VT_RESERVATIONS: ::flatbuffers::VOffsetT = 10;
+    pub const VT_CIRCUIT_COUNT: ::flatbuffers::VOffsetT = 8;
+    pub const VT_BUDGETS: ::flatbuffers::VOffsetT = 10;
+    pub const VT_RESERVATIONS: ::flatbuffers::VOffsetT = 12;
+    pub const VT_CIRCUITS: ::flatbuffers::VOffsetT = 14;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -40,8 +42,12 @@ impl<'a> Risk<'a> {
         args: &'args RiskArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<Risk<'bldr>> {
         let mut builder = RiskBuilder::new(_fbb);
+        builder.add_circuit_count(args.circuit_count);
         builder.add_reservation_count(args.reservation_count);
         builder.add_budget_count(args.budget_count);
+        if let Some(x) = args.circuits {
+            builder.add_circuits(x);
+        }
         if let Some(x) = args.reservations {
             builder.add_reservations(x);
         }
@@ -74,6 +80,17 @@ impl<'a> Risk<'a> {
         }
     }
     #[inline]
+    pub fn circuit_count(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Risk::VT_CIRCUIT_COUNT, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn budgets(
         &self,
     ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Budget<'a>>>> {
@@ -99,6 +116,19 @@ impl<'a> Risk<'a> {
             >>(Risk::VT_RESERVATIONS, None)
         }
     }
+    #[inline]
+    pub fn circuits(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CircuitState<'a>>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CircuitState>>,
+            >>(Risk::VT_CIRCUITS, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Risk<'_> {
@@ -110,12 +140,16 @@ impl ::flatbuffers::Verifiable for Risk<'_> {
         v.visit_table(pos)?
             .visit_field::<u64>("budget_count", Self::VT_BUDGET_COUNT, false)?
             .visit_field::<u64>("reservation_count", Self::VT_RESERVATION_COUNT, false)?
+            .visit_field::<u64>("circuit_count", Self::VT_CIRCUIT_COUNT, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Budget>>,
             >>("budgets", Self::VT_BUDGETS, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Reservation>>,
             >>("reservations", Self::VT_RESERVATIONS, false)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<CircuitState>>,
+            >>("circuits", Self::VT_CIRCUITS, false)?
             .finish();
         Ok(())
     }
@@ -123,6 +157,7 @@ impl ::flatbuffers::Verifiable for Risk<'_> {
 pub struct RiskArgs<'a> {
     pub budget_count: u64,
     pub reservation_count: u64,
+    pub circuit_count: u64,
     pub budgets: Option<
         ::flatbuffers::WIPOffset<
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Budget<'a>>>,
@@ -133,6 +168,11 @@ pub struct RiskArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Reservation<'a>>>,
         >,
     >,
+    pub circuits: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CircuitState<'a>>>,
+        >,
+    >,
 }
 impl<'a> Default for RiskArgs<'a> {
     #[inline]
@@ -140,8 +180,10 @@ impl<'a> Default for RiskArgs<'a> {
         RiskArgs {
             budget_count: 0,
             reservation_count: 0,
+            circuit_count: 0,
             budgets: None,
             reservations: None,
+            circuits: None,
         }
     }
 }
@@ -160,6 +202,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RiskBuilder<'a, 'b, A> {
     pub fn add_reservation_count(&mut self, reservation_count: u64) {
         self.fbb_
             .push_slot::<u64>(Risk::VT_RESERVATION_COUNT, reservation_count, 0);
+    }
+    #[inline]
+    pub fn add_circuit_count(&mut self, circuit_count: u64) {
+        self.fbb_
+            .push_slot::<u64>(Risk::VT_CIRCUIT_COUNT, circuit_count, 0);
     }
     #[inline]
     pub fn add_budgets(
@@ -182,6 +229,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RiskBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Risk::VT_RESERVATIONS, reservations);
     }
     #[inline]
+    pub fn add_circuits(
+        &mut self,
+        circuits: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<CircuitState<'b>>>,
+        >,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Risk::VT_CIRCUITS, circuits);
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> RiskBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         RiskBuilder {
@@ -201,8 +258,10 @@ impl ::core::fmt::Debug for Risk<'_> {
         let mut ds = f.debug_struct("Risk");
         ds.field("budget_count", &self.budget_count());
         ds.field("reservation_count", &self.reservation_count());
+        ds.field("circuit_count", &self.circuit_count());
         ds.field("budgets", &self.budgets());
         ds.field("reservations", &self.reservations());
+        ds.field("circuits", &self.circuits());
         ds.finish()
     }
 }

@@ -42,7 +42,9 @@ class ProcessSpec:
             object.__setattr__(self, "cwd", Path(self.cwd))
         if self.health_file is not None and not isinstance(self.health_file, Path):
             object.__setattr__(self, "health_file", Path(self.health_file))
-        if self.control_socket is not None and not isinstance(self.control_socket, Path):
+        if self.control_socket is not None and not isinstance(
+            self.control_socket, Path
+        ):
             object.__setattr__(self, "control_socket", Path(self.control_socket))
 
 
@@ -77,12 +79,16 @@ class ProcessSupervisor:
             self._processes[spec.name] = managed
             asyncio.create_task(self._observe(spec.name, managed))
 
-    async def start_ready(self, spec: ProcessSpec, *, timeout: float = 30.0) -> Mapping[str, Any]:
+    async def start_ready(
+        self, spec: ProcessSpec, *, timeout: float = 30.0
+    ) -> Mapping[str, Any]:
         """Start a process and wait for its process-owned health contract."""
         await self.start(spec)
         return await self.wait_ready(spec.name, timeout=timeout)
 
-    async def wait_ready(self, name: str, *, timeout: float = 30.0) -> Mapping[str, Any]:
+    async def wait_ready(
+        self, name: str, *, timeout: float = 30.0
+    ) -> Mapping[str, Any]:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         deadline = asyncio.get_running_loop().time() + timeout
@@ -93,10 +99,18 @@ class ProcessSupervisor:
             if managed.process.returncode is not None:
                 raise RuntimeError(f"process exited before ready: {name}")
             try:
-                health = await self.remote_health(name) if managed.spec.control_socket else self.health(name)
+                health = (
+                    await self.remote_health(name)
+                    if managed.spec.control_socket
+                    else self.health(name)
+                )
             except (OSError, RuntimeError, TimeoutError, ValueError):
                 health = None
-            if isinstance(health, Mapping) and health.get("status") in {"ok", "ready", "running"}:
+            if isinstance(health, Mapping) and health.get("status") in {
+                "ok",
+                "ready",
+                "running",
+            }:
                 return health
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"process did not become ready: {name}")
@@ -150,7 +164,9 @@ class ProcessSupervisor:
             except ProcessLookupError:
                 pass
         try:
-            await asyncio.wait_for(managed.process.wait(), timeout=managed.spec.stop_timeout)
+            await asyncio.wait_for(
+                managed.process.wait(), timeout=managed.spec.stop_timeout
+            )
         except asyncio.TimeoutError:
             try:
                 os.killpg(managed.process.pid, signal.SIGKILL)
@@ -182,8 +198,15 @@ class ProcessSupervisor:
 
     def statuses(self) -> dict[str, ProcessState]:
         for managed in self._processes.values():
-            if managed.process.returncode is not None and managed.state not in {ProcessState.STOPPING, ProcessState.EXITED}:
-                managed.state = ProcessState.FAILED if managed.process.returncode else ProcessState.EXITED
+            if managed.process.returncode is not None and managed.state not in {
+                ProcessState.STOPPING,
+                ProcessState.EXITED,
+            }:
+                managed.state = (
+                    ProcessState.FAILED
+                    if managed.process.returncode
+                    else ProcessState.EXITED
+                )
         return {name: managed.state for name, managed in self._processes.items()}
 
     def health(self, name: str) -> Mapping[str, Any] | None:
@@ -208,7 +231,9 @@ class ProcessSupervisor:
     async def _observe(self, name: str, managed: _ManagedProcess) -> None:
         returncode = await managed.process.wait()
         if managed.state is not ProcessState.STOPPING:
-            managed.state = ProcessState.EXITED if returncode == 0 else ProcessState.FAILED
+            managed.state = (
+                ProcessState.EXITED if returncode == 0 else ProcessState.FAILED
+            )
 
 
 class UnixRestClient:
@@ -229,7 +254,9 @@ class UnixRestClient:
         if not method or not path.startswith("/"):
             raise ValueError("invalid Unix REST request")
         return await asyncio.wait_for(
-            request_async(self.socket_path, method.upper(), path, body, timeout=self.timeout),
+            request_async(
+                self.socket_path, method.upper(), path, body, timeout=self.timeout
+            ),
             timeout=self.timeout,
         )
 

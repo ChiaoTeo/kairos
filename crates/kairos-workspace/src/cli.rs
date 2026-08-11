@@ -7,17 +7,12 @@
 use serde_json::Value;
 use std::{fmt, str::FromStr};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputFormat {
+    #[default]
     Json,
     Text,
     Table,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Json
-    }
 }
 
 impl FromStr for OutputFormat {

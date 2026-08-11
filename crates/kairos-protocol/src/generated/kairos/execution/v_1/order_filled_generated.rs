@@ -26,7 +26,7 @@ impl<'a> OrderFilled<'a> {
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 10;
     pub const VT_FILL_QUANTITY: ::flatbuffers::VOffsetT = 12;
     pub const VT_FILL_PRICE: ::flatbuffers::VOffsetT = 14;
-    pub const VT_VENUE_ORDER_ID: ::flatbuffers::VOffsetT = 16;
+    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 16;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -43,8 +43,8 @@ impl<'a> OrderFilled<'a> {
         args: &'args OrderFilledArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<OrderFilled<'bldr>> {
         let mut builder = OrderFilledBuilder::new(_fbb);
-        if let Some(x) = args.venue_order_id {
-            builder.add_venue_order_id(x);
+        if let Some(x) = args.remote_order_id {
+            builder.add_remote_order_id(x);
         }
         if let Some(x) = args.fill_price {
             builder.add_fill_price(x);
@@ -135,13 +135,13 @@ impl<'a> OrderFilled<'a> {
         }
     }
     #[inline]
-    pub fn venue_order_id(&self) -> Option<&'a str> {
+    pub fn remote_order_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(OrderFilled::VT_VENUE_ORDER_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(OrderFilled::VT_REMOTE_ORDER_ID, None)
         }
     }
 }
@@ -180,8 +180,8 @@ impl ::flatbuffers::Verifiable for OrderFilled<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "venue_order_id",
-                Self::VT_VENUE_ORDER_ID,
+                "remote_order_id",
+                Self::VT_REMOTE_ORDER_ID,
                 false,
             )?
             .finish();
@@ -195,7 +195,7 @@ pub struct OrderFilledArgs<'a> {
     pub side: super::super::common::v_1::Side,
     pub fill_quantity: Option<&'a super::super::common::v_1::Decimal64>,
     pub fill_price: Option<&'a super::super::common::v_1::Decimal64>,
-    pub venue_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for OrderFilledArgs<'a> {
     #[inline]
@@ -207,7 +207,7 @@ impl<'a> Default for OrderFilledArgs<'a> {
             side: super::super::common::v_1::Side::UNSPECIFIED,
             fill_quantity: None, // required field
             fill_price: None,    // required field
-            venue_order_id: None,
+            remote_order_id: None,
         }
     }
 }
@@ -263,10 +263,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderFilledBuilder<'a, 'b, A>
             );
     }
     #[inline]
-    pub fn add_venue_order_id(&mut self, venue_order_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_remote_order_id(&mut self, remote_order_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            OrderFilled::VT_VENUE_ORDER_ID,
-            venue_order_id,
+            OrderFilled::VT_REMOTE_ORDER_ID,
+            remote_order_id,
         );
     }
     #[inline]
@@ -305,7 +305,7 @@ impl ::core::fmt::Debug for OrderFilled<'_> {
         ds.field("side", &self.side());
         ds.field("fill_quantity", &self.fill_quantity());
         ds.field("fill_price", &self.fill_price());
-        ds.field("venue_order_id", &self.venue_order_id());
+        ds.field("remote_order_id", &self.remote_order_id());
         ds.finish()
     }
 }

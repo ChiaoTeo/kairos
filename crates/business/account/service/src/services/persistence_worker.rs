@@ -226,8 +226,8 @@ impl Drop for AccountPersistenceWorker {
     }
 }
 
-fn record_error(last_error: &Arc<Mutex<Option<String>>>, error: &String) {
+fn record_error(last_error: &Arc<Mutex<Option<String>>>, error: &str) {
     if let Ok(mut last_error) = last_error.lock() {
-        *last_error = Some(error.clone());
+        *last_error = Some(error.to_owned());
     }
 }

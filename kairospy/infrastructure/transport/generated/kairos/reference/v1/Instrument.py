@@ -103,14 +103,35 @@ class Instrument(object):
         return None
 
     # Instrument
-    def Status(self):
+    def IssuerId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # Instrument
+    def ShareClass(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Instrument
+    def PrimaryCurrencyAssetId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Instrument
+    def Status(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def InstrumentStart(builder):
-    builder.StartObject(11)
+    builder.StartObject(14)
 
 def Start(builder):
     InstrumentStart(builder)
@@ -175,8 +196,26 @@ def InstrumentAddMultiplier(builder, multiplier):
 def AddMultiplier(builder, multiplier):
     InstrumentAddMultiplier(builder, multiplier)
 
+def InstrumentAddIssuerId(builder, issuerId):
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(issuerId), 0)
+
+def AddIssuerId(builder, issuerId):
+    InstrumentAddIssuerId(builder, issuerId)
+
+def InstrumentAddShareClass(builder, shareClass):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(shareClass), 0)
+
+def AddShareClass(builder, shareClass):
+    InstrumentAddShareClass(builder, shareClass)
+
+def InstrumentAddPrimaryCurrencyAssetId(builder, primaryCurrencyAssetId):
+    builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(primaryCurrencyAssetId), 0)
+
+def AddPrimaryCurrencyAssetId(builder, primaryCurrencyAssetId):
+    InstrumentAddPrimaryCurrencyAssetId(builder, primaryCurrencyAssetId)
+
 def InstrumentAddStatus(builder, status):
-    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
 
 def AddStatus(builder, status):
     InstrumentAddStatus(builder, status)

@@ -1,25 +1,40 @@
 //! Process composition for concrete provider feeds.
 
-use kairos_integration::application::{
-    AccessScope, ConnectionSpec, IntegrationCapability, ProductFamily, TransportKind,
+use kairos_integration::application::credential::load_workspace_credential;
+use kairos_integration::participants::binance::{
+    self, ConnectionDomain as BinanceConnectionDomain,
 };
-use kairos_integration::credentials::load_workspace_credential;
-use kairos_integration::{Integration, IntegrationRoute};
+use kairos_integration::participants::massive::{
+    MarketType as MassiveMarketType, MassiveConnection, MassiveConnectionConfig,
+};
+use kairos_integration::participants::okx::{
+    InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig,
+};
 use kairos_workspace::workspace::Workspace;
 
+pub use crate::application::{MarketFeed, MarketFeedRoute};
 use crate::application::{MarketSnapshotPublisher, ReferenceChangeSource, ReferenceEvent};
+use crate::services::composite::{MarketFeedFactory, MarketRoute};
 
-pub use crate::services::composite::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
-pub use crate::services::feed::{MarketFeed, MarketOrderBookUpdate};
-pub use crate::services::integration::IntegrationMarketFeed;
 pub use kairos_market_contract::transport::AeronReferenceChangeSource;
+
+/// Market-owned source routing classification. Provider adapters map this to
+/// their own native vocabulary at composition time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarketProduct {
+    Spot,
+    UsdMFutures,
+    CoinMFutures,
+    Options,
+    Equity,
+}
 
 impl ReferenceChangeSource for AeronReferenceChangeSource {
     fn next_event(&mut self) -> Result<Option<ReferenceEvent>, String> {
         self.next_change()
             .map(|value| {
                 value.map(|change| ReferenceEvent {
-                    sequence: change.sequence,
+                    sequence: change.sequence.into(),
                 })
             })
             .map_err(|error| error.to_string())
@@ -71,11 +86,213 @@ impl MmapMarketSnapshotPublisher {
         &mut self,
         snapshot: &crate::domain::snapshot::MarketSnapshot,
     ) -> Result<(), String> {
-        let value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+        let mut value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+        normalize_orderbook_decimals(&mut value)?;
+        normalize_observation_decimals(&mut value)?;
         let contract: kairos_market_contract::MarketSnapshot =
             serde_json::from_value(value).map_err(|error| error.to_string())?;
         self.inner.publish(&contract)
     }
+}
+
+/// Convert domain fixed-decimal value objects to the decimal strings used by
+/// the cross-process Market contract. This belongs at the composition
+/// boundary; the domain keeps its typed Price and Quantity invariants while
+/// the wire contract remains stable and provider-neutral.
+fn normalize_orderbook_decimals(value: &mut serde_json::Value) -> Result<(), String> {
+    let order_books = value
+        .get_mut("order_books")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "market snapshot is missing order_books".to_string())?;
+
+    for book in order_books.values_mut() {
+        let book = book
+            .as_object_mut()
+            .ok_or_else(|| "market order book must be an object".to_string())?;
+        for side in ["bids", "asks"] {
+            let levels = book
+                .get_mut(side)
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or_else(|| format!("market order book is missing {side}"))?;
+            for level in levels {
+                let level = level
+                    .as_object_mut()
+                    .ok_or_else(|| "market price level must be an object".to_string())?;
+                for field in ["price", "quantity"] {
+                    let decimal = level
+                        .get(field)
+                        .ok_or_else(|| format!("market price level is missing {field}"))?;
+                    level.insert(field.to_string(), fixed_decimal_string(decimal)?);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_observation_decimals(value: &mut serde_json::Value) -> Result<(), String> {
+    for field in ["latest", "views"] {
+        let Some(values) = value
+            .get_mut(field)
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for observation in values.values_mut() {
+            normalize_observation_value(observation)?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_observation_value(value: &mut serde_json::Value) -> Result<(), String> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "market observation must be an object".to_string())?;
+    for kind in ["Quote", "Trade", "Bar"] {
+        if let Some(payload) = object
+            .get_mut(kind)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let fields = match kind {
+                "Quote" => ["bid_price", "bid_quantity", "ask_price", "ask_quantity"].as_slice(),
+                "Trade" => ["price", "quantity", "cost"].as_slice(),
+                _ => ["open", "high", "low", "close", "volume"].as_slice(),
+            };
+            for field in fields {
+                if let Some(decimal) = payload.get_mut(*field) {
+                    if !decimal.is_null() {
+                        *decimal = fixed_decimal_string(decimal)?;
+                    }
+                }
+            }
+        }
+    }
+    for kind in ["TradeBar", "QuoteBar"] {
+        if let Some(payload) = object
+            .get_mut(kind)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            if let Some(bar) = payload.get_mut("bar") {
+                if let Some(bar) = bar.as_object_mut() {
+                    for field in ["open", "high", "low", "close", "volume"] {
+                        if let Some(decimal) = bar.get_mut(field) {
+                            if !decimal.is_null() {
+                                *decimal = fixed_decimal_string(decimal)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let decimal_fields: &[(&str, &[&str])] = &[
+        (
+            "OptionGreeks",
+            &[
+                "strike",
+                "delta",
+                "gamma",
+                "vega",
+                "theta",
+                "implied_volatility",
+            ],
+        ),
+        ("Rate", &["value", "mark_price"]),
+        (
+            "Ticker24h",
+            &[
+                "last_price",
+                "bid_price",
+                "bid_quantity",
+                "ask_price",
+                "ask_quantity",
+                "open_price",
+                "high_price",
+                "low_price",
+                "volume_base",
+                "volume_quote",
+                "price_change_abs",
+                "price_change_pct",
+                "vwap",
+                "mark_price",
+            ],
+        ),
+        (
+            "MarkPrice",
+            &[
+                "mark_price",
+                "index_price",
+                "estimated_settlement_price",
+                "funding_rate",
+            ],
+        ),
+        (
+            "IndexPrice",
+            &[
+                "spot_index_price",
+                "contract_index_price",
+                "index_price",
+                "funding_rate",
+            ],
+        ),
+        ("FundingRate", &["funding_rate"]),
+        (
+            "OpenInterest",
+            &["contracts", "quote_value", "change_24h", "change_pct_24h"],
+        ),
+    ];
+    for (kind, fields) in decimal_fields {
+        if let Some(payload) = object
+            .get_mut(*kind)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for field in *fields {
+                if let Some(decimal) = payload.get_mut(*field) {
+                    if !decimal.is_null() {
+                        *decimal = fixed_decimal_string(decimal)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fixed_decimal_string(value: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if value.is_string() {
+        return Ok(value.clone());
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| "market observation decimal must be an object".to_string())?;
+    let mantissa = object
+        .get("mantissa")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| "market observation decimal has invalid mantissa".to_string())?;
+    let scale = object
+        .get("scale")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "market observation decimal has invalid scale".to_string())?;
+    let scale = u32::try_from(scale).map_err(|_| "decimal scale is too large")?;
+    let divisor = 10_i128
+        .checked_pow(scale)
+        .ok_or_else(|| "market observation decimal scale overflows".to_string())?;
+    let mantissa = i128::from(mantissa);
+    let negative = mantissa < 0;
+    let absolute = mantissa.abs();
+    let whole = absolute / divisor;
+    let fraction = format!("{:0width$}", absolute % divisor, width = scale as usize);
+    let rendered = if scale == 0 {
+        whole.to_string()
+    } else {
+        format!("{whole}.{fraction}")
+    };
+    Ok(serde_json::Value::String(if negative {
+        format!("-{rendered}")
+    } else {
+        rendered
+    }))
 }
 
 impl MarketSnapshotPublisher for MmapMarketSnapshotPublisher {
@@ -86,16 +303,16 @@ impl MarketSnapshotPublisher for MmapMarketSnapshotPublisher {
         Self::publish(self, snapshot)
     }
 }
-pub use crate::services::replay::ReplayMarketFeed;
-
 /// Default market capability used by a workspace that has not declared an
 /// explicit connection catalog. The provider choice remains in composition;
 /// strategies only declare their market-data intent.
-pub fn default_market_feed() -> Result<CompositeMarketFeed, String> {
+pub fn default_market_feed() -> Result<Box<dyn MarketFeed>, String> {
     let mut factories: std::collections::BTreeMap<MarketRoute, MarketFeedFactory> =
         std::collections::BTreeMap::new();
     add_public_factories(&mut factories);
-    CompositeMarketFeed::new(factories)
+    Ok(Box::new(
+        crate::services::composite::CompositeMarketFeed::new(factories)?,
+    ))
 }
 
 /// Build the workspace-default market capability directory.
@@ -103,26 +320,23 @@ pub fn default_market_feed() -> Result<CompositeMarketFeed, String> {
 /// Public product connections are always available from built-in composition.
 /// Credentialed products are added when a matching Workspace credential is
 /// discovered; users do not need to describe provider routes in `kairos.toml`.
-pub fn workspace_market_feed(workspace: &Workspace) -> Result<CompositeMarketFeed, String> {
+pub fn workspace_market_feed(workspace: &Workspace) -> Result<Box<dyn MarketFeed>, String> {
     let mut factories = std::collections::BTreeMap::new();
     add_public_factories(&mut factories);
+    add_configured_source_factories(workspace, &mut factories)?;
 
     let credentials_root = workspace
         .child(&["credentials"])
         .map_err(|error| error.to_string())?;
     if let Some(credential) = load_workspace_credential(&credentials_root, "binance", None)? {
-        if !credential.api_key.trim().is_empty() && !credential.secret.trim().is_empty() {
+        let secret = credential.secret_value().to_owned();
+        if !credential.api_key.trim().is_empty() && !secret.trim().is_empty() {
             let endpoint = default_endpoint("binance-equity-rest").to_owned();
             let api_key = credential.api_key;
-            let secret = credential.secret;
             factories.insert(
                 MarketRoute::with_asset_type("binance", "equity", "equity"),
                 Box::new(move || {
-                    Ok(Box::new(binance_equity_rest_feed(
-                        api_key.clone(),
-                        secret.clone(),
-                        endpoint.clone(),
-                    )?) as Box<dyn MarketFeed>)
+                    binance_equity_rest_feed(api_key.clone(), secret.clone(), endpoint.clone())
                 }),
             );
         }
@@ -133,58 +347,161 @@ pub fn workspace_market_feed(workspace: &Workspace) -> Result<CompositeMarketFee
             let api_key = credential.api_key;
             let equity_key = api_key.clone();
             let options_key = api_key;
-            let equity_endpoint = massive_websocket_endpoint(workspace, ProductFamily::Equity);
-            let options_endpoint = massive_websocket_endpoint(workspace, ProductFamily::Options);
+            let equity_endpoint = massive_websocket_endpoint(workspace, MarketProduct::Equity);
+            let options_endpoint = massive_websocket_endpoint(workspace, MarketProduct::Options);
             factories.insert(
                 MarketRoute::with_asset_type("massive", "equity", "equity"),
                 Box::new(move || {
-                    Ok(Box::new(massive_market_websocket_feed(
-                        ProductFamily::Equity,
+                    massive_market_websocket_feed(
+                        MarketProduct::Equity,
                         equity_key.clone(),
                         equity_endpoint.clone(),
-                    )?) as Box<dyn MarketFeed>)
+                    )
                 }),
             );
             factories.insert(
                 MarketRoute::with_asset_type("massive", "options", "equity"),
                 Box::new(move || {
-                    Ok(Box::new(massive_market_websocket_feed(
-                        ProductFamily::Options,
+                    massive_market_websocket_feed(
+                        MarketProduct::Options,
                         options_key.clone(),
                         options_endpoint.clone(),
-                    )?) as Box<dyn MarketFeed>)
+                    )
                 }),
             );
         }
     }
 
-    CompositeMarketFeed::new(factories)
+    Ok(Box::new(
+        crate::services::composite::CompositeMarketFeed::new(factories)?,
+    ))
+}
+
+fn add_configured_source_factories(
+    workspace: &Workspace,
+    factories: &mut std::collections::BTreeMap<
+        crate::services::composite::MarketRoute,
+        crate::services::composite::MarketFeedFactory,
+    >,
+) -> Result<(), String> {
+    let credentials_root = workspace
+        .child(&["credentials"])
+        .map_err(|error| error.to_string())?;
+    for (source_id, config) in &workspace.market_config().sources {
+        if config.enabled == Some(false) {
+            continue;
+        }
+        let provider = config.provider.to_ascii_lowercase();
+        let route = match config.asset_type.as_deref() {
+            Some(asset_type) => {
+                crate::services::composite::MarketRoute::with_source_and_asset_type(
+                    source_id,
+                    &config.exchange,
+                    &config.market_type,
+                    asset_type,
+                )
+            }
+            None => crate::services::composite::MarketRoute::with_source(
+                source_id,
+                &config.exchange,
+                &config.market_type,
+            ),
+        };
+        let transport = config
+            .transport
+            .as_deref()
+            .unwrap_or("websocket")
+            .to_ascii_lowercase();
+        let endpoint = config.endpoint.clone().unwrap_or_else(|| {
+            default_endpoint(if provider == "binance" && config.market_type == "spot" {
+                if transport == "rest" {
+                    "binance-spot-rest"
+                } else {
+                    "binance-spot-websocket"
+                }
+            } else if provider == "massive" {
+                "massive-equity-websocket"
+            } else {
+                provider.as_str()
+            })
+            .to_owned()
+        });
+        let factory: MarketFeedFactory = match (provider.as_str(), config.market_type.as_str()) {
+            ("binance", "spot") if transport == "rest" => {
+                Box::new(move || binance_spot_rest_feed(endpoint.clone()))
+            }
+            ("binance", "spot") => Box::new(move || binance_spot_websocket_feed(endpoint.clone())),
+            ("massive", "equity") | ("massive", "options") => {
+                let credential_id = config.credential_id.as_deref();
+                let credential =
+                    load_workspace_credential(&credentials_root, "massive", credential_id)?
+                        .ok_or_else(|| {
+                            format!("market source {source_id} requires a Massive credential")
+                        })?;
+                let api_key = credential.api_key;
+                if api_key.trim().is_empty() {
+                    return Err(format!(
+                        "market source {source_id} credential has no API key"
+                    ));
+                }
+                let product = if config.market_type == "options" {
+                    MarketProduct::Options
+                } else {
+                    MarketProduct::Equity
+                };
+                Box::new(move || {
+                    massive_market_websocket_feed(product, api_key.clone(), endpoint.clone())
+                })
+            }
+            _ => {
+                return Err(format!(
+                    "unsupported configured market source {source_id}: {provider}/{}",
+                    config.market_type
+                ))
+            }
+        };
+        factories.insert(route, factory);
+    }
+    Ok(())
 }
 
 fn add_public_factories(
-    factories: &mut std::collections::BTreeMap<MarketRoute, MarketFeedFactory>,
+    factories: &mut std::collections::BTreeMap<
+        crate::services::composite::MarketRoute,
+        crate::services::composite::MarketFeedFactory,
+    >,
 ) {
     let binance_spot_endpoint = default_endpoint("binance-spot-websocket").to_owned();
     factories.insert(
-        MarketRoute::with_asset_type("binance", "spot", "crypto"),
-        Box::new(move || {
-            Ok(
-                Box::new(binance_spot_websocket_feed(binance_spot_endpoint.clone())?)
-                    as Box<dyn MarketFeed>,
-            )
-        }),
+        crate::services::composite::MarketRoute::with_source_and_asset_type(
+            "binance.public.websocket",
+            "binance",
+            "spot",
+            "crypto",
+        ),
+        Box::new(move || binance_spot_websocket_feed(binance_spot_endpoint.clone())),
     );
 
     for (route, product, endpoint, path) in [
         (
-            MarketRoute::with_asset_type("binance", "usd-m-futures", "crypto"),
-            ProductFamily::UsdMFutures,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "binance.public.rest.usd-m-futures",
+                "binance",
+                "usd-m-futures",
+                "crypto",
+            ),
+            MarketProduct::UsdMFutures,
             default_endpoint("binance-usdm-futures-rest"),
             "/fapi/v1/ticker/bookTicker",
         ),
         (
-            MarketRoute::with_asset_type("binance", "coin-m-futures", "crypto"),
-            ProductFamily::CoinMFutures,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "binance.public.rest.coin-m-futures",
+                "binance",
+                "coin-m-futures",
+                "crypto",
+            ),
+            MarketProduct::CoinMFutures,
             default_endpoint("binance-coinm-futures-rest"),
             "/dapi/v1/ticker/bookTicker",
         ),
@@ -194,52 +511,73 @@ fn add_public_factories(
         factories.insert(
             route,
             Box::new(move || {
-                Ok(Box::new(binance_derivatives_rest_feed(
-                    product,
-                    endpoint.clone(),
-                    path.clone(),
-                )?) as Box<dyn MarketFeed>)
+                binance_derivatives_rest_feed(product, endpoint.clone(), path.clone())
             }),
         );
     }
 
     let endpoint = default_endpoint("binance-options-websocket").to_owned();
     factories.insert(
-        MarketRoute::with_asset_type("binance", "options", "crypto"),
-        Box::new(move || {
-            Ok(Box::new(binance_options_websocket_feed(endpoint.clone())?) as Box<dyn MarketFeed>)
-        }),
+        crate::services::composite::MarketRoute::with_source_and_asset_type(
+            "binance.public.websocket.options",
+            "binance",
+            "options",
+            "crypto",
+        ),
+        Box::new(move || binance_options_websocket_feed(endpoint.clone())),
     );
 
-    for (route, product) in [
+    for (route, instrument_type) in [
         (
-            MarketRoute::with_asset_type("okx", "spot", "crypto"),
-            ProductFamily::Spot,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "okx.public.rest.spot",
+                "okx",
+                "spot",
+                "crypto",
+            ),
+            OkxInstrumentType::Spot,
         ),
         (
-            MarketRoute::with_asset_type("okx", "swap", "crypto"),
-            ProductFamily::UsdMFutures,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "okx.public.rest.swap",
+                "okx",
+                "swap",
+                "crypto",
+            ),
+            OkxInstrumentType::Swap,
         ),
         (
-            MarketRoute::with_asset_type("okx", "futures", "crypto"),
-            ProductFamily::CoinMFutures,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "okx.public.rest.futures",
+                "okx",
+                "futures",
+                "crypto",
+            ),
+            OkxInstrumentType::Futures,
         ),
         (
-            MarketRoute::with_asset_type("okx", "options", "crypto"),
-            ProductFamily::Options,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "okx.public.rest.options",
+                "okx",
+                "options",
+                "crypto",
+            ),
+            OkxInstrumentType::Option,
         ),
         (
-            MarketRoute::with_asset_type("okx", "spot", "equity"),
-            ProductFamily::Spot,
+            crate::services::composite::MarketRoute::with_source_and_asset_type(
+                "okx.public.rest.equity",
+                "okx",
+                "spot",
+                "equity",
+            ),
+            OkxInstrumentType::Spot,
         ),
     ] {
         factories.insert(
             route,
             Box::new(move || {
-                Ok(Box::new(okx_market_rest_feed(
-                    product,
-                    default_endpoint("okx-spot-rest"),
-                )?) as Box<dyn MarketFeed>)
+                okx_market_rest_feed(instrument_type, default_endpoint("okx-spot-rest"))
             }),
         );
     }
@@ -265,6 +603,7 @@ pub fn default_endpoint(provider: &str) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::default_endpoint;
 
@@ -280,7 +619,7 @@ mod tests {
 /// Return the configured Massive WebSocket endpoint, falling back to the
 /// bundled private proxy. The CLI `--endpoint` remains the highest-precedence
 /// option for direct provider mode.
-pub fn massive_websocket_endpoint(workspace: &Workspace, product: ProductFamily) -> String {
+pub fn massive_websocket_endpoint(workspace: &Workspace, product: MarketProduct) -> String {
     let base = workspace
         .market_config()
         .massive
@@ -289,162 +628,152 @@ pub fn massive_websocket_endpoint(workspace: &Workspace, product: ProductFamily)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "http://socket.massiveprivateserver.site".to_owned());
     let path = match product {
-        ProductFamily::Options => "/options",
+        MarketProduct::Options => "/options",
         _ => "/stocks",
     };
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
-pub fn binance_spot_rest_feed(
-    endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_binance_spot_rest_market_stream(endpoint)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: "market.binance.spot.rest".into(),
-            route: IntegrationRoute::exchange("binance"),
-            product: Some(ProductFamily::Spot),
-            access: AccessScope::Public,
-            transport: TransportKind::Rest,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: None,
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+pub fn binance_spot_rest_feed(endpoint: impl Into<String>) -> Result<Box<dyn MarketFeed>, String> {
+    let connection = binance::blocking::spot_rest_market(endpoint).map_err(|e| e.to_string())?;
+    crate::services::integration::IntegrationMarketFeed::with_source(
+        connection,
+        "binance.public.rest",
+    )
+    .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
 }
 
 pub fn binance_spot_websocket_feed(
     endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_binance_spot_websocket_market_stream(endpoint)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: "market.binance.spot.websocket".into(),
-            route: IntegrationRoute::exchange("binance"),
-            product: Some(ProductFamily::Spot),
-            access: AccessScope::Public,
-            transport: TransportKind::WebSocket,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: None,
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let connection =
+        binance::blocking::spot_websocket_market(endpoint).map_err(|e| e.to_string())?;
+    crate::services::integration::IntegrationMarketFeed::with_source(
+        connection,
+        "binance.public.websocket",
+    )
+    .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
 }
 
 pub fn binance_equity_rest_feed(
     api_key: impl Into<String>,
     secret: impl Into<String>,
     endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_binance_equity_market_stream(api_key, secret, endpoint)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: "market.binance.equity.rest".into(),
-            route: IntegrationRoute::exchange("binance"),
-            product: Some(ProductFamily::Equity),
-            access: AccessScope::Public,
-            transport: TransportKind::Rest,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: Some(kairos_integration::domain::AssetType::Equity),
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let connection = binance::blocking::equity_rest_market(api_key, secret, endpoint)
+        .map_err(|e| e.to_string())?;
+    crate::services::integration::IntegrationMarketFeed::with_source(
+        connection,
+        "binance.private.equity.rest",
+    )
+    .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
 }
 
 pub fn binance_derivatives_rest_feed(
-    product: ProductFamily,
+    product: MarketProduct,
     endpoint: impl Into<String>,
     path: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_binance_derivatives_market_stream(product, endpoint, path)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: format!("market.binance.{product:?}.rest"),
-            route: IntegrationRoute::exchange("binance"),
-            product: Some(product),
-            access: AccessScope::Public,
-            transport: TransportKind::Rest,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: None,
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let source_id = match product {
+        MarketProduct::UsdMFutures => "binance.public.rest.usd-m-futures",
+        MarketProduct::CoinMFutures => "binance.public.rest.coin-m-futures",
+        MarketProduct::Options => "binance.public.rest.options",
+        _ => "binance.public.rest.derivatives",
+    };
+    let product = match product {
+        MarketProduct::UsdMFutures => BinanceConnectionDomain::UsdMFutures,
+        MarketProduct::CoinMFutures => BinanceConnectionDomain::CoinMFutures,
+        MarketProduct::Options => BinanceConnectionDomain::Options,
+        _ => return Err("Binance derivatives feed requires futures or options product".into()),
+    };
+    let connection = binance::blocking::derivatives_rest_market(product, endpoint, path)
+        .map_err(|e| e.to_string())?;
+    crate::services::integration::IntegrationMarketFeed::with_source(connection, source_id)
+        .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
 }
 
 pub fn binance_options_websocket_feed(
     endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_binance_options_websocket_market_stream(endpoint)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: "market.binance.options.websocket".into(),
-            route: IntegrationRoute::exchange("binance"),
-            product: Some(ProductFamily::Options),
-            access: AccessScope::Public,
-            transport: TransportKind::WebSocket,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: Some(kairos_integration::domain::AssetType::Crypto),
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let connection =
+        binance::blocking::options_websocket_market(endpoint).map_err(|e| e.to_string())?;
+    crate::services::integration::IntegrationMarketFeed::with_source(
+        connection,
+        "binance.public.websocket.options",
+    )
+    .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
 }
 
 pub fn okx_market_rest_feed(
-    product: ProductFamily,
+    instrument_type: OkxInstrumentType,
     endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_okx_market_stream(product, endpoint)
-        .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: format!("market.okx.{product:?}.rest"),
-            route: IntegrationRoute::exchange("okx"),
-            product: Some(product),
-            access: AccessScope::Public,
-            transport: TransportKind::Rest,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: None,
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let provider = OkxConnection::connect(OkxConnectionConfig {
+        environment: "public".into(),
+        rest_base_url: endpoint.into(),
+        shared_quota: None,
+    })
+    .map_err(|error| error.to_string())?;
+    Ok(Box::new(
+        crate::services::integration::OkxSnapshotMarketFeed::with_source(
+            provider.blocking_market_snapshot(instrument_type),
+            "okx.public.rest",
+        ),
+    ))
 }
 
 pub fn massive_market_websocket_feed(
-    product: ProductFamily,
+    product: MarketProduct,
     api_key: impl Into<String>,
     endpoint: impl Into<String>,
-) -> Result<IntegrationMarketFeed, String> {
-    let integration = Integration::new()
-        .with_massive_market_stream(product, api_key, endpoint)
+) -> Result<Box<dyn MarketFeed>, String> {
+    let endpoint = endpoint.into();
+    let provider = MassiveConnection::connect(MassiveConnectionConfig {
+        environment: "public".into(),
+        rest_base_url: endpoint.clone(),
+        api_key: secrecy::SecretString::new(api_key.into().into()),
+    })
+    .map_err(|error| error.to_string())?;
+    let market_type = match product {
+        MarketProduct::Equity => MassiveMarketType::Equity,
+        MarketProduct::Options => MassiveMarketType::Option,
+        _ => return Err("Massive market feed requires equity or options product".into()),
+    };
+    let connection = provider
+        .blocking_live_market(market_type, endpoint)
         .map_err(|error| error.to_string())?;
-    let connection = integration
-        .connect_market_stream(&ConnectionSpec {
-            connection_id: format!("market.massive.{product:?}.websocket"),
-            route: IntegrationRoute::data_provider("massive"),
-            product: Some(product),
-            access: AccessScope::Public,
-            transport: TransportKind::WebSocket,
-            capability: IntegrationCapability::MarketStream,
-            credential_id: None,
-            asset_type: None,
-        })
-        .map_err(|error| error.to_string())?;
-    IntegrationMarketFeed::new(connection)
+    crate::services::integration::IntegrationMarketFeed::with_source(
+        Box::new(connection),
+        match product {
+            MarketProduct::Equity => "massive.public.websocket.equity",
+            MarketProduct::Options => "massive.public.websocket.options",
+            _ => "massive.public.websocket",
+        },
+    )
+    .map(|feed| Box::new(feed) as Box<dyn MarketFeed>)
+}
+
+/// Build the deterministic replay capability without exposing its stateful
+/// implementation to callers outside composition.
+pub fn replay_market_feed(
+    events: impl IntoIterator<Item = crate::domain::observations::MarketObservation>,
+) -> Box<dyn MarketFeed> {
+    Box::new(crate::services::replay::ReplayMarketFeed::new(events))
+}
+
+/// Build a checkpointed replay capability for one runtime instance.
+pub fn replay_market_feed_with_checkpoint(
+    events: impl IntoIterator<Item = crate::domain::observations::MarketObservation>,
+    start_unix_nanos: Option<u64>,
+    end_unix_nanos: Option<u64>,
+    checkpoint: impl Into<std::path::PathBuf>,
+) -> Result<Box<dyn MarketFeed>, String> {
+    Ok(Box::new(
+        crate::services::replay::ReplayMarketFeed::with_checkpoint(
+            events,
+            start_unix_nanos,
+            end_unix_nanos,
+            checkpoint,
+        )?,
+    ))
 }

@@ -1,5 +1,11 @@
 mod budget;
+pub mod circuit;
+pub mod exposure;
+pub mod margin;
+pub mod scenario;
 
 pub use budget::{
-    Amount, Budget, BudgetRef, Metric, Reservation, ReservationAllocation, ReservationStatus, Usage,
+    Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks,
+    EnforcementMode, Metric, PolicyScope, ReasonCode, Reservation, ReservationStatus, RiskContext,
+    RiskPolicy,
 };
