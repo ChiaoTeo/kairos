@@ -7,10 +7,10 @@ import re
 
 from kairospy.application.launch.application import (
     LaunchControlApplication,
+    LaunchInstanceTimelineApplication,
     LaunchRegistryApplication,
 )
 from kairospy.application.launch.application import new_instance_id
-from kairospy.application.timeline import TimelineApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
 from kairospy.surface.cli.commands.launch import (
@@ -350,10 +350,14 @@ def test_launch_status_omits_explicitly_optional_reference(
 
 
 def test_launch_control_commands_do_not_require_mode_flag() -> None:
-    for command in ("status", "logs", "attach", "stop", "artifacts"):
+    for command in ("status", "logs", "attach", "stop", "restart", "artifacts"):
         output = StringIO()
         assert execute_argv(["launch", command, "--help"], output) == 0
         assert "--mode" not in output.getvalue()
+
+    output = StringIO()
+    assert execute_argv(["launch", "attach", "--help"], output) == 0
+    assert "--python" in output.getvalue()
 
     for command in ("status", "enable", "pause", "resume", "refresh"):
         output = StringIO()
@@ -406,15 +410,15 @@ def test_cli_registers_legacy_product_groups() -> None:
     for command in (
         "project",
         "config",
+        "data",
         "launch",
         "account",
         "integration",
         "market",
-        "reference",
-        "order",
-        "system",
-        "timeline",
-    ):
+            "reference",
+            "order",
+            "system",
+        ):
         assert command in text
     assert "catalog" not in text
     assert not any("│ shell " in line for line in text.splitlines())
@@ -453,10 +457,10 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["account", "--help"], ("credential-list", "balances", "snapshot")),
         (["integration", "--help"], ("transfer", "earn")),
         (["market", "--help"], ("validate", "once", "replay")),
-        (["launch", "--help"], ("targets", "diagnose", "replay")),
+        (["launch", "--help"], ("targets", "diagnose", "replay", "instance")),
         (
-            ["reference", "--help"],
-            ("health", "snapshots", "catalog", "assets", "listings", "markets"),
+                ["reference", "--help"],
+                ("health", "views", "catalog", "assets", "listings", "markets"),
         ),
         (["system", "--help"], ("account", "restart", "list")),
     ):
@@ -913,18 +917,67 @@ def test_launch_component_cleanup_reports_stop_failures_without_raising(
     assert "stale control socket" in result["error"]
 
 
-def test_timeline_application_reads_and_exports_jsonl(tmp_path) -> None:
-    source = tmp_path / "events.jsonl"
-    source.write_text(
-        '{"sequence": 1, "kind": "started"}\n{"sequence": 2, "kind": "stopped"}\n',
+def test_launch_instance_timeline_application_reads_and_exports(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="timeline"
+    )
+    LaunchRegistryApplication(workspace).add(
+        "btc", mode="backtest", instance_id="run-1"
+    )
+    instance = workspace.instance("backtest", "btc", "run-1")
+    timeline = instance.root / "lifecycle.jsonl"
+    timeline.write_text(
+        '{"sequence": 1, "kind": "started"}\n'
+        '{"sequence": 2, "kind": "stopped"}\n',
         encoding="utf-8",
     )
-    assert TimelineApplication().list(source, limit=1) == [
+
+    application = LaunchInstanceTimelineApplication(instance)
+    assert application.list(limit=1) == [
         {"sequence": 2, "kind": "stopped"}
     ]
     destination = tmp_path / "export.jsonl"
-    assert TimelineApplication().export(source, destination) == destination
+    assert application.export(destination) == destination
     assert destination.read_text(encoding="utf-8").count("sequence") == 2
+
+
+def test_launch_instance_timeline_cli_requires_instance_identity(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="timeline-cli"
+    )
+    LaunchRegistryApplication(workspace).add(
+        "btc", mode="backtest", instance_id="run-1"
+    )
+    timeline = workspace.instance("backtest", "btc", "run-1").root / "lifecycle.jsonl"
+    timeline.write_text('{"sequence": 1, "kind": "started"}\n', encoding="utf-8")
+    destination = tmp_path / "timeline.jsonl"
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "instance",
+                "timeline",
+                "export",
+                "btc",
+                "run-1",
+                "--destination",
+                str(destination),
+                "--workspace",
+                str(workspace.paths.root),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    value = json.loads(output.getvalue())
+    assert value["instance_id"] == "run-1"
+    assert destination.read_text(encoding="utf-8") == timeline.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_cli_render_redacts_secret_fields() -> None:

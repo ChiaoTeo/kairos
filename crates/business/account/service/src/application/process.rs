@@ -62,6 +62,7 @@ pub struct AccountProcess {
     recovery_events: VecDeque<kairos_integration::application::ExternalAccountEventEnvelope>,
     recovery_overflowed: bool,
     async_event_queue_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    business_time_unix_nanos: Option<u64>,
 }
 
 /// Application-owned publication capability. Concrete transport publishers
@@ -132,6 +133,7 @@ impl AccountProcess {
             recovery_events: VecDeque::new(),
             recovery_overflowed: false,
             async_event_queue_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            business_time_unix_nanos: None,
         })
     }
 }
@@ -811,6 +813,29 @@ impl AccountProcess {
                     .map(|_| json!({"status":"applied"}))
                     .map_err(|error| error.to_string())
             }),
+            "/v1/time/advance" => {
+                let event_time = serde_json::from_str::<Value>(body)
+                    .ok()
+                    .and_then(|value| value.get("event_time_unix_nanos").and_then(Value::as_u64));
+                match event_time {
+                    Some(event_time)
+                        if self
+                            .business_time_unix_nanos
+                            .is_none_or(|current| event_time >= current) =>
+                    {
+                        self.business_time_unix_nanos = Some(event_time);
+                        (
+                            200,
+                            json!({"status":"advanced", "event_time_unix_nanos": event_time}),
+                        )
+                    }
+                    Some(_) => (
+                        409,
+                        json!({"error":"account business time cannot move backwards"}),
+                    ),
+                    None => (400, json!({"error":"event_time_unix_nanos is required"})),
+                }
+            }
             "/v1/fill" => self.json_command(body, |application, body| {
                 let fill: AccountFill =
                     serde_json::from_slice(body).map_err(|error| error.to_string())?;
@@ -983,7 +1008,7 @@ impl AccountProcess {
                 })
             })
             .collect::<Vec<_>>();
-        json!({"status": self.business_status(), "pid": std::process::id(), "account_id": self.account_id, "actor_id": self.application.actor_id(), "generation": self.application.generation(), "event_sequence": self.application.event_sequence(), "stream_queue_depth": self.async_event_queue_depth.load(std::sync::atomic::Ordering::Relaxed) + self.recovery_events.len(), "persistence_queue_depth": self.application.persistence_queue_depth(), "refresh_pending": self.refresh_pending(), "initial_refresh_complete": self.initial_refresh_complete, "provider_channels": provider_channels, "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
+        json!({"status": self.business_status(), "pid": std::process::id(), "account_id": self.account_id, "actor_id": self.application.actor_id(), "generation": self.application.generation(), "event_sequence": self.application.event_sequence(), "business_time_unix_nanos": self.business_time_unix_nanos, "stream_queue_depth": self.async_event_queue_depth.load(std::sync::atomic::Ordering::Relaxed) + self.recovery_events.len(), "persistence_queue_depth": self.application.persistence_queue_depth(), "refresh_pending": self.refresh_pending(), "initial_refresh_complete": self.initial_refresh_complete, "provider_channels": provider_channels, "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
     }
 
     fn business_status(&self) -> &'static str {

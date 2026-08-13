@@ -1,9 +1,83 @@
 //! Public Account snapshot models.
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Decimal {
     pub mantissa: i64,
     pub scale: u8,
+}
+
+#[cfg(test)]
+mod decimal_tests {
+    use super::Decimal;
+
+    #[test]
+    fn json_decimal_is_a_string_and_rejects_the_retired_object_shape() {
+        let value = serde_json::from_str::<Decimal>("\"42110.50\"").unwrap();
+        assert_eq!((value.mantissa, value.scale), (4_211_050, 2));
+        assert_eq!(serde_json::to_string(&value).unwrap(), "\"42110.50\"");
+        assert!(serde_json::from_str::<Decimal>(r#"{"mantissa":4211050,"scale":2}"#).is_err());
+    }
+}
+
+pub(crate) fn parse_decimal(value: &str) -> Result<(i64, u8), String> {
+    let (negative, unsigned) = value
+        .strip_prefix('-')
+        .map_or((false, value), |value| (true, value));
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    if whole.is_empty()
+        || fraction.len() > 18
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("expected a decimal string with at most 18 fractional digits".into());
+    }
+    let magnitude = format!("{whole}{fraction}")
+        .parse::<i128>()
+        .map_err(|_| "decimal value is too large")?;
+    let mantissa = i64::try_from(if negative { -magnitude } else { magnitude })
+        .map_err(|_| "decimal value is too large")?;
+    Ok((mantissa, fraction.len() as u8))
+}
+
+pub(crate) fn format_decimal(mantissa: i64, scale: u8) -> Result<String, String> {
+    if scale > 18 {
+        return Err("decimal scale exceeds 18 digits".into());
+    }
+    let negative = mantissa < 0;
+    let magnitude = i128::from(mantissa).abs();
+    if scale == 0 {
+        return Ok(format!("{}{magnitude}", if negative { "-" } else { "" }));
+    }
+    let factor = 10_i128.pow(u32::from(scale));
+    Ok(format!(
+        "{}{whole}.{fraction:0width$}",
+        if negative { "-" } else { "" },
+        whole = magnitude / factor,
+        fraction = magnitude % factor,
+        width = usize::from(scale)
+    ))
+}
+
+impl serde::Serialize for Decimal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(
+            &format_decimal(self.mantissa, self.scale).map_err(serde::ser::Error::custom)?,
+        )
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Decimal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        let (mantissa, scale) = parse_decimal(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { mantissa, scale })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

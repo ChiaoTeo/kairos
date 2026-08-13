@@ -86,8 +86,7 @@ impl ExecutionOrder {
         instrument_id: impl Into<String>,
         side: OrderSide,
         order_type: OrderType,
-        quantity_mantissa: i64,
-        quantity_scale: u8,
+        quantity: Quantity,
         at_unix_nanos: u64,
     ) -> Result<Self, String> {
         let order = Self {
@@ -102,17 +101,16 @@ impl ExecutionOrder {
             market_id: None,
             side,
             order_type,
-            quantity: Quantity::positive(quantity_mantissa, quantity_scale)
-                .map_err(|error| error.to_string())?,
+            quantity,
             limit_price: None,
             remote_order_id: None,
-            filled_quantity: Quantity::new(0, quantity_scale).map_err(|error| error.to_string())?,
+            filled_quantity: Quantity::ZERO,
             status: ExecutionOrderStatus::Pending,
             submitted_at_unix_nanos: UnixNanos::new(at_unix_nanos),
             updated_at_unix_nanos: UnixNanos::new(at_unix_nanos),
             reason: String::new(),
         };
-        if quantity_mantissa <= 0 {
+        if quantity <= Quantity::ZERO {
             return Err("execution order quantity must be positive".into());
         }
         Ok(order)

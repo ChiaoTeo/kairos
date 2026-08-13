@@ -56,7 +56,7 @@ fn segment(key: &str) -> AccountSegment {
 }
 
 fn signed(mantissa: i64, scale: u8) -> SignedQuantity {
-    SignedQuantity::new(mantissa, scale)
+    SignedQuantity::new(mantissa, scale).unwrap()
 }
 
 fn quantity(mantissa: i64, scale: u8) -> Quantity {
@@ -68,7 +68,7 @@ fn price(mantissa: i64, scale: u8) -> Price {
 }
 
 fn money(mantissa: i64, scale: u8) -> Money {
-    Money::new(mantissa, scale)
+    Money::new(mantissa, scale).unwrap()
 }
 
 fn balance(asset_id: &str, asset_code: &str, total: SignedQuantity) -> Balance {
@@ -202,7 +202,7 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
         port: 4002,
         client_id: 0,
         isolated_margin_symbol: None,
-        reference_snapshot_root: None,
+        reference_database: None,
     };
     let mut composition =
         compose_blocking_account_application(&options, Some(directory.path().join("account.json")))
@@ -244,7 +244,7 @@ fn paper_account_composition_restores_multiple_configured_segments() {
         port: 4002,
         client_id: 0,
         isolated_margin_symbol: None,
-        reference_snapshot_root: None,
+        reference_database: None,
     };
     let mut composition = compose_blocking_account_application_for_segments(
         &options,
@@ -281,7 +281,7 @@ fn account_application_exposes_capabilities_and_fee_queries() {
         port: 4002,
         client_id: 0,
         isolated_margin_symbol: None,
-        reference_snapshot_root: None,
+        reference_database: None,
     };
     let composition = compose_blocking_account_application_for_segments(
         &options,
@@ -329,7 +329,7 @@ fn ibkr_account_composition_selects_native_equity_connection() {
         port: 4002,
         client_id: 0,
         isolated_margin_symbol: None,
-        reference_snapshot_root: None,
+        reference_database: None,
     };
     let composition = compose_blocking_account_application(&options, None).unwrap();
     assert_eq!(composition.provider, "ibkr");

@@ -14,10 +14,10 @@ pub use runtime::{
 pub use workspace::{
     InstanceWorkspace, Workspace, WorkspaceBinanceDerivativeProduct,
     WorkspaceBinanceDerivativeTransport, WorkspaceBinanceSpotTransport,
-    WorkspaceHyperliquidMarketType, WorkspaceManifest, WorkspaceMarketConfig,
-    WorkspaceMarketReplayClock, WorkspaceMarketReplayConfig, WorkspaceMarketRuntimeProfile,
-    WorkspaceMarketRuntimeScope, WorkspaceMarketSourceBinding, WorkspaceMassiveMarketProduct,
-    WorkspaceOkxInstrumentType, WorkspaceProcessLock, WorkspacePublicMarketTransport,
-    WorkspaceReferenceConfig, WorkspaceReferenceParticipantConfig, WorkspaceReferenceProductConfig,
-    WorkspaceReferenceProviderConfig,
+    WorkspaceHyperliquidMarketType, WorkspaceManifest, WorkspaceMarketCollection,
+    WorkspaceMarketConfig, WorkspaceMarketReplayClock, WorkspaceMarketReplayConfig,
+    WorkspaceMarketRuntimeProfile, WorkspaceMarketRuntimeScope, WorkspaceMarketSourceBinding,
+    WorkspaceMassiveMarketProduct, WorkspaceOkxInstrumentType, WorkspaceProcessLock,
+    WorkspacePublicMarketTransport, WorkspaceReferenceConfig, WorkspaceReferenceParticipantConfig,
+    WorkspaceReferenceProductConfig, WorkspaceReferenceProviderConfig,
 };

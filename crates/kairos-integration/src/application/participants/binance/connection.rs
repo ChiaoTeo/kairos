@@ -20,7 +20,9 @@ pub use execution::{
     BinanceSpotOrderEntry, BinanceSpotOrderEvents, BinanceSpotOrderQuery,
 };
 pub use funding::{BinanceSimpleEarn, BinanceTransfer};
-pub use reference::{BinanceEquityInstrumentCatalog, BinanceInstrumentCatalog};
+pub use reference::{
+    BinanceEquityInstrumentCatalog, BinanceEquityMarketQuote, BinanceInstrumentCatalog,
+};
 
 use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
@@ -196,6 +198,23 @@ impl BinanceConnection {
         BinanceEquityInstrumentCatalog {
             descriptor: ConnectionDescriptor {
                 binding_id: "binance.equity.catalog".into(),
+                participant: ParticipantRef::new(ParticipantKind::Broker, "binance")
+                    .expect("static Binance broker participant"),
+                environment: self.config.environment.clone(),
+                principal_id: None,
+                domain: crate::application::ConnectionDomainRef::new("equity")
+                    .expect("static Binance equity domain"),
+            },
+            base_url: self.config.rest_base_url.clone(),
+            api_key,
+            runtime: self.runtime.clone(),
+        }
+    }
+
+    pub fn equity_market_quote(&self, api_key: SecretString) -> BinanceEquityMarketQuote {
+        BinanceEquityMarketQuote {
+            descriptor: ConnectionDescriptor {
+                binding_id: "binance.equity.market.quote".into(),
                 participant: ParticipantRef::new(ParticipantKind::Broker, "binance")
                     .expect("static Binance broker participant"),
                 environment: self.config.environment.clone(),

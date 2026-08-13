@@ -502,7 +502,9 @@ pub(super) fn normalize(
                 .ok_or("open interest event has no quantity")?,
             quote_value: event
                 .price
-                .map(|value| Money::new(value.mantissa(), value.scale())),
+                .map(|value| Money::new(value.mantissa(), value.scale()))
+                .transpose()
+                .map_err(|error| error.to_string())?,
             change_24h: None,
             change_pct_24h: None,
             observed_at_unix_nanos: event.observed_at_unix_nanos,

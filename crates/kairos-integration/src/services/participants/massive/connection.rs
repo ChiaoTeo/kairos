@@ -23,6 +23,40 @@ pub(crate) struct MassiveHistoricalBar {
     pub(crate) volume: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MassiveHistoricalQuote {
+    pub(crate) sip_timestamp_unix_nanos: u64,
+    pub(crate) bid_price: Option<String>,
+    pub(crate) bid_size: Option<String>,
+    pub(crate) ask_price: Option<String>,
+    pub(crate) ask_size: Option<String>,
+    pub(crate) sequence_number: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MassiveHistoricalTrade {
+    pub(crate) sip_timestamp_unix_nanos: u64,
+    pub(crate) price: String,
+    pub(crate) size: String,
+    pub(crate) sequence_number: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MassiveCashDividendRow {
+    pub(crate) id: String,
+    pub(crate) ticker: String,
+    pub(crate) ex_dividend_date: String,
+    pub(crate) declaration_date: Option<String>,
+    pub(crate) record_date: Option<String>,
+    pub(crate) pay_date: Option<String>,
+    pub(crate) cash_amount: Option<String>,
+    pub(crate) split_adjusted_cash_amount: Option<String>,
+    pub(crate) historical_adjustment_factor: Option<String>,
+    pub(crate) currency: Option<String>,
+    pub(crate) distribution_type: Option<String>,
+    pub(crate) frequency: Option<u32>,
+}
+
 #[derive(Clone)]
 pub struct MassiveStocksRestClient {
     http: PublicHttpClient,
@@ -30,6 +64,10 @@ pub struct MassiveStocksRestClient {
     base_url: String,
     options: bool,
     option_underlying: Option<String>,
+    option_as_of: Option<String>,
+    option_expiration_start: Option<String>,
+    option_expiration_end: Option<String>,
+    option_contract_type: Option<String>,
 }
 
 #[derive(Clone)]
@@ -39,6 +77,10 @@ pub struct MassiveAsyncRestClient {
     base_url: String,
     options: bool,
     option_underlying: Option<String>,
+    option_as_of: Option<String>,
+    option_expiration_start: Option<String>,
+    option_expiration_end: Option<String>,
+    option_contract_type: Option<String>,
 }
 
 impl MassiveAsyncRestClient {
@@ -64,6 +106,10 @@ impl MassiveAsyncRestClient {
             base_url: base_url.trim_end_matches('/').into(),
             options: false,
             option_underlying: None,
+            option_as_of: None,
+            option_expiration_start: None,
+            option_expiration_end: None,
+            option_contract_type: None,
         })
     }
 
@@ -77,6 +123,26 @@ impl MassiveAsyncRestClient {
         if !underlying.trim().is_empty() {
             self.option_underlying = Some(underlying);
         }
+        self
+    }
+
+    pub fn with_option_as_of(mut self, value: impl Into<String>) -> Self {
+        self.option_as_of = non_empty(value);
+        self
+    }
+
+    pub fn with_option_expiration_range(
+        mut self,
+        start: impl Into<String>,
+        end: impl Into<String>,
+    ) -> Self {
+        self.option_expiration_start = non_empty(start);
+        self.option_expiration_end = non_empty(end);
+        self
+    }
+
+    pub fn with_option_contract_type(mut self, value: impl Into<String>) -> Self {
+        self.option_contract_type = non_empty(value);
         self
     }
 
@@ -116,6 +182,18 @@ impl MassiveAsyncRestClient {
         if self.options {
             if let Some(underlying) = &self.option_underlying {
                 query.push(("underlying_ticker", underlying.clone()));
+            }
+            if let Some(as_of) = &self.option_as_of {
+                query.push(("as_of", as_of.clone()));
+            }
+            if let Some(start) = &self.option_expiration_start {
+                query.push(("expiration_date.gte", start.clone()));
+            }
+            if let Some(end) = &self.option_expiration_end {
+                query.push(("expiration_date.lte", end.clone()));
+            }
+            if let Some(contract_type) = &self.option_contract_type {
+                query.push(("contract_type", contract_type.clone()));
             }
         }
         let payload = self
@@ -163,6 +241,7 @@ impl MassiveAsyncRestClient {
         timespan: &str,
         start_unix_millis: i64,
         end_unix_millis: i64,
+        adjusted: bool,
     ) -> Result<Vec<MassiveHistoricalBar>, ExchangeError> {
         let endpoint = format!(
             "{}/v2/aggs/ticker/{}/range/{}/{}/{}/{}",
@@ -178,7 +257,7 @@ impl MassiveAsyncRestClient {
                 Vec::new()
             } else {
                 vec![
-                    ("adjusted", "false".into()),
+                    ("adjusted", adjusted.to_string()),
                     ("sort", "asc".into()),
                     ("limit", "50000".into()),
                 ]
@@ -201,6 +280,180 @@ impl MassiveAsyncRestClient {
         Err(ExchangeError::InvalidRequest(
             "Massive historical pagination exceeded safety limit".into(),
         ))
+    }
+
+    pub(crate) async fn historical_quotes(
+        &self,
+        ticker: &str,
+        start_unix_nanos: u64,
+        end_unix_nanos: u64,
+    ) -> Result<Vec<MassiveHistoricalQuote>, ExchangeError> {
+        let payloads = self
+            .historical_ticks("quotes", ticker, start_unix_nanos, end_unix_nanos)
+            .await?;
+        payloads
+            .iter()
+            .map(massive_historical_quote)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExchangeError::InvalidRequest)
+    }
+
+    pub(crate) async fn historical_trades(
+        &self,
+        ticker: &str,
+        start_unix_nanos: u64,
+        end_unix_nanos: u64,
+    ) -> Result<Vec<MassiveHistoricalTrade>, ExchangeError> {
+        let payloads = self
+            .historical_ticks("trades", ticker, start_unix_nanos, end_unix_nanos)
+            .await?;
+        payloads
+            .iter()
+            .map(massive_historical_trade)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ExchangeError::InvalidRequest)
+    }
+
+    pub(crate) async fn cash_dividends(
+        &self,
+        ticker: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<MassiveCashDividendRow>, ExchangeError> {
+        let endpoint = format!("{}/stocks/v1/dividends", self.base_url);
+        let mut next_url = Some(endpoint);
+        let mut result = Vec::new();
+        for _ in 0..10_000 {
+            let Some(url) = next_url.take() else {
+                return Ok(result);
+            };
+            let query = if url.contains('?') {
+                Vec::new()
+            } else {
+                vec![
+                    ("ticker", ticker.to_owned()),
+                    ("ex_dividend_date.gte", start_date.to_owned()),
+                    ("ex_dividend_date.lte", end_date.to_owned()),
+                    ("sort", "ex_dividend_date".into()),
+                    ("order", "asc".into()),
+                    ("limit", "1000".into()),
+                ]
+            };
+            let payload = self
+                .http
+                .get_json_response_with_headers_and_query(
+                    &url,
+                    &query,
+                    &[("Authorization", format!("Bearer {}", self.api_key))],
+                )
+                .await?
+                .body;
+            let rows = payload
+                .get("results")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ExchangeError::InvalidRequest(
+                        "Massive dividend response has no results list".into(),
+                    )
+                })?;
+            for value in rows {
+                let Some(id) = value.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(row_ticker) = value.get("ticker").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(ex_dividend_date) = value.get("ex_dividend_date").and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let number = |name: &str| {
+                    value.get(name).map(|item| {
+                        item.as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| item.to_string())
+                    })
+                };
+                let text = |name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
+                result.push(MassiveCashDividendRow {
+                    id: id.into(),
+                    ticker: row_ticker.into(),
+                    ex_dividend_date: ex_dividend_date.into(),
+                    declaration_date: text("declaration_date"),
+                    record_date: text("record_date"),
+                    pay_date: text("pay_date"),
+                    cash_amount: number("cash_amount"),
+                    split_adjusted_cash_amount: number("split_adjusted_cash_amount"),
+                    historical_adjustment_factor: number("historical_adjustment_factor"),
+                    currency: text("currency"),
+                    distribution_type: text("distribution_type").or_else(|| text("dividend_type")),
+                    frequency: value
+                        .get("frequency")
+                        .and_then(Value::as_u64)
+                        .and_then(|value| u32::try_from(value).ok()),
+                });
+            }
+            next_url = payload
+                .get("next_url")
+                .and_then(Value::as_str)
+                .map(|value| private_next_url(value, &self.base_url));
+        }
+        Err(ExchangeError::InvalidRequest(
+            "Massive dividend pagination exceeded safety limit".into(),
+        ))
+    }
+
+    async fn historical_ticks(
+        &self,
+        resource: &str,
+        ticker: &str,
+        start_unix_nanos: u64,
+        end_unix_nanos: u64,
+    ) -> Result<Vec<Value>, ExchangeError> {
+        let endpoint = format!("{}/v3/{resource}/{ticker}", self.base_url);
+        let mut next_url = Some(endpoint);
+        let mut result = Vec::new();
+        for _ in 0..10_000 {
+            let Some(url) = next_url.take() else {
+                return Ok(result);
+            };
+            let query = if url.contains('?') {
+                Vec::new()
+            } else {
+                vec![
+                    ("timestamp.gte", start_unix_nanos.to_string()),
+                    ("timestamp.lte", end_unix_nanos.to_string()),
+                    ("sort", "timestamp".into()),
+                    ("order", "asc".into()),
+                    ("limit", "50000".into()),
+                ]
+            };
+            let payload = self
+                .http
+                .get_json_response_with_headers_and_query(
+                    &url,
+                    &query,
+                    &[("Authorization", format!("Bearer {}", self.api_key))],
+                )
+                .await?
+                .body;
+            let rows = payload
+                .get("results")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    ExchangeError::InvalidRequest(format!(
+                        "Massive historical {resource} response has no results list"
+                    ))
+                })?;
+            result.extend(rows.iter().cloned());
+            next_url = payload
+                .get("next_url")
+                .and_then(Value::as_str)
+                .map(|value| private_next_url(value, &self.base_url));
+        }
+        Err(ExchangeError::InvalidRequest(format!(
+            "Massive historical {resource} pagination exceeded safety limit"
+        )))
     }
 }
 
@@ -227,6 +480,10 @@ impl MassiveStocksRestClient {
             base_url: base_url.trim_end_matches('/').into(),
             options: false,
             option_underlying: None,
+            option_as_of: None,
+            option_expiration_start: None,
+            option_expiration_end: None,
+            option_contract_type: None,
         })
     }
 
@@ -243,6 +500,26 @@ impl MassiveStocksRestClient {
         self
     }
 
+    pub fn with_option_as_of(mut self, value: impl Into<String>) -> Self {
+        self.option_as_of = non_empty(value);
+        self
+    }
+
+    pub fn with_option_expiration_range(
+        mut self,
+        start: impl Into<String>,
+        end: impl Into<String>,
+    ) -> Self {
+        self.option_expiration_start = non_empty(start);
+        self.option_expiration_end = non_empty(end);
+        self
+    }
+
+    pub fn with_option_contract_type(mut self, value: impl Into<String>) -> Self {
+        self.option_contract_type = non_empty(value);
+        self
+    }
+
     pub fn for_equity(mut self) -> Self {
         self.options = false;
         self
@@ -255,6 +532,7 @@ impl MassiveStocksRestClient {
         timespan: &str,
         start_unix_millis: i64,
         end_unix_millis: i64,
+        adjusted: bool,
     ) -> Result<Vec<MassiveHistoricalBar>, String> {
         let endpoint = format!(
             "{}/v2/aggs/ticker/{}/range/{}/{}/{}/{}",
@@ -272,7 +550,7 @@ impl MassiveStocksRestClient {
                 Vec::new()
             } else {
                 vec![
-                    ("adjusted", "false".into()),
+                    ("adjusted", adjusted.to_string()),
                     ("sort", "asc".into()),
                     ("limit", "50000".into()),
                 ]
@@ -345,6 +623,13 @@ impl MassiveStocksRestClient {
                 if let Some(underlying) = &self.option_underlying {
                     query.push(("underlying_ticker", underlying.clone()));
                 }
+                append_option_filters(
+                    &mut query,
+                    self.option_as_of.as_deref(),
+                    self.option_expiration_start.as_deref(),
+                    self.option_expiration_end.as_deref(),
+                    self.option_contract_type.as_deref(),
+                );
                 query
             };
             let payload = self
@@ -383,6 +668,13 @@ impl MassiveStocksRestClient {
         if let Some(underlying) = &self.option_underlying {
             query.push(("underlying_ticker", underlying.clone()));
         }
+        append_option_filters(
+            &mut query,
+            self.option_as_of.as_deref(),
+            self.option_expiration_start.as_deref(),
+            self.option_expiration_end.as_deref(),
+            self.option_contract_type.as_deref(),
+        );
         let payload = self
             .http
             .get_json_with_headers_and_query(
@@ -545,6 +837,42 @@ fn append_historical_rows(result: &mut Vec<MassiveHistoricalBar>, payload: &Valu
     }
 }
 
+fn value_text(value: &Value, key: &str) -> Option<String> {
+    value.get(key).map(|item| {
+        item.as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| item.to_string())
+    })
+}
+
+fn massive_historical_quote(value: &Value) -> Result<MassiveHistoricalQuote, String> {
+    Ok(MassiveHistoricalQuote {
+        sip_timestamp_unix_nanos: value
+            .get("sip_timestamp")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "Massive historical quote has no sip_timestamp".to_string())?,
+        bid_price: value_text(value, "bid_price"),
+        bid_size: value_text(value, "bid_size"),
+        ask_price: value_text(value, "ask_price"),
+        ask_size: value_text(value, "ask_size"),
+        sequence_number: value.get("sequence_number").and_then(Value::as_u64),
+    })
+}
+
+fn massive_historical_trade(value: &Value) -> Result<MassiveHistoricalTrade, String> {
+    Ok(MassiveHistoricalTrade {
+        sip_timestamp_unix_nanos: value
+            .get("sip_timestamp")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "Massive historical trade has no sip_timestamp".to_string())?,
+        price: value_text(value, "price")
+            .ok_or_else(|| "Massive historical trade has no price".to_string())?,
+        size: value_text(value, "size")
+            .ok_or_else(|| "Massive historical trade has no size".to_string())?,
+        sequence_number: value.get("sequence_number").and_then(Value::as_u64),
+    })
+}
+
 impl MassiveMarketClient for MassiveStocksRestClient {
     fn load_markets(&mut self) -> Result<Vec<MassiveMarketRow>, String> {
         if self.options {
@@ -599,6 +927,32 @@ fn equity_rows_from_payload(payload: Value) -> Result<Vec<MassiveMarketRow>, Str
             })
         })
         .collect())
+}
+
+fn non_empty(value: impl Into<String>) -> Option<String> {
+    let value = value.into();
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn append_option_filters(
+    query: &mut Vec<(&'static str, String)>,
+    as_of: Option<&str>,
+    expiration_start: Option<&str>,
+    expiration_end: Option<&str>,
+    contract_type: Option<&str>,
+) {
+    if let Some(value) = as_of {
+        query.push(("as_of", value.to_owned()));
+    }
+    if let Some(value) = expiration_start {
+        query.push(("expiration_date.gte", value.to_owned()));
+    }
+    if let Some(value) = expiration_end {
+        query.push(("expiration_date.lte", value.to_owned()));
+    }
+    if let Some(value) = contract_type {
+        query.push(("contract_type", value.to_owned()));
+    }
 }
 
 fn rows_from_payload(payload: &Value) -> Result<Vec<MassiveMarketRow>, String> {
@@ -737,6 +1091,125 @@ mod tests {
         assert!(page.complete);
         assert!(page.rows.is_empty());
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_option_catalog_sends_point_in_time_filters() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(request_line.contains("underlying_ticker=SPY"));
+            assert!(request_line.contains("as_of=2024-12-19"));
+            assert!(request_line.contains("expiration_date.gte=2024-12-20"));
+            assert!(request_line.contains("expiration_date.lte=2025-01-31"));
+            assert!(request_line.contains("contract_type=put"));
+            assert!(request_line.contains("expired=false"));
+            let body = r#"{"results":[]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let page = MassiveAsyncRestClient::with_base_url("test-secret", endpoint)
+            .unwrap()
+            .for_options()
+            .with_option_underlying("SPY")
+            .with_option_as_of("2024-12-19")
+            .with_option_expiration_range("2024-12-20", "2025-01-31")
+            .with_option_contract_type("put")
+            .load_markets_page(None, 1000)
+            .await
+            .unwrap();
+
+        assert!(page.complete);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn cash_dividends_use_bounded_query_and_map_rows() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(request_line.contains("/stocks/v1/dividends?"));
+            assert!(request_line.contains("ticker=SPY"));
+            assert!(request_line.contains("ex_dividend_date.gte=2024-01-01"));
+            assert!(request_line.contains("ex_dividend_date.lte=2024-12-31"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-secret\r\n"));
+            let body = r#"{"results":[{"id":"div-1","ticker":"SPY","ex_dividend_date":"2024-03-15","declaration_date":"2024-02-29","cash_amount":1.59,"split_adjusted_cash_amount":1.59,"currency":"USD","frequency":4}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let rows = MassiveAsyncRestClient::with_base_url("test-secret", endpoint)
+            .unwrap()
+            .cash_dividends("SPY", "2024-01-01", "2024-12-31")
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "div-1");
+        assert_eq!(rows[0].cash_amount.as_deref(), Some("1.59"));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn historical_option_quotes_use_bounded_timestamp_query_and_map_rows() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_line = request.lines().next().unwrap_or_default();
+            assert!(request_line.contains("/v3/quotes/O:SPY250117P00500000?"));
+            assert!(request_line.contains("timestamp.gte=100"));
+            assert!(request_line.contains("timestamp.lte=200"));
+            assert!(request_line.contains("order=asc"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-secret\r\n"));
+            let body = r#"{"results":[{"bid_price":1.1,"bid_size":2,"ask_price":1.2,"ask_size":3,"sequence_number":7,"sip_timestamp":150}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let rows = MassiveAsyncRestClient::with_base_url("test-secret", endpoint)
+            .unwrap()
+            .for_options()
+            .historical_quotes("O:SPY250117P00500000", 100, 200)
+            .await
+            .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].bid_price.as_deref(), Some("1.1"));
+        assert_eq!(rows[0].ask_size.as_deref(), Some("3"));
+        assert_eq!(rows[0].sequence_number, Some(7));
+        assert_eq!(rows[0].sip_timestamp_unix_nanos, 150);
     }
 
     #[test]

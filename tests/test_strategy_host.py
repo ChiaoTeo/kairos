@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 from io import StringIO
 import json
 import os
 from pathlib import Path
+import pytest
 
 from kairospy.application.launch import (
     LaunchIdentity,
@@ -13,52 +15,157 @@ from kairospy.application.launch import (
     LaunchInstanceApplication,
 )
 from kairospy.application.strategy import StrategyHost, StrategyLifecycle
-from kairospy.application.strategy.domain.messages import SnapshotEnvelope
+from kairospy.application.market import MarketSnapshot
+from kairospy.application.strategy.domain.messages import RawEventEnvelope
 from kairospy.strategy import (
-    EventEnvelope,
-    StrategyBase,
+    BarEvent,
+    ExchangeId,
+    InstrumentId,
+    InstrumentRef,
+    ListingId,
+    Market,
+    MarketId,
+    MarketStatus,
+    Strategy,
+    StrategyCommand,
 )
 from kairospy.application.strategy.services import (
-    InMemoryContextBus,
+    InMemoryApplicationPorts,
     InMemoryEventStream,
     InMemoryLifecycleJournal,
-    InMemorySnapshotReader,
+    InMemoryMarketSnapshotReader,
     StrategyClientBundle,
     StrategyControlServer,
 )
-from kairospy.infrastructure.contracts.market import EventStreamGap
+from kairospy.strategy import StrategyState
+from kairospy.infrastructure.transport.market import EventStreamGap
+from kairospy.infrastructure.transport.market import BarView, DecimalValue, QuoteView
 from kairospy.application.system import UnixRestClient
 from kairospy.strategy import StrategyLogger, StrategyOutput
+from kairospy.strategy import CommandResult
 
 
-class UserStrategy(StrategyBase):
+_MARKET = Market(
+    MarketId("market:test:BTCUSDT"),
+    InstrumentRef(InstrumentId("instrument:test:BTCUSDT"), "BTCUSDT"),
+    ListingId("listing:test:BTCUSDT"),
+    ExchangeId("exchange:test"),
+    "BTCUSDT",
+    "spot",
+    status=MarketStatus.ACTIVE,
+)
+
+
+def EventEnvelope(
+    stream_id: str,
+    sequence: int,
+    domain: str,
+    kind: str,
+    payload: object,
+    occurred_at: datetime | None = None,
+) -> RawEventEnvelope:
+    """Test fixture adapter that builds the same transport views as production."""
+    event_time = int(
+        (occurred_at or datetime.now(timezone.utc)).timestamp() * 1_000_000_000
+    )
+    if domain == "data" and isinstance(payload, dict):
+        symbol = str(payload.get("symbol", "BTCUSDT"))
+        instrument_id = f"instrument:test:{symbol}"
+        market_id = f"market:test:{symbol}"
+        if kind == "bar":
+            close = DecimalValue(int(payload.get("close", 100)), 0)
+            payload = BarView(
+                instrument_id,
+                market_id,
+                "1m",
+                close,
+                close,
+                close,
+                close,
+                None,
+                event_time,
+                "test",
+                "provider",
+            )
+        elif kind == "quote":
+            bid = DecimalValue(100, 0)
+            ask = DecimalValue(101, 0)
+            payload = QuoteView(
+                instrument_id, market_id, bid, None, ask, None, event_time, "test"
+            )
+    return RawEventEnvelope(stream_id, sequence, domain, kind, payload, occurred_at)
+
+
+class UserStrategy(Strategy):
     strategy_id = "user-sma"
 
     def __init__(self) -> None:
         self.events: list[int] = []
 
     def on_start(self, context) -> None:
-        context.subscribe("market.BTCUSDT", selectors=("bar:1m",))
+        context.market.subscribe_bars(_MARKET, timeframe="1m")
 
-    def on_data(self, context, event) -> None:
-        self.events.append(event.sequence)
-        context.target_position("BTCUSDT", 1)
+    def on_market(self, context, event) -> None:
+        if not isinstance(event, BarEvent):
+            return
+        self.events.append(event.metadata.sequence)
+        context.execution.target_position(
+            event.data.instrument, Decimal("1"), account="main"
+        )
+
+
+class CommandStrategy(Strategy):
+    strategy_id = "command-strategy"
+
+    async def on_command(self, context, command: StrategyCommand) -> CommandResult:
+        return CommandResult(
+            command.request_id,
+            "completed",
+            result={"kind": command.kind, "source": command.source},
+        )
+
+
+class TimerStrategy(Strategy):
+    strategy_id = "timer-strategy"
+
+    def __init__(self) -> None:
+        self.clock_events: list[tuple[str, datetime]] = []
+
+    def on_start(self, context) -> None:
+        context.clock.every(
+            "rebalance",
+            "1h",
+            start_at=datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
+        )
+
+    def on_clock(self, context, event) -> None:
+        if event.kind == "timer":
+            self.clock_events.append((event.data.timer_id, event.data.scheduled_at))
+
+
+class FiniteReplayStream(InMemoryEventStream):
+    replayable = True
+
+    async def events(self, after_sequence: int = 0):
+        while self._events:
+            event = self._events.popleft()
+            if event.sequence > after_sequence:
+                yield event
 
 
 class RecoveringSnapshotReader:
     def __init__(self) -> None:
         self.read_count = 0
 
-    def read(self, view_key: str) -> SnapshotEnvelope:
+    def read(self, view_key: str) -> MarketSnapshot:
         self.read_count += 1
-        return SnapshotEnvelope(
+        return MarketSnapshot(
             view_key,
             f"snapshot-{self.read_count}",
             "market-actor",
             "market-events",
             0 if self.read_count == 1 else 1,
             self.read_count,
-            {"BTCUSDT": 100},
         )
 
 
@@ -85,19 +192,23 @@ class GapThenRecoveryStream:
         )
 
 
-def _host(tmp_path: Path, logger: StrategyLogger | None = None):
-    bus = InMemoryContextBus()
+def _host(
+    tmp_path: Path,
+    logger: StrategyLogger | None = None,
+    *,
+    params: dict[str, object] | None = None,
+):
+    bus = InMemoryApplicationPorts()
     stream = InMemoryEventStream("market-events")
-    snapshots = InMemorySnapshotReader(
+    snapshots = InMemoryMarketSnapshotReader(
         {
-            "market.current": SnapshotEnvelope(
+            "market.current": MarketSnapshot(
                 "market.current",
                 "snapshot-1",
                 "market-actor",
                 "market-events",
                 0,
                 1,
-                {"BTCUSDT": 100},
             ),
         }
     )
@@ -107,7 +218,6 @@ def _host(tmp_path: Path, logger: StrategyLogger | None = None):
         launch_id="btc-paper",
         instance_id="instance-1",
         clients=StrategyClientBundle(
-            commands=bus,
             market_commands=bus,  # In-memory bus is the test command capability.
             execution_commands=bus,
             market_snapshots=snapshots,
@@ -115,8 +225,184 @@ def _host(tmp_path: Path, logger: StrategyLogger | None = None):
         ),
         journal=InMemoryLifecycleJournal(),
         logger=logger,
+        params=params,
     )
     return host, strategy, bus, stream
+
+
+def _timer_host(tmp_path: Path):
+    bus = InMemoryApplicationPorts()
+    stream = InMemoryEventStream("market-events")
+    snapshots = InMemoryMarketSnapshotReader(
+        {
+            "market.current": MarketSnapshot(
+                "market.current",
+                "snapshot-1",
+                "market-actor",
+                "market-events",
+                0,
+                1,
+            ),
+        }
+    )
+    strategy = TimerStrategy()
+    host = StrategyHost(
+        strategy,
+        launch_id="timer-launch",
+        instance_id="instance-1",
+        clients=StrategyClientBundle(
+            market_commands=bus,
+            execution_commands=bus,
+            market_snapshots=snapshots,
+            market_events=stream,
+        ),
+        journal=InMemoryLifecycleJournal(),
+    )
+    return host, strategy, bus
+
+
+def test_strategy_clock_fires_deterministic_catch_up_timers_before_market_event(
+    tmp_path: Path,
+) -> None:
+    host, strategy, bus = _timer_host(tmp_path)
+    host.start()
+    bus.resolve(bus.requests[0].request_id) if bus.requests else None
+    host.refresh()
+    host.enable()
+
+    host.dispatch(
+        EventEnvelope(
+            "market-events",
+            1,
+            "data",
+            "bar",
+            {"close": 101},
+            datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
+        )
+    )
+
+    assert strategy.clock_events == [
+        ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc)),
+        ("rebalance", datetime(2024, 1, 1, 2, tzinfo=timezone.utc)),
+    ]
+    assert host.context.clock.now == datetime(2024, 1, 1, 2, tzinfo=timezone.utc)
+
+
+def test_replay_dispatch_visits_timer_times_inside_a_market_gap(tmp_path: Path) -> None:
+    host, strategy, bus = _timer_host(tmp_path)
+    host.start()
+    host.refresh()
+    host.enable()
+
+    host._dispatch_replay_event(
+        EventEnvelope(
+            "market-events",
+            1,
+            "data",
+            "bar",
+            {"close": 101},
+            datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert [scheduled for _, scheduled in strategy.clock_events] == [
+        datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
+    ]
+
+
+def test_strategy_clock_can_fire_without_a_market_event(tmp_path: Path) -> None:
+    host, strategy, bus = _timer_host(tmp_path)
+    host.start()
+    host.refresh()
+    host.enable()
+
+    host.advance_time(datetime(2024, 1, 1, 1, tzinfo=timezone.utc))
+
+    assert strategy.clock_events == [
+        ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc))
+    ]
+
+
+def test_external_clock_event_advances_context_business_time(tmp_path: Path) -> None:
+    host, strategy, bus = _timer_host(tmp_path)
+    host.start()
+    host.refresh()
+    host.enable()
+
+    host.dispatch(
+        EventEnvelope(
+            "market-events",
+            1,
+            "clock",
+            "advance",
+            {"source": "replay"},
+            datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    assert strategy.clock_events == [
+        ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc))
+    ]
+    assert host.context.now == datetime(2024, 1, 1, 1, tzinfo=timezone.utc)
+
+
+def test_replay_driver_fires_each_timer_in_empty_market_gap(tmp_path: Path) -> None:
+    bus = InMemoryApplicationPorts()
+    stream = FiniteReplayStream("market-events")
+    snapshots = InMemoryMarketSnapshotReader(
+        {
+            "market.current": MarketSnapshot(
+                "market.current", "snapshot-1", "market-actor", "market-events", 0, 1
+            )
+        }
+    )
+    strategy = TimerStrategy()
+    host = StrategyHost(
+        strategy,
+        launch_id="replay-driver",
+        instance_id="instance-1",
+        clients=StrategyClientBundle(
+            market_commands=bus,
+            execution_commands=bus,
+            market_snapshots=snapshots,
+            market_events=stream,
+        ),
+        journal=InMemoryLifecycleJournal(),
+        replay_end=datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
+    )
+    host.start()
+    host.refresh()
+    host.enable()
+    stream.append(
+        EventEnvelope(
+            "market-events",
+            1,
+            "data",
+            "bar",
+            {},
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    stream.append(
+        EventEnvelope(
+            "market-events",
+            2,
+            "data",
+            "bar",
+            {},
+            datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    asyncio.run(host.run())
+
+    assert [scheduled for _, scheduled in strategy.clock_events] == [
+        datetime(2024, 1, 1, 1, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
+    ]
 
 
 def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) -> None:
@@ -153,11 +439,104 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     )
     assert strategy.events == [1]
     assert bus.requests[1].operation == "intent.target_position"
-    assert bus.requests[1].payload.instrument_id == "BTCUSDT"
+    assert bus.requests[1].payload.instrument_id == "instrument:test:BTCUSDT"
+    assert bus.requests[1].payload.source_event_sequence == 1
+    assert bus.requests[1].payload.source_event_time_unix_nanos is not None
+
+
+def test_strategy_stop_releases_all_market_leases_after_on_end(tmp_path: Path) -> None:
+    host, _, bus, _ = _host(tmp_path)
+    host.start()
+    subscription_id = bus.requests[0].request_id
+    bus.resolve(subscription_id)
+    host.refresh()
+    host.enable()
+
+    host.stop()
+
+    assert bus.requests[-1].operation == "market.release_owner"
+    assert host.status.subscription_count == 0
+    assert host.status.active_subscription_count == 0
+    assert host.status.subscriptions[0]["status"] == "removed"
+
+
+def test_strategy_process_close_retries_owner_cleanup_idempotently(
+    tmp_path: Path,
+) -> None:
+    host, _, bus, _ = _host(tmp_path)
+    host.start()
+
+    host.close()
+    host.close()
+
+    releases = [
+        request
+        for request in bus.requests
+        if request.operation == "market.release_owner"
+    ]
+    assert len(releases) == 1
+
+
+def test_strategy_start_failure_releases_owner_after_subscription(
+    tmp_path: Path,
+) -> None:
+    host, _, bus, _ = _host(tmp_path)
+
+    def fail_status(request_id: str):
+        raise RuntimeError(f"Market unavailable for {request_id}")
+
+    bus.status = fail_status  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Market unavailable"):
+        host.start()
+
+    assert host.status.state is StrategyLifecycle.FAILED
+    assert bus.requests[-1].operation == "market.release_owner"
+
+
+def test_strategy_state_is_json_only_versioned_and_recoverable(tmp_path: Path) -> None:
+    path = tmp_path / "strategy-state.json"
+    state = StrategyState(path)
+    state.set_int("window", 3)
+    state.set_decimal("threshold", Decimal("1.25"))
+    state.checkpoint()
+
+    restored = StrategyState(path)
+
+    assert restored.schema_version == 1
+    assert restored.get_int("window") == 3
+    assert restored.get_decimal("threshold") == Decimal("1.25")
+    with pytest.raises(Exception, match="expected=int"):
+        restored.get_int("threshold")
+
+
+def test_strategy_context_exposes_immutable_identity_and_params(tmp_path: Path) -> None:
+    host, _, _, _ = _host(tmp_path, params={"window": 20})
+
+    assert host.context.identity.strategy_id == "user-sma"
+    assert host.context.identity.launch_id == "btc-paper"
+    assert host.context.identity.instance_id == "instance-1"
+    assert host.context.params == {"window": 20}
+    with pytest.raises(TypeError):
+        host.context.params["window"] = 30  # type: ignore[index]
+
+
+def test_execution_application_uses_strategy_scoped_command_surface(
+    tmp_path: Path,
+) -> None:
+    host, _, bus, _ = _host(tmp_path)
+
+    receipt = host.context.execution.target_position(
+        _MARKET.instrument, Decimal("2"), account="main"
+    )
+
+    assert receipt.request_id == bus.requests[-1].request_id
+    assert bus.requests[-1].operation == "intent.target_position"
+    assert bus.requests[-1].strategy_id == "user-sma"
 
 
 def test_strategy_recovers_market_snapshot_after_event_gap(tmp_path: Path) -> None:
-    bus = InMemoryContextBus()
+    bus = InMemoryApplicationPorts()
     snapshots = RecoveringSnapshotReader()
     stream = GapThenRecoveryStream()
     host = StrategyHost(
@@ -165,7 +544,6 @@ def test_strategy_recovers_market_snapshot_after_event_gap(tmp_path: Path) -> No
         launch_id="gap-launch",
         instance_id="gap-instance",
         clients=StrategyClientBundle(
-            commands=bus,
             market_commands=bus,
             execution_commands=bus,
             market_snapshots=snapshots,
@@ -188,7 +566,7 @@ def test_strategy_recovers_market_snapshot_after_event_gap(tmp_path: Path) -> No
 def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     output = StringIO()
     event_time = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-    host, _, bus, _ = _host(
+    host, strategy, bus, _ = _host(
         tmp_path,
         StrategyLogger(fields={"component": "strategy"}, stream=output),
     )
@@ -197,6 +575,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
     bus.resolve(bus.requests[0].request_id)
     host.refresh()
     host.enable()
+    strategy.log_on_market = True
     host.dispatch(EventEnvelope("market-events", 1, "data", "quote", {}, event_time))
     assert host.status.first_event_received is True
     assert host.status.data_health.value == "healthy"
@@ -206,7 +585,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
 
     records = [json.loads(line) for line in output.getvalue().splitlines()]
     dispatch = next(
-        record for record in records if record["message"] == "dispatch on_data"
+        record for record in records if record.get("event") == "strategy_on_market"
     )
     assert dispatch["system_time"]
     assert dispatch["event_time"] == event_time.isoformat()
@@ -223,17 +602,6 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
         record.get("event") == "market_subscriptions_active" for record in records
     )
     assert any(record.get("event") == "first_data_event_received" for record in records)
-    submitted = next(
-        record
-        for record in records
-        if record.get("event") == "strategy_command_submitted"
-    )
-    assert submitted["operation"] == "market.subscribe"
-    assert submitted["data"]["subject"] == "market.BTCUSDT"
-    result = next(
-        record for record in records if record.get("event") == "strategy_command_result"
-    )
-    assert result["data"]["command_status"] == "pending"
 
 
 def test_legacy_print_is_wrapped_with_event_context() -> None:
@@ -318,6 +686,56 @@ def test_strategy_control_uses_instance_unix_rest_socket(tmp_path: Path) -> None
     asyncio.run(scenario())
 
 
+def test_strategy_control_dispatches_command_to_optional_strategy_hook(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        host, _, bus, _ = _host(tmp_path)
+        socket = Path(f"/tmp/kairos-strategy-command-{os.getpid()}.sock")
+        server = StrategyControlServer(host, socket)
+        await server.start()
+        try:
+            host.start()
+            bus.resolve(bus.requests[0].request_id)
+            host.refresh()
+            host.enable()
+            result = await UnixRestClient(socket).request(
+                "POST",
+                "/v1/command",
+                {
+                    "request_id": "command-1",
+                    "kind": "interactive.python",
+                    "source": "print('not supported by this strategy')",
+                },
+            )
+            assert result["status"] == "rejected"
+            assert result["error_code"] == "unsupported_command"
+            assert result["request_id"] == "command-1"
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_user_strategy_can_implement_on_command(tmp_path: Path) -> None:
+    host, _, _, _ = _host(tmp_path)
+    strategy = CommandStrategy()
+    host = StrategyHost(
+        strategy,
+        launch_id="btc-paper",
+        instance_id="instance-1",
+        clients=host.clients,
+        journal=InMemoryLifecycleJournal(),
+    )
+    host.start()
+    host.enable()
+    result = asyncio.run(
+        host.command(StrategyCommand("command-2", "custom.command", "42"))
+    )
+    assert result.status == "completed"
+    assert result.result["source"] == "42"
+
+
 def test_strategy_host_consumes_instance_event_stream(tmp_path: Path) -> None:
     async def scenario() -> None:
         host, strategy, bus, stream = _host(tmp_path)
@@ -341,19 +759,61 @@ def test_strategy_host_consumes_instance_event_stream(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_backtest_callbacks_run_after_strategy_intent_and_record_equity(
+def test_strategy_can_enable_on_market_logging_at_runtime(tmp_path: Path) -> None:
+    output = StringIO()
+    logger = StrategyLogger(stream=output)
+    host, strategy, bus, _ = _host(tmp_path, logger=logger)
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+
+    strategy.log_on_market = True
+    host.dispatch(
+        EventEnvelope(
+            "market-events",
+            1,
+            "data",
+            "quote",
+            {"symbol": "AAPL", "bid": "100.0"},
+        )
+    )
+
+    records = [json.loads(line) for line in output.getvalue().splitlines()]
+    event = next(
+        record for record in records if record.get("event") == "strategy_on_market"
+    )
+    assert event["data"]["event_kind"] == "quote"
+    assert "AAPL" in event["data"]["event_payload"]
+
+
+def test_strategy_on_market_logging_is_disabled_by_default(tmp_path: Path) -> None:
+    output = StringIO()
+    host, _, bus, _ = _host(tmp_path, logger=StrategyLogger(stream=output))
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+    host.dispatch(
+        EventEnvelope("market-events", 1, "data", "quote", {"symbol": "AAPL"})
+    )
+
+    assert '"event":"strategy_on_market"' not in output.getvalue()
+    assert '"message":"dispatch on_market"' not in output.getvalue()
+
+
+def test_backtest_quote_callbacks_bracket_strategy_and_record_equity(
     tmp_path: Path,
 ) -> None:
     host, strategy, bus, stream = _host(tmp_path)
     calls: list[str] = []
 
     host.clients = host.clients.__class__(
-        commands=host.clients.commands,
         market_commands=host.clients.market_commands,
         execution_commands=host.clients.execution_commands,
         market_snapshots=host.clients.market_snapshots,
         market_events=host.clients.market_events,
-        reference=host.clients.reference,
+        reference_client=host.clients.reference_client,
         backtest_market=lambda event: calls.append("execution"),
         backtest_account_mark=lambda event: (
             calls.append("account") or {"snapshot": {"equity": "101"}}
@@ -376,6 +836,42 @@ def test_backtest_callbacks_run_after_strategy_intent_and_record_equity(
         },
     )
     host.dispatch(event)
-    assert bus.requests[-1].operation == "intent.target_position"
     assert calls == ["execution", "account"]
     assert host.equity_curve[-1]["snapshot"] == {"equity": "101"}
+
+
+def test_bar_backtest_callbacks_use_previous_completed_bar_for_execution(
+    tmp_path: Path,
+) -> None:
+    host, _, bus, _ = _host(tmp_path)
+    calls: list[tuple[str, int]] = []
+    host.clients = host.clients.__class__(
+        market_commands=host.clients.market_commands,
+        execution_commands=host.clients.execution_commands,
+        market_snapshots=host.clients.market_snapshots,
+        market_events=host.clients.market_events,
+        reference_client=host.clients.reference_client,
+        backtest_market=lambda event: calls.append(("execution", event.sequence)),
+        backtest_account_mark=lambda event: calls.append(("account", event.sequence)),
+    )
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+
+    def bar(sequence: int, hour: int) -> EventEnvelope:
+        return EventEnvelope(
+            "market-events",
+            sequence,
+            "data",
+            "bar",
+            {"close": 100 + sequence},
+            datetime(2024, 1, 1, hour, tzinfo=timezone.utc),
+        )
+
+    host.dispatch(bar(1, 10))
+    assert calls == []
+    host.dispatch(bar(2, 11))
+    assert calls == [("execution", 1), ("account", 1)]
+    host.stop()
+    assert calls == [("execution", 1), ("account", 1), ("account", 2)]

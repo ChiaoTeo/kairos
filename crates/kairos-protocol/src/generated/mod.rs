@@ -38,20 +38,8 @@ pub mod kairos {
             pub use reference_changed_generated::*;
             mod exchange_generated;
             pub use exchange_generated::*;
-            mod catalog_generated;
-            pub use catalog_generated::*;
-            mod catalog_snapshot_generated;
-            pub use catalog_snapshot_generated::*;
-            mod reference_collections_generated;
-            pub use reference_collections_generated::*;
-            mod reference_collections_snapshot_generated;
-            pub use reference_collections_snapshot_generated::*;
             mod lifecycle_event_generated;
             pub use lifecycle_event_generated::*;
-            mod markets_generated;
-            pub use markets_generated::*;
-            mod markets_snapshot_generated;
-            pub use markets_snapshot_generated::*;
         }
     }
 

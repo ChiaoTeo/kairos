@@ -44,8 +44,9 @@ pub use capabilities::funding::{
 };
 pub use capabilities::funding::{AsyncTransferConnection, TransferRequest, TransferResult};
 pub use capabilities::market::{
-    AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, AsyncMarketSnapshotConnection,
-    HistoricalMarketRequest, MarketEvent, MarketEventKind, MarketSubscription, SubscriptionId,
+    AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, AsyncMarketQuoteConnection,
+    AsyncMarketSnapshotConnection, HistoricalMarketRequest, MarketEvent, MarketEventKind,
+    MarketSubscription, SubscriptionId,
 };
 pub use capabilities::market_facts::{
     MarketBar, MarketDataKind, MarketGreeks, MarketQuote, MarketStreamCapabilities, MarketTrade,

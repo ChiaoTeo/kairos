@@ -70,6 +70,14 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
         .orders
         .iter()
         .map(|order| {
+            let (quantity_mantissa, quantity_scale) = order.quantity.parts()?;
+            let (filled_mantissa, filled_scale) = order.filled_quantity.parts()?;
+            let (quantity_mantissa, filled_mantissa, quantity_scale) = align_decimal_parts(
+                quantity_mantissa,
+                quantity_scale,
+                filled_mantissa,
+                filled_scale,
+            )?;
             let order_id = builder.create_string(&order.order_id);
             let account_id = builder.create_string(&order.account_id);
             let instrument_id = builder.create_string(&order.instrument_id);
@@ -81,20 +89,19 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
                 .as_ref()
                 .map(|v| builder.create_string(v));
             let reason = (!order.reason.is_empty()).then(|| builder.create_string(&order.reason));
-            let quantity = Decimal64::new(order.quantity_mantissa, order.quantity_scale);
-            let filled =
-                Decimal64::new(order.filled_quantity_mantissa, order.filled_quantity_scale);
-            let remaining = Decimal64::new(
-                order
-                    .quantity_mantissa
-                    .saturating_sub(order.filled_quantity_mantissa),
-                order.quantity_scale,
-            );
+            let quantity = Decimal64::new(quantity_mantissa, quantity_scale);
+            let filled = Decimal64::new(filled_mantissa, quantity_scale);
+            let remaining_mantissa = quantity_mantissa
+                .checked_sub(filled_mantissa)
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| "filled quantity exceeds order quantity".to_string())?;
+            let remaining = Decimal64::new(remaining_mantissa, quantity_scale);
             let limit = order
-                .limit_price_mantissa
-                .zip(order.limit_price_scale)
-                .map(|(m, s)| Decimal64::new(m, s));
-            execution_fb::Order::create(
+                .limit_price
+                .as_ref()
+                .map(|value| value.parts().map(|(m, s)| Decimal64::new(m, s)))
+                .transpose()?;
+            Ok(execution_fb::Order::create(
                 &mut builder,
                 &execution_fb::OrderArgs {
                     order_id: Some(order_id),
@@ -124,9 +131,9 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
                     updated_at_unix_nanos: order.updated_at_unix_nanos,
                     reason,
                 },
-            )
+            ))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let vector = builder.create_vector(&orders);
     let payload = execution_fb::Orders::create(
         &mut builder,
@@ -169,7 +176,7 @@ fn encode_intents(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8
         .intents
         .iter()
         .map(|state| encode_intent(&mut builder, state))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let vector = builder.create_vector(&intents);
     let payload = intent_fb::Intents::create(
         &mut builder,
@@ -204,7 +211,7 @@ fn encode_intents(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8
 fn encode_intent<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     state: &IntentState,
-) -> flatbuffers::WIPOffset<intent_fb::Intent<'a>> {
+) -> Result<flatbuffers::WIPOffset<intent_fb::Intent<'a>>, String> {
     let intent = &state.intent;
     let intent_id = builder.create_string(&intent.intent_id);
     let strategy_id = builder.create_string(&intent.strategy_id);
@@ -231,9 +238,11 @@ fn encode_intent<'a>(
         .collect::<Vec<_>>();
     let account_ids = builder.create_vector(&account_ids);
     let order_ids = builder.create_vector(&order_ids);
-    let target = Decimal64::new(intent.target_quantity_mantissa, intent.quantity_scale);
-    let completed = Decimal64::new(state.completed_quantity_mantissa, intent.quantity_scale);
-    intent_fb::Intent::create(
+    let (target_mantissa, target_scale) = intent.target_quantity.parts()?;
+    let (completed_mantissa, completed_scale) = state.completed_quantity.parts()?;
+    let target = Decimal64::new(target_mantissa, target_scale);
+    let completed = Decimal64::new(completed_mantissa, completed_scale);
+    Ok(intent_fb::Intent::create(
         builder,
         &intent_fb::IntentArgs {
             intent_id: Some(intent_id),
@@ -254,7 +263,7 @@ fn encode_intent<'a>(
             source_event_sequence: intent.source_event_sequence.unwrap_or_default(),
             reason,
         },
-    )
+    ))
 }
 
 fn make_header<'a>(
@@ -339,6 +348,28 @@ fn now_unix_nanos() -> u64 {
         .as_nanos() as u64
 }
 
+fn align_decimal_parts(
+    left: i64,
+    left_scale: u8,
+    right: i64,
+    right_scale: u8,
+) -> Result<(i64, i64, u8), String> {
+    let scale = left_scale.max(right_scale);
+    Ok((
+        rescale_decimal(left, left_scale, scale)?,
+        rescale_decimal(right, right_scale, scale)?,
+        scale,
+    ))
+}
+
+fn rescale_decimal(value: i64, from_scale: u8, to_scale: u8) -> Result<i64, String> {
+    let factor = 10_i128
+        .checked_pow(u32::from(to_scale.saturating_sub(from_scale)))
+        .ok_or_else(|| "decimal scale overflow".to_string())?;
+    i64::try_from(i128::from(value) * factor)
+        .map_err(|_| "decimal value cannot be represented by Decimal64".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +415,45 @@ mod tests {
                 .generation,
             1
         );
+    }
+
+    #[test]
+    fn order_encoding_aligns_canonical_zero_with_fractional_quantity() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = ExecutionSnapshot {
+            actor_id: "execution:test".into(),
+            generation: 1,
+            event_sequence: 1,
+            orders: vec![crate::model::ExecutionOrder {
+                order_id: "order-1".into(),
+                plan_id: None,
+                leg_id: None,
+                intent_id: None,
+                account_id: "paper".into(),
+                segment_key: "spot".into(),
+                instrument_id: "BTCUSDT".into(),
+                market_id: None,
+                side: OrderSide::Buy,
+                order_type: OrderType::Limit,
+                quantity: crate::model::Decimal("1.25".into()),
+                limit_price: Some(crate::model::Decimal("100.01".into())),
+                remote_order_id: None,
+                filled_quantity: crate::model::Decimal("0".into()),
+                status: ExecutionOrderStatus::Accepted,
+                submitted_at_unix_nanos: 1,
+                updated_at_unix_nanos: 1,
+                reason: String::new(),
+            }],
+            events: vec![],
+            fills: vec![],
+            intents: vec![],
+            intent_events: vec![],
+            intent_idempotency: Default::default(),
+        };
+        let path = directory.path().join("orders.snapshot");
+        let mut publisher =
+            SharedExecutionSnapshotPublisher::create(&path, 1024 * 1024, "execution:test").unwrap();
+
+        publisher.publish(&snapshot).unwrap();
     }
 }

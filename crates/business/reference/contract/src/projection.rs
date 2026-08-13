@@ -1,8 +1,8 @@
-//! Typed data-plane projection models decoded from Reference snapshots.
+//! Typed data-plane projection models decoded from Reference SQLite rows.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceMarket {
     pub market_id: String,
     #[serde(default)]
@@ -45,7 +45,7 @@ pub struct ReferenceMarket {
     pub effective_to_unix_nanos: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceHealth {
     pub status: String,
     pub generation: u64,

@@ -7,11 +7,16 @@ credentials remain workspace-owned; launch files only reference them.
 from __future__ import annotations
 
 import json
+import hashlib
 import tomllib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, cast
+
+from ...data import DatasetSetRef
+from .semantics import OptionBacktestConstraints
 
 
 VALID_MODES = frozenset({"backtest", "paper", "live"})
@@ -50,6 +55,11 @@ class LaunchPlan:
     backtest_data_root: Path | None = None
     backtest_storage_format: str | None = None
     backtest_replay_file: Path | None = None
+    backtest_dataset_set: DatasetSetRef | None = None
+    backtest_seed: int | None = None
+    backtest_start_time_unix_nanos: int | None = None
+    backtest_end_time_unix_nanos: int | None = None
+    risk_profile: str | None = None
     paper_events: Path | None = None
     live_safety: Mapping[str, Any] | None = None
     live_private_sync: Mapping[str, Any] | None = None
@@ -74,6 +84,15 @@ class LaunchPlan:
                     "backtest_data_root": self.backtest_data_root,
                     "backtest_storage_format": self.backtest_storage_format,
                     "backtest_replay_file": self.backtest_replay_file,
+                    "backtest_dataset_set": (
+                        self.backtest_dataset_set.as_dict()
+                        if self.backtest_dataset_set is not None
+                        else None
+                    ),
+                    "backtest_seed": self.backtest_seed,
+                    "backtest_start_time_unix_nanos": self.backtest_start_time_unix_nanos,
+                    "backtest_end_time_unix_nanos": self.backtest_end_time_unix_nanos,
+                    "risk_profile": self.risk_profile,
                     "paper_events": self.paper_events,
                     "live_safety": self.live_safety,
                     "live_private_sync": self.live_private_sync,
@@ -111,6 +130,24 @@ class LaunchConfig:
             values,
         )
 
+    @classmethod
+    def from_values(
+        cls,
+        values: Mapping[str, Any],
+        *,
+        root: str | Path,
+        source_name: str = "programmatic-launch",
+    ) -> "LaunchConfig":
+        """Build the same canonical config model used by TOML adapters."""
+        resolved_root = Path(root).expanduser().resolve()
+        if not source_name.strip() or "/" in source_name or "\\" in source_name:
+            raise LaunchConfigError("programmatic launch source name must be path-safe")
+        return cls(
+            path=resolved_root / f"{source_name}.programmatic",
+            root=resolved_root,
+            values=dict(values),
+        )
+
     @property
     def launch(self) -> Mapping[str, Any]:
         return _table(self.values.get("launch"), "launch")
@@ -138,12 +175,17 @@ class LaunchConfig:
     @property
     def account_refs(self) -> tuple[str, ...]:
         refs: list[str] = []
-        if self.account_ref is not None:
+        account = _optional_table(self.values.get("account"), "account")
+        if self.account_ref is not None and account.get("enabled", True):
             refs.append(self.account_ref)
         accounts = self.values.get("accounts")
         if isinstance(accounts, Mapping):
             for alias, value in accounts.items():
-                if not isinstance(value, Mapping) or "ref" not in value:
+                if (
+                    not isinstance(value, Mapping)
+                    or "ref" not in value
+                    or not value.get("enabled", True)
+                ):
                     continue
                 refs.append(_text(value["ref"], f"accounts.{alias}.ref"))
         return tuple(dict.fromkeys(refs))
@@ -186,11 +228,24 @@ class LaunchConfig:
         backtest_data_root: Path | None = None
         backtest_storage_format: str | None = None
         backtest_replay_file: Path | None = None
+        backtest_dataset_set: DatasetSetRef | None = None
+        backtest_seed: int | None = None
+        backtest_start_time_unix_nanos: int | None = None
+        backtest_end_time_unix_nanos: int | None = None
+        risk_profile: str | None = None
         paper_events: Path | None = None
         live_safety: Mapping[str, Any] | None = None
         live_private_sync: Mapping[str, Any] | None = None
         if mode == "backtest":
             backtest_market = dict(_table(mode_config.get("market"), "backtest.market"))
+            backtest_start_time_unix_nanos = _time_nanos(
+                backtest_market.get("start"), "backtest.market.start"
+            )
+            backtest_end_time_unix_nanos = _time_nanos(
+                backtest_market.get("end"), "backtest.market.end"
+            )
+            if backtest_start_time_unix_nanos > backtest_end_time_unix_nanos:
+                raise LaunchConfigError("backtest market start must not be after end")
             raw_data_root = mode_config.get("data_root", ".kairos/data")
             backtest_data_root = _resolve_path(
                 raw_data_root, self.root, "backtest.data_root"
@@ -201,6 +256,41 @@ class LaunchConfig:
                 backtest_replay_file = _resolve_path(
                     raw_replay, self.root, "backtest.market.events"
                 )
+            raw_dataset_set = mode_config.get("data")
+            if raw_dataset_set is not None:
+                if not isinstance(raw_dataset_set, Mapping):
+                    raise LaunchConfigError("backtest.data must be a dataset set table")
+                try:
+                    backtest_dataset_set = DatasetSetRef.from_dict(raw_dataset_set)
+                except (TypeError, ValueError) as error:
+                    raise LaunchConfigError(
+                        f"invalid backtest.data: {error}"
+                    ) from error
+            raw_seed = mode_config.get("seed")
+            if raw_seed is not None:
+                if not isinstance(raw_seed, int) or isinstance(raw_seed, bool):
+                    raise LaunchConfigError("backtest.seed must be an integer")
+                backtest_seed = raw_seed
+            mode_config["market"] = dict(backtest_market)
+            if backtest_dataset_set is not None:
+                mode_config["data"] = backtest_dataset_set.as_dict()
+            if backtest_seed is not None:
+                mode_config["seed"] = backtest_seed
+            raw_option_constraints = mode_config.get("option_constraints")
+            if raw_option_constraints is not None:
+                if not isinstance(raw_option_constraints, Mapping):
+                    raise LaunchConfigError(
+                        "backtest.option_constraints must be a table"
+                    )
+                try:
+                    option_constraints = OptionBacktestConstraints.from_mapping(
+                        raw_option_constraints
+                    )
+                except (TypeError, ValueError) as error:
+                    raise LaunchConfigError(
+                        f"invalid backtest.option_constraints: {error}"
+                    ) from error
+                mode_config["option_constraints"] = option_constraints.as_dict()
         elif mode == "paper":
             raw_events = mode_config.get("events")
             if raw_events is not None:
@@ -221,6 +311,10 @@ class LaunchConfig:
                 _optional_table(live.get("private_sync"), "live.private_sync")
             )
             live_private_sync.setdefault("enabled", bool(self.account_refs))
+        risk = _optional_table(self.values.get("risk"), "risk")
+        raw_risk_profile = risk.get("profile")
+        if raw_risk_profile is not None:
+            risk_profile = _text(raw_risk_profile, "risk.profile")
         return LaunchPlan(
             launch_id=self.launch_id,
             mode=mode,
@@ -235,6 +329,11 @@ class LaunchConfig:
             backtest_data_root=backtest_data_root,
             backtest_storage_format=backtest_storage_format,
             backtest_replay_file=backtest_replay_file,
+            backtest_dataset_set=backtest_dataset_set,
+            backtest_seed=backtest_seed,
+            backtest_start_time_unix_nanos=backtest_start_time_unix_nanos,
+            backtest_end_time_unix_nanos=backtest_end_time_unix_nanos,
+            risk_profile=risk_profile,
             paper_events=paper_events,
             live_safety=live_safety,
             live_private_sync=live_private_sync,
@@ -243,6 +342,17 @@ class LaunchConfig:
     @property
     def normalized(self) -> dict[str, Any]:
         return self.plan().normalized() | {"source": str(self.path)}
+
+    @property
+    def normalized_hash(self) -> str:
+        """Content identity of the canonical, source-independent launch plan."""
+
+        payload = json.dumps(
+            self.plan().normalized(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     def report(self) -> LaunchConfigReport:
         issues: list[str] = []
@@ -270,7 +380,7 @@ class LaunchConfig:
             not isinstance(strategy, str) or not strategy.strip() or ":" not in strategy
         ):
             issues.append("launch.strategy must be a module:callable reference")
-        for name in ("account", "execution", "strategy"):
+        for name in ("account", "execution", "strategy", "risk"):
             value = self.values.get(name)
             if value is not None and not isinstance(value, Mapping):
                 issues.append(f"[{name}] must be a table")
@@ -289,10 +399,6 @@ class LaunchConfig:
         except LaunchConfigError as error:
             issues.append(str(error))
             account_refs = ()
-        if mode in {"paper", "live"} and not account_refs:
-            issues.append(
-                f"{mode} launch requires [account].ref or [accounts.<alias>].ref"
-            )
         if mode == "live":
             live = self.values.get("live")
             if not isinstance(live, Mapping):
@@ -349,6 +455,33 @@ class LaunchConfig:
                     "jsonl",
                 }:
                     issues.append("backtest.storage_format must be parquet or jsonl")
+                raw_seed = backtest.get("seed")
+                if raw_seed is not None and (
+                    not isinstance(raw_seed, int) or isinstance(raw_seed, bool)
+                ):
+                    issues.append("backtest.seed must be an integer")
+                raw_dataset_set = backtest.get("data")
+                if raw_dataset_set is not None:
+                    if not isinstance(raw_dataset_set, Mapping):
+                        issues.append("backtest.data must be a dataset set table")
+                    else:
+                        try:
+                            DatasetSetRef.from_dict(raw_dataset_set)
+                        except (TypeError, ValueError) as error:
+                            issues.append(f"invalid backtest.data: {error}")
+                raw_option_constraints = backtest.get("option_constraints")
+                if raw_option_constraints is not None:
+                    if not isinstance(raw_option_constraints, Mapping):
+                        issues.append("backtest.option_constraints must be a table")
+                    else:
+                        try:
+                            OptionBacktestConstraints.from_mapping(
+                                raw_option_constraints
+                            )
+                        except (TypeError, ValueError) as error:
+                            issues.append(
+                                f"invalid backtest.option_constraints: {error}"
+                            )
         if mode == "paper":
             account = _optional_table(self.values.get("account"), "account")
             if account.get("environment") is not None and account.get(
@@ -358,6 +491,27 @@ class LaunchConfig:
         execution = self.values.get("execution")
         if (
             isinstance(execution, Mapping)
+            and "enabled" in execution
+            and not isinstance(execution["enabled"], bool)
+        ):
+            issues.append("execution.enabled must be a boolean")
+        account = self.values.get("account")
+        if (
+            isinstance(account, Mapping)
+            and "enabled" in account
+            and not isinstance(account["enabled"], bool)
+        ):
+            issues.append("account.enabled must be a boolean")
+        if isinstance(accounts, Mapping):
+            for alias, value in accounts.items():
+                if (
+                    isinstance(value, Mapping)
+                    and "enabled" in value
+                    and not isinstance(value["enabled"], bool)
+                ):
+                    issues.append(f"accounts.{alias}.enabled must be a boolean")
+        if (
+            isinstance(execution, Mapping)
             and "dry_run" in execution
             and not isinstance(execution["dry_run"], bool)
         ):
@@ -365,7 +519,9 @@ class LaunchConfig:
         if isinstance(execution, Mapping) and "routes" in execution:
             routes = execution.get("routes")
             if not isinstance(routes, list) or not routes:
-                issues.append("execution.routes must be a non-empty array of route tables")
+                issues.append(
+                    "execution.routes must be a non-empty array of route tables"
+                )
             else:
                 route_ids: set[str] = set()
                 for index, route in enumerate(routes):
@@ -387,7 +543,10 @@ class LaunchConfig:
                             issues.append(
                                 f"{prefix}.{secret} is forbidden; use credential_id"
                             )
-                if execution.get("provider") is not None or execution.get("product") is not None:
+                if (
+                    execution.get("provider") is not None
+                    or execution.get("product") is not None
+                ):
                     issues.append(
                         "execution.routes cannot be combined with execution.provider/product"
                     )
@@ -486,6 +645,13 @@ class LaunchEnvironment:
             "KAIROS_ACCOUNT_REFS": json.dumps(
                 list(plan.account_refs), separators=(",", ":")
             ),
+            **(
+                {"KAIROS_BACKTEST_END": str(plan.backtest_market.get("end"))}
+                if self.mode == "backtest"
+                and isinstance(plan.backtest_market, Mapping)
+                and plan.backtest_market.get("end") is not None
+                else {}
+            ),
             "KAIROS_LIVE_TRADING_ENABLED": str(
                 bool(safety.get("trading_enabled", False))
             ).lower(),
@@ -538,6 +704,17 @@ class LaunchConfigurationApplication:
     ) -> LaunchConfig:
         return LaunchConfig.load(path, root=workspace_root)
 
+    def from_values(
+        self,
+        values: Mapping[str, Any],
+        *,
+        workspace_root: str | Path,
+        source_name: str = "programmatic-launch",
+    ) -> LaunchConfig:
+        return LaunchConfig.from_values(
+            values, root=workspace_root, source_name=source_name
+        )
+
     def validate(
         self, path: str | Path, *, workspace_root: str | Path | None = None
     ) -> dict[str, Any]:
@@ -574,6 +751,17 @@ class LaunchConfigurationApplication:
             config, workspace_root=workspace_root, instance_id=instance_id
         )
 
+    def environment_config(
+        self,
+        config: LaunchConfig,
+        *,
+        workspace_root: str | Path,
+        instance_id: str = "default",
+    ) -> LaunchEnvironment:
+        return LaunchEnvironment.create(
+            config, workspace_root=workspace_root, instance_id=instance_id
+        )
+
 
 def _table(value: object, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
@@ -598,6 +786,24 @@ def _resolve_path(value: object, root: Path, name: str) -> Path:
         raise LaunchConfigError(f"{name} must be a non-empty path")
     path = Path(value).expanduser()
     return path.resolve() if path.is_absolute() else (root / path).resolve()
+
+
+def _time_nanos(value: object, name: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise LaunchConfigError(f"{name} cannot be negative")
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise LaunchConfigError(
+            f"{name} must be an ISO timestamp or integer nanoseconds"
+        )
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise LaunchConfigError(f"{name} must be an ISO timestamp") from error
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1_000_000_000)
 
 
 def _jsonable(value: object) -> object:

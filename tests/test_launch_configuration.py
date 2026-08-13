@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
 from kairospy.application.launch.application import (
+    BacktestSpec,
     LaunchConfigError,
     LaunchConfigurationApplication,
+    LaunchRuntimeApplication,
+    OptionBacktestConstraints,
+)
+from kairospy import Kairos
+from kairospy.application.data import DatasetRef, DatasetSetRef
+from kairospy.application.launch.application.wizard import (
+    LaunchDraft,
+    build_and_validate,
+    load_values,
 )
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
@@ -41,6 +52,96 @@ def test_launch_config_validates_and_explains_toml(tmp_path: Path) -> None:
     assert result["valid"] is True
     assert explanation["launch"]["id"] == "demo-launch"
     assert explanation["account_refs"] == ["paper-account"]
+
+
+def test_launch_config_supports_disabled_and_multiple_accounts(tmp_path: Path) -> None:
+    config = tmp_path / "manual.toml"
+    config.write_text(
+        """[launch]
+id = "manual"
+mode = "paper"
+strategy = "builtin:interactive"
+
+[accounts.main]
+ref = "main"
+enabled = true
+
+[accounts.secondary]
+ref = "secondary"
+enabled = false
+
+[execution]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+
+    plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
+    assert plan.account_refs == ("main",)
+    assert plan.execution["enabled"] is False
+
+
+def test_launch_draft_preserves_advanced_values_and_writes_valid_toml(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "manual.toml"
+    original = {
+        "launch": {"id": "old", "mode": "paper", "strategy": "old:Strategy"},
+        "strategy": {"params": {"symbol": "BTCUSDT"}},
+        "paper": {"events": "events.jsonl"},
+    }
+    updated = LaunchDraft(
+        launch_id="manual",
+        mode="paper",
+        strategy="builtin:interactive",
+        accounts=("main", "secondary"),
+        execution_enabled=False,
+    ).apply(original)
+
+    report = build_and_validate(path, updated, tmp_path)
+
+    assert report["valid"] is True
+    values = load_values(path)
+    assert values["launch"]["strategy"] == "builtin:interactive"
+    assert values["strategy"]["params"] == {"symbol": "BTCUSDT"}
+    assert values["paper"]["events"] == "events.jsonl"
+    assert values["accounts"]["account_2"]["ref"] == "secondary"
+
+
+def test_launch_draft_does_not_replace_existing_file_when_validation_fails(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "existing.toml"
+    path.write_text(
+        '[launch]\nid = "existing"\nmode = "paper"\nstrategy = "strategy:Factory"\n',
+        encoding="utf-8",
+    )
+    draft = LaunchDraft(
+        launch_id="broken",
+        mode="backtest",
+        strategy="strategy:Factory",
+        accounts=(),
+        execution_enabled=True,
+    )
+
+    with pytest.raises(LaunchConfigError):
+        build_and_validate(path, draft.apply({}), tmp_path)
+
+    assert 'id = "existing"' in path.read_text(encoding="utf-8")
+
+
+def test_launch_config_allows_zero_accounts(tmp_path: Path) -> None:
+    config = tmp_path / "market-only.toml"
+    config.write_text(
+        """[launch]
+id = "market-only"
+mode = "paper"
+strategy = "strategy:Factory"
+""",
+        encoding="utf-8",
+    )
+
+    assert LaunchConfigurationApplication().validate(config)["valid"] is True
 
 
 def test_launch_environment_writes_normalized_config_inside_instance(
@@ -115,6 +216,232 @@ def test_mode_plan_resolves_backtest_paths_and_defaults_execution(
     assert plan.backtest_data_root == (tmp_path / "data").resolve()
     assert plan.backtest_storage_format == "jsonl"
     assert plan.execution["dry_run"] is True
+
+
+def test_toml_and_backtest_spec_share_one_canonical_launch_plan(tmp_path: Path) -> None:
+    member = DatasetRef(
+        dataset_id="market.quote/SPY-options",
+        version="v1",
+        content_hash="abc123",
+        owner="market",
+        kind="quote",
+        subject="SPY-options",
+        start_time_unix_nanos=1,
+        end_time_unix_nanos=2,
+        event_count=2,
+        product="options",
+        source="fixture",
+    )
+    dataset_set = DatasetSetRef((member,))
+    config = tmp_path / "spy-put-spread.toml"
+    config.write_text(
+        f'''[launch]
+id = "spy-put-spread"
+mode = "backtest"
+strategy = "spy_put_spread.strategy:SpyPutSpread"
+
+[account]
+ref = "spy-options-paper"
+
+[risk]
+profile = "options-conservative"
+
+[backtest]
+seed = 42
+
+[backtest.option_constraints]
+hold_through_expiry = false
+assignment_enabled = false
+exercise_enabled = false
+naked_options_enabled = false
+zero_dte_enabled = false
+dynamic_delta_hedging_enabled = false
+avoid_short_dividend_window = true
+package_fill_required = true
+maximum_open_spreads = 1
+exit_before_expiry_days = 1
+dividend_buffer_days = 1
+
+[backtest.market]
+start = "2025-01-01T00:00:00Z"
+end = "2025-02-01T00:00:00Z"
+scope = "instance"
+profile = "replay"
+
+[backtest.data]
+composition_hash = "{dataset_set.composition_hash}"
+
+[backtest.data.composition_policy]
+
+[[backtest.data.members]]
+dataset_id = "{member.dataset_id}"
+version = "{member.version}"
+content_hash = "{member.content_hash}"
+owner = "{member.owner}"
+kind = "{member.kind}"
+subject = "{member.subject}"
+start_time_unix_nanos = {member.start_time_unix_nanos}
+end_time_unix_nanos = {member.end_time_unix_nanos}
+event_count = {member.event_count}
+schema_version = "{member.schema_version}"
+product = "{member.product}"
+source = "{member.source}"
+quality_status = "{member.quality_status}"
+''',
+        encoding="utf-8",
+    )
+    typed = BacktestSpec(
+        launch_id="spy-put-spread",
+        strategy="spy_put_spread.strategy:SpyPutSpread",
+        data=dataset_set,
+        account="spy-options-paper",
+        risk_profile="options-conservative",
+        start="2025-01-01T00:00:00Z",
+        end="2025-02-01T00:00:00Z",
+        seed=42,
+        option_constraints=OptionBacktestConstraints(),
+    )
+    application = LaunchConfigurationApplication()
+
+    toml_plan = application.plan(config, workspace_root=tmp_path)
+    typed_plan = typed.to_launch_config(workspace_root=tmp_path).plan()
+
+    assert typed_plan == toml_plan
+    assert typed_plan.normalized() == toml_plan.normalized()
+    assert typed_plan.backtest_dataset_set == dataset_set
+    assert typed_plan.backtest_seed == 42
+    assert typed_plan.risk_profile == "options-conservative"
+    constraints = typed_plan.mode_config["option_constraints"]
+    assert constraints["package_fill_required"] is True
+    assert constraints["hold_through_expiry"] is False
+
+
+def test_option_backtest_constraints_reject_unsupported_silent_approximations(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "unsupported-option-semantics.toml"
+    config.write_text(
+        """[launch]
+id = "unsupported-options"
+mode = "backtest"
+strategy = "strategy:Factory"
+
+[backtest]
+
+[backtest.market]
+start = "2025-01-01T00:00:00Z"
+end = "2025-01-02T00:00:00Z"
+
+[backtest.option_constraints]
+hold_through_expiry = true
+""",
+        encoding="utf-8",
+    )
+
+    report = LaunchConfigurationApplication().validate(config)
+
+    assert report["valid"] is False
+    assert "hold_through_expiry" in " ".join(report["issues"])
+    with pytest.raises(ValueError, match="does not support"):
+        OptionBacktestConstraints(zero_dte_enabled=True)
+    assert "package semantics" in " ".join(OptionBacktestConstraints().limitations)
+
+
+def test_cli_and_python_backtest_use_the_same_launch_runtime_application(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="shared-runtime"
+    )
+    config = workspace.paths.launch_config("cli-backtest")
+    config.write_text(
+        """[launch]
+id = "cli-backtest"
+mode = "backtest"
+strategy = "strategy:Factory"
+
+[backtest.market]
+start = "2025-01-01T00:00:00Z"
+end = "2025-01-02T00:00:00Z"
+scope = "instance"
+profile = "replay"
+""",
+        encoding="utf-8",
+    )
+    member = DatasetRef(
+        dataset_id="market.quote/SPY-options",
+        version="v1",
+        content_hash="abc123",
+        owner="market",
+        kind="quote",
+        subject="SPY-options",
+        start_time_unix_nanos=1,
+        end_time_unix_nanos=2,
+        event_count=2,
+    )
+    spec = BacktestSpec(
+        launch_id="python-backtest",
+        strategy="strategy:Factory",
+        data=DatasetSetRef((member,)),
+        account="simulated",
+        risk_profile="options-conservative",
+        start="2025-01-01T00:00:00Z",
+        end="2025-01-02T00:00:00Z",
+        seed=42,
+    )
+    starts: list[tuple[str, str]] = []
+
+    def fake_start(self, canonical, **_kwargs):
+        starts.append((self.workspace.identity.workspace_id, canonical.launch_id))
+        return {
+            "status": "running",
+            "launch_id": canonical.launch_id,
+            "instance_id": f"instance-{len(starts)}",
+            "normalized_config_hash": canonical.normalized_hash,
+        }
+
+    def fake_wait(self, launch_id, *, instance=None, timeout=3600.0):
+        del self, timeout
+        return {
+            "status": "completed",
+            "launch_id": launch_id,
+            "instance_id": instance,
+            "report": {"orders": 1},
+        }
+
+    monkeypatch.setattr(LaunchRuntimeApplication, "start", fake_start)
+    monkeypatch.setattr(LaunchRuntimeApplication, "wait", fake_wait)
+
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "start",
+                "cli-backtest",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    result = asyncio.run(Kairos(workspace).run_backtest(spec, timeout=5))
+
+    assert starts == [
+        ("shared-runtime", "cli-backtest"),
+        ("shared-runtime", "python-backtest"),
+    ]
+    assert json.loads(output.getvalue())["instance_id"] == "instance-1"
+    assert result.instance_id == "instance-2"
+    assert result.status == "completed"
+    assert result.report == {"orders": 1}
+    assert (
+        result.normalized_config_hash
+        == spec.to_launch_config(workspace_root=workspace.paths.root).normalized_hash
+    )
 
 
 def test_execution_routes_are_validated_without_inline_secrets(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-//! Public Reference read models used by snapshots and change events.
+//! Public Reference models used by SQLite payloads and change events.
 
 use std::collections::BTreeMap;
 
@@ -125,6 +125,12 @@ pub struct LifecycleEvent {
     pub current_status: Option<String>,
     pub previous_symbol: Option<String>,
     pub current_symbol: Option<String>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub record_payload_json: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

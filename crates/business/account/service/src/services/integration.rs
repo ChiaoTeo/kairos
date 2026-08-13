@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::application::{AccountMarketProfile, AccountMarketProfileRequest};
@@ -31,19 +31,23 @@ const ASYNC_ACCOUNT_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
-    markets: Arc<Vec<kairos_reference_contract::model::Market>>,
-    instruments: Arc<Vec<kairos_reference_contract::model::Instrument>>,
+    reader: Option<Arc<kairos_reference_contract::ReferenceSqliteReader>>,
+    cache: Arc<Mutex<BTreeMap<String, (InstrumentId, Option<kairos_domain_types::MarketId>)>>>,
+    cache_generation: Arc<Mutex<Option<u64>>>,
+    #[cfg(test)]
+    fixture_markets: Arc<Vec<kairos_reference_contract::ReferenceMarket>>,
+    #[cfg(test)]
+    fixture_instruments: Arc<Vec<kairos_reference_contract::model::Instrument>>,
 }
 
 impl AccountInstrumentResolver {
-    pub(crate) fn from_reference_snapshot(root: impl AsRef<Path>) -> Result<Self, String> {
-        let snapshot = kairos_reference_contract::ReferenceMmapSnapshotSetReader::open(root)
-            .map_err(|error| error.to_string())?
-            .read()
-            .map_err(|error| error.to_string())?;
+    pub(crate) fn from_reference_database(path: impl AsRef<Path>) -> Result<Self, String> {
         Ok(Self {
-            markets: Arc::new(snapshot.markets),
-            instruments: Arc::new(snapshot.instruments),
+            reader: Some(Arc::new(
+                kairos_reference_contract::ReferenceSqliteReader::open(path)
+                    .map_err(|error| error.to_string())?,
+            )),
+            ..Default::default()
         })
     }
 
@@ -51,10 +55,62 @@ impl AccountInstrumentResolver {
         &self,
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
+        let key = format!(
+            "{}|{}|{}",
+            provider.participant.id.to_ascii_lowercase(),
+            provider
+                .instrument_type
+                .as_ref()
+                .map(|value| value.as_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase(),
+            provider.source_symbol.as_str().to_ascii_uppercase()
+        );
+        if let Some(reader) = &self.reader {
+            let generation = reader
+                .watermark()
+                .map_err(|error| error.to_string())?
+                .generation;
+            let mut cached_generation = self
+                .cache_generation
+                .lock()
+                .map_err(|_| "Reference identity cache generation lock poisoned".to_string())?;
+            if *cached_generation != Some(generation) {
+                self.cache
+                    .lock()
+                    .map_err(|_| "Reference identity cache lock poisoned".to_string())?
+                    .clear();
+                *cached_generation = Some(generation);
+            }
+            if let Some(value) = self
+                .cache
+                .lock()
+                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
+                .get(&key)
+                .cloned()
+            {
+                return Ok(value);
+            }
+        }
+
+        let resolved = self.resolve_uncached(provider)?;
+        if self.reader.is_some() {
+            self.cache
+                .lock()
+                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
+                .insert(key, resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_uncached(
+        &self,
+        provider: &kairos_integration::application::ProviderInstrumentRef,
+    ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
         let symbol = provider.source_symbol.as_str();
         if provider.participant.id.eq_ignore_ascii_case("ibkr") {
-            let matches = self
-                .instruments
+            let instruments = self.instruments(symbol, "equity")?;
+            let matches = instruments
                 .iter()
                 .filter(|value| {
                     value.symbol.eq_ignore_ascii_case(symbol)
@@ -78,8 +134,8 @@ impl AccountInstrumentResolver {
             .map(|value| value.as_str())
             .unwrap_or_default();
         let exchange = format!("exchange:{}", provider.participant.id.to_ascii_lowercase());
-        let matches = self
-            .markets
+        let markets = self.markets(symbol, &exchange)?;
+        let matches = markets
             .iter()
             .filter(|value| {
                 value.exchange_id.eq_ignore_ascii_case(&exchange)
@@ -97,6 +153,66 @@ impl AccountInstrumentResolver {
                 market.market_id.clone(),
             )?),
         ))
+    }
+
+    fn markets(
+        &self,
+        source_symbol: &str,
+        exchange_id: &str,
+    ) -> Result<Vec<kairos_reference_contract::ReferenceMarket>, String> {
+        #[cfg(test)]
+        if self.reader.is_none() {
+            return Ok(self.fixture_markets.as_ref().clone());
+        }
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
+        reader
+            .markets(&kairos_reference_contract::SqliteMarketQuery {
+                source_symbol: Some(source_symbol.to_owned()),
+                exchange_id: Some(exchange_id.to_owned()),
+                statuses: vec!["active".into(), "trading".into()],
+                limit: 100,
+                ..Default::default()
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn instruments(
+        &self,
+        symbol: &str,
+        instrument_type: &str,
+    ) -> Result<Vec<kairos_reference_contract::model::Instrument>, String> {
+        #[cfg(test)]
+        if self.reader.is_none() {
+            return Ok(self.fixture_instruments.as_ref().clone());
+        }
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
+        reader
+            .instruments(&kairos_reference_contract::SqliteInstrumentQuery {
+                symbol: Some(symbol.to_owned()),
+                instrument_type: Some(instrument_type.to_owned()),
+                statuses: vec!["active".into(), "trading".into()],
+                limit: 100,
+                ..Default::default()
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
+    fn fixture(
+        markets: Vec<kairos_reference_contract::ReferenceMarket>,
+        instruments: Vec<kairos_reference_contract::model::Instrument>,
+    ) -> Self {
+        Self {
+            fixture_markets: Arc::new(markets),
+            fixture_instruments: Arc::new(instruments),
+            ..Default::default()
+        }
     }
 }
 
@@ -569,8 +685,8 @@ fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
     }
 }
 
-fn signed_quantity(value: ExternalDecimal) -> SignedQuantity {
-    SignedQuantity::new(value.mantissa, value.scale)
+fn signed_quantity(value: ExternalDecimal) -> Result<SignedQuantity, String> {
+    SignedQuantity::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
 fn quantity(value: ExternalDecimal) -> Result<kairos_domain_types::Quantity, String> {
@@ -582,23 +698,23 @@ fn price(value: ExternalDecimal) -> Result<kairos_domain_types::Price, String> {
     kairos_domain_types::Price::new(value.mantissa, value.scale).map_err(|error| error.to_string())
 }
 
-fn money(value: ExternalDecimal) -> Money {
-    Money::new(value.mantissa, value.scale)
+fn money(value: ExternalDecimal) -> Result<Money, String> {
+    Money::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
-fn rate(value: ExternalDecimal) -> kairos_domain_types::Rate {
-    kairos_domain_types::Rate::new(value.mantissa, value.scale)
+fn rate(value: ExternalDecimal) -> Result<kairos_domain_types::Rate, String> {
+    kairos_domain_types::Rate::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
 fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
     Ok(Balance {
         asset_id: AssetId::new(value.asset_id.to_string()).expect("validated asset id"),
         asset_code: value.asset_code,
-        total: signed_quantity(value.total),
-        available: value.available.map(signed_quantity),
-        locked: value.locked.map(signed_quantity),
-        borrowed: value.borrowed.map(signed_quantity),
-        interest: value.interest.map(signed_quantity),
+        total: signed_quantity(value.total)?,
+        available: value.available.map(signed_quantity).transpose()?,
+        locked: value.locked.map(signed_quantity).transpose()?,
+        borrowed: value.borrowed.map(signed_quantity).transpose()?,
+        interest: value.interest.map(signed_quantity).transpose()?,
     })
 }
 
@@ -610,11 +726,11 @@ fn map_position(
     Ok(Position {
         instrument_id,
         market_id,
-        quantity: signed_quantity(value.quantity),
+        quantity: signed_quantity(value.quantity)?,
         average_price: value.average_price.map(price).transpose()?,
         mark_price: value.mark_price.map(price).transpose()?,
-        unrealized_pnl: value.unrealized_pnl.map(money),
-        realized_pnl: value.realized_pnl.map(money),
+        unrealized_pnl: value.unrealized_pnl.map(money).transpose()?,
+        realized_pnl: value.realized_pnl.map(money).transpose()?,
         updated_at_unix_nanos: value.updated_at_unix_nanos,
     })
 }
@@ -648,9 +764,9 @@ fn map_snapshot(
             .collect::<Result<_, _>>()?,
         status: map_status(value.status),
         observed_at_unix_nanos: value.observed_at_unix_nanos,
-        equity: value.equity.map(money),
-        initial_equity: value.initial_equity.map(money),
-        net_profit: value.net_profit.map(money),
+        equity: value.equity.map(money).transpose()?,
+        initial_equity: value.initial_equity.map(money).transpose()?,
+        net_profit: value.net_profit.map(money).transpose()?,
         account_model: value.account_model.map(map_model),
         margin_mode: value.margin_mode.map(map_margin),
         position_mode: value.position_mode.map(map_position_mode),
@@ -800,10 +916,10 @@ fn map_profile(
             "hedge" => Some(PositionMode::Hedge),
             _ => None,
         }),
-        maker_fee: value.maker_fee.map(rate),
-        taker_fee: value.taker_fee.map(rate),
+        maker_fee: value.maker_fee.map(rate).transpose()?,
+        taker_fee: value.taker_fee.map(rate).transpose()?,
         fee_currency: value.fee_currency,
-        fee_discount: value.fee_discount.map(rate),
+        fee_discount: value.fee_discount.map(rate).transpose()?,
         fee_tier: value.fee_tier,
         source: value.source,
         observed_at_unix_nanos: value.observed_at_unix_nanos,
@@ -816,22 +932,36 @@ mod identity_tests {
     use kairos_integration::application::{
         ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef, ProviderInstrumentRef,
     };
-    use std::sync::Arc;
 
     #[test]
     fn resolves_exchange_symbol_only_through_reference_market() {
-        let resolver = AccountInstrumentResolver {
-            markets: Arc::new(vec![kairos_reference_contract::model::Market {
+        let resolver = AccountInstrumentResolver::fixture(
+            vec![kairos_reference_contract::ReferenceMarket {
+                source_id: Some("binance-spot".into()),
                 market_id: "market:binance:spot:BTCUSDT".into(),
+                market_key: "BTCUSDT".into(),
                 instrument_id: "instrument:spot:BTC".into(),
+                listing_id: "listing:binance:spot:BTCUSDT".into(),
                 exchange_id: "exchange:binance".into(),
                 market_type: "spot".into(),
                 source_symbol: "BTCUSDT".into(),
                 status: "active".into(),
-                ..Default::default()
-            }]),
-            instruments: Arc::default(),
-        };
+                asset_type: None,
+                base_asset_id: None,
+                quote_asset_id: None,
+                underlying_instrument_id: None,
+                price_tick: None,
+                quantity_tick: None,
+                minimum_quantity: None,
+                minimum_notional: None,
+                price_precision: 0,
+                quantity_precision: 0,
+                contract_size: None,
+                effective_from_unix_nanos: 0,
+                effective_to_unix_nanos: None,
+            }],
+            Vec::new(),
+        );
         let provider = ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("binance-spot").unwrap()),
@@ -849,16 +979,16 @@ mod identity_tests {
 
     #[test]
     fn resolves_ibkr_equity_to_reference_instrument_without_fabricating_market() {
-        let resolver = AccountInstrumentResolver {
-            markets: Arc::default(),
-            instruments: Arc::new(vec![kairos_reference_contract::model::Instrument {
+        let resolver = AccountInstrumentResolver::fixture(
+            Vec::new(),
+            vec![kairos_reference_contract::model::Instrument {
                 instrument_id: "instrument:equity:US:AAPL:common".into(),
                 symbol: "AAPL".into(),
                 instrument_type: "equity".into(),
                 status: "active".into(),
                 ..Default::default()
-            }]),
-        };
+            }],
+        );
         let provider = ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Broker, "ibkr").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("equity").unwrap()),

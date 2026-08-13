@@ -381,20 +381,21 @@ fn compare_snapshot(
             .collect()
     };
     for key in order_keys {
-        let local = state
-            .open_orders()
-            .get(&key)
-            .map(|value| SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale()));
-        let external = external_orders
-            .get(&key)
-            .map(|value| SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale()));
+        let local = state.open_orders().get(&key).map(|value| {
+            SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale())
+                .expect("validated order quantity")
+        });
+        let external = external_orders.get(&key).map(|value| {
+            SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale())
+                .expect("validated order quantity")
+        });
         if local.is_none() || external.is_none() {
             compare_decimal(
                 &mut differences,
                 "open_order.present",
                 key.to_string(),
-                local.map(|_| SignedQuantity::new(1, 0)),
-                external.map(|_| SignedQuantity::new(1, 0)),
+                local.map(|_| SignedQuantity::new(1, 0).expect("valid presence marker")),
+                external.map(|_| SignedQuantity::new(1, 0).expect("valid presence marker")),
             );
         } else {
             compare_decimal(

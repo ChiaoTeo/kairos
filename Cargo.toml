@@ -20,13 +20,13 @@ members = [
 ]
 
 [workspace.dependencies]
-async-trait = "0.1"
 criterion = "0.8"
 opentelemetry = { version = "0.31", default-features = false, features = ["trace", "metrics"] }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "metrics"] }
 proptest = "1.11"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "query", "gzip", "rustls"] }
+rusqlite = { version = "0.39", default-features = false }
 secrecy = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "macros", "migrate", "time"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "native-tls"] }

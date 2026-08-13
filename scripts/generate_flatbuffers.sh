@@ -58,9 +58,6 @@ flatc -I "$schema_root" --python -o "$python_stage" \
   "$schema_root/risk/v1/reservation_event.fbs" \
   "$schema_root/intent/v1/types.fbs" \
   "$schema_root/system/v1/types.fbs" \
-  "$schema_root/projection/reference/v1/catalog.fbs" \
-  "$schema_root/projection/reference/v1/markets.fbs" \
-  "$schema_root/projection/reference/v1/collections.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \
   "$schema_root/projection/market/v1/orderbook.fbs" \
   "$schema_root/projection/market/v1/history.fbs" \
@@ -111,9 +108,6 @@ for schema in \
   "$schema_root/risk/v1/reservation_event.fbs" \
   "$schema_root/intent/v1/types.fbs" \
   "$schema_root/system/v1/types.fbs" \
-  "$schema_root/projection/reference/v1/catalog.fbs" \
-  "$schema_root/projection/reference/v1/markets.fbs" \
-  "$schema_root/projection/reference/v1/collections.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \
   "$schema_root/projection/market/v1/orderbook.fbs" \
   "$schema_root/projection/market/v1/history.fbs" \
@@ -146,5 +140,8 @@ find "$rust_stage" -type f -name '*.rs' -print0 \
   | xargs -0 rustfmt --edition 2021
 
 mkdir -p "$python_out/kairos" "$rust_out/kairos"
-cp -R "$python_stage/kairos/." "$python_out/kairos/"
-cp -R "$rust_stage/kairos/." "$rust_out/kairos/"
+# The generated trees are exact schema projections. `--delete` removes stale
+# message types after a schema is retired instead of leaving an accidental
+# compatibility surface in source control.
+rsync -a --delete "$python_stage/kairos/" "$python_out/kairos/"
+rsync -a --delete "$rust_stage/kairos/" "$rust_out/kairos/"

@@ -1,12 +1,11 @@
 """Private strategy runtime services selected by composition."""
 
 from .fakes import (
-    InMemoryContextBus,
+    InMemoryApplicationPorts,
     InMemoryEventStream,
     InMemoryLifecycleJournal,
-    InMemorySnapshotReader,
+    InMemoryMarketSnapshotReader,
 )
-from .bus import StrategyContextBus
 from .composition import StrategyProcessComposition, compose_strategy_process
 from .context import StrategyClientBundle, StrategyContext
 from .host import StrategyHost, StrategyHostStatus
@@ -15,13 +14,12 @@ from .loader import StrategyEntrypoint, load_strategy
 from .rest import StrategyControlServer
 
 __all__ = [
-    "InMemoryContextBus",
+    "InMemoryApplicationPorts",
     "InMemoryEventStream",
     "InMemoryLifecycleJournal",
-    "InMemorySnapshotReader",
+    "InMemoryMarketSnapshotReader",
     "StrategyClientBundle",
     "StrategyContext",
-    "StrategyContextBus",
     "StrategyControlServer",
     "StrategyEntrypoint",
     "StrategyHost",

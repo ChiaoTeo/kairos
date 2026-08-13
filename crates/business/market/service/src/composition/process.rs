@@ -4,8 +4,9 @@ use kairos_protocol::InstanceIdentity;
 use kairos_workspace::Workspace;
 
 use crate::application::{load_replay_events, MarketProcessSettings};
+use crate::services::history::{HistoryCollectionSpec, JsonlMarketHistoryRecorder};
 use crate::services::sources::load_actor_checkpoint;
-use crate::{MarketApplication, MarketProcess};
+use crate::{MarketApplication, MarketDescriptor, MarketProcess, SubscriptionId};
 
 use super::{
     attach_replay_source_with_policy, MarketProcessRequest, MarketRuntimeProfile,
@@ -97,8 +98,8 @@ pub async fn build_market_process(
                 .process_socket("market-events")
                 .map_err(MarketStartupError::new)?,
         );
-    let reference_snapshot = workspace
-        .child(&["snapshots", "reference", "markets.snapshot"])
+    let reference_database = workspace
+        .child(&["reference", "reference.sqlite"])
         .map_err(MarketStartupError::new)?;
 
     if let Some(parent) = snapshot_path.parent() {
@@ -162,6 +163,87 @@ pub async fn build_market_process(
         | MarketRuntimeScope::Diagnostic => {}
     }
 
+    let mut history_specs = Vec::new();
+    if profile.scope != MarketRuntimeScope::Replay {
+        for (name, collection) in &workspace.market_config().collections {
+            if !collection.enabled {
+                continue;
+            }
+            if name.trim().is_empty()
+                || name == "."
+                || name == ".."
+                || name.contains('/')
+                || name.contains('\\')
+                || collection.subject.trim().is_empty()
+            {
+                return Err(MarketStartupError::new(format!(
+                    "invalid Market collection identity: {name}"
+                )));
+            }
+            if collection.queue_capacity == 0 {
+                return Err(MarketStartupError::new(format!(
+                    "Market collection {name} queue_capacity must be positive"
+                )));
+            }
+            let exchange = collection.exchange.as_deref().unwrap_or("binance");
+            let market_type = collection.market_type.as_deref().unwrap_or("spot");
+            let source_symbol = collection
+                .subject
+                .strip_prefix("market.")
+                .unwrap_or(&collection.subject);
+            let market_id = format!("market:{exchange}:{market_type}:{source_symbol}");
+            let instrument_id = format!("instrument:{exchange}:{market_type}:{source_symbol}");
+            let mut descriptor = MarketDescriptor::new(
+                market_id,
+                instrument_id,
+                exchange,
+                market_type,
+                source_symbol,
+            )
+            .map_err(MarketStartupError::new)?;
+            descriptor.asset_type = collection.asset_type.clone();
+            if let Some(source_id) = &collection.source_id {
+                descriptor = descriptor
+                    .with_source(source_id.clone())
+                    .map_err(MarketStartupError::new)?;
+            }
+            let subscription_id = SubscriptionId::new(format!("collection:{name}"))
+                .map_err(MarketStartupError::new)?;
+            let owner_id = serde_json::to_string(&serde_json::json!(["collection", name]))
+                .map_err(MarketStartupError::new)?;
+            application
+                .subscribe_static_with_selectors(
+                    subscription_id,
+                    owner_id,
+                    descriptor.clone(),
+                    collection.selectors.clone(),
+                )
+                .map_err(MarketStartupError::new)?;
+            history_specs.push(HistoryCollectionSpec {
+                name: name.clone(),
+                market_id: descriptor.market_id.to_string(),
+                selectors: collection.selectors.clone(),
+                root: workspace
+                    .data_root()
+                    .join("market")
+                    .join("collections")
+                    .join(name),
+                queue_capacity: collection.queue_capacity,
+            });
+        }
+        if !history_specs.is_empty() {
+            let mut activator = WorkspaceMarketSourceActivator::new(workspace.clone());
+            application
+                .activate_sources_for_subscriptions(&mut activator)
+                .await
+                .map_err(MarketStartupError::new)?;
+            application
+                .sync_source_subscriptions()
+                .await
+                .map_err(MarketStartupError::new)?;
+        }
+    }
+
     let publisher = MmapMarketSnapshotPublisher::create_with_identity(
         &snapshot_path,
         SNAPSHOT_SLOT_SIZE,
@@ -178,7 +260,7 @@ pub async fn build_market_process(
         shutdown_timeout: profile.shutdown_timeout,
         publication_queue_capacity: profile.publication_queue_capacity,
     };
-    MarketProcess::new_configured_with_activator(
+    let mut process = MarketProcess::new_configured_with_activator(
         application,
         publisher,
         socket_path,
@@ -188,10 +270,16 @@ pub async fn build_market_process(
         (profile.scope != MarketRuntimeScope::Replay)
             .then(|| Box::new(WorkspaceMarketSourceActivator::new(workspace.clone())) as Box<_>),
     )
-    .map(|process| {
-        process
-            .with_reference_snapshot(reference_snapshot)
-            .with_lifecycle_guard(process_lock)
-    })
-    .map_err(MarketStartupError::new)
+    .map_err(MarketStartupError::new)?;
+    if !history_specs.is_empty() {
+        process = process.with_history_recorder(
+            JsonlMarketHistoryRecorder::spawn(history_specs).map_err(MarketStartupError::new)?,
+        );
+    }
+    // A static replay resolves subscriptions from its explicit request and
+    // must remain independent of the live Reference/Aeron runtime.
+    if profile.scope != MarketRuntimeScope::Replay {
+        process = process.with_reference_database(reference_database);
+    }
+    Ok(process.with_lifecycle_guard(process_lock))
 }

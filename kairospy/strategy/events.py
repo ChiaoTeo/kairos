@@ -1,24 +1,52 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal, Mapping, TypeAlias
+
+from kairospy.domain_types import DataEvent, EventMetadata
+
+from .clock import TimerEvent
 
 
 @dataclass(frozen=True, slots=True)
-class EventEnvelope:
-    """Stable event shape delivered to a strategy callback."""
+class TimerFiredEvent(DataEvent[TimerEvent]):
+    kind: Literal["timer"] = field(init=False, default="timer")
 
-    stream_id: str
-    sequence: int
-    domain: str
-    kind: str
-    payload: object
-    occurred_at: datetime | None = None
 
-    def __post_init__(self) -> None:
-        if not self.stream_id.strip():
-            raise ValueError("event stream_id is required")
-        if self.sequence <= 0:
-            raise ValueError("event sequence must be positive")
-        if not self.domain.strip() or not self.kind.strip():
-            raise ValueError("event domain and kind are required")
+@dataclass(frozen=True, slots=True)
+class ClockAdvance:
+    occurred_at: datetime
+    source: str = "runtime"
+
+
+@dataclass(frozen=True, slots=True)
+class ClockAdvancedEvent(DataEvent[ClockAdvance]):
+    kind: Literal["advance"] = field(init=False, default="advance")
+
+
+ClockEvent: TypeAlias = TimerFiredEvent | ClockAdvancedEvent
+
+
+@dataclass(frozen=True, slots=True)
+class SystemNotice:
+    code: str
+    message: str
+    details: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class SystemEvent(DataEvent[SystemNotice]):
+    kind: Literal["system"] = field(init=False, default="system")
+
+
+__all__ = [
+    "ClockAdvance",
+    "ClockAdvancedEvent",
+    "ClockEvent",
+    "DataEvent",
+    "EventMetadata",
+    "SystemEvent",
+    "SystemNotice",
+    "TimerFiredEvent",
+]

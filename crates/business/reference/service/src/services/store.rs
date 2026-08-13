@@ -1,13 +1,37 @@
 //! Persistence seams owned by the Reference application.
 
 use crate::domain::{LifecycleEvent, ProviderCatalog, ReferenceCatalog, ReferenceResult};
-use async_trait::async_trait;
+
+#[derive(Debug)]
+pub(crate) struct NormalizedRefresh {
+    pub generation: kairos_domain_types::Generation,
+    pub event_sequence: kairos_domain_types::Sequence,
+    pub market_count: usize,
+    pub changed: bool,
+    pub event_count: usize,
+}
+
+#[cfg_attr(test, allow(dead_code))]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CatalogState {
+    pub generation: kairos_domain_types::Generation,
+    pub event_sequence: kairos_domain_types::Sequence,
+    pub market_count: usize,
+}
 
 /// Internal persistence seam. The application owns the use case; storage
 /// implementations remain selected by composition.
-#[async_trait]
 pub(crate) trait CatalogStore: Send {
     async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>>;
+    #[cfg_attr(test, allow(dead_code))]
+    async fn load_state(&mut self) -> ReferenceResult<CatalogState> {
+        let catalog = self.load().await?.unwrap_or_default();
+        Ok(CatalogState {
+            generation: catalog.generation,
+            event_sequence: catalog.event_sequence,
+            market_count: catalog.markets.len(),
+        })
+    }
     /// Atomically persist current state, lifecycle history, and publication
     /// outbox rows. Implementations must not expose a partially committed
     /// refresh if this operation fails.
@@ -16,6 +40,14 @@ pub(crate) trait CatalogStore: Send {
         catalog: &ReferenceCatalog,
         events: &[LifecycleEvent],
     ) -> ReferenceResult<()>;
+
+    async fn reconcile_provider_facts(
+        &mut self,
+        _overlay: &ProviderCatalog,
+        _now: kairos_domain_types::UnixNanos,
+    ) -> ReferenceResult<Option<NormalizedRefresh>> {
+        Ok(None)
+    }
 
     async fn pending_events(&mut self, _limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
         Ok(Vec::new())
@@ -65,7 +97,6 @@ pub(crate) trait CatalogStore: Send {
 /// Durable provider cursor state. It is deliberately separate from the
 /// business catalog: a page cursor is operational progress, not a reference
 /// entity, and must survive a process restart without being published.
-#[async_trait]
 pub(crate) trait ProviderSyncStore: Send {
     async fn load_state(
         &mut self,
@@ -84,6 +115,10 @@ pub(crate) trait ProviderSyncStore: Send {
         _provider: &str,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         Ok(None)
+    }
+
+    async fn has_last_good(&mut self, provider: &str) -> ReferenceResult<bool> {
+        Ok(self.load_last_good(provider).await?.is_some())
     }
 
     async fn save_last_good(
@@ -115,6 +150,23 @@ pub(crate) trait ProviderSyncStore: Send {
         Ok(())
     }
 
+    fn supports_normalized_promotion(&self) -> bool {
+        false
+    }
+
+    /// Marks one completed staged scan for Actor-controlled promotion. The
+    /// CatalogStore consumes it in the same transaction as canonical rows,
+    /// lifecycle rows and watermarks.
+    async fn promote_staged(&mut self, _provider: &str) -> ReferenceResult<()> {
+        Err(crate::domain::ReferenceError::Persistence(
+            "normalized provider promotion is not supported by this store".into(),
+        ))
+    }
+
+    async fn remove_last_good(&mut self, _provider: &str) -> ReferenceResult<()> {
+        Ok(())
+    }
+
     async fn paused_sources(&mut self) -> ReferenceResult<Vec<String>> {
         Ok(Vec::new())
     }
@@ -135,6 +187,24 @@ pub(crate) trait ProviderSyncStore: Send {
         _provider: &str,
         _underlying: &str,
         _enabled: bool,
+    ) -> ReferenceResult<()> {
+        Ok(())
+    }
+}
+
+impl ProviderSyncStore for () {
+    async fn load_state(
+        &mut self,
+        _provider: &str,
+    ) -> ReferenceResult<Option<(Option<String>, Option<ProviderCatalog>)>> {
+        Ok(None)
+    }
+
+    async fn save_state(
+        &mut self,
+        _provider: &str,
+        _cursor: Option<&str>,
+        _accumulated: Option<&ProviderCatalog>,
     ) -> ReferenceResult<()> {
         Ok(())
     }

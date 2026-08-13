@@ -1002,6 +1002,12 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self.publish_snapshots()?;
         while !self.stopping {
             let now = now_unix_nanos();
+            let business_now = self
+                .simulator
+                .as_ref()
+                .and_then(|simulator| simulator.business_time())
+                .map(kairos_domain_types::UnixNanos::get)
+                .unwrap_or(now);
             let recovery_targets = resync_targets(&self.route_readiness);
             let recovery_required = !recovery_targets.is_empty();
             if self.application.has_order_query()
@@ -1055,13 +1061,13 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             }
             if self
                 .application
-                .advance_due_intent_orders(now_unix_nanos(), EXCHANGE_BATCH_LIMIT)?
+                .advance_due_intent_orders(business_now, EXCHANGE_BATCH_LIMIT)?
                 > 0
             {
                 self.flush_events()?;
                 self.publish_snapshots()?;
             }
-            if self.application.expire_due_intents(now_unix_nanos())? > 0 {
+            if self.application.expire_due_intents(business_now)? > 0 {
                 self.flush_events()?;
                 self.publish_snapshots()?;
             }
@@ -1190,6 +1196,15 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         if simulator.order(&order.order_id).is_some() {
             return Ok(());
         }
+        // A standalone simulator test or manual paper order may be created
+        // before any replay clock exists.  Its wall-clock submission time
+        // must not make a synthetic historical quote at t=42 ineligible.
+        // Once replay has established a business time, preserve the order's
+        // causal timestamp for look-ahead protection.
+        let submitted_at_unix_nanos = simulator
+            .business_time()
+            .map(|_| order.submitted_at_unix_nanos)
+            .unwrap_or_default();
         simulator
             .submit(SimulationOrderRequest {
                 order_id: kairos_domain_types::OrderId::new(order.order_id.to_string())
@@ -1210,12 +1225,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     .map(|price| kairos_domain_types::Price::new(price.mantissa(), price.scale()))
                     .transpose()
                     .map_err(|error| error.to_string())?,
-                // Execution's lifecycle timestamp is wall-clock based, while
-                // replay observations use dataset time.  The StrategyHost
-                // forwards the current observation immediately after the
-                // intent, so the simulator must not compare those unrelated
-                // clocks here.
-                submitted_at_unix_nanos: 0.into(),
+                // The order carries the causal intent's business time.  A
+                // manual/live order falls back to the processing-time value
+                // assigned by ExecutionApplication.
+                submitted_at_unix_nanos,
             })
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1228,6 +1241,24 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         let Some(simulator) = self.simulator.as_mut() else {
             return Err("execution simulator is not enabled".into());
         };
+        let event_time = match &event {
+            kairos_market_contract::model::MarketObservation::Quote(value) => {
+                value.observed_at_unix_nanos
+            }
+            kairos_market_contract::model::MarketObservation::Bar(value) => {
+                value.observed_at_unix_nanos
+            }
+            kairos_market_contract::model::MarketObservation::TradeBar(value) => {
+                value.bar.observed_at_unix_nanos
+            }
+            kairos_market_contract::model::MarketObservation::QuoteBar(value) => {
+                value.bar.observed_at_unix_nanos
+            }
+            _ => 0,
+        };
+        if event_time != 0 {
+            simulator.set_business_time(event_time.into());
+        }
         simulator.apply_market_event(event)?;
         let fills = simulator.take_fills();
         for fill in &fills {
@@ -1259,6 +1290,27 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                 json!({"status":status,"pid":std::process::id(),"actor_id":self.application.snapshot().actor_id,"generation":self.application.snapshot().generation,"event_sequence":self.application.snapshot().event_sequence,"order_count":self.application.snapshot().orders.len(),"dependency_watermarks":self.application.dependency_watermarks(),"routes":routes,"runtime_metrics":self.metrics.snapshot()})
             }),
             SNAPSHOT_PATH => (200, serde_json::to_value(self.application.snapshot())?),
+            "/v1/time/advance" => {
+                let value: serde_json::Value = serde_json::from_str(body)?;
+                let event_time = value
+                    .get("event_time_unix_nanos")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or("event_time_unix_nanos is required")?;
+                if let Some(current) = self
+                    .simulator
+                    .as_ref()
+                    .and_then(ExecutionSimulator::business_time)
+                {
+                    if event_time < current.get() {
+                        return Err("execution business time cannot move backwards".into());
+                    }
+                }
+                self.application.advance_time(event_time)?;
+                if let Some(simulator) = self.simulator.as_mut() {
+                    simulator.set_business_time(event_time.into());
+                }
+                (200, json!({"event_time_unix_nanos": event_time}))
+            }
             "/v1/intents" => (200, json!({"intents": self.application.intents()})),
             "/v1/intent" => match self
                 .application

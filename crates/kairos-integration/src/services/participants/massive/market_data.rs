@@ -115,6 +115,7 @@ impl HistoricalMarketDataConnection for MassiveHistoricalMarketData {
                 timespan,
                 (request.start_time_unix_nanos.get() / 1_000_000) as i64,
                 (request.end_time_unix_nanos.get() / 1_000_000) as i64,
+                request.adjusted.unwrap_or(false),
             )
             .map_err(IntegrationError::Transport)?;
         normalize_historical(rows, request, interval, self.market_type)
@@ -131,36 +132,121 @@ impl AsyncHistoricalMarketDataConnection for MassiveAsyncHistoricalMarketData {
         request: &HistoricalMarketRequest,
     ) -> Result<Vec<MarketEvent>, IntegrationError> {
         request.validate()?;
-        if !matches!(
-            request.data_kind,
-            MarketDataKind::Bar | MarketDataKind::TradeBar
-        ) {
-            return Err(IntegrationError::UnsupportedOperation);
+        match request.data_kind {
+            MarketDataKind::Bar | MarketDataKind::TradeBar => {
+                let interval = request.interval.as_deref().unwrap_or("1m");
+                let (multiplier, timespan) = parse_interval(interval)?;
+                let rows = self
+                    .client
+                    .historical_bars(
+                        request.symbol.as_str(),
+                        multiplier,
+                        timespan,
+                        (request.start_time_unix_nanos.get() / 1_000_000) as i64,
+                        (request.end_time_unix_nanos.get() / 1_000_000) as i64,
+                        request.adjusted.unwrap_or(false),
+                    )
+                    .await
+                    .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+                normalize_historical(rows, request, interval, self.market_type)
+            }
+            MarketDataKind::Quote => {
+                let rows = self
+                    .client
+                    .historical_quotes(
+                        request.symbol.as_str(),
+                        request.start_time_unix_nanos.get(),
+                        request.end_time_unix_nanos.get(),
+                    )
+                    .await
+                    .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+                normalize_historical_quotes(rows, request)
+            }
+            MarketDataKind::Trade => {
+                let rows = self
+                    .client
+                    .historical_trades(
+                        request.symbol.as_str(),
+                        request.start_time_unix_nanos.get(),
+                        request.end_time_unix_nanos.get(),
+                    )
+                    .await
+                    .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+                normalize_historical_trades(rows, request)
+            }
+            _ => Err(IntegrationError::UnsupportedOperation),
         }
-        let interval = request.interval.as_deref().unwrap_or("1m");
-        let (multiplier, timespan) = parse_interval(interval)?;
-        let rows = self
-            .client
-            .historical_bars(
-                request.symbol.as_str(),
-                multiplier,
-                timespan,
-                (request.start_time_unix_nanos.get() / 1_000_000) as i64,
-                (request.end_time_unix_nanos.get() / 1_000_000) as i64,
-            )
-            .await
-            .map_err(|error| IntegrationError::Transport(error.to_string()))?;
-        normalize_historical(rows, request, interval, self.market_type)
     }
 }
 
 fn historical_capabilities() -> MarketStreamCapabilities {
     MarketStreamCapabilities {
-        historical: [MarketDataKind::Bar, MarketDataKind::TradeBar]
-            .into_iter()
-            .collect(),
+        historical: [
+            MarketDataKind::Bar,
+            MarketDataKind::TradeBar,
+            MarketDataKind::Quote,
+            MarketDataKind::Trade,
+        ]
+        .into_iter()
+        .collect(),
         ..Default::default()
     }
+}
+
+fn normalize_historical_quotes(
+    rows: Vec<crate::services::participants::massive::connection::MassiveHistoricalQuote>,
+    request: &HistoricalMarketRequest,
+) -> Result<Vec<MarketEvent>, IntegrationError> {
+    rows.into_iter()
+        .map(|row| {
+            Ok(MarketEvent {
+                symbol: Symbol::new(request.symbol.as_str())
+                    .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+                kind: MarketEventKind::Quote,
+                price: parse_optional::<Price>(row.bid_price.or_else(|| row.ask_price.clone()))?,
+                quantity: parse_optional::<Quantity>(row.bid_size)?,
+                rate: None,
+                ask_price: parse_optional::<Price>(row.ask_price)?,
+                ask_quantity: parse_optional::<Quantity>(row.ask_size)?,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: None,
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: row.sequence_number.map(Sequence::new),
+                observed_at_unix_nanos: row.sip_timestamp_unix_nanos.into(),
+            })
+        })
+        .collect()
+}
+
+fn normalize_historical_trades(
+    rows: Vec<crate::services::participants::massive::connection::MassiveHistoricalTrade>,
+    request: &HistoricalMarketRequest,
+) -> Result<Vec<MarketEvent>, IntegrationError> {
+    rows.into_iter()
+        .map(|row| {
+            Ok(MarketEvent {
+                symbol: Symbol::new(request.symbol.as_str())
+                    .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+                kind: MarketEventKind::Trade,
+                price: Some(parse_required::<Price>(Some(row.price))?),
+                quantity: Some(parse_required::<Quantity>(Some(row.size))?),
+                rate: None,
+                ask_price: None,
+                ask_quantity: None,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: None,
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: row.sequence_number.map(Sequence::new),
+                observed_at_unix_nanos: row.sip_timestamp_unix_nanos.into(),
+            })
+        })
+        .collect()
 }
 
 fn normalize_historical(

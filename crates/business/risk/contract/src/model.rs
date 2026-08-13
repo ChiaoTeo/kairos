@@ -2,10 +2,80 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Amount {
     pub mantissa: i64,
     pub scale: u8,
+}
+
+impl Serialize for Amount {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.scale > 18 {
+            return Err(serde::ser::Error::custom("decimal scale exceeds 18 digits"));
+        }
+        let negative = self.mantissa < 0;
+        let magnitude = i128::from(self.mantissa).abs();
+        let value = if self.scale == 0 {
+            format!("{}{magnitude}", if negative { "-" } else { "" })
+        } else {
+            let factor = 10_i128.pow(u32::from(self.scale));
+            format!(
+                "{}{whole}.{fraction:0width$}",
+                if negative { "-" } else { "" },
+                whole = magnitude / factor,
+                fraction = magnitude % factor,
+                width = usize::from(self.scale)
+            )
+        };
+        serializer.serialize_str(&value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let (negative, unsigned) = value
+            .strip_prefix('-')
+            .map_or((false, value.as_str()), |value| (true, value));
+        let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        if whole.is_empty()
+            || fraction.len() > 18
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(serde::de::Error::custom(
+                "expected a decimal string with at most 18 fractional digits",
+            ));
+        }
+        let magnitude = format!("{whole}{fraction}")
+            .parse::<i128>()
+            .map_err(serde::de::Error::custom)?;
+        let mantissa = i64::try_from(if negative { -magnitude } else { magnitude })
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            mantissa,
+            scale: fraction.len() as u8,
+        })
+    }
+}
+
+#[cfg(test)]
+mod amount_tests {
+    use super::Amount;
+
+    #[test]
+    fn json_amount_is_a_decimal_string_only() {
+        let amount = serde_json::from_str::<Amount>("\"-12.50\"").unwrap();
+        assert_eq!((amount.mantissa, amount.scale), (-1_250, 2));
+        assert_eq!(serde_json::to_string(&amount).unwrap(), "\"-12.50\"");
+        assert!(serde_json::from_str::<Amount>(r#"{"mantissa":-1250,"scale":2}"#).is_err());
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -50,7 +120,7 @@ pub struct RiskContext {
     pub current_exposure: Amount,
     pub current_margin: Amount,
     pub available_margin: Amount,
-    pub current_pnl: i64,
+    pub current_pnl: Amount,
     pub current_drawdown: Amount,
     pub market_is_fresh: bool,
     pub leverage_bps: u64,

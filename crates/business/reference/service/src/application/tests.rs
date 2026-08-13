@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
 use kairos_reference::domain::{
@@ -41,7 +40,6 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
-#[async_trait]
 impl ReferenceSource for SequenceSource {
     fn source_id(&self) -> &str {
         "sequence-test"
@@ -58,7 +56,6 @@ impl ReferenceSource for SequenceSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for TestSource {
     fn source_id(&self) -> &str {
         "test"
@@ -74,7 +71,6 @@ struct TestStore(Option<ReferenceCatalog>);
 
 struct FailingStore(Option<ReferenceCatalog>);
 
-#[async_trait]
 impl CatalogStore for TestStore {
     async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
         Ok(self.0.clone())
@@ -90,7 +86,6 @@ impl CatalogStore for TestStore {
     }
 }
 
-#[async_trait]
 impl CatalogStore for FailingStore {
     async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
         Ok(self.0.clone())
@@ -105,13 +100,13 @@ impl CatalogStore for FailingStore {
     }
 }
 
-async fn application() -> ReferenceApplication {
+async fn application() -> ReferenceApplication<TestSource, TestStore> {
     ReferenceApplication::new(
         "reference-test",
-        Box::new(TestSource {
+        TestSource {
             catalog: provider_catalog(),
-        }),
-        Box::new(TestStore::default()),
+        },
+        TestStore::default(),
     )
     .await
     .unwrap()
@@ -259,10 +254,10 @@ async fn application_does_not_emit_duplicate_events_for_same_catalog() {
 async fn failed_refresh_does_not_advance_in_memory_catalog() {
     let mut application = ReferenceApplication::new(
         "reference-test",
-        Box::new(TestSource {
+        TestSource {
             catalog: provider_catalog(),
-        }),
-        Box::new(FailingStore(None)),
+        },
+        FailingStore(None),
     )
     .await
     .unwrap();
@@ -280,10 +275,10 @@ async fn failed_administrative_commit_does_not_advance_in_memory_catalog() {
     persisted.apply(provider_catalog(), 1.into());
     let mut application = ReferenceApplication::new(
         "reference-test",
-        Box::new(TestSource {
+        TestSource {
             catalog: provider_catalog(),
-        }),
-        Box::new(FailingStore(Some(persisted))),
+        },
+        FailingStore(Some(persisted)),
     )
     .await
     .unwrap();
@@ -415,8 +410,8 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     catalog.instruments[0].underlying_instrument_id = Some(instrument_id("instrument:equity:SPY"));
     let mut application = ReferenceApplication::new(
         "reference-test",
-        Box::new(TestSource { catalog }),
-        Box::new(TestStore::default()),
+        TestSource { catalog },
+        TestStore::default(),
     )
     .await
     .unwrap();
@@ -435,11 +430,11 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
 async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
     let mut application = ReferenceApplication::new(
         "reference-test",
-        Box::new(SequenceSource {
+        SequenceSource {
             catalogs: vec![provider_catalog(), ProviderCatalog::default()],
             index: 0,
-        }),
-        Box::new(TestStore::default()),
+        },
+        TestStore::default(),
     )
     .await
     .unwrap();
@@ -473,23 +468,17 @@ async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
 }
 
 #[tokio::test]
-async fn immutable_read_model_matches_application_query_results() {
+async fn immutable_read_model_contains_only_bounded_operational_metadata() {
     let mut application = application().await;
     application.refresh().await.unwrap();
-    let query = ReferenceQuery {
-        kind: ReferenceKind::Market,
-        text: Some("BTCUSDT".into()),
-        ..ReferenceQuery::default()
-    };
+    let read_model = application.read_model().await;
+    assert_eq!(read_model.generation(), application.catalog().generation);
     assert_eq!(
-        serde_json::to_value(application.query(&query)).unwrap(),
-        serde_json::to_value(application.read_model().await.query(&query)).unwrap()
+        read_model.event_sequence(),
+        application.catalog().event_sequence
     );
     assert_eq!(
-        application.markets(&MarketQuery::by_symbol("BTCUSDT")),
-        application
-            .read_model()
-            .await
-            .markets(&MarketQuery::by_symbol("BTCUSDT"))
+        read_model.market_count(),
+        application.catalog().markets.len()
     );
 }

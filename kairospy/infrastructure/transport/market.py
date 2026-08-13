@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 import struct
 import sys
 from typing import Any, AsyncIterator, cast
 
-from kairospy.application.strategy.domain.messages import (
-    EventEnvelope,
-    SnapshotEnvelope,
-)
+from kairospy.application.market import Bar, MarketSnapshot, Quote, Trade
+from kairospy.application.reference import InstrumentRef
+from kairospy.application.strategy.domain.messages import RawEventEnvelope
+from kairospy.domain_types import InstrumentId, MarketId, datetime_from_unix_nanos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
@@ -150,7 +151,7 @@ class MmapMarketSnapshotReader:
         self.path = Path(path)
         self._reader = SharedSnapshotReader(self.path)
 
-    def read(self, view_key: str) -> SnapshotEnvelope:
+    def read(self, view_key: str) -> MarketSnapshot:
         if view_key == "market.current":
             return self._decode(self._reader.read().payload)
         prefix = "market.view."
@@ -167,7 +168,7 @@ class MmapMarketSnapshotReader:
         return self._decode(SharedSnapshotReader(path).read().payload)
 
     @staticmethod
-    def _decode(payload: bytes) -> SnapshotEnvelope:
+    def _decode(payload: bytes) -> MarketSnapshot:
         from kairospy.infrastructure.transport.generated.kairos.market.v1.MarketDataSnapshot import (
             MarketDataSnapshot,
         )
@@ -182,21 +183,86 @@ class MmapMarketSnapshotReader:
         quotes = tuple(
             _decode_quote(data.Quotes(index)) for index in range(data.QuotesLength())
         )
+        trades = tuple(
+            _decode_trade(data.Trades(index)) for index in range(data.TradesLength())
+        )
         bars = tuple(
             _decode_bar(data.Bars(index)) for index in range(data.BarsLength())
         )
         greeks = tuple(
             _decode_greeks(data.Greeks(index)) for index in range(data.GreeksLength())
         )
-        return SnapshotEnvelope(
+        return MarketSnapshot(
             view_key=cast(bytes, header.ViewKey()).decode(),
             snapshot_id=cast(bytes, header.SnapshotId()).decode(),
             owner_actor_id=cast(bytes, header.OwnerActorId()).decode(),
             event_stream_id=cast(bytes, header.EventStreamId()).decode(),
             event_sequence=header.EventSequence(),
             generation=header.Generation(),
-            payload=MarketDataView(quotes=quotes, bars=bars, greeks=greeks),
+            quotes=tuple(_quote_model(value) for value in quotes),
+            trades=tuple(_trade_model(value) for value in trades),
+            bars=tuple(_bar_model(value) for value in bars),
         )
+
+
+def _instrument(value: str) -> InstrumentRef:
+    identifier = InstrumentId(value)
+    return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
+
+
+def _market_id(value: str | None, kind: str) -> MarketId:
+    if value is None or not value.strip():
+        raise ValueError(f"{kind} market_id is required")
+    return MarketId(value)
+
+
+def _decimal(value: DecimalValue | None) -> Decimal | None:
+    return None if value is None else Decimal(value.value)
+
+
+def _quote_model(value: QuoteView) -> Quote:
+    return Quote(
+        market_id=_market_id(value.market_id, "quote"),
+        instrument=_instrument(value.instrument_id),
+        bid_price=_decimal(value.bid_price),
+        bid_quantity=_decimal(value.bid_quantity),
+        ask_price=_decimal(value.ask_price),
+        ask_quantity=_decimal(value.ask_quantity),
+        occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
+        occurred_at_unix_nanos=value.event_time_unix_nanos,
+        source_id=value.source_id,
+    )
+
+
+def _trade_model(value: TradeView) -> Trade:
+    if value.price is None or value.quantity is None:
+        raise ValueError("trade price and quantity are required")
+    return Trade(
+        market_id=_market_id(value.market_id, "trade"),
+        instrument=_instrument(value.instrument_id),
+        price=Decimal(value.price.value),
+        quantity=Decimal(value.quantity.value),
+        aggressor_side=None,
+        occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
+        occurred_at_unix_nanos=value.event_time_unix_nanos,
+        source_id=value.source_id,
+    )
+
+
+def _bar_model(value: BarView) -> Bar:
+    return Bar(
+        market_id=_market_id(value.market_id, "bar"),
+        instrument=_instrument(value.instrument_id),
+        timeframe=value.timeframe,
+        open=Decimal(value.open.value),
+        high=Decimal(value.high.value),
+        low=Decimal(value.low.value),
+        close=Decimal(value.close.value),
+        volume=_decimal(value.volume),
+        occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
+        occurred_at_unix_nanos=value.event_time_unix_nanos,
+        source_id=value.source_id,
+    )
 
 
 def _decode_quote(value: object) -> QuoteView:
@@ -217,6 +283,28 @@ def _decode_quote(value: object) -> QuoteView:
         bid_quantity=decimal("BidQuantity"),
         ask_price=decimal("AskPrice"),
         ask_quantity=decimal("AskQuantity"),
+        event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
+        source_id=text("SourceId"),
+    )
+
+
+def _decode_trade(value: object) -> TradeView:
+    value = cast(Any, value)
+
+    def text(name: str) -> str | None:
+        raw = getattr(value, name)()
+        return None if raw is None else raw.decode()
+
+    def decimal(name: str) -> DecimalValue | None:
+        raw = getattr(value, name)()
+        return None if raw is None else DecimalValue(raw.Mantissa(), raw.Scale())
+
+    return TradeView(
+        instrument_id=text("InstrumentId") or "",
+        market_id=text("MarketId"),
+        trade_id=text("TradeId"),
+        price=decimal("Price"),
+        quantity=decimal("Quantity"),
         event_time_unix_nanos=getattr(value, "EventTimeUnixNanos")(),
         source_id=text("SourceId"),
     )
@@ -307,7 +395,7 @@ class UnixMarketEventStream:
         # stream.  ``replayable`` remains available for future transports.
         return event_sequence >= 0 or self.replayable
 
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[EventEnvelope]:
+    async def events(self, after_sequence: int = 0) -> AsyncIterator[RawEventEnvelope]:
         cursor = max(0, after_sequence)
         while True:
             try:
@@ -342,7 +430,7 @@ class UnixMarketEventStream:
             await asyncio.sleep(self.reconnect_delay)
 
 
-def _decode_market_event(payload: bytes) -> EventEnvelope:
+def _decode_market_event(payload: bytes) -> RawEventEnvelope:
     if payload[4:8] == b"MOB1":
         return _decode_orderbook_event(payload)
     if payload[4:8] == b"MTR1":
@@ -354,7 +442,7 @@ def _decode_market_event(payload: bytes) -> EventEnvelope:
     return _decode_quote_event(payload)
 
 
-def _decode_orderbook_event(payload: bytes) -> EventEnvelope:
+def _decode_orderbook_event(payload: bytes) -> RawEventEnvelope:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.OrderBookMessage import (
         OrderBookMessage,
     )
@@ -385,7 +473,7 @@ def _decode_orderbook_event(payload: bytes) -> EventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return EventEnvelope(
+    return RawEventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
         domain="data",
@@ -408,7 +496,7 @@ def _decode_orderbook_event(payload: bytes) -> EventEnvelope:
     )
 
 
-def _decode_quote_event(payload: bytes) -> EventEnvelope:
+def _decode_quote_event(payload: bytes) -> RawEventEnvelope:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.QuoteMessage import (
         QuoteMessage,
     )
@@ -426,7 +514,7 @@ def _decode_quote_event(payload: bytes) -> EventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return EventEnvelope(
+    return RawEventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
         domain="data",
@@ -436,7 +524,7 @@ def _decode_quote_event(payload: bytes) -> EventEnvelope:
     )
 
 
-def _decode_trade_event(payload: bytes) -> EventEnvelope:
+def _decode_trade_event(payload: bytes) -> RawEventEnvelope:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.TradeMessage import (
         TradeMessage,
     )
@@ -461,7 +549,7 @@ def _decode_trade_event(payload: bytes) -> EventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return EventEnvelope(
+    return RawEventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
         domain="data",
@@ -479,7 +567,7 @@ def _decode_trade_event(payload: bytes) -> EventEnvelope:
     )
 
 
-def _decode_bar_event(payload: bytes) -> EventEnvelope:
+def _decode_bar_event(payload: bytes) -> RawEventEnvelope:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.BarMessage import (
         BarMessage,
     )
@@ -495,7 +583,7 @@ def _decode_bar_event(payload: bytes) -> EventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return EventEnvelope(
+    return RawEventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
         domain="data",
@@ -505,7 +593,7 @@ def _decode_bar_event(payload: bytes) -> EventEnvelope:
     )
 
 
-def _decode_greeks_event(payload: bytes) -> EventEnvelope:
+def _decode_greeks_event(payload: bytes) -> RawEventEnvelope:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.GreeksMessage import (
         GreeksMessage,
     )
@@ -521,7 +609,7 @@ def _decode_greeks_event(payload: bytes) -> EventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return EventEnvelope(
+    return RawEventEnvelope(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
         domain="data",

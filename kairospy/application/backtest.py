@@ -165,17 +165,7 @@ def _quote_payload(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return None
 
 
-def _decimal_wire(value: Decimal) -> dict[str, int]:
-    normalized = value.normalize()
-    sign, digits, exponent = normalized.as_tuple()
-    if not isinstance(exponent, int):
-        raise ValueError("decimal wire value must be finite")
-    mantissa = int("".join(str(digit) for digit in digits) or "0")
-    if sign:
-        mantissa = -mantissa
-    if exponent >= 0:
-        mantissa *= 10**exponent
-        scale = 0
-    else:
-        scale = -exponent
-    return {"mantissa": mantissa, "scale": scale}
+def _decimal_wire(value: Decimal) -> str:
+    if not value.is_finite():
+        raise ValueError("decimal value must be finite")
+    return format(value, "f")

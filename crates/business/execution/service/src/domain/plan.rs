@@ -30,7 +30,7 @@ impl SplitOrderPolicy {
             return Err("split policy quantities and child_count must be positive".into());
         }
         if let (Some(minimum), Some(maximum)) = (self.min_child_quantity, self.max_child_quantity) {
-            if minimum.scale() != maximum.scale() || minimum.mantissa() > maximum.mantissa() {
+            if minimum > maximum {
                 return Err("split policy minimum exceeds maximum child quantity".into());
             }
         }
@@ -113,21 +113,26 @@ impl HedgePolicy {
 
     pub fn required_hedge_quantity(
         &self,
-        leader_filled_mantissa: i64,
-        hedge_filled_mantissa: i64,
-    ) -> Result<i64, String> {
-        if leader_filled_mantissa < 0 || hedge_filled_mantissa < 0 {
-            return Err("hedge progress cannot be negative".into());
-        }
+        leader_filled: Quantity,
+        hedge_filled: Quantity,
+    ) -> Result<Quantity, String> {
         let required = self
             .ratio
-            .apply_to_nonnegative(leader_filled_mantissa)
+            .apply_to_nonnegative(leader_filled.mantissa())
             .map_err(|error| error.to_string())?;
         let required = self
             .contract_multiplier
             .apply_to_nonnegative(required)
             .map_err(|error| error.to_string())?;
-        Ok(required.saturating_sub(hedge_filled_mantissa))
+        let required =
+            Quantity::new(required, leader_filled.scale()).map_err(|error| error.to_string())?;
+        if hedge_filled >= required {
+            Ok(Quantity::ZERO)
+        } else {
+            required
+                .checked_sub(hedge_filled)
+                .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -139,19 +144,21 @@ pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<
         return Err("split quantity must be positive".into());
     }
     policy.validate()?;
-    if policy
-        .max_child_quantity
-        .is_some_and(|value| value.scale() != total.scale())
-        || policy
-            .min_child_quantity
-            .is_some_and(|value| value.scale() != total.scale())
-    {
-        return Err("split policy quantity scale must match the order quantity scale".into());
-    }
-    let total_mantissa = total.mantissa();
+    let mut scale = total
+        .scale()
+        .max(policy.max_child_quantity.map_or(0, Quantity::scale))
+        .max(policy.min_child_quantity.map_or(0, Quantity::scale));
+    let mut total_mantissa = rescale_quantity(total, scale)?;
     let mut count = policy.child_count.unwrap_or(1) as i64;
     if let Some(maximum) = policy.max_child_quantity {
-        count = count.max((total_mantissa + maximum.mantissa() - 1) / maximum.mantissa());
+        let maximum = rescale_quantity(maximum, scale)?;
+        count = count.max((total_mantissa + maximum - 1) / maximum);
+    }
+    while count > total_mantissa && scale < kairos_domain_types::MAX_DECIMAL_SCALE {
+        scale += 1;
+        total_mantissa = total_mantissa
+            .checked_mul(10)
+            .ok_or_else(|| "split quantity overflows".to_string())?;
     }
     if count <= 0 || count > total_mantissa {
         return Err("split policy produces an invalid child count".into());
@@ -159,18 +166,28 @@ pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<
     let base = total_mantissa / count;
     let remainder = total_mantissa % count;
     if let Some(minimum) = policy.min_child_quantity {
-        if base < minimum.mantissa() {
+        if base < rescale_quantity(minimum, scale)? {
             return Err("split policy minimum child quantity cannot be satisfied".into());
         }
     }
     let mut chunks = Vec::with_capacity(count as usize);
     for index in 0..count {
         chunks.push(
-            Quantity::new(base + i64::from(index < remainder), total.scale())
+            Quantity::new(base + i64::from(index < remainder), scale)
                 .expect("split quantity is non-negative"),
         );
     }
     Ok(chunks)
+}
+
+fn rescale_quantity(value: Quantity, scale: u8) -> Result<i64, String> {
+    let factor = 10_i64
+        .checked_pow(u32::from(scale.saturating_sub(value.scale())))
+        .ok_or_else(|| "split quantity scale overflows".to_string())?;
+    value
+        .mantissa()
+        .checked_mul(factor)
+        .ok_or_else(|| "split quantity overflows".to_string())
 }
 
 /// Business-level intent kinds.  An intent describes an outcome; exchange orders
@@ -317,7 +334,6 @@ pub struct ExecutionLeg {
     pub market_id: Option<MarketId>,
     pub side: OrderSide,
     pub target_quantity: Quantity,
-    pub quantity_scale: u8,
     pub order_ids: Vec<OrderId>,
     pub lifecycle: LegLifecycle,
     pub completed_quantity: Quantity,
@@ -331,8 +347,7 @@ impl ExecutionLeg {
         segment_key: impl Into<String>,
         instrument_id: impl Into<String>,
         side: OrderSide,
-        target_quantity_mantissa: i64,
-        quantity_scale: u8,
+        target_quantity: Quantity,
     ) -> Result<Self, String> {
         let value = Self {
             leg_id: LegId::new(leg_id.into()).map_err(|error| error.to_string())?,
@@ -342,13 +357,10 @@ impl ExecutionLeg {
                 .map_err(|error| format!("invalid instrument_id: {error}"))?,
             market_id: None,
             side,
-            target_quantity: Quantity::positive(target_quantity_mantissa, quantity_scale)
-                .map_err(|error| error.to_string())?,
-            quantity_scale,
+            target_quantity,
             order_ids: Vec::new(),
             lifecycle: LegLifecycle::Pending,
-            completed_quantity: Quantity::new(0, quantity_scale)
-                .map_err(|error| error.to_string())?,
+            completed_quantity: Quantity::ZERO,
             reason: String::new(),
         };
         Ok(value)
@@ -461,8 +473,15 @@ mod tests {
 
     #[test]
     fn plan_requires_unique_legs() {
-        let first =
-            ExecutionLeg::new("leg", "account", "spot", "BTCUSDT", OrderSide::Buy, 1, 0).unwrap();
+        let first = ExecutionLeg::new(
+            "leg",
+            "account",
+            "spot",
+            "BTCUSDT",
+            OrderSide::Buy,
+            Quantity::new(1, 0).unwrap(),
+        )
+        .unwrap();
         let second = first.clone();
         assert!(ExecutionPlan::new(
             "plan",
@@ -477,8 +496,15 @@ mod tests {
 
     #[test]
     fn plan_classifies_orders_by_progress() {
-        let leg =
-            ExecutionLeg::new("leg", "account", "spot", "BTCUSDT", OrderSide::Buy, 1, 0).unwrap();
+        let leg = ExecutionLeg::new(
+            "leg",
+            "account",
+            "spot",
+            "BTCUSDT",
+            OrderSide::Buy,
+            Quantity::new(1, 0).unwrap(),
+        )
+        .unwrap();
         let plan = ExecutionPlan::new(
             "plan",
             "intent",
@@ -526,6 +552,25 @@ mod tests {
     }
 
     #[test]
+    fn split_quantity_can_increase_precision_after_canonicalization() {
+        let chunks = split_quantity(
+            Quantity::new(1, 0).unwrap(),
+            &SplitOrderPolicy {
+                max_child_quantity: None,
+                child_count: Some(2),
+                min_child_quantity: None,
+                interval: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            chunks,
+            vec![Quantity::new(5, 1).unwrap(), Quantity::new(5, 1).unwrap()]
+        );
+    }
+
+    #[test]
     fn hedge_requirement_uses_actual_leader_fills() {
         let policy = HedgePolicy {
             leader_leg_id: LegId::new("leader").unwrap(),
@@ -536,7 +581,17 @@ mod tests {
             compensate_on_failure: true,
             max_compensation_attempts: 3,
         };
-        assert_eq!(policy.required_hedge_quantity(3, 4).unwrap(), 2);
-        assert_eq!(policy.required_hedge_quantity(3, 6).unwrap(), 0);
+        assert_eq!(
+            policy
+                .required_hedge_quantity(Quantity::new(3, 0).unwrap(), Quantity::new(4, 0).unwrap())
+                .unwrap(),
+            Quantity::new(2, 0).unwrap()
+        );
+        assert_eq!(
+            policy
+                .required_hedge_quantity(Quantity::new(3, 0).unwrap(), Quantity::new(6, 0).unwrap())
+                .unwrap(),
+            Quantity::ZERO
+        );
     }
 }

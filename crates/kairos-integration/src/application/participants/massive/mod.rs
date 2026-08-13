@@ -2,12 +2,14 @@
 
 mod config;
 mod connection;
+mod dividends;
 mod market_data;
 mod reference;
 mod types;
 
 pub use config::{MassiveChannelConfig, MassiveConnectionConfig};
 pub use connection::MassiveConnection;
+pub use dividends::{MassiveCashDividend, MassiveDividendCatalog};
 pub use market_data::{MassiveAsyncHistoricalMarket, MassiveAsyncLiveMarket};
 pub use reference::MassiveInstrumentCatalog;
 pub use types::{InstrumentQuery, InstrumentType, MarketType};

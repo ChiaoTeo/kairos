@@ -1,16 +1,70 @@
 //! Binance Stocks Trading catalog normalization.
 //!
-//! The catalog endpoint is API-key protected but read-only. This module does
-//! not imply support for quote, order-entry, or order-query endpoints.
+//! The catalog and single-symbol quote are separate read-only capabilities;
+//! this module does not imply order-entry or order-query support.
 
-use kairos_domain_types::ProviderSymbol;
+use kairos_domain_types::{Price, ProviderSymbol, Quantity, Symbol, UnixNanos};
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::capabilities::reference::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
 };
 use crate::application::capabilities::{ParticipantKind, ParticipantRef};
 use crate::application::IntegrationError;
+use crate::application::MarketQuote;
+
+pub(crate) fn normalize_quote(
+    payload: &Value,
+    requested_symbol: &ProviderSymbol,
+) -> Result<Option<MarketQuote>, IntegrationError> {
+    if payload.is_null() || payload.as_object().is_some_and(|value| value.is_empty()) {
+        return Ok(None);
+    }
+    let symbol = text(payload, "symbol")
+        .unwrap_or(requested_symbol.as_str())
+        .to_ascii_uppercase();
+    let bid_price = decimal::<Price>(payload, &["bidPrice", "bid_price"])?;
+    let bid_quantity = decimal::<Quantity>(payload, &["bidQty", "bidQuantity", "bid_quantity"])?;
+    let ask_price = decimal::<Price>(payload, &["askPrice", "ask_price"])?;
+    let ask_quantity = decimal::<Quantity>(payload, &["askQty", "askQuantity", "ask_quantity"])?;
+    if bid_price.is_none()
+        && bid_quantity.is_none()
+        && ask_price.is_none()
+        && ask_quantity.is_none()
+    {
+        return Ok(None);
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    Ok(Some(MarketQuote {
+        symbol: Symbol::new(symbol)
+            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+        bid_price,
+        bid_quantity,
+        ask_price,
+        ask_quantity,
+        last_price: None,
+        observed_at_unix_nanos: UnixNanos::new(nanos),
+    }))
+}
+
+fn decimal<T>(value: &Value, fields: &[&str]) -> Result<Option<T>, IntegrationError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let Some(raw) = fields.iter().find_map(|field| text(value, field)) else {
+        return Ok(None);
+    };
+    raw.parse::<T>().map(Some).map_err(|error| {
+        IntegrationError::InvalidPayload(format!("invalid equity quote decimal {raw}: {error}"))
+    })
+}
 
 pub(crate) fn normalize_catalog(
     payload: &Value,
@@ -95,8 +149,9 @@ fn decimal_scale(value: Option<&Value>) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_catalog;
+    use super::{normalize_catalog, normalize_quote};
     use crate::application::capabilities::reference::ExternalInstrumentKind;
+    use kairos_domain_types::ProviderSymbol;
 
     #[test]
     fn normalizes_real_binance_equity_exchange_info_shape() {
@@ -129,5 +184,39 @@ mod tests {
             "symbols": [{"symbol": "AAPL", "tradability": "MYSTERY"}]
         }))
         .is_err());
+    }
+
+    #[test]
+    fn normalizes_best_bid_and_ask_quote() {
+        let quote = normalize_quote(
+            &serde_json::json!({
+                "symbol": "AAPL",
+                "bidPrice": "201.25",
+                "bidQty": "3.5",
+                "askPrice": "201.30",
+                "askQty": "4"
+            }),
+            &ProviderSymbol::new("AAPL").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(quote.symbol.as_str(), "AAPL");
+        assert_eq!(quote.bid_price.unwrap().to_string(), "201.25");
+        assert_eq!(quote.bid_quantity.unwrap().to_string(), "3.5");
+        assert_eq!(quote.ask_price.unwrap().to_string(), "201.3");
+        assert_eq!(quote.ask_quantity.unwrap().to_string(), "4");
+    }
+
+    #[test]
+    fn empty_quote_response_is_absent_not_null() {
+        let symbol = ProviderSymbol::new("UNKNOWN").unwrap();
+        assert_eq!(
+            normalize_quote(&serde_json::Value::Null, &symbol).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_quote(&serde_json::json!({}), &symbol).unwrap(),
+            None
+        );
     }
 }

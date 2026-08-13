@@ -10,7 +10,7 @@ use kairos_account::composition::account::{
     inspect_account_credential, AccountOptions,
 };
 use kairos_account::domain::{AccountFill, AccountId, AccountModel, SegmentKey};
-use kairos_domain_types::{MarketId, Price, Quantity, SignedQuantity, Symbol};
+use kairos_domain_types::{MarketId, Symbol};
 use kairos_integration::application::ExternalAccountCredentialProfile;
 use kairos_workspace::account::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry, CredentialRecord,
@@ -297,25 +297,17 @@ struct FillArgs {
     #[arg(long)]
     instrument_id: String,
     #[arg(long)]
-    quantity_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    quantity_scale: u8,
+    quantity: String,
     #[arg(long)]
-    price_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    price_scale: u8,
+    price: String,
     #[arg(long)]
     settlement_asset: Option<String>,
     #[arg(long)]
-    settlement_delta_mantissa: Option<i64>,
-    #[arg(long, default_value_t = 0)]
-    settlement_delta_scale: u8,
+    settlement_delta: Option<String>,
     #[arg(long)]
     fee_asset: Option<String>,
     #[arg(long)]
-    fee_mantissa: Option<i64>,
-    #[arg(long, default_value_t = 0)]
-    fee_scale: u8,
+    fee: Option<String>,
     #[arg(long, default_value = "buy")]
     side: String,
     #[arg(long)]
@@ -341,10 +333,14 @@ impl FillArgs {
                 .map_err(|error| error.to_string())?,
             instrument_id: kairos_account::domain::InstrumentId::new(self.instrument_id.clone())
                 .map_err(|error| error.to_string())?,
-            quantity: Quantity::new(self.quantity_mantissa, self.quantity_scale)
-                .map_err(|error| error.to_string())?,
-            price: Price::new(self.price_mantissa, self.price_scale)
-                .map_err(|error| error.to_string())?,
+            quantity: self
+                .quantity
+                .parse()
+                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
+            price: self
+                .price
+                .parse()
+                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
             side: match self.side.to_ascii_lowercase().as_str() {
                 "sell" => kairos_account::domain::FillSide::Sell,
                 _ => kairos_account::domain::FillSide::Buy,
@@ -356,8 +352,11 @@ impl FillArgs {
                 .transpose()
                 .map_err(|error| error.to_string())?,
             settlement_delta: self
-                .settlement_delta_mantissa
-                .map(|value| SignedQuantity::new(value, self.settlement_delta_scale)),
+                .settlement_delta
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
             fee_asset: self
                 .fee_asset
                 .clone()
@@ -365,8 +364,11 @@ impl FillArgs {
                 .transpose()
                 .map_err(|error| error.to_string())?,
             fee_amount: self
-                .fee_mantissa
-                .map(|value| SignedQuantity::new(value, self.fee_scale)),
+                .fee
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
             occurred_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
         })
     }
@@ -935,7 +937,7 @@ async fn run_direct(
         isolated_margin_symbol: account_record
             .as_ref()
             .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
-        reference_snapshot_root: Some(workspace.child(&["snapshots", "reference"])?),
+        reference_database: Some(workspace.child(&["reference", "reference.sqlite"])?),
     };
     let state = workspace.child(&["state", "account", "account-state.json"])?;
     let configured_segments = registry
@@ -1366,7 +1368,7 @@ fn credential_probe_options(
         port: args.connection.port,
         client_id: args.connection.client_id,
         isolated_margin_symbol: account.values.get("isolated_margin_symbol").cloned(),
-        reference_snapshot_root: None,
+        reference_database: None,
     })
 }
 

@@ -3,46 +3,152 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Mapping
 
+from kairospy.application.market import MarketSnapshot, SubscriptionRequest
 from ..domain.lifecycle import StrategyLifecycle
 from ..domain.messages import (
     CommandHandle,
-    ContextRequest,
-    EventEnvelope,
+    RawEventEnvelope,
     LifecycleRecord,
-    SnapshotEnvelope,
-    StrategySignal,
 )
 
 
-class InMemoryContextBus:
-    """Deterministic composition fake for Context Bus tests."""
+@dataclass(frozen=True, slots=True)
+class RecordedApplicationRequest:
+    operation: str
+    payload: object
+    strategy_id: str
+    request_id: str
+    instance_id: str
+
+
+class InMemoryApplicationPorts:
+    """Deterministic Market and Execution port fake for runtime tests."""
 
     def __init__(self) -> None:
-        self.requests: list[ContextRequest] = []
-        self.signals: list[StrategySignal] = []
+        self.requests: list[RecordedApplicationRequest] = []
         self._handles: dict[str, CommandHandle] = {}
 
-    def submit(self, request: ContextRequest) -> CommandHandle:
-        self.requests.append(request)
-        status = "pending" if request.operation == "market.subscribe" else "accepted"
-        handle = CommandHandle(request.request_id, status)
-        self._handles[request.request_id] = handle
-        return handle
-
-    def publish_signal(self, signal: StrategySignal) -> CommandHandle:
-        self.signals.append(signal)
-        request_id = f"{signal.strategy_id}:signal:{len(self.signals)}"
-        handle = CommandHandle(request_id, "accepted")
+    def _record(
+        self,
+        operation: str,
+        payload: object,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+        *,
+        status: str = "accepted",
+    ) -> CommandHandle:
+        self.requests.append(
+            RecordedApplicationRequest(
+                operation, payload, strategy_id, request_id, instance_id
+            )
+        )
+        handle = CommandHandle(request_id, status)
         self._handles[request_id] = handle
         return handle
+
+    def subscribe(
+        self,
+        request: SubscriptionRequest,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        return self._record(
+            "market.subscribe",
+            request,
+            strategy_id,
+            instance_id,
+            request_id,
+            status="pending",
+        )
+
+    def unsubscribe(
+        self,
+        subscription: object,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        return self._record(
+            "market.unsubscribe", subscription, strategy_id, instance_id, request_id
+        )
+
+    def target_position(self, request: object, **identity: str) -> CommandHandle:
+        return self._record("intent.target_position", request, **identity)
+
+    def cancel_intent(
+        self, intent_id: str, *, reason: str, **identity: str
+    ) -> CommandHandle:
+        return self._record(
+            "intent.cancel", {"intent_id": intent_id, "reason": reason}, **identity
+        )
+
+    def submit_order(self, request: object, **identity: str) -> CommandHandle:
+        return self._record("execution.submit_order", request, **identity)
+
+    def cancel_order(
+        self, order_id: str, *, reason: str, **identity: str
+    ) -> CommandHandle:
+        return self._record(
+            "execution.cancel_order",
+            {"order_id": order_id, "reason": reason},
+            **identity,
+        )
+
+    def replace_order(
+        self, order_id: str, request: object, **identity: str
+    ) -> CommandHandle:
+        return self._record("execution.replace_order", (order_id, request), **identity)
+
+    def cancel_all(
+        self,
+        *,
+        instrument_id: str | None,
+        account_id: str | None,
+        reason: str,
+        **identity: str,
+    ) -> CommandHandle:
+        return self._record(
+            "execution.cancel_all",
+            {
+                "instrument_id": instrument_id,
+                "account_id": account_id,
+                "reason": reason,
+            },
+            **identity,
+        )
 
     def status(self, request_id: str) -> CommandHandle:
         return self._handles.get(
             request_id, CommandHandle(request_id, "missing", error="request not found")
         )
+
+    def release_owner(
+        self,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        self.requests.append(
+            RecordedApplicationRequest(
+                "market.release_owner", None, strategy_id, request_id, instance_id
+            )
+        )
+        handle = CommandHandle(
+            request_id,
+            "accepted",
+            {"removed_subscription_ids": []},
+        )
+        self._handles[request_id] = handle
+        return handle
 
     def resolve(
         self,
@@ -59,11 +165,11 @@ class InMemoryContextBus:
         )
 
 
-class InMemorySnapshotReader:
-    def __init__(self, snapshots: Mapping[str, SnapshotEnvelope] | None = None) -> None:
+class InMemoryMarketSnapshotReader:
+    def __init__(self, snapshots: Mapping[str, MarketSnapshot] | None = None) -> None:
         self.snapshots = dict(snapshots or {})
 
-    def read(self, view_key: str) -> SnapshotEnvelope:
+    def read(self, view_key: str) -> MarketSnapshot:
         return self.snapshots[view_key]
 
 
@@ -71,13 +177,13 @@ class InMemoryEventStream:
     def __init__(self, stream_id: str, *, first_sequence: int = 1) -> None:
         self.stream_id = stream_id
         self.first_sequence = first_sequence
-        self._events: deque[EventEnvelope] = deque()
+        self._events: deque[RawEventEnvelope] = deque()
         self._waiters: list[asyncio.Future[None]] = []
 
     def can_join(self, event_sequence: int) -> bool:
         return event_sequence >= self.first_sequence - 1
 
-    def append(self, event: EventEnvelope) -> None:
+    def append(self, event: RawEventEnvelope) -> None:
         if event.stream_id != self.stream_id:
             raise ValueError("event belongs to a different stream")
         self._events.append(event)
@@ -86,7 +192,7 @@ class InMemoryEventStream:
                 waiter.set_result(None)
         self._waiters.clear()
 
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[EventEnvelope]:
+    async def events(self, after_sequence: int = 0) -> AsyncIterator[RawEventEnvelope]:
         next_sequence = after_sequence + 1
         while True:
             while self._events and self._events[0].sequence < next_sequence:

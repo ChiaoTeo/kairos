@@ -177,10 +177,12 @@ impl MarketQuery {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn not_found_message(&self) -> String {
         format!("no reference market matches {self:?}")
     }
 
+    #[cfg(test)]
     pub(crate) fn ambiguous_message(&self) -> String {
         format!("reference market query is ambiguous: {self:?}")
     }

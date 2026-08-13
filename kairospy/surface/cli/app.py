@@ -11,6 +11,8 @@ import typer
 from typer.main import get_command
 
 from .commands.launch import launch_app
+from .commands.data import data_app
+from .commands.research import research_app
 from .commands.reference import reference_app
 from .commands.account import account_passthrough
 from .commands.integration import integration_passthrough
@@ -20,7 +22,6 @@ from .commands.root import (
     config_app,
     project_app,
     system_app,
-    timeline_app,
 )
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.system import ComponentProcessApplication
@@ -44,6 +45,18 @@ app.add_typer(
     project_app,
     name="project",
     help="Create, scaffold, and diagnose a Kairos project.",
+    rich_help_panel="Daily workflow",
+)
+app.add_typer(
+    data_app,
+    name="data",
+    help="Plan, acquire, validate, and inspect unified Datasets.",
+    rich_help_panel="Daily workflow",
+)
+app.add_typer(
+    research_app,
+    name="research",
+    help="Lock reproducible Research plans and inspect trust gates.",
     rich_help_panel="Daily workflow",
 )
 app.add_typer(
@@ -97,12 +110,6 @@ app.add_typer(
     name="system",
     help="Diagnose and control workspace runtime components.",
     rich_help_panel="Operations",
-)
-app.add_typer(
-    timeline_app,
-    name="timeline",
-    help="Inspect and export event timelines.",
-    rich_help_panel="Advanced tools",
 )
 app.add_typer(
     reference_app,

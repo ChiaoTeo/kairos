@@ -9,6 +9,9 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
+    CashDividendDatasetRecord, CashDividendDatasetRequest, CashDividendDatasetResult,
+    CashDividendInput, LifecycleQuery, MarketQuery, OptionContractDatasetRecord,
+    OptionContractInput, OptionContractSnapshotRequest, OptionContractSnapshotResult,
+    ReferenceApplication, ReferenceDatasetApplication, ReferenceKind, ReferenceQuery,
     ReferenceReadModel, ReferenceRecord, ReferenceRefreshResult,
 };

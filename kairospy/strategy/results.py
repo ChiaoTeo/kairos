@@ -15,6 +15,8 @@ class CommandResult:
     error: str | None = None
     error_code: str | None = None
     retryable: bool = False
+    stdout: str = ""
+    stderr: str = ""
 
     def __post_init__(self) -> None:
         if not self.request_id.strip():

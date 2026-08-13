@@ -1,278 +1,115 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
-from dataclasses import dataclass
-import time
-from typing import Callable, Mapping, Sequence
+from pathlib import Path
+from types import MappingProxyType
+from typing import TYPE_CHECKING
 
-from kairospy.application.observability import (
-    record_counter,
-    record_duration_ms,
-    start_span,
+from kairospy.strategy import (
+    StrategyContext as StrategyContextContract,
+    StrategyIdentity,
+    StrategyLogger,
+    StrategyState,
 )
-from kairospy.strategy import StrategyContextProtocol, StrategyLogger
-from kairospy.infrastructure.contracts.reference import ReferenceSnapshotClient
-from ..domain.messages import (
-    ArbitrageLegRequest,
-    CommandHandle,
-    ContextRequest,
-    EventEnvelope,
-    PairArbitrageRequest,
-    PortfolioRebalanceRequest,
-    PortfolioRebalanceTarget,
-    QuoteProvisioningRequest,
-    QuoteRefreshRequest,
-    SnapshotEnvelope,
-    SubscriptionRequest,
-    TargetPositionRequest,
-)
-from ..protocol import (
-    ContextBus,
-    EventStream,
-    IntentCommandPort,
-    MarketCommandPort,
-    SnapshotReader,
-)
+from kairospy.strategy.clock import StrategyClock
+from kairospy.domain_types import AccountId
+
+from ..domain.messages import RawEventEnvelope
+from ..protocol import EventStream
+from .applications import StrategyApplications
+
+if TYPE_CHECKING:
+    from kairospy.infrastructure.contracts.reference_client import ReferenceClient
+    from kairospy.infrastructure.contracts.execution import ExecutionMmapProjection
+    from kairospy.infrastructure.contracts.risk import RiskMmapProjection
+    from kairospy.infrastructure.contracts.account import AccountMmapProjection
+    from kairospy.infrastructure.transport.commands import (
+        ExecutionCommandClient,
+        MarketCommandClient,
+    )
+    from kairospy.infrastructure.transport.market import MmapMarketSnapshotReader
 
 
 @dataclass(frozen=True, slots=True)
 class StrategyClientBundle:
-    """All process-boundary capabilities owned by one strategy instance."""
+    """Private process dependencies assembled for one strategy instance."""
 
-    commands: ContextBus
-    market_commands: MarketCommandPort
-    execution_commands: IntentCommandPort
-    market_snapshots: SnapshotReader
+    market_commands: MarketCommandClient
+    execution_commands: ExecutionCommandClient | None
+    market_snapshots: MmapMarketSnapshotReader
     market_events: EventStream
-    reference: ReferenceSnapshotClient | None = None
-    backtest_market: Callable[[EventEnvelope], None] | None = None
-    backtest_account_mark: Callable[[EventEnvelope], object] | None = None
+    application_events: tuple[EventStream, ...] = ()
+    reference_client: ReferenceClient | None = None
+    account_projections: Mapping[AccountId, AccountMmapProjection] = field(
+        default_factory=dict
+    )
+    execution_projection: ExecutionMmapProjection | None = None
+    risk_projection: RiskMmapProjection | None = None
+    history_root: Path | None = None
+    state_path: Path | None = None
+    backtest_market: Callable[[RawEventEnvelope], object] | None = None
+    backtest_account_mark: Callable[[RawEventEnvelope], object] | None = None
+    backtest_time_advance: Callable[[int], object] | None = None
 
 
-class StrategyContext(StrategyContextProtocol):
-    """The only interaction surface given to user-authored strategies."""
+class StrategyContext(StrategyContextContract):
+    """Thin strategy facade holding already-composed business applications."""
 
     def __init__(
         self,
         strategy_id: str,
         *,
+        applications: StrategyApplications,
+        launch_id: str = "",
         instance_id: str = "",
-        clients: StrategyClientBundle,
-        state: dict[str, object] | None = None,
-        request_observer: Callable[[ContextRequest, CommandHandle], None] | None = None,
+        params: Mapping[str, object] | None = None,
+        state_path: Path | None = None,
+        state: Mapping[str, object] | None = None,
         logger: StrategyLogger | None = None,
+        clock: StrategyClock | None = None,
     ) -> None:
         if not strategy_id.strip():
             raise ValueError("strategy_id is required")
         self.strategy_id = strategy_id
+        self.launch_id = launch_id
         self.instance_id = instance_id
-        self.clients = clients
-        # Compatibility aliases for existing diagnostics; new code uses the
-        # explicit client bundle.
-        self._bus = clients.commands
-        self._snapshots = clients.market_snapshots
-        self.reference = clients.reference
-        self._request_observer = request_observer
-        self.state = state if state is not None else {}
+        self.identity = StrategyIdentity(strategy_id, launch_id, instance_id)
+        self.params = MappingProxyType(dict(params or {}))
+        self._event: object | None = None
+        self.state = StrategyState(
+            state_path,
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            initial=state,
+        )
         self.logger = logger or StrategyLogger(
             fields={"strategy_id": strategy_id, "instance_id": instance_id}
         )
-        self._event: EventEnvelope | None = None
-        self._views: dict[str, SnapshotEnvelope] = {}
-        self._request_counter = 0
+        self.clock = clock or StrategyClock(lambda *args: None, lambda *args: None)
+        self.reference = applications.reference
+        self.market = applications.market
+        self.account = applications.account
+        self.risk = applications.risk
+        self.execution = applications.execution
 
-    def _bind(self, event: EventEnvelope | None) -> "StrategyContext":
+    def _bind(self, event: object | None) -> StrategyContext:
         self._event = event
+        metadata = getattr(event, "metadata", None)
+        sequence = getattr(metadata, "sequence", None)
+        occurred_at_unix_nanos = getattr(metadata, "occurred_at_unix_nanos", None)
+        self.market.bind_event(sequence)
+        self.execution.bind_event(sequence, occurred_at_unix_nanos)
         return self
 
     @property
-    def now(self) -> datetime | None:
-        return None if self._event is None else self._event.occurred_at
-
-    @property
-    def event(self) -> EventEnvelope | None:
+    def event(self):
         return self._event
 
-    def _submit(self, operation: str, payload: object) -> CommandHandle:
-        started = time.monotonic()
-        request = ContextRequest(
-            operation,
-            payload,
-            self.strategy_id,
-            self._request_id(operation),
-            self.instance_id,
-        )
-        with start_span(
-            "strategy.command",
-            attributes={
-                "component": "strategy",
-                "operation": operation,
-                "request_id": request.request_id,
-            },
-        ):
-            try:
-                handle = self._submit_request(request, payload)
-            except Exception:
-                record_counter("kairos.operation.failed")
-                raise
-            record_counter("kairos.operation")
-            record_duration_ms(
-                "kairos.operation.duration", (time.monotonic() - started) * 1_000
-            )
-            return handle
-
-    def _submit_request(
-        self, request: ContextRequest, payload: object
-    ) -> CommandHandle:
-        self.logger.info(
-            "strategy command submitted",
-            event="strategy_command_submitted",
-            operation=request.operation,
-            request_id=request.request_id,
-            payload_type=type(payload).__name__,
-            **self._command_observability(payload),
-        )
-        try:
-            handle = self.clients.commands.submit(request)
-        except Exception as error:
-            record_counter("kairos.strategy.command.failed")
-            self.logger.error(
-                "strategy command raised",
-                event="strategy_command_raised",
-                operation=request.operation,
-                request_id=request.request_id,
-                error_kind=type(error).__name__,
-                retryable=False,
-                error=str(error),
-            )
-            raise
-        record_counter("kairos.strategy.command.total")
-        self.logger.info(
-            "strategy command result",
-            event="strategy_command_result",
-            operation=request.operation,
-            request_id=request.request_id,
-            command_status=handle.status,
-            error=handle.error,
-            error_code=handle.error_code,
-            retryable=handle.retryable,
-            result=dict(handle.result),
-        )
-        if self._request_observer is not None:
-            self._request_observer(request, handle)
-        return handle
-
-    @staticmethod
-    def _command_observability(payload: object) -> dict[str, object]:
-        """Return business request facts without leaking provider objects."""
-        if isinstance(payload, SubscriptionRequest):
-            return {
-                "subject": payload.subject,
-                "selectors": list(payload.selectors),
-                "exchange": payload.exchange,
-                "market_type": payload.market_type,
-                "asset_type": payload.asset_type,
-                "identity": payload.identity,
-                "dynamic": payload.dynamic,
-                "params": dict(payload.params),
-            }
-        return {}
-
-    def subscribe(
-        self,
-        subject: str,
-        *,
-        selectors: Sequence[str] = (),
-        exchange: str | None = None,
-        market_type: str | None = None,
-        asset_type: str | None = None,
-        identity: str | None = None,
-        params: Mapping[str, object] | None = None,
-        dynamic: bool = False,
-    ) -> CommandHandle:
-        request = SubscriptionRequest(
-            subject=subject,
-            selectors=tuple(selectors),
-            exchange=exchange,
-            market_type=market_type,
-            asset_type=asset_type,
-            identity=identity,
-            params=params or {},
-            dynamic=dynamic,
-        )
-        return self._submit("market.subscribe", request)
-
-    def unsubscribe(self, subscription: object) -> CommandHandle:
-        return self._submit("market.unsubscribe", subscription)
-
-    def target_position(
-        self,
-        instrument: str,
-        quantity: Decimal | str | int | float,
-        *,
-        account: str | None = None,
-        accounts: Sequence[str] | None = None,
-        limit_price: Decimal | str | int | float | None = None,
-        reason: str = "",
-        intent_id: str | None = None,
-    ) -> CommandHandle:
-        return self._submit(
-            "intent.target_position",
-            TargetPositionRequest(
-                instrument_id=instrument,
-                quantity=Decimal(str(quantity)),
-                account_id=account,
-                account_ids=tuple(accounts or ()),
-                limit_price=None if limit_price is None else Decimal(str(limit_price)),
-                reason=reason,
-                intent_id=intent_id,
-                source_snapshot_id=None
-                if self._event is None
-                else self._event.stream_id,
-                source_event_sequence=None
-                if self._event is None
-                else self._event.sequence,
-            ),
-        )
-
-    def pair_arbitrage(self, request: PairArbitrageRequest) -> CommandHandle:
-        return self._submit("intent.pair_arbitrage", request)
-
-    def portfolio_rebalance(self, request: PortfolioRebalanceRequest) -> CommandHandle:
-        return self._submit("intent.portfolio_rebalance", request)
-
-    def quote_provisioning(self, request: QuoteProvisioningRequest) -> CommandHandle:
-        return self._submit("intent.quote_provisioning", request)
-
-    def refresh_quote(self, request: QuoteRefreshRequest) -> CommandHandle:
-        return self._submit("intent.refresh_quote", request)
-
-    def view(self, view_key: str, default: object = None) -> object:
-        try:
-            return self._views.get(
-                view_key, self.clients.market_snapshots.read(view_key)
-            ).payload
-        except (KeyError, FileNotFoundError):
-            return default
-
-    def require_view(self, view_key: str) -> object:
-        return self._snapshot(view_key).payload
-
-    def _install_snapshot(self, snapshot: SnapshotEnvelope) -> None:
-        self._views[snapshot.view_key] = snapshot
-
-    def _snapshot(self, view_key: str) -> SnapshotEnvelope:
-        snapshot = self._views.get(view_key)
-        if snapshot is None:
-            snapshot = self.clients.market_snapshots.read(view_key)
-            self._views[view_key] = snapshot
-        return snapshot
-
-    def _request_id(self, operation: str) -> str:
-        self._request_counter += 1
-        sequence = self._event_sequence() or 0
-        return f"{self.strategy_id}:{self.instance_id}:{operation}:{sequence}:{self._request_counter}"
-
-    def _event_sequence(self) -> int | None:
-        return None if self._event is None else self._event.sequence
+    @property
+    def now(self) -> datetime | None:
+        if self.clock.now is not None:
+            return self.clock.now
+        metadata = getattr(self._event, "metadata", None)
+        return None if metadata is None else metadata.occurred_at

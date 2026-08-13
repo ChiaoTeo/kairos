@@ -7,17 +7,18 @@
 use std::collections::BTreeMap;
 
 use kairos_market_contract::model::{Bar, MarketObservation, Quote};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{OrderSide, OrderType};
-use kairos_domain_types::{FillId, InstrumentId, Money, OrderId, Price, Quantity, UnixNanos};
+use kairos_domain_types::{FillId, InstrumentId, Money, OrderId, Price, Quantity, Rate, UnixNanos};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SimulationConfig {
     #[serde(default)]
-    pub fee_bps: f64,
+    pub fee_bps: Rate,
     #[serde(default)]
-    pub slippage_bps: f64,
+    pub slippage_bps: Rate,
     #[serde(default = "default_true")]
     pub enforce_quote_quantity: bool,
 }
@@ -25,8 +26,8 @@ pub struct SimulationConfig {
 impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
-            fee_bps: 0.0,
-            slippage_bps: 0.0,
+            fee_bps: Rate::ZERO,
+            slippage_bps: Rate::ZERO,
             enforce_quote_quantity: true,
         }
     }
@@ -34,11 +35,11 @@ impl Default for SimulationConfig {
 
 impl SimulationConfig {
     fn validate(&self) -> Result<(), String> {
-        if !self.fee_bps.is_finite() || self.fee_bps < 0.0 {
-            return Err("simulation fee_bps must be finite and non-negative".into());
+        if self.fee_bps < Rate::ZERO {
+            return Err("simulation fee_bps must be non-negative".into());
         }
-        if !self.slippage_bps.is_finite() || self.slippage_bps < 0.0 {
-            return Err("simulation slippage_bps must be finite and non-negative".into());
+        if self.slippage_bps < Rate::ZERO {
+            return Err("simulation slippage_bps must be non-negative".into());
         }
         Ok(())
     }
@@ -96,9 +97,9 @@ pub struct SimulationResult {
 #[derive(Clone, Debug)]
 struct WorkingOrder {
     order: SimulationOrder,
-    quantity: f64,
-    filled_quantity: f64,
-    limit_price: Option<f64>,
+    quantity: Decimal,
+    filled_quantity: Decimal,
+    limit_price: Option<Decimal>,
 }
 
 pub struct ExecutionSimulator {
@@ -106,6 +107,7 @@ pub struct ExecutionSimulator {
     orders: BTreeMap<String, WorkingOrder>,
     fills: Vec<SimulationFill>,
     next_fill_id: u64,
+    last_market_event_time: Option<UnixNanos>,
 }
 
 impl ExecutionSimulator {
@@ -116,7 +118,16 @@ impl ExecutionSimulator {
             orders: BTreeMap::new(),
             fills: Vec::new(),
             next_fill_id: 1,
+            last_market_event_time: None,
         })
+    }
+
+    pub fn business_time(&self) -> Option<UnixNanos> {
+        self.last_market_event_time
+    }
+
+    pub fn set_business_time(&mut self, value: UnixNanos) {
+        self.last_market_event_time = Some(value);
     }
 
     pub fn submit(&mut self, request: SimulationOrderRequest) -> Result<SimulationOrder, String> {
@@ -154,7 +165,7 @@ impl ExecutionSimulator {
             WorkingOrder {
                 order: order.clone(),
                 quantity,
-                filled_quantity: 0.0,
+                filled_quantity: Decimal::ZERO,
                 limit_price,
             },
         );
@@ -282,27 +293,35 @@ impl ExecutionSimulator {
                 quantity = quantity.min(positive_number(value, "quote quantity")?);
             }
         }
-        if quantity <= 0.0 {
+        if quantity <= Decimal::ZERO {
             return Ok(());
         }
         let fill_price = if working.order.request.order_type == OrderType::Market {
-            let impact = self.config.slippage_bps / 10_000.0;
+            let impact = decimal(self.config.slippage_bps) / Decimal::from(10_000_u32);
             match working.order.request.side {
-                OrderSide::Buy => price * (1.0 + impact),
-                OrderSide::Sell => price * (1.0 - impact),
+                OrderSide::Buy => price * (Decimal::ONE + impact),
+                OrderSide::Sell => price * (Decimal::ONE - impact),
             }
         } else {
             price
         };
-        let fee = fill_price * quantity * self.config.fee_bps / 10_000.0;
+        let fee = fill_price * quantity * decimal(self.config.fee_bps) / Decimal::from(10_000_u32);
         let at = quote.observed_at_unix_nanos;
-        let quantity_value = format_number(quantity)
+        let quantity_value = quantity
+            .normalize()
+            .to_string()
             .parse::<Quantity>()
             .map_err(|error| error.to_string())?;
-        let price_value = format_number(fill_price)
+        let price_value = fill_price
+            .round_dp(18)
+            .normalize()
+            .to_string()
             .parse::<Price>()
             .map_err(|error| error.to_string())?;
-        let fee_value = format_number(fee)
+        let fee_value = fee
+            .round_dp(18)
+            .normalize()
+            .to_string()
             .parse::<Money>()
             .map_err(|error| error.to_string())?;
         self.fills.push(SimulationFill {
@@ -322,15 +341,19 @@ impl ExecutionSimulator {
             .get_mut(order_id)
             .ok_or_else(|| format!("simulation order not found: {order_id}"))?;
         current.filled_quantity += quantity;
-        current.order.filled_quantity = format_number(current.filled_quantity)
+        current.order.filled_quantity = current
+            .filled_quantity
+            .normalize()
+            .to_string()
             .parse::<Quantity>()
             .map_err(|error| error.to_string())?;
-        current.order.remaining_quantity =
-            format_number(current.quantity - current.filled_quantity)
-                .parse::<Quantity>()
-                .map_err(|error| error.to_string())?;
+        current.order.remaining_quantity = (current.quantity - current.filled_quantity)
+            .normalize()
+            .to_string()
+            .parse::<Quantity>()
+            .map_err(|error| error.to_string())?;
         current.order.updated_at_unix_nanos = at.into();
-        current.order.status = if current.filled_quantity + f64::EPSILON >= current.quantity {
+        current.order.status = if current.filled_quantity >= current.quantity {
             SimulationOrderStatus::Filled
         } else {
             SimulationOrderStatus::PartiallyFilled
@@ -360,26 +383,20 @@ fn default_true() -> bool {
     true
 }
 
-fn positive_number(value: &str, field: &str) -> Result<f64, String> {
+fn positive_number(value: &str, field: &str) -> Result<Decimal, String> {
     let number = value
         .trim()
-        .parse::<f64>()
+        .parse::<Decimal>()
         .map_err(|error| format!("{field} must be decimal-compatible: {error}"))?;
-    if !number.is_finite() || number <= 0.0 {
-        return Err(format!("{field} must be finite and positive"));
+    if number <= Decimal::ZERO {
+        return Err(format!("{field} must be positive"));
     }
     Ok(number)
 }
 
-fn format_number(value: f64) -> String {
-    let mut text = format!("{value:.12}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    text
+fn decimal(value: Rate) -> Decimal {
+    Decimal::try_new(value.mantissa(), u32::from(value.scale()))
+        .expect("validated domain rate must fit rust_decimal")
 }
 
 #[cfg(test)]
@@ -427,8 +444,8 @@ mod tests {
     #[test]
     fn market_buy_fills_at_ask_with_fee_and_slippage() {
         let mut simulator = ExecutionSimulator::new(SimulationConfig {
-            fee_bps: 10.0,
-            slippage_bps: 20.0,
+            fee_bps: "10".parse().unwrap(),
+            slippage_bps: "20".parse().unwrap(),
             enforce_quote_quantity: true,
         })
         .unwrap();
@@ -455,6 +472,28 @@ mod tests {
             simulator.order("order-1").unwrap().status,
             SimulationOrderStatus::Filled
         );
+    }
+
+    #[test]
+    fn market_sell_fills_at_bid() {
+        let mut simulator = ExecutionSimulator::new(SimulationConfig::default()).unwrap();
+        simulator
+            .submit(request(
+                "sell-order",
+                OrderSide::Sell,
+                OrderType::Market,
+                "1",
+                None,
+                10,
+            ))
+            .unwrap();
+        simulator
+            .apply_market_event(quote("101", "102", "10", "10", 11))
+            .unwrap();
+        let fills = simulator.take_fills();
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].price.to_string(), "101");
+        assert_eq!(fills[0].occurred_at_unix_nanos.get(), 11);
     }
 
     #[test]

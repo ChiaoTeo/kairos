@@ -11,6 +11,7 @@ use crate::services::simulator::{
 };
 use kairos_domain_types::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
 use kairos_market_contract::model::MarketObservation;
+use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BacktestEquityPoint {
@@ -111,44 +112,48 @@ impl BacktestApplication {
         let trades = closed_trades(&request.fills)?;
         let gross_profit = trades
             .iter()
-            .map(|trade| trade.gross_pnl.max(0.0))
-            .sum::<f64>();
+            .map(|trade| trade.gross_pnl.max(Decimal::ZERO))
+            .sum::<Decimal>();
         let gross_loss = trades
             .iter()
-            .map(|trade| trade.gross_pnl.min(0.0))
-            .sum::<f64>();
+            .map(|trade| trade.gross_pnl.min(Decimal::ZERO))
+            .sum::<Decimal>();
         let net_profit = equity.last().copied().unwrap_or(initial_equity) - initial_equity;
-        let win_count = trades.iter().filter(|trade| trade.net_pnl > 0.0).count();
-        let loss_count = trades.iter().filter(|trade| trade.net_pnl < 0.0).count();
-        let max_drawdown = max_drawdown(&equity);
-        let max_equity = equity
+        let win_count = trades
             .iter()
-            .fold(f64::NEG_INFINITY, |peak, value| peak.max(*value));
-        let max_drawdown_pct = if max_equity > 0.0 {
+            .filter(|trade| trade.net_pnl > Decimal::ZERO)
+            .count();
+        let loss_count = trades
+            .iter()
+            .filter(|trade| trade.net_pnl < Decimal::ZERO)
+            .count();
+        let max_drawdown = max_drawdown(&equity);
+        let max_equity = equity.iter().copied().max().unwrap_or(Decimal::ZERO);
+        let max_drawdown_pct = if max_equity > Decimal::ZERO {
             max_drawdown / max_equity
         } else {
-            0.0
+            Decimal::ZERO
         };
         let risk_free_rate = if request.risk_free_rate.mantissa() == 0 {
             0.0
         } else {
-            number(&request.risk_free_rate.to_string(), "risk_free_rate")?
+            statistical_number(&request.risk_free_rate.to_string(), "risk_free_rate")?
         };
         let sharpe = sharpe(&equity, risk_free_rate, request.annualization_periods);
         Ok(BacktestMetrics {
             trade_count: trades.len(),
             win_count,
             loss_count,
-            win_rate: format_number(if trades.is_empty() {
-                0.0
+            win_rate: format_decimal(if trades.is_empty() {
+                Decimal::ZERO
             } else {
-                win_count as f64 / trades.len() as f64
+                Decimal::from(win_count as u64) / Decimal::from(trades.len() as u64)
             }),
-            gross_profit: format_number(gross_profit),
-            gross_loss: format_number(gross_loss),
-            net_profit: format_number(net_profit),
-            max_drawdown: format_number(max_drawdown),
-            max_drawdown_pct: format_number(max_drawdown_pct),
+            gross_profit: format_decimal(gross_profit),
+            gross_loss: format_decimal(gross_loss),
+            net_profit: format_decimal(net_profit),
+            max_drawdown: format_decimal(max_drawdown),
+            max_drawdown_pct: format_decimal(max_drawdown_pct),
             sharpe: format_number(sharpe),
         })
     }
@@ -167,14 +172,14 @@ fn backtest_fill(fill: &SimulationFill) -> Result<BacktestFill, String> {
 
 #[derive(Clone, Copy)]
 struct OpenTrade {
-    quantity: f64,
-    entry_price: f64,
-    fees: f64,
+    quantity: Decimal,
+    entry_price: Decimal,
+    fees: Decimal,
 }
 
 struct ClosedTrade {
-    gross_pnl: f64,
-    net_pnl: f64,
+    gross_pnl: Decimal,
+    net_pnl: Decimal,
 }
 
 fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
@@ -184,7 +189,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
         let quantity = number(&fill.quantity.to_string(), "fill.quantity")?;
         let price = number(&fill.price.to_string(), "fill.price")?;
         let fee = number(&fill.fee.to_string(), "fill.fee")?;
-        if quantity <= 0.0 || price <= 0.0 || fee < 0.0 {
+        if quantity <= Decimal::ZERO || price <= Decimal::ZERO || fee < Decimal::ZERO {
             return Err("fill quantity and price must be positive; fee cannot be negative".into());
         }
         match fill.side {
@@ -221,7 +226,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                 });
                 current.quantity -= close_quantity;
                 current.fees -= opening_fee;
-                if current.quantity > 0.0 {
+                if current.quantity > Decimal::ZERO {
                     open.insert(fill.instrument_id.to_string(), current);
                 }
             }
@@ -230,9 +235,11 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
     Ok(trades)
 }
 
-fn max_drawdown(equity: &[f64]) -> f64 {
-    let mut peak = f64::NEG_INFINITY;
-    let mut result: f64 = 0.0;
+fn max_drawdown(equity: &[Decimal]) -> Decimal {
+    let Some(mut peak) = equity.first().copied() else {
+        return Decimal::ZERO;
+    };
+    let mut result = Decimal::ZERO;
     for value in equity {
         peak = peak.max(*value);
         result = result.max(peak - value);
@@ -240,8 +247,13 @@ fn max_drawdown(equity: &[f64]) -> f64 {
     result
 }
 
-fn sharpe(equity: &[f64], risk_free_rate: f64, annualization_periods: Option<f64>) -> f64 {
-    let returns: Vec<f64> = equity
+fn sharpe(equity: &[Decimal], risk_free_rate: f64, annualization_periods: Option<f64>) -> f64 {
+    let values = equity
+        .iter()
+        .map(|value| statistical_number(&value.to_string(), "equity"))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+    let returns: Vec<f64> = values
         .windows(2)
         .filter_map(|pair| (pair[0] != 0.0).then_some((pair[1] - pair[0]) / pair[0]))
         .collect();
@@ -262,11 +274,22 @@ fn sharpe(equity: &[f64], risk_free_rate: f64, annualization_periods: Option<f64
     annualization_periods.map_or(value, |periods| value * periods.max(0.0).sqrt())
 }
 
-fn number(value: &str, field: &str) -> Result<f64, String> {
+fn number(value: &str, field: &str) -> Result<Decimal, String> {
+    value
+        .trim()
+        .parse::<Decimal>()
+        .map_err(|error| format!("{field} must be decimal-compatible: {error}"))
+}
+
+fn statistical_number(value: &str, field: &str) -> Result<f64, String> {
     value
         .trim()
         .parse::<f64>()
-        .map_err(|error| format!("{field} must be decimal-compatible: {error}"))
+        .map_err(|error| format!("{field} must be convertible for statistical analysis: {error}"))
+}
+
+fn format_decimal(value: Decimal) -> String {
+    value.round_dp(18).normalize().to_string()
 }
 
 fn format_number(value: f64) -> String {

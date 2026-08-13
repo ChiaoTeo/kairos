@@ -41,7 +41,29 @@ pub struct WorkspaceMarketConfig {
     /// connection details.
     #[serde(default)]
     pub profiles: BTreeMap<String, WorkspaceMarketRuntimeProfile>,
+    /// Workspace-owned durable Market demand and historical recording rules.
+    #[serde(default)]
+    pub collections: BTreeMap<String, WorkspaceMarketCollection>,
     pub default_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMarketCollection {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    pub subject: String,
+    #[serde(default)]
+    pub selectors: Vec<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub market_type: Option<String>,
+    #[serde(default)]
+    pub asset_type: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default = "default_market_collection_queue_capacity")]
+    pub queue_capacity: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -52,6 +74,14 @@ pub enum WorkspaceMarketSourceBinding {
         enabled: bool,
         #[serde(default)]
         transport: WorkspaceBinanceSpotTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_market_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    BinanceEquity {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        credential_id: String,
         endpoint: Option<String>,
         #[serde(default = "default_market_source_snapshot_interval_ms")]
         snapshot_interval_ms: u64,
@@ -100,6 +130,7 @@ impl WorkspaceMarketSourceBinding {
     pub fn enabled(&self) -> bool {
         match self {
             Self::BinanceSpot { enabled, .. }
+            | Self::BinanceEquity { enabled, .. }
             | Self::BinanceDerivatives { enabled, .. }
             | Self::Massive { enabled, .. }
             | Self::Okx { enabled, .. }
@@ -243,6 +274,10 @@ fn default_market_source_input_capacity() -> usize {
 
 fn default_market_publication_queue_capacity() -> usize {
     256
+}
+
+fn default_market_collection_queue_capacity() -> usize {
+    4_096
 }
 
 fn default_market_snapshot_interval_ms() -> u64 {
@@ -883,6 +918,34 @@ mod tests {
             workspace.reference_config().providers["okx"].enabled,
             Some(false)
         );
+    }
+
+    #[test]
+    fn parses_durable_market_collection_policy() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("workspace.toml"),
+            r#"version = 1
+workspace_id = "demo"
+
+[market.collections.btc-bars]
+subject = "BTCUSDT"
+selectors = ["bar:1m"]
+exchange = "binance"
+market_type = "spot"
+source_id = "binance-spot"
+"#,
+        )
+        .unwrap();
+
+        let workspace = Workspace::open(root.path()).unwrap();
+        let collection = &workspace.market_config().collections["btc-bars"];
+
+        assert!(collection.enabled);
+        assert_eq!(collection.subject, "BTCUSDT");
+        assert_eq!(collection.selectors, ["bar:1m"]);
+        assert_eq!(collection.source_id.as_deref(), Some("binance-spot"));
+        assert_eq!(collection.queue_capacity, 4_096);
     }
 
     #[test]

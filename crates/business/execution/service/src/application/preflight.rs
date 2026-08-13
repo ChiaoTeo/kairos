@@ -2,6 +2,12 @@
 /// Implementations may aggregate Account, Risk, Market, Reference and System
 /// clients, while Execution remains the owner of intent/order state.
 pub trait ExecutionPreflight: Send {
+    /// Advance the composition dependencies' business-time view. Replay uses
+    /// this barrier for Risk reservation transitions; live and paper adapters
+    /// may keep the default no-op implementation.
+    fn advance_time(&mut self, _event_time_unix_nanos: u64) -> Result<(), String> {
+        Ok(())
+    }
     /// Resolve a strategy intent into the concrete per-account orders that
     /// will be submitted. The implementation is assembled in composition and
     /// may consult Account, Risk, Market, and Reference application APIs.
@@ -33,8 +39,7 @@ pub trait ExecutionPreflight: Send {
     fn resize_order(
         &mut self,
         _order_id: &str,
-        _remaining_quantity_mantissa: i64,
-        _quantity_scale: u8,
+        _remaining_quantity: kairos_domain_types::Quantity,
     ) -> Result<(), String> {
         Ok(())
     }

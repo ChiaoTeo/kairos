@@ -1,25 +1,25 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ExecutionOrderStatus, OrderSide};
+use crate::model::{Decimal, ExecutionOrderStatus, OrderSide};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SplitOrderPolicy {
-    pub max_child_quantity_mantissa: Option<i64>,
+    pub max_child_quantity: Option<Decimal>,
     pub child_count: Option<u32>,
-    pub min_child_quantity_mantissa: Option<i64>,
-    pub interval_millis: Option<u64>,
+    pub min_child_quantity: Option<Decimal>,
+    pub interval: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MakerExecutionPolicy {
-    pub min_interval_millis: Option<u64>,
+    pub min_interval: Option<u64>,
     pub max_orders_per_window: Option<u32>,
-    pub window_millis: Option<u64>,
-    pub max_inventory_abs_mantissa: Option<i64>,
-    pub target_inventory_mantissa: Option<i64>,
-    pub max_quote_age_millis: Option<u64>,
+    pub window: Option<u64>,
+    pub max_inventory_abs: Option<Decimal>,
+    pub target_inventory: Option<Decimal>,
+    pub max_quote_age: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,13 +44,10 @@ pub struct ExecutionOrderOptions {
 pub struct HedgePolicy {
     pub leader_leg_id: String,
     pub hedge_leg_id: String,
-    pub ratio_numerator: i64,
-    pub ratio_denominator: i64,
-    #[serde(default = "one_i64")]
-    pub contract_multiplier_numerator: i64,
-    #[serde(default = "one_i64")]
-    pub contract_multiplier_denominator: i64,
-    pub max_unhedged_quantity_mantissa: i64,
+    pub ratio: Ratio,
+    #[serde(default = "one_ratio")]
+    pub contract_multiplier: Ratio,
+    pub max_unhedged_quantity: Decimal,
     pub compensate_on_failure: bool,
     #[serde(default = "default_compensation_attempts")]
     pub max_compensation_attempts: u32,
@@ -60,8 +57,17 @@ fn default_compensation_attempts() -> u32 {
     3
 }
 
-fn one_i64() -> i64 {
-    1
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Ratio {
+    pub numerator: u64,
+    pub denominator: u64,
+}
+
+fn one_ratio() -> Ratio {
+    Ratio {
+        numerator: 1,
+        denominator: 1,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -72,10 +78,8 @@ pub struct ExecutionIntentLeg {
     pub instrument_id: String,
     pub market_id: Option<String>,
     pub side: OrderSide,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
+    pub quantity: Decimal,
+    pub limit_price: Option<Decimal>,
     #[serde(default)]
     pub target_position: bool,
     #[serde(default)]
@@ -104,10 +108,8 @@ pub struct PairArbitrageLeg {
     pub instrument_id: String,
     pub market_id: Option<String>,
     pub side: OrderSide,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
+    pub quantity: Decimal,
+    pub limit_price: Option<Decimal>,
     #[serde(default)]
     pub options: ExecutionOrderOptions,
 }
@@ -116,8 +118,7 @@ pub struct PairArbitrageLeg {
 pub struct PortfolioRebalanceTarget {
     pub instrument_id: String,
     pub market_id: Option<String>,
-    pub target_quantity_mantissa: i64,
-    pub quantity_scale: u8,
+    pub target_quantity: Decimal,
     pub side: OrderSide,
 }
 
@@ -217,11 +218,10 @@ pub struct ExecutionLeg {
     pub instrument_id: String,
     pub market_id: Option<String>,
     pub side: OrderSide,
-    pub target_quantity_mantissa: i64,
-    pub quantity_scale: u8,
+    pub target_quantity: Decimal,
     pub order_ids: Vec<String>,
     pub lifecycle: LegLifecycle,
-    pub completed_quantity_mantissa: i64,
+    pub completed_quantity: Decimal,
     pub reason: String,
 }
 

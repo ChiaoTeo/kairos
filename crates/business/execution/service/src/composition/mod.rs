@@ -66,7 +66,7 @@ impl SharedExecutionSnapshotPublisher {
     }
 
     pub fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String> {
-        let value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+        let value = execution_contract_snapshot_value(snapshot, true, false)?;
         let contract: kairos_execution_contract::model::ExecutionSnapshot =
             serde_json::from_value(value).map_err(|error| error.to_string())?;
         self.inner.publish(&contract)
@@ -97,11 +97,51 @@ impl SharedIntentSnapshotPublisher {
     }
 
     pub fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String> {
-        let value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+        let value = execution_contract_snapshot_value(snapshot, false, true)?;
         let contract: kairos_execution_contract::model::ExecutionSnapshot =
             serde_json::from_value(value).map_err(|error| error.to_string())?;
         self.inner.publish(&contract)
     }
+}
+
+/// Convert the application-owned snapshot representation to the flatter
+/// contract representation used by the shared-memory publishers.  The two
+/// models intentionally have different ownership and wire concerns; using a
+/// raw `serde_json` conversion here silently loses that boundary.
+fn execution_contract_snapshot_value(
+    snapshot: &ExecutionSnapshot,
+    include_orders: bool,
+    include_intents: bool,
+) -> Result<serde_json::Value, String> {
+    let mut value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "execution snapshot must be an object".to_string())?;
+    if !include_orders {
+        object.insert("orders".into(), serde_json::json!([]));
+    }
+    if !include_intents {
+        object.insert("intents".into(), serde_json::json!([]));
+    } else if let Some(intents) = object
+        .get_mut("intents")
+        .and_then(|value| value.as_array_mut())
+    {
+        for state in intents {
+            if let Some(state_object) = state.as_object_mut() {
+                // Plan legs use Domain quantities while the intent snapshot
+                // contract does not publish the plan itself.
+                state_object.insert("plan".into(), serde_json::Value::Null);
+            }
+        }
+    }
+    // These collections are not consumed by either shared-memory payload and
+    // have distinct internal representations.  Do not force them through the
+    // public contract conversion merely to satisfy serde.
+    object.insert("events".into(), serde_json::json!([]));
+    object.insert("fills".into(), serde_json::json!([]));
+    object.insert("intent_events".into(), serde_json::json!([]));
+    object.insert("unknown_remote_orders".into(), serde_json::json!([]));
+    Ok(value)
 }
 
 #[derive(Default)]

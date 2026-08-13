@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
 use futures_util::future::join_all;
 use kairos_integration::application::capabilities::reference::{
     AsyncInstrumentCatalogConnection, ExternalInstrument, ExternalInstrumentCatalog,
@@ -31,9 +30,11 @@ use crate::domain::{
 
 /// Internal provider seam. Provider selection belongs to composition and is
 /// not part of the public application contract.
-#[async_trait]
 pub(crate) trait ReferenceSource: Send {
     fn source_id(&self) -> &str;
+    fn normalized_facts_authoritative(&self) -> bool {
+        false
+    }
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog>;
 
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
@@ -41,6 +42,7 @@ pub(crate) trait ReferenceSource: Send {
             catalog: self.fetch_catalog().await?,
             complete: true,
             page_count: 1,
+            facts_persisted: false,
         })
     }
 
@@ -83,27 +85,27 @@ pub(crate) trait ReferenceSource: Send {
 
 /// Adds workspace-declared participants to the provider fan-in without
 /// creating another mutable catalog owner or another provider health entry.
-pub(crate) struct ParticipantAugmentedSource {
-    inner: Box<dyn ReferenceSource>,
+pub(crate) struct ParticipantAugmentedSource<S> {
+    inner: S,
     participants: Vec<Entity>,
 }
 
-impl ParticipantAugmentedSource {
-    pub(crate) fn wrap(
-        inner: Box<dyn ReferenceSource>,
-        participants: Vec<Entity>,
-    ) -> Box<dyn ReferenceSource> {
-        Box::new(Self {
+impl<S> ParticipantAugmentedSource<S> {
+    pub(crate) fn wrap(inner: S, participants: Vec<Entity>) -> Self {
+        Self {
             inner,
             participants,
-        })
+        }
     }
 }
 
-#[async_trait]
-impl ReferenceSource for ParticipantAugmentedSource {
+impl<S: ReferenceSource> ReferenceSource for ParticipantAugmentedSource<S> {
     fn source_id(&self) -> &str {
         self.inner.source_id()
+    }
+
+    fn normalized_facts_authoritative(&self) -> bool {
+        self.inner.normalized_facts_authoritative()
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
@@ -153,6 +155,7 @@ pub(crate) struct ProviderUpdate {
     pub catalog: ProviderCatalog,
     pub complete: bool,
     pub page_count: usize,
+    pub facts_persisted: bool,
 }
 
 /// Binance Spot public reference source.
@@ -185,12 +188,12 @@ pub struct BinanceEquitySource {
 /// to enabled underlyings. Market-data WebSocket observations may later add a
 /// single underlying/contract to this input, but they never make a global
 /// catalog scan authoritative.
-pub struct MassiveOptionsCoverageSource {
+pub struct MassiveOptionsCoverageSource<P> {
     api_key: String,
     base_url: String,
     scopes: BTreeMap<String, ScopedMassiveOptions>,
     last_good: BTreeMap<String, ProviderCatalog>,
-    sync_store: Box<dyn ProviderSyncStore>,
+    sync_store: P,
     next_scope: usize,
     coverage_dirty: bool,
 }
@@ -201,11 +204,11 @@ struct ScopedMassiveOptions {
     legacy_accumulated: Option<ProviderCatalog>,
 }
 
-pub struct MassiveEquitySource {
+pub struct MassiveEquitySource<P> {
     connection: kairos_integration::participants::massive::MassiveInstrumentCatalog,
     cursor: Option<String>,
     accumulated: Option<ProviderCatalog>,
-    sync_store: Option<Box<dyn ProviderSyncStore>>,
+    sync_store: P,
 }
 
 pub struct HyperliquidSource {
@@ -220,17 +223,19 @@ pub struct OkxSource {
 /// Reference-owned fan-in for the global catalog. Each provider remains an
 /// independent integration connection; this source only merges normalized
 /// records before they enter the Reference actor.
-pub struct CompositeSource {
-    workers: Vec<ProviderWorker>,
+pub struct CompositeSource<S, P> {
+    workers: Vec<ProviderWorker<S>>,
+    #[cfg(test)]
     last_good: BTreeMap<String, ProviderCatalog>,
+    known_last_good: BTreeSet<String>,
     health: BTreeMap<String, ProviderHealth>,
-    sync_store: Option<Box<dyn ProviderSyncStore>>,
+    sync_store: Option<P>,
     paused: BTreeSet<String>,
 }
 
-struct ProviderWorker {
+struct ProviderWorker<S> {
     source_id: String,
-    source: Box<dyn ReferenceSource>,
+    source: S,
     retry_after: Option<Instant>,
 }
 
@@ -245,28 +250,46 @@ const PROVIDER_FETCH_TIMEOUT: Duration = Duration::from_secs(150);
 const MASSIVE_PAGES_PER_REFRESH: usize = 1;
 const MASSIVE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
-impl CompositeSource {
-    #[cfg(test)]
-    pub async fn new(sources: Vec<Box<dyn ReferenceSource>>) -> ReferenceResult<Self> {
-        Self::new_with_sync_store(sources, None).await
-    }
-
+impl<S, P> CompositeSource<S, P>
+where
+    S: ReferenceSource,
+    P: ProviderSyncStore,
+{
     pub async fn new_with_sync_store(
-        sources: Vec<Box<dyn ReferenceSource>>,
-        mut sync_store: Option<Box<dyn ProviderSyncStore>>,
+        sources: Vec<S>,
+        mut sync_store: Option<P>,
     ) -> ReferenceResult<Self> {
         if sources.is_empty() {
             return Err(ReferenceError::Provider(
                 "reference catalog has no sources".into(),
             ));
         }
+        #[cfg(not(test))]
+        if !sync_store
+            .as_ref()
+            .is_some_and(ProviderSyncStore::supports_normalized_promotion)
+        {
+            return Err(ReferenceError::Persistence(
+                "production reference fan-in requires normalized SQLite promotion".into(),
+            ));
+        }
+        #[cfg(test)]
         let mut last_good = BTreeMap::new();
+        let mut known_last_good = BTreeSet::new();
         let mut paused = BTreeSet::new();
         for source in &sources {
             if let Some(store) = sync_store.as_mut() {
+                if store.supports_normalized_promotion() {
+                    if store.has_last_good(source.source_id()).await? {
+                        known_last_good.insert(source.source_id().to_owned());
+                    }
+                    continue;
+                }
+                #[cfg(test)]
                 if let Some(catalog) = store.load_last_good(source.source_id()).await? {
                     if provider_catalog_uses_current_canonical_shape(&catalog) {
                         last_good.insert(source.source_id().to_owned(), catalog);
+                        known_last_good.insert(source.source_id().to_owned());
                     } else {
                         tracing::warn!(
                             event = "reference_provider_snapshot_schema_mismatch",
@@ -294,7 +317,9 @@ impl CompositeSource {
             .collect();
         Ok(Self {
             workers,
+            #[cfg(test)]
             last_good,
+            known_last_good,
             health: BTreeMap::new(),
             sync_store,
             paused,
@@ -304,16 +329,149 @@ impl CompositeSource {
     /// Build a catalog from already committed provider snapshots. This is used
     /// after one independently scheduled source finishes so the completion
     /// never triggers network work for Binance, OKX, or another peer.
+    #[cfg(test)]
     fn last_good_catalog(&self) -> ReferenceResult<Option<ProviderCatalog>> {
         if self.last_good.is_empty() {
             return Ok(None);
         }
         merge_provider_catalog_views(self.last_good.values()).map(Some)
     }
+
+    async fn fetch_normalized_facts(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut requests = Vec::new();
+        let mut skipped = Vec::new();
+        for worker in &mut self.workers {
+            if self.paused.contains(&worker.source_id)
+                || worker
+                    .retry_after
+                    .is_some_and(|until| until > Instant::now())
+            {
+                skipped.push(worker.source_id.clone());
+                continue;
+            }
+            let source_id = worker.source_id.clone();
+            let source = &mut worker.source;
+            requests.push(async move {
+                let result =
+                    tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step())
+                        .await
+                        .map_err(|error| {
+                            ReferenceError::Provider(format!("provider fetch timed out: {error}"))
+                        })?;
+                Ok::<_, ReferenceError>((source_id, result))
+            });
+        }
+        let requests = join_all(requests).await;
+        if self.sync_store.is_none() {
+            return Err(ReferenceError::Persistence(
+                "normalized provider store is unavailable".into(),
+            ));
+        }
+        let mut unavailable = Vec::new();
+        for source_id in skipped {
+            if !self
+                .sync_store
+                .as_mut()
+                .expect("store checked")
+                .has_last_good(&source_id)
+                .await?
+            {
+                unavailable.push(source_id);
+            }
+        }
+        for result in requests {
+            let (source_id, result) = match result {
+                Ok(value) => value,
+                Err(error) => return Err(error),
+            };
+            match result {
+                Ok(mut update) if update.complete => {
+                    tracing::info!(
+                        event = "reference_provider_scan_completed",
+                        component = "reference",
+                        provider = %source_id,
+                        page_count = update.page_count,
+                        "normalized provider facts are ready for atomic promotion"
+                    );
+                    if !update.facts_persisted {
+                        tag_catalog_source(&mut update.catalog, &source_id);
+                        update.catalog.validate()?;
+                        self.sync_store
+                            .as_mut()
+                            .expect("store checked")
+                            .save_last_good(&source_id, &update.catalog)
+                            .await?;
+                    }
+                    self.mark_success(&source_id);
+                }
+                Ok(update) => {
+                    tracing::info!(
+                        event = "reference_provider_sync_in_progress",
+                        component = "reference",
+                        provider = %source_id,
+                        page_count = update.page_count,
+                        "normalized provider scan will resume from its durable cursor"
+                    );
+                    self.mark_syncing(&source_id);
+                    let has_last_good = self
+                        .sync_store
+                        .as_mut()
+                        .expect("store checked")
+                        .has_last_good(&source_id)
+                        .await?;
+                    if !has_last_good {
+                        unavailable.push(source_id);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        event = "reference_provider_degraded",
+                        component = "reference",
+                        provider = %source_id,
+                        error = %error,
+                        "reference refresh retained normalized last-known-good facts"
+                    );
+                    self.mark_failure(&source_id, "stale");
+                    let has_last_good = self
+                        .sync_store
+                        .as_mut()
+                        .expect("store checked")
+                        .has_last_good(&source_id)
+                        .await?;
+                    if !has_last_good {
+                        unavailable.push(source_id);
+                    }
+                }
+            }
+        }
+        if !unavailable.is_empty() {
+            return Err(ReferenceError::Provider(format!(
+                "providers unavailable without last-known-good facts: {}",
+                unavailable.join(", ")
+            )));
+        }
+        Ok(ProviderCatalog::default())
+    }
 }
 
-#[async_trait]
-impl ReferenceSource for CompositeSource {
+#[cfg(test)]
+impl<S: ReferenceSource> CompositeSource<S, ()> {
+    pub async fn new(sources: Vec<S>) -> ReferenceResult<Self> {
+        Self::new_with_sync_store(sources, None).await
+    }
+}
+
+impl<S, P> ReferenceSource for CompositeSource<S, P>
+where
+    S: ReferenceSource,
+    P: ProviderSyncStore,
+{
+    fn normalized_facts_authoritative(&self) -> bool {
+        self.sync_store
+            .as_ref()
+            .is_some_and(ProviderSyncStore::supports_normalized_promotion)
+    }
+
     fn source_id(&self) -> &str {
         if self.workers.len() == 1 {
             &self.workers[0].source_id
@@ -323,244 +481,265 @@ impl ReferenceSource for CompositeSource {
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        // Provider queries are polled concurrently by the caller's runtime.
-        // Each query has the same bounded deadline, so one slow provider does
-        // not serialize or indefinitely hold the fan-in.
-        let started = Instant::now();
-        let mut failures = Vec::new();
-        let mut unavailable_without_last_good = Vec::new();
-        let mut requests = Vec::new();
-        let mut paused_sources = Vec::new();
-        for worker in &mut self.workers {
-            if self.paused.contains(&worker.source_id) {
-                paused_sources.push(worker.source_id.clone());
-                continue;
-            }
-            if worker
-                .retry_after
-                .is_some_and(|until| until > Instant::now())
-            {
-                failures.push(format!("{}: provider circuit is open", worker.source_id));
-                if !self.last_good.contains_key(&worker.source_id) {
-                    unavailable_without_last_good.push(worker.source_id.clone());
+        if self.normalized_facts_authoritative() {
+            return self.fetch_normalized_facts().await;
+        }
+        #[cfg(not(test))]
+        return Err(ReferenceError::Persistence(
+            "production reference sources require normalized SQLite promotion".into(),
+        ));
+        #[cfg(test)]
+        {
+            // Provider queries are polled concurrently by the caller's runtime.
+            // Each query has the same bounded deadline, so one slow provider does
+            // not serialize or indefinitely hold the fan-in.
+            let started = Instant::now();
+            let mut failures = Vec::new();
+            let mut unavailable_without_last_good = Vec::new();
+            let mut requests = Vec::new();
+            let mut paused_sources = Vec::new();
+            for worker in &mut self.workers {
+                if self.paused.contains(&worker.source_id) {
+                    paused_sources.push(worker.source_id.clone());
+                    continue;
                 }
-                continue;
-            }
-            let health = self
-                .health
-                .entry(worker.source_id.clone())
-                .or_insert_with(|| ProviderHealth {
-                    source_id: worker.source_id.clone(),
-                    status: "unknown".into(),
-                    last_attempt_unix_nanos: None,
-                    last_success_unix_nanos: None,
-                    consecutive_failures: 0,
-                    stale: false,
-                });
-            health.last_attempt_unix_nanos = Some(unix_nanos().into());
-            let source_id = worker.source_id.clone();
-            let source = &mut worker.source;
-            requests.push(async move {
-                let provider_started = Instant::now();
-                let result =
-                    match tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step())
-                        .await
+                if worker
+                    .retry_after
+                    .is_some_and(|until| until > Instant::now())
+                {
+                    failures.push(format!("{}: provider circuit is open", worker.source_id));
+                    if !self.last_good.contains_key(&worker.source_id) {
+                        unavailable_without_last_good.push(worker.source_id.clone());
+                    }
+                    continue;
+                }
+                let health = self
+                    .health
+                    .entry(worker.source_id.clone())
+                    .or_insert_with(|| ProviderHealth {
+                        source_id: worker.source_id.clone(),
+                        status: "unknown".into(),
+                        last_attempt_unix_nanos: None,
+                        last_success_unix_nanos: None,
+                        consecutive_failures: 0,
+                        stale: false,
+                    });
+                health.last_attempt_unix_nanos = Some(unix_nanos().into());
+                let source_id = worker.source_id.clone();
+                let source = &mut worker.source;
+                requests.push(async move {
+                    let provider_started = Instant::now();
+                    let result = match tokio::time::timeout(
+                        PROVIDER_FETCH_TIMEOUT,
+                        source.fetch_catalog_step(),
+                    )
+                    .await
                     {
                         Ok(result) => result,
                         Err(error) => Err(ReferenceError::Provider(format!(
                             "provider fetch timed out: {error}"
                         ))),
                     };
-                (source_id, result, provider_started)
-            });
-        }
-        let requests = join_all(requests).await;
-        for source_id in paused_sources {
-            self.mark_paused(&source_id);
-        }
-        let mut entities = BTreeMap::new();
-        let mut assets = BTreeMap::new();
-        let mut instruments = BTreeMap::new();
-        let mut listings = BTreeMap::new();
-        let mut markets = BTreeMap::new();
-        let mut financial_products = BTreeMap::new();
-        let mut execution_accesses = BTreeMap::new();
-        let mut conflicts = Vec::new();
-        let mut reconciled_instruments = 0usize;
-        let mut successful_sources = 0usize;
-        for (source_id, result, provider_started) in requests {
-            tracing::info!(
-                event = "reference_provider_fetch_completed",
-                component = "reference",
-                provider = %source_id,
-                duration_ms = provider_started.elapsed().as_millis() as u64,
-                success = result.is_ok(),
-                complete = result.as_ref().map(|update| update.complete).unwrap_or(false),
-                page_count = result.as_ref().map(|update| update.page_count).unwrap_or(0),
-                "reference provider fetch completed"
-            );
-            let catalog = match result {
-                Ok(update) => {
-                    if !update.complete {
-                        self.mark_syncing(&source_id);
-                        tracing::info!(
-                            event = "reference_provider_sync_in_progress",
-                            component = "reference",
-                            provider = %source_id,
-                            page_count = update.page_count,
-                            fallback = self.last_good.contains_key(&source_id),
-                            "reference provider sync is continuing from its persisted cursor"
-                        );
+                    (source_id, result, provider_started)
+                });
+            }
+            let requests = join_all(requests).await;
+            for source_id in paused_sources {
+                self.mark_paused(&source_id);
+            }
+            let mut entities = BTreeMap::new();
+            let mut assets = BTreeMap::new();
+            let mut instruments = BTreeMap::new();
+            let mut listings = BTreeMap::new();
+            let mut markets = BTreeMap::new();
+            let mut financial_products = BTreeMap::new();
+            let mut execution_accesses = BTreeMap::new();
+            let mut conflicts = Vec::new();
+            let mut reconciled_instruments = 0usize;
+            let mut successful_sources = 0usize;
+            for (source_id, result, provider_started) in requests {
+                tracing::info!(
+                    event = "reference_provider_fetch_completed",
+                    component = "reference",
+                    provider = %source_id,
+                    duration_ms = provider_started.elapsed().as_millis() as u64,
+                    success = result.is_ok(),
+                    complete = result.as_ref().map(|update| update.complete).unwrap_or(false),
+                    page_count = result.as_ref().map(|update| update.page_count).unwrap_or(0),
+                    "reference provider fetch completed"
+                );
+                let catalog = match result {
+                    Ok(update) => {
+                        if !update.complete {
+                            self.mark_syncing(&source_id);
+                            tracing::info!(
+                                event = "reference_provider_sync_in_progress",
+                                component = "reference",
+                                provider = %source_id,
+                                page_count = update.page_count,
+                                fallback = self.last_good.contains_key(&source_id),
+                                "reference provider sync is continuing from its persisted cursor"
+                            );
+                            let Some(catalog) = self.last_good.get(&source_id) else {
+                                unavailable_without_last_good.push(source_id.clone());
+                                continue;
+                            };
+                            catalog
+                        } else {
+                            successful_sources += 1;
+                            self.mark_success(&source_id);
+                            let mut catalog = update.catalog;
+                            tag_catalog_source(&mut catalog, &source_id);
+                            self.last_good.insert(source_id.clone(), catalog);
+                            if let Some(store) = self.sync_store.as_mut() {
+                                store
+                                    .save_last_good(
+                                        &source_id,
+                                        self.last_good
+                                            .get(&source_id)
+                                            .expect("inserted provider snapshot"),
+                                    )
+                                    .await?;
+                            }
+                            self.last_good
+                                .get(&source_id)
+                                .expect("inserted provider snapshot")
+                        }
+                    }
+                    Err(error) => {
+                        failures.push(format!("{source_id}: {error}"));
+                        self.mark_failure(&source_id, "stale");
                         let Some(catalog) = self.last_good.get(&source_id) else {
                             unavailable_without_last_good.push(source_id.clone());
                             continue;
                         };
                         catalog
-                    } else {
-                        successful_sources += 1;
-                        self.mark_success(&source_id);
-                        let mut catalog = update.catalog;
-                        tag_catalog_source(&mut catalog, &source_id);
-                        self.last_good.insert(source_id.clone(), catalog);
-                        if let Some(store) = self.sync_store.as_mut() {
-                            store
-                                .save_last_good(
-                                    &source_id,
-                                    self.last_good
-                                        .get(&source_id)
-                                        .expect("inserted provider snapshot"),
-                                )
-                                .await?;
+                    }
+                };
+                for value in &catalog.entities {
+                    if entities
+                        .insert(value.entity_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("entity:{}", value.entity_id));
+                    }
+                }
+                for value in &catalog.assets {
+                    if assets
+                        .insert(value.asset_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("asset:{}", value.asset_id));
+                    }
+                }
+                for value in &catalog.instruments {
+                    if let Some(previous) = instruments.get_mut(&value.instrument_id) {
+                        if previous != value {
+                            merge_canonical_instrument(previous, value).map_err(|error| {
+                                ReferenceError::Provider(format!(
+                                    "canonical instrument conflict for {}: {error}",
+                                    value.instrument_id
+                                ))
+                            })?;
+                            reconciled_instruments += 1;
                         }
-                        self.last_good
-                            .get(&source_id)
-                            .expect("inserted provider snapshot")
+                    } else {
+                        instruments.insert(value.instrument_id.clone(), value.clone());
                     }
                 }
-                Err(error) => {
-                    failures.push(format!("{source_id}: {error}"));
-                    self.mark_failure(&source_id, "stale");
-                    let Some(catalog) = self.last_good.get(&source_id) else {
-                        unavailable_without_last_good.push(source_id.clone());
-                        continue;
-                    };
-                    catalog
-                }
-            };
-            for value in &catalog.entities {
-                if entities
-                    .insert(value.entity_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("entity:{}", value.entity_id));
-                }
-            }
-            for value in &catalog.assets {
-                if assets
-                    .insert(value.asset_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("asset:{}", value.asset_id));
-                }
-            }
-            for value in &catalog.instruments {
-                if let Some(previous) = instruments.get_mut(&value.instrument_id) {
-                    if previous != value {
-                        merge_canonical_instrument(previous, value).map_err(|error| {
-                            ReferenceError::Provider(format!(
-                                "canonical instrument conflict for {}: {error}",
-                                value.instrument_id
-                            ))
-                        })?;
-                        reconciled_instruments += 1;
+                for value in &catalog.listings {
+                    if listings
+                        .insert(value.listing_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("listing:{}", value.listing_id));
                     }
-                } else {
-                    instruments.insert(value.instrument_id.clone(), value.clone());
+                }
+                for value in &catalog.markets {
+                    if markets
+                        .insert(value.market_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("market:{}", value.market_id));
+                    }
+                }
+                for value in &catalog.financial_products {
+                    if financial_products
+                        .insert(value.product_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("financial_product:{}", value.product_id));
+                    }
+                }
+                for value in &catalog.execution_accesses {
+                    if execution_accesses
+                        .insert(value.access_id.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!("execution_access:{}", value.access_id));
+                    }
                 }
             }
-            for value in &catalog.listings {
-                if listings
-                    .insert(value.listing_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("listing:{}", value.listing_id));
-                }
-            }
-            for value in &catalog.markets {
-                if markets
-                    .insert(value.market_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("market:{}", value.market_id));
-                }
-            }
-            for value in &catalog.financial_products {
-                if financial_products
-                    .insert(value.product_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("financial_product:{}", value.product_id));
-                }
-            }
-            for value in &catalog.execution_accesses {
-                if execution_accesses
-                    .insert(value.access_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts.push(format!("execution_access:{}", value.access_id));
-                }
-            }
-        }
-        if !unavailable_without_last_good.is_empty() {
-            return Err(ReferenceError::Provider(format!(
+            if !unavailable_without_last_good.is_empty() {
+                #[cfg(not(test))]
+                self.last_good.clear();
+                return Err(ReferenceError::Provider(format!(
                 "reference providers unavailable without a last-known-good snapshot: {}; failures: {}",
                 unavailable_without_last_good.join(", "),
                 failures.join("; ")
             )));
-        }
-        if successful_sources == 0 && self.last_good.is_empty() {
-            return Err(ReferenceError::Provider(format!(
-                "all reference providers failed: {}",
-                failures.join("; ")
-            )));
-        }
-        if !failures.is_empty() {
-            tracing::warn!(
-                event = "reference_provider_degraded",
-                component = "reference",
-                failures = ?failures,
-                "reference refresh used last-known-good provider snapshots"
-            );
-        }
-        if !conflicts.is_empty() {
-            let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
-            return Err(ReferenceError::Provider(format!(
-                "providers returned {} irreconcilable canonical record conflicts (sample: {})",
-                conflicts.len(),
-                sample.join(", ")
-            )));
-        }
-        if reconciled_instruments > 0 {
+            }
+            if successful_sources == 0 && self.last_good.is_empty() {
+                #[cfg(not(test))]
+                self.last_good.clear();
+                return Err(ReferenceError::Provider(format!(
+                    "all reference providers failed: {}",
+                    failures.join("; ")
+                )));
+            }
+            if !failures.is_empty() {
+                tracing::warn!(
+                    event = "reference_provider_degraded",
+                    component = "reference",
+                    failures = ?failures,
+                    "reference refresh used last-known-good provider snapshots"
+                );
+            }
+            if !conflicts.is_empty() {
+                let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
+                #[cfg(not(test))]
+                self.last_good.clear();
+                return Err(ReferenceError::Provider(format!(
+                    "providers returned {} irreconcilable canonical record conflicts (sample: {})",
+                    conflicts.len(),
+                    sample.join(", ")
+                )));
+            }
+            if reconciled_instruments > 0 {
+                tracing::info!(
+                    event = "reference_canonical_instruments_reconciled",
+                    component = "reference",
+                    instrument_count = reconciled_instruments,
+                    "shared canonical instruments were reconciled across provider listings"
+                );
+            }
             tracing::info!(
-                event = "reference_canonical_instruments_reconciled",
+                event = "reference_provider_fan_in_completed",
                 component = "reference",
-                instrument_count = reconciled_instruments,
-                "shared canonical instruments were reconciled across provider listings"
+                provider_count = self.workers.len(),
+                successful_sources,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "reference provider fan-in completed"
             );
+            // Include paused and circuit-open providers through their durable
+            // snapshots without cloning them into a synthetic request result.
+            // This also makes the returned fan-in independent from which workers
+            // happened to be scheduled in this refresh cycle.
+            let result = merge_provider_catalog_views(self.last_good.values());
+            #[cfg(not(test))]
+            self.last_good.clear();
+            result
         }
-        tracing::info!(
-            event = "reference_provider_fan_in_completed",
-            component = "reference",
-            provider_count = self.workers.len(),
-            successful_sources,
-            duration_ms = started.elapsed().as_millis() as u64,
-            "reference provider fan-in completed"
-        );
-        // Include paused and circuit-open providers through their durable
-        // snapshots without cloning them into a synthetic request result.
-        // This also makes the returned fan-in independent from which workers
-        // happened to be scheduled in this refresh cycle.
-        merge_provider_catalog_views(self.last_good.values())
     }
 
     async fn advance_source(
@@ -588,65 +767,114 @@ impl ReferenceSource for CompositeSource {
                 "{source_id}: provider circuit is open"
             )));
         }
-        let health = self
-            .health
-            .entry(source_id.to_owned())
-            .or_insert_with(|| ProviderHealth {
-                source_id: source_id.to_owned(),
-                status: "unknown".into(),
-                last_attempt_unix_nanos: None,
-                last_success_unix_nanos: None,
-                consecutive_failures: 0,
-                stale: false,
-            });
-        health.last_attempt_unix_nanos = Some(unix_nanos().into());
-        let started = Instant::now();
-        let result = {
-            let source = &mut self.workers[index].source;
-            match tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step()).await {
-                Ok(result) => result,
-                Err(error) => Err(ReferenceError::Provider(format!(
-                    "provider fetch timed out: {error}"
-                ))),
-            }
-        };
-        tracing::info!(
-            event = "reference_provider_targeted_fetch_completed",
-            component = "reference",
-            provider = source_id,
-            duration_ms = started.elapsed().as_millis() as u64,
-            success = result.is_ok(),
-            complete = result
-                .as_ref()
-                .map(|update| update.complete)
-                .unwrap_or(false),
-            page_count = result.as_ref().map(|update| update.page_count).unwrap_or(0),
-            "targeted reference provider fetch completed"
-        );
-        match result {
-            Ok(update) if !update.complete => {
-                self.mark_syncing(source_id);
-                Ok(None)
-            }
-            Ok(mut update) => {
-                tag_catalog_source(&mut update.catalog, source_id);
-                self.last_good.insert(source_id.to_owned(), update.catalog);
-                if let Some(store) = self.sync_store.as_mut() {
-                    store
-                        .save_last_good(
-                            source_id,
-                            self.last_good
-                                .get(source_id)
-                                .expect("inserted provider snapshot"),
-                        )
-                        .await?;
+        if self.normalized_facts_authoritative() {
+            let result = tokio::time::timeout(
+                PROVIDER_FETCH_TIMEOUT,
+                self.workers[index].source.fetch_catalog_step(),
+            )
+            .await
+            .map_err(|error| {
+                ReferenceError::Provider(format!("provider fetch timed out: {error}"))
+            })?;
+            return match result {
+                Ok(mut update) if update.complete => {
+                    if !update.facts_persisted {
+                        tag_catalog_source(&mut update.catalog, source_id);
+                        update.catalog.validate()?;
+                        self.sync_store
+                            .as_mut()
+                            .expect("normalized source has a store")
+                            .save_last_good(source_id, &update.catalog)
+                            .await?;
+                    }
+                    self.mark_success(source_id);
+                    Ok(Some(ProviderCatalog::default()))
                 }
-                self.mark_success(source_id);
-                self.last_good_catalog()
-            }
-            Err(error) => {
-                self.mark_failure(source_id, "failed");
-                Err(error)
+                Ok(_) => {
+                    self.mark_syncing(source_id);
+                    Ok(None)
+                }
+                Err(error) => {
+                    self.mark_failure(source_id, "failed");
+                    Err(error)
+                }
+            };
+        }
+        #[cfg(not(test))]
+        return Err(ReferenceError::Persistence(
+            "production reference sources require normalized SQLite promotion".into(),
+        ));
+        #[cfg(test)]
+        {
+            let health =
+                self.health
+                    .entry(source_id.to_owned())
+                    .or_insert_with(|| ProviderHealth {
+                        source_id: source_id.to_owned(),
+                        status: "unknown".into(),
+                        last_attempt_unix_nanos: None,
+                        last_success_unix_nanos: None,
+                        consecutive_failures: 0,
+                        stale: false,
+                    });
+            health.last_attempt_unix_nanos = Some(unix_nanos().into());
+            let started = Instant::now();
+            let result = {
+                let source = &mut self.workers[index].source;
+                match tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step())
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => Err(ReferenceError::Provider(format!(
+                        "provider fetch timed out: {error}"
+                    ))),
+                }
+            };
+            tracing::info!(
+                event = "reference_provider_targeted_fetch_completed",
+                component = "reference",
+                provider = source_id,
+                duration_ms = started.elapsed().as_millis() as u64,
+                success = result.is_ok(),
+                complete = result
+                    .as_ref()
+                    .map(|update| update.complete)
+                    .unwrap_or(false),
+                page_count = result.as_ref().map(|update| update.page_count).unwrap_or(0),
+                "targeted reference provider fetch completed"
+            );
+            match result {
+                Ok(update) if !update.complete => {
+                    self.mark_syncing(source_id);
+                    #[cfg(not(test))]
+                    self.last_good.clear();
+                    Ok(None)
+                }
+                Ok(mut update) => {
+                    tag_catalog_source(&mut update.catalog, source_id);
+                    self.last_good.insert(source_id.to_owned(), update.catalog);
+                    if let Some(store) = self.sync_store.as_mut() {
+                        store
+                            .save_last_good(
+                                source_id,
+                                self.last_good
+                                    .get(source_id)
+                                    .expect("inserted provider snapshot"),
+                            )
+                            .await?;
+                    }
+                    self.mark_success(source_id);
+                    let result = self.last_good_catalog();
+                    #[cfg(not(test))]
+                    self.last_good.clear();
+                    result
+                }
+                Err(error) => {
+                    self.mark_failure(source_id, "failed");
+                    #[cfg(not(test))]
+                    self.last_good.clear();
+                    Err(error)
+                }
             }
         }
     }
@@ -936,6 +1164,7 @@ fn canonical_instrument_status(
     }
 }
 
+#[cfg(test)]
 fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> bool {
     if catalog
         .entities
@@ -985,7 +1214,11 @@ fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> b
     })
 }
 
-impl CompositeSource {
+impl<S, P> CompositeSource<S, P>
+where
+    S: ReferenceSource,
+    P: ProviderSyncStore,
+{
     fn mark_success(&mut self, source_id: &str) {
         let health = self
             .health
@@ -1002,6 +1235,7 @@ impl CompositeSource {
         health.last_success_unix_nanos = Some(unix_nanos().into());
         health.consecutive_failures = 0;
         health.stale = false;
+        self.known_last_good.insert(source_id.to_owned());
         if let Some(worker) = self
             .workers
             .iter_mut()
@@ -1023,14 +1257,14 @@ impl CompositeSource {
                 consecutive_failures: 0,
                 stale: false,
             });
-        health.status = if self.last_good.contains_key(source_id) {
+        health.status = if self.known_last_good.contains(source_id) {
             "stale"
         } else {
             status
         }
         .into();
         health.consecutive_failures = health.consecutive_failures.saturating_add(1);
-        health.stale = self.last_good.contains_key(source_id);
+        health.stale = self.known_last_good.contains(source_id);
         let backoff_seconds = 5u64.saturating_mul(1u64 << health.consecutive_failures.min(6));
         if let Some(worker) = self
             .workers
@@ -1043,7 +1277,7 @@ impl CompositeSource {
     }
 
     fn mark_syncing(&mut self, source_id: &str) {
-        let has_last_good = self.last_good.contains_key(source_id);
+        let has_last_good = self.known_last_good.contains(source_id);
         let health = self
             .health
             .entry(source_id.to_owned())
@@ -1128,7 +1362,6 @@ impl OkxSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for OkxSource {
     fn source_id(&self) -> &str {
         &self.id
@@ -1218,12 +1451,18 @@ fn binance_public_connection(endpoint: impl Into<String>) -> ReferenceResult<Bin
     .map_err(|error| ReferenceError::Provider(error.to_string()))
 }
 
-impl MassiveOptionsCoverageSource {
+impl<P: ProviderSyncStore> MassiveOptionsCoverageSource<P> {
     pub async fn new(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        sync_store: Box<dyn ProviderSyncStore>,
+        sync_store: P,
     ) -> ReferenceResult<Self> {
+        #[cfg(not(test))]
+        if !sync_store.supports_normalized_promotion() {
+            return Err(ReferenceError::Persistence(
+                "production Massive options ingestion requires normalized SQLite promotion".into(),
+            ));
+        }
         let api_key = api_key.into();
         let base_url = base_url.into();
         let mut source = Self {
@@ -1270,6 +1509,7 @@ impl MassiveOptionsCoverageSource {
             .load_state(&key)
             .await?
             .unwrap_or((None, None));
+        #[cfg(test)]
         if let Some(catalog) = self.sync_store.load_last_good(&key).await? {
             self.last_good.insert(underlying.clone(), catalog);
         }
@@ -1287,7 +1527,7 @@ impl MassiveOptionsCoverageSource {
     async fn advance_one_scope(
         &mut self,
         underlying: &str,
-    ) -> ReferenceResult<Option<ProviderCatalog>> {
+    ) -> ReferenceResult<Option<(ProviderCatalog, bool)>> {
         let key = Self::scope_key(underlying);
         let (legacy, cursor) = {
             let scope = self
@@ -1341,51 +1581,71 @@ impl MassiveOptionsCoverageSource {
         if !page.complete {
             return Ok(None);
         }
-        let catalog = self
-            .sync_store
-            .staged_pages(&key)
-            .await?
-            .into_iter()
-            .fold(None, |merged, page| {
-                Some(merge_provider_catalog(merged, page))
-            })
-            .unwrap_or_default();
-        self.sync_store.clear_staged_pages(&key).await?;
+        let normalized = self.sync_store.supports_normalized_promotion();
+        let catalog = if normalized {
+            self.sync_store.promote_staged(&key).await?;
+            ProviderCatalog::default()
+        } else {
+            let catalog = self
+                .sync_store
+                .staged_pages(&key)
+                .await?
+                .into_iter()
+                .fold(None, |merged, page| {
+                    Some(merge_provider_catalog(merged, page))
+                })
+                .unwrap_or_default();
+            self.sync_store.clear_staged_pages(&key).await?;
+            self.sync_store.save_last_good(&key, &catalog).await?;
+            catalog
+        };
         self.scopes
             .get_mut(underlying)
             .expect("enabled coverage scope is present")
             .cursor = None;
-        self.sync_store.save_last_good(&key, &catalog).await?;
-        self.last_good.insert(underlying.into(), catalog);
-        Ok(Some(self.merged_last_good()?))
+        if normalized {
+            Ok(Some((ProviderCatalog::default(), true)))
+        } else {
+            self.last_good.insert(underlying.into(), catalog);
+            Ok(Some((self.merged_last_good()?, false)))
+        }
     }
 }
 
-impl MassiveEquitySource {
-    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> ReferenceResult<Self> {
+impl<P: ProviderSyncStore> MassiveEquitySource<P> {
+    fn without_state(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        sync_store: P,
+    ) -> ReferenceResult<Self> {
         let connection = massive_public_connection(api_key, base_url)?
             .instrument_catalog(MassiveInstrumentQuery::equities());
         Ok(Self {
             connection,
             cursor: None,
             accumulated: None,
-            sync_store: None,
+            sync_store,
         })
     }
 
     pub async fn new_with_sync_store(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        mut sync_store: Box<dyn ProviderSyncStore>,
+        mut sync_store: P,
     ) -> ReferenceResult<Self> {
-        let mut source = Self::new(api_key, base_url)?;
+        #[cfg(not(test))]
+        if !sync_store.supports_normalized_promotion() {
+            return Err(ReferenceError::Persistence(
+                "production Massive equity ingestion requires normalized SQLite promotion".into(),
+            ));
+        }
         let (cursor, accumulated) = sync_store
             .load_state("massive-equity")
             .await?
             .unwrap_or((None, None));
+        let mut source = Self::without_state(api_key, base_url, sync_store)?;
         source.cursor = cursor;
         source.accumulated = accumulated;
-        source.sync_store = Some(sync_store);
         Ok(source)
     }
 }
@@ -1414,7 +1674,6 @@ impl HyperliquidSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for BinanceSpotSource {
     fn source_id(&self) -> &str {
         "binance-spot"
@@ -1430,7 +1689,6 @@ impl ReferenceSource for BinanceSpotSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for BinanceOptionsSource {
     fn source_id(&self) -> &str {
         "binance-options"
@@ -1446,7 +1704,6 @@ impl ReferenceSource for BinanceOptionsSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for BinanceDerivativesSource {
     fn source_id(&self) -> &str {
         self.id
@@ -1462,7 +1719,6 @@ impl ReferenceSource for BinanceDerivativesSource {
     }
 }
 
-#[async_trait]
 impl ReferenceSource for BinanceEquitySource {
     fn source_id(&self) -> &str {
         "binance-equity"
@@ -1478,8 +1734,10 @@ impl ReferenceSource for BinanceEquitySource {
     }
 }
 
-#[async_trait]
-impl ReferenceSource for MassiveOptionsCoverageSource {
+impl<P> ReferenceSource for MassiveOptionsCoverageSource<P>
+where
+    P: ProviderSyncStore,
+{
     fn source_id(&self) -> &str {
         "massive-options"
     }
@@ -1489,51 +1747,68 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
     }
 
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        if self.coverage_dirty {
-            self.coverage_dirty = false;
-            return Ok(ProviderUpdate {
-                catalog: self.merged_last_good()?,
-                complete: true,
-                page_count: 0,
-            });
+        let result = async {
+            if self.coverage_dirty {
+                self.coverage_dirty = false;
+                let normalized = self.sync_store.supports_normalized_promotion();
+                return Ok(ProviderUpdate {
+                    catalog: if normalized {
+                        ProviderCatalog::default()
+                    } else {
+                        self.merged_last_good()?
+                    },
+                    complete: true,
+                    page_count: 0,
+                    facts_persisted: normalized,
+                });
+            }
+            if self.scopes.is_empty() {
+                let normalized = self.sync_store.supports_normalized_promotion();
+                return Ok(ProviderUpdate {
+                    catalog: ProviderCatalog::default(),
+                    complete: true,
+                    page_count: 0,
+                    facts_persisted: normalized,
+                });
+            }
+            let scope_count = self.scopes.len();
+            let index = self.next_scope % scope_count;
+            self.next_scope = (self.next_scope + 1) % scope_count;
+            let underlying = self
+                .scopes
+                .keys()
+                .nth(index)
+                .cloned()
+                .expect("scope count was non-zero");
+            match self.advance_one_scope(&underlying).await? {
+                Some((catalog, facts_persisted)) => Ok(ProviderUpdate {
+                    catalog,
+                    complete: true,
+                    page_count: 1,
+                    facts_persisted,
+                }),
+                None if self.last_good.is_empty() => Ok(ProviderUpdate {
+                    catalog: ProviderCatalog::default(),
+                    complete: false,
+                    page_count: 1,
+                    facts_persisted: false,
+                }),
+                None => Ok(ProviderUpdate {
+                    // A replacement scope is still paging, but a completed
+                    // scoped snapshot exists. Keep it authoritative until that
+                    // one underlying finishes rather than degrading the entire
+                    // Massive provider.
+                    catalog: self.merged_last_good()?,
+                    complete: true,
+                    page_count: 1,
+                    facts_persisted: false,
+                }),
+            }
         }
-        if self.scopes.is_empty() {
-            return Ok(ProviderUpdate {
-                catalog: ProviderCatalog::default(),
-                complete: true,
-                page_count: 0,
-            });
-        }
-        let scope_count = self.scopes.len();
-        let index = self.next_scope % scope_count;
-        self.next_scope = (self.next_scope + 1) % scope_count;
-        let underlying = self
-            .scopes
-            .keys()
-            .nth(index)
-            .cloned()
-            .expect("scope count was non-zero");
-        match self.advance_one_scope(&underlying).await? {
-            Some(catalog) => Ok(ProviderUpdate {
-                catalog,
-                complete: true,
-                page_count: 1,
-            }),
-            None if self.last_good.is_empty() => Ok(ProviderUpdate {
-                catalog: ProviderCatalog::default(),
-                complete: false,
-                page_count: 1,
-            }),
-            None => Ok(ProviderUpdate {
-                // A replacement scope is still paging, but a completed
-                // scoped snapshot exists. Keep it authoritative until that
-                // one underlying finishes rather than degrading the entire
-                // Massive provider.
-                catalog: self.merged_last_good()?,
-                complete: true,
-                page_count: 1,
-            }),
-        }
+        .await;
+        #[cfg(not(test))]
+        self.last_good.clear();
+        result
     }
 
     async fn set_option_underlying(
@@ -1548,6 +1823,9 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
         if enabled {
             self.load_scope(&underlying).await?;
         } else {
+            self.sync_store
+                .remove_last_good(&Self::scope_key(&underlying))
+                .await?;
             self.scopes.remove(&underlying);
             self.last_good.remove(&underlying);
             self.next_scope = 0;
@@ -1561,8 +1839,7 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
     }
 }
 
-#[async_trait]
-impl ReferenceSource for MassiveEquitySource {
+impl<P: ProviderSyncStore> ReferenceSource for MassiveEquitySource<P> {
     fn source_id(&self) -> &str {
         "massive-equity"
     }
@@ -1578,22 +1855,19 @@ impl ReferenceSource for MassiveEquitySource {
 
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         if self.accumulated.is_none() {
-            if let Some(store) = self.sync_store.as_mut() {
-                if let Some((cursor, accumulated)) = store.load_state("massive-equity").await? {
-                    self.cursor = cursor;
-                    self.accumulated = accumulated;
-                }
+            if let Some((cursor, accumulated)) =
+                self.sync_store.load_state("massive-equity").await?
+            {
+                self.cursor = cursor;
+                self.accumulated = accumulated;
             }
         }
-        if let (Some(store), Some(legacy_catalog)) =
-            (self.sync_store.as_mut(), self.accumulated.take())
-        {
-            store
+        if let Some(legacy_catalog) = self.accumulated.take() {
+            self.sync_store
                 .append_staged_page("massive-equity", self.cursor.as_deref(), &legacy_catalog)
                 .await?;
         }
         let mut cursor = self.cursor.clone();
-        let mut catalog = None;
         let mut complete = false;
         let mut page_count = 0;
         for _ in 0..MASSIVE_PAGES_PER_REFRESH {
@@ -1623,22 +1897,24 @@ impl ReferenceSource for MassiveEquitySource {
             let page_catalog = massive_provider_catalog(page.catalog)?;
             complete = page.complete;
             let next_cursor = if complete { None } else { cursor.clone() };
-            if let Some(store) = self.sync_store.as_mut() {
-                store
-                    .append_staged_page("massive-equity", next_cursor.as_deref(), &page_catalog)
-                    .await?;
-            } else {
-                catalog = Some(merge_provider_catalog(catalog.take(), page_catalog));
-            }
+            self.sync_store
+                .append_staged_page("massive-equity", next_cursor.as_deref(), &page_catalog)
+                .await?;
             self.cursor = next_cursor;
             if complete {
                 break;
             }
         }
+        let mut facts_persisted = false;
         let result_catalog = if complete {
             self.cursor = None;
-            if let Some(store) = self.sync_store.as_mut() {
-                let catalog = store
+            if self.sync_store.supports_normalized_promotion() {
+                self.sync_store.promote_staged("massive-equity").await?;
+                facts_persisted = true;
+                ProviderCatalog::default()
+            } else {
+                let catalog = self
+                    .sync_store
                     .staged_pages("massive-equity")
                     .await?
                     .into_iter()
@@ -1646,25 +1922,23 @@ impl ReferenceSource for MassiveEquitySource {
                         Some(merge_provider_catalog(merged, page))
                     })
                     .unwrap_or_default();
-                store.clear_staged_pages("massive-equity").await?;
+                self.sync_store.clear_staged_pages("massive-equity").await?;
                 catalog
-            } else {
-                catalog.unwrap_or_default()
             }
         } else {
             self.cursor = cursor;
-            self.accumulated = catalog;
+            self.accumulated = None;
             ProviderCatalog::default()
         };
         Ok(ProviderUpdate {
             catalog: result_catalog,
             complete,
             page_count,
+            facts_persisted,
         })
     }
 }
 
-#[async_trait]
 impl ReferenceSource for HyperliquidSource {
     fn source_id(&self) -> &str {
         "hyperliquid"
@@ -2814,10 +3088,10 @@ mod tests {
         HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource, OkxSource,
         ReferenceSource,
     };
-    use crate::domain::{Instrument, Market, ProviderCatalog, ReferenceResult};
-    use crate::services::sqlx_storage::SqlxProviderSyncStore;
+    use crate::domain::{Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
+    use crate::services::actor::ReferenceActor;
+    use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::services::store::ProviderSyncStore;
-    use async_trait::async_trait;
     use kairos_domain_types::{Currency, InstrumentId, MarketId, ProviderSymbol, Symbol};
     use kairos_integration::application::capabilities::reference::{
         ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
@@ -2866,7 +3140,72 @@ mod tests {
         barrier: Arc<tokio::sync::Barrier>,
     }
 
-    #[async_trait]
+    enum TestProviderSource {
+        Flaky(FlakySource),
+        RefreshingPaged(RefreshingPagedSource),
+        Paged(PagedSource),
+        AlwaysFail(AlwaysFailSource),
+        Fixed(FixedSource),
+        Counting(CountingSource),
+        Barrier(BarrierSource),
+    }
+
+    macro_rules! test_source_from {
+        ($type:ty, $variant:ident) => {
+            impl From<$type> for TestProviderSource {
+                fn from(source: $type) -> Self {
+                    Self::$variant(source)
+                }
+            }
+        };
+    }
+
+    test_source_from!(FlakySource, Flaky);
+    test_source_from!(RefreshingPagedSource, RefreshingPaged);
+    test_source_from!(PagedSource, Paged);
+    test_source_from!(AlwaysFailSource, AlwaysFail);
+    test_source_from!(FixedSource, Fixed);
+    test_source_from!(CountingSource, Counting);
+    test_source_from!(BarrierSource, Barrier);
+
+    impl ReferenceSource for TestProviderSource {
+        fn source_id(&self) -> &str {
+            match self {
+                Self::Flaky(source) => source.source_id(),
+                Self::RefreshingPaged(source) => source.source_id(),
+                Self::Paged(source) => source.source_id(),
+                Self::AlwaysFail(source) => source.source_id(),
+                Self::Fixed(source) => source.source_id(),
+                Self::Counting(source) => source.source_id(),
+                Self::Barrier(source) => source.source_id(),
+            }
+        }
+
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+            match self {
+                Self::Flaky(source) => source.fetch_catalog().await,
+                Self::RefreshingPaged(source) => source.fetch_catalog().await,
+                Self::Paged(source) => source.fetch_catalog().await,
+                Self::AlwaysFail(source) => source.fetch_catalog().await,
+                Self::Fixed(source) => source.fetch_catalog().await,
+                Self::Counting(source) => source.fetch_catalog().await,
+                Self::Barrier(source) => source.fetch_catalog().await,
+            }
+        }
+
+        async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+            match self {
+                Self::Flaky(source) => source.fetch_catalog_step().await,
+                Self::RefreshingPaged(source) => source.fetch_catalog_step().await,
+                Self::Paged(source) => source.fetch_catalog_step().await,
+                Self::AlwaysFail(source) => source.fetch_catalog_step().await,
+                Self::Fixed(source) => source.fetch_catalog_step().await,
+                Self::Counting(source) => source.fetch_catalog_step().await,
+                Self::Barrier(source) => source.fetch_catalog_step().await,
+            }
+        }
+    }
+
     impl ReferenceSource for FlakySource {
         fn source_id(&self) -> &str {
             "test-flaky"
@@ -2890,7 +3229,83 @@ mod tests {
         }
     }
 
-    #[async_trait]
+    #[tokio::test]
+    async fn normalized_composite_persists_facts_without_returning_a_full_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let source = FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog {
+                entities: vec![Entity {
+                    entity_id: "provider:a".into(),
+                    entity_type: "data_provider".into(),
+                    name: "Provider A".into(),
+                    status: "active".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        let mut composite = CompositeSource::new_with_sync_store(
+            vec![TestProviderSource::from(source)],
+            Some(store),
+        )
+        .await
+        .unwrap();
+
+        assert!(composite.normalized_facts_authoritative());
+        assert_eq!(
+            composite.fetch_catalog().await.unwrap(),
+            ProviderCatalog::default()
+        );
+        let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+        assert!(reopened.has_last_good("provider-a").await.unwrap());
+        assert!(reopened
+            .load_last_good("provider-a")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn actor_commits_normalized_composite_facts_without_catalog_materialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let provider_store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let source = FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog {
+                entities: vec![Entity {
+                    entity_id: "provider:a".into(),
+                    entity_type: "data_provider".into(),
+                    name: "Provider A".into(),
+                    status: "active".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        let composite = CompositeSource::new_with_sync_store(
+            vec![TestProviderSource::from(source)],
+            Some(provider_store),
+        )
+        .await
+        .unwrap();
+        let catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
+        let mut actor = ReferenceActor::new("reference-test", composite, catalog_store)
+            .await
+            .unwrap();
+
+        let result = actor.refresh().await.unwrap();
+        assert!(result.changed);
+        assert_eq!(result.generation.get(), 1);
+        assert_eq!(result.event_sequence.get(), 1);
+        assert!(result.events.is_empty());
+        let reader = kairos_reference_contract::ReferenceSqliteReader::open(&path).unwrap();
+        assert!(reader.record("provider:a").unwrap().is_some());
+    }
+
     impl ReferenceSource for PagedSource {
         fn source_id(&self) -> &str {
             "test-paged"
@@ -2921,11 +3336,11 @@ mod tests {
                 },
                 complete: self.calls >= 2,
                 page_count: 1,
+                facts_persisted: false,
             })
         }
     }
 
-    #[async_trait]
     impl ReferenceSource for RefreshingPagedSource {
         fn source_id(&self) -> &str {
             "test-refreshing-paged"
@@ -2953,11 +3368,11 @@ mod tests {
                 },
                 complete: self.calls != 2,
                 page_count: 1,
+                facts_persisted: false,
             })
         }
     }
 
-    #[async_trait]
     impl ReferenceSource for AlwaysFailSource {
         fn source_id(&self) -> &str {
             "test-flaky"
@@ -2970,7 +3385,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl ReferenceSource for FixedSource {
         fn source_id(&self) -> &str {
             self.id
@@ -2981,7 +3395,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl ReferenceSource for CountingSource {
         fn source_id(&self) -> &str {
             self.id
@@ -2993,7 +3406,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl ReferenceSource for BarrierSource {
         fn source_id(&self) -> &str {
             self.id
@@ -3420,7 +3832,7 @@ mod tests {
     #[tokio::test]
     async fn provider_failure_keeps_last_known_good_snapshot() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut source = CompositeSource::new(vec![Box::new(FlakySource {
+        let mut source = CompositeSource::new(vec![TestProviderSource::from(FlakySource {
             calls: Arc::clone(&calls),
         })])
         .await
@@ -3438,8 +3850,8 @@ mod tests {
     async fn targeted_refresh_does_not_poll_unrelated_provider() {
         let peer_calls = Arc::new(AtomicUsize::new(0));
         let mut source = CompositeSource::new(vec![
-            Box::new(PagedSource { calls: 0 }),
-            Box::new(CountingSource {
+            TestProviderSource::from(PagedSource { calls: 0 }),
+            TestProviderSource::from(CountingSource {
                 id: "test-peer",
                 catalog: ProviderCatalog {
                     markets: vec![Market {
@@ -3475,10 +3887,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let paused_calls = Arc::new(AtomicUsize::new(0));
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let mut source = CompositeSource::new_with_sync_store(
             vec![
-                Box::new(FixedSource {
+                TestProviderSource::from(FixedSource {
                     id: "binance-spot",
                     catalog: ProviderCatalog {
                         markets: vec![Market {
@@ -3489,7 +3901,7 @@ mod tests {
                         ..Default::default()
                     },
                 }),
-                Box::new(CountingSource {
+                TestProviderSource::from(CountingSource {
                     id: "massive-options",
                     catalog: ProviderCatalog {
                         markets: vec![Market {
@@ -3502,7 +3914,7 @@ mod tests {
                     calls: Arc::clone(&paused_calls),
                 }),
             ],
-            Some(Box::new(store)),
+            Some(store),
         )
         .await
         .unwrap();
@@ -3533,22 +3945,22 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         {
-            let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+            let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
             let calls = Arc::new(AtomicUsize::new(0));
             let mut source = CompositeSource::new_with_sync_store(
-                vec![Box::new(FlakySource {
+                vec![TestProviderSource::from(FlakySource {
                     calls: Arc::clone(&calls),
                 })],
-                Some(Box::new(store)),
+                Some(store),
             )
             .await
             .unwrap();
             assert_eq!(source.fetch_catalog().await.unwrap().markets.len(), 1);
         }
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let mut restarted = CompositeSource::new_with_sync_store(
-            vec![Box::new(AlwaysFailSource)],
-            Some(Box::new(store)),
+            vec![TestProviderSource::from(AlwaysFailSource)],
+            Some(store),
         )
         .await
         .unwrap();
@@ -3559,7 +3971,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_without_last_known_good_rejects_partial_refresh() {
-        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)])
+        let mut source = CompositeSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
             .await
             .unwrap();
         let error = source.fetch_catalog().await.unwrap_err().to_string();
@@ -3568,7 +3980,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_failure_opens_circuit_and_applies_backoff() {
-        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)])
+        let mut source = CompositeSource::new(vec![TestProviderSource::from(AlwaysFailSource)])
             .await
             .unwrap();
         let _ = source.fetch_catalog().await;
@@ -3602,9 +4014,12 @@ mod tests {
                 ..Default::default()
             },
         };
-        let mut source = CompositeSource::new(vec![Box::new(first), Box::new(second)])
-            .await
-            .unwrap();
+        let mut source = CompositeSource::new(vec![
+            TestProviderSource::from(first),
+            TestProviderSource::from(second),
+        ])
+        .await
+        .unwrap();
         let error = source.fetch_catalog().await.unwrap_err().to_string();
         assert!(error.contains("irreconcilable canonical record conflicts"));
         assert!(error.contains("market:market:shared"));
@@ -3624,14 +4039,14 @@ mod tests {
             ..Instrument::default()
         };
         let mut source = CompositeSource::new(vec![
-            Box::new(FixedSource {
+            TestProviderSource::from(FixedSource {
                 id: "provider-a",
                 catalog: ProviderCatalog {
                     instruments: vec![instrument("active".into())],
                     ..ProviderCatalog::default()
                 },
             }),
-            Box::new(FixedSource {
+            TestProviderSource::from(FixedSource {
                 id: "provider-b",
                 catalog: ProviderCatalog {
                     instruments: vec![instrument("inactive".into())],
@@ -3692,11 +4107,11 @@ mod tests {
     async fn provider_fan_in_polls_sources_concurrently_on_caller_runtime() {
         let barrier = Arc::new(tokio::sync::Barrier::new(2));
         let mut source = CompositeSource::new(vec![
-            Box::new(BarrierSource {
+            TestProviderSource::from(BarrierSource {
                 id: "provider-a",
                 barrier: Arc::clone(&barrier),
             }),
-            Box::new(BarrierSource {
+            TestProviderSource::from(BarrierSource {
                 id: "provider-b",
                 barrier,
             }),
@@ -3836,11 +4251,11 @@ mod tests {
         });
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let mut source = MassiveEquitySource::new_with_sync_store(
             "test-key",
             format!("http://{address}"),
-            Box::new(store),
+            store,
         )
         .await
         .unwrap();
@@ -3851,7 +4266,7 @@ mod tests {
         assert!(source.fetch_catalog_step().await.is_err());
         server.join().unwrap();
 
-        let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut reopened = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let (cursor, accumulated) = reopened
             .load_state("massive-equity")
             .await
@@ -3889,14 +4304,11 @@ mod tests {
         });
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
-        let mut source = MassiveOptionsCoverageSource::new(
-            "test-key",
-            format!("http://{address}"),
-            Box::new(store),
-        )
-        .await
-        .unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
+        let mut source =
+            MassiveOptionsCoverageSource::new("test-key", format!("http://{address}"), store)
+                .await
+                .unwrap();
 
         assert!(source.option_underlyings().is_empty());
         source.set_option_underlying("spy", true).await.unwrap();
@@ -3955,11 +4367,11 @@ mod tests {
         });
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let mut first = MassiveEquitySource::new_with_sync_store(
             "test-key",
             format!("http://{address}"),
-            Box::new(store),
+            store,
         )
         .await
         .unwrap();
@@ -3970,11 +4382,11 @@ mod tests {
         assert!(partial.catalog.markets.is_empty());
         drop(first);
 
-        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
         let mut resumed = MassiveEquitySource::new_with_sync_store(
             "test-key",
             format!("http://{address}"),
-            Box::new(store),
+            store,
         )
         .await
         .unwrap();
@@ -4004,9 +4416,10 @@ mod tests {
 
     #[tokio::test]
     async fn partial_provider_pages_do_not_drop_previous_page() {
-        let mut source = CompositeSource::new(vec![Box::new(PagedSource { calls: 0 })])
-            .await
-            .unwrap();
+        let mut source =
+            CompositeSource::new(vec![TestProviderSource::from(PagedSource { calls: 0 })])
+                .await
+                .unwrap();
         let first_error = source.fetch_catalog().await.unwrap_err().to_string();
         assert!(first_error.contains("without a last-known-good snapshot"));
         assert_eq!(source.provider_health()[0].status, "syncing");
@@ -4020,7 +4433,10 @@ mod tests {
 
     #[tokio::test]
     async fn incomplete_provider_sync_does_not_replace_last_good_snapshot() {
-        let mut source = CompositeSource::new(vec![Box::new(RefreshingPagedSource { calls: 0 })])
+        let mut source =
+            CompositeSource::new(vec![TestProviderSource::from(RefreshingPagedSource {
+                calls: 0,
+            })])
             .await
             .unwrap();
         let first = source.fetch_catalog().await.unwrap();

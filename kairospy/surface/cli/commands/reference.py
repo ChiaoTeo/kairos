@@ -7,30 +7,19 @@ import json
 import subprocess
 import typer
 
-from kairospy.application.reference import ReferenceSnapshotClient
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.infrastructure.contracts.reference_client import ReferenceClient
 
 reference_app = typer.Typer(
     no_args_is_help=True, help="Query the running Reference process"
 )
 
 
-def _client(workspace: Path | None) -> ReferenceSnapshotClient:
+def _client(workspace: Path | None) -> ReferenceClient:
     owner = WorkspaceApplication().open(workspace)
-    return ReferenceSnapshotClient(
+    return ReferenceClient(
         socket_path=owner.paths.reference_socket(),
-        snapshot_path=owner.paths.reference_snapshot("catalog"),
-        entities_snapshot_path=owner.paths.reference_snapshot("entities"),
-        assets_snapshot_path=owner.paths.reference_snapshot("assets"),
-        instruments_snapshot_path=owner.paths.reference_snapshot("instruments"),
-        listings_snapshot_path=owner.paths.reference_snapshot("listings"),
-        markets_snapshot_path=owner.paths.reference_snapshot("markets"),
-        financial_products_snapshot_path=owner.paths.reference_snapshot(
-            "financial-products"
-        ),
-        execution_accesses_snapshot_path=owner.paths.reference_snapshot(
-            "execution-accesses"
-        ),
+        database_path=owner.paths.reference_database(),
     )
 
 
@@ -44,16 +33,6 @@ def reference_health(
     typer.echo(render(_client(workspace).health(), OutputFormat(output)))
 
 
-@reference_app.command("snapshot")
-def reference_snapshot(
-    workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("json", "--output", "--format"),
-) -> None:
-    from kairospy.surface.cli.options import OutputFormat, render
-
-    typer.echo(render(_client(workspace).snapshot(), OutputFormat(output)))
-
-
 @reference_app.command("catalog")
 def reference_catalog(
     workspace: Path | None = typer.Option(None, "--workspace"),
@@ -65,15 +44,15 @@ def reference_catalog(
     typer.echo(render(_client(workspace).catalog(), OutputFormat(output)))
 
 
-@reference_app.command("snapshots")
-def reference_snapshots(
+@reference_app.command("views")
+def reference_views(
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
-    """List Reference snapshot views, identities, and resource paths."""
+    """List Reference SQLite read-model views and resource paths."""
     from kairospy.surface.cli.options import OutputFormat, render
 
-    typer.echo(render(_client(workspace).snapshot_views(), OutputFormat(output)))
+    typer.echo(render(_client(workspace).reference_views(), OutputFormat(output)))
 
 
 @reference_app.command("providers")
@@ -167,7 +146,9 @@ def reference_stream(
         command.extend(("--aeron-dir", str(aeron_dir)))
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "Reference stream observation failed")
+        raise RuntimeError(
+            result.stderr.strip() or "Reference stream observation failed"
+        )
     typer.echo(render(json.loads(result.stdout), OutputFormat(output)))
 
 
@@ -191,7 +172,9 @@ def reference_pause(
     """Pause one provider without affecting the others."""
     from kairospy.surface.cli.options import OutputFormat, render
 
-    typer.echo(render(_client(workspace).set_source_paused(source, True), OutputFormat(output)))
+    typer.echo(
+        render(_client(workspace).set_source_paused(source, True), OutputFormat(output))
+    )
 
 
 @reference_app.command("resume")
@@ -203,7 +186,11 @@ def reference_resume(
     """Resume one paused provider."""
     from kairospy.surface.cli.options import OutputFormat, render
 
-    typer.echo(render(_client(workspace).set_source_paused(source, False), OutputFormat(output)))
+    typer.echo(
+        render(
+            _client(workspace).set_source_paused(source, False), OutputFormat(output)
+        )
+    )
 
 
 @reference_app.command("options-coverage")

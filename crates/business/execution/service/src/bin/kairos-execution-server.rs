@@ -54,12 +54,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let async_order_entry = connections.async_order_entry;
     let async_order_query = connections.async_order_query;
     let async_execution_streams = connections.async_execution_streams;
+    // The SQLx persistence implementations expose a synchronous constructor
+    // because the Execution application owns a synchronous state transition
+    // API.  Their constructors bootstrap a private runtime, so initialize
+    // them outside the current Tokio worker context.
+    let state_store = tokio::task::block_in_place(|| SqlxExecutionStore::new(state))?;
+    let audit_store = tokio::task::block_in_place(|| SqlxExecutionAudit::new(audit))?;
     let application = ExecutionApplication::with_dependencies_and_query_and_stream(
         "execution",
         connections.order_entry,
         connections.order_query,
         connections.execution_stream,
-        Some(Box::new(SqlxExecutionStore::new(state)?)),
+        Some(Box::new(state_store)),
     )?;
     let mut application = application;
     let manifest = instance.component_manifest()?;
@@ -69,19 +75,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "simulated" | "paper"
         )
     });
-    let preflight =
-        SocketExecutionPreflight::from_manifest(manifest)?.with_simulated_settlement(simulated);
+    let mut preflight = SocketExecutionPreflight::from_manifest(manifest)?;
+    if args.launch_mode == "backtest" {
+        preflight = preflight.without_market_snapshot();
+        preflight = preflight.with_backtest_trade_authorization(true);
+        preflight = preflight.with_backtest_reference_without_projection(true);
+        preflight = preflight.with_backtest_balance_without_projection(true);
+    }
+    let preflight = preflight.with_simulated_settlement(simulated);
     application.attach_preflight(Box::new(QueuedExecutionPreflight::start(
         Box::new(preflight),
         128,
     )?));
     application.configure_live_trading(!simulated, args.confirm_live);
     let socket = instance.socket("execution")?;
-    let process =
-        ExecutionProcess::with_audit(application, socket, SqlxExecutionAudit::new(audit)?)
-            .with_async_order_entry(async_order_entry)
-            .with_async_order_query(async_order_query)
-            .with_async_execution_routes(async_execution_streams);
+    let process = ExecutionProcess::with_audit(application, socket, audit_store)
+        .with_async_order_entry(async_order_entry)
+        .with_async_order_query(async_order_query)
+        .with_async_execution_routes(async_execution_streams);
     let process = if simulated {
         process.with_simulator(ExecutionSimulator::new(SimulationConfig::default())?)
     } else {

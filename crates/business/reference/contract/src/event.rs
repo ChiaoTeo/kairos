@@ -73,6 +73,9 @@ pub fn decode_change(payload: &[u8]) -> ContractResult<ReferenceChange> {
                     current_status: value.current_status().map(str::to_owned),
                     previous_symbol: value.previous_symbol().map(str::to_owned),
                     current_symbol: value.current_symbol().map(str::to_owned),
+                    operation: value.operation().map(str::to_owned),
+                    generation: value.generation(),
+                    record_payload_json: value.record_payload_json().map(str::to_owned),
                 })
                 .collect()
         })

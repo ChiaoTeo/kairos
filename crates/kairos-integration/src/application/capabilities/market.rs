@@ -21,6 +21,23 @@ mod snapshot {
 
 pub use snapshot::*;
 
+mod quote {
+    use super::super::market_facts::MarketQuote;
+    use crate::application::IntegrationError;
+    use kairos_domain_types::ProviderSymbol;
+    use std::future::Future;
+
+    /// Bounded, provider-native best bid/ask query for one symbol.
+    pub trait AsyncMarketQuoteConnection: Send {
+        fn fetch_quote(
+            &mut self,
+            symbol: &ProviderSymbol,
+        ) -> impl Future<Output = Result<Option<MarketQuote>, IntegrationError>> + Send;
+    }
+}
+
+pub use quote::*;
+
 mod live {
     //! Provider-neutral market-stream interaction protocol.
     //!

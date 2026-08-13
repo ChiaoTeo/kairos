@@ -1,7 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use kairos_domain_types::{
-    AccountId, InstrumentId, IntentId, MarketId, OrderId, Price, Quantity, SegmentKey,
-};
+use kairos_domain_types::{AccountId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey};
 use kairos_execution::{
     application::{
         BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
@@ -315,17 +313,13 @@ struct SubmitArgs {
     #[arg(long)]
     instrument_id: String,
     #[arg(long)]
-    quantity_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    quantity_scale: u8,
+    quantity: String,
     #[arg(long, default_value = "buy")]
     side: String,
     #[arg(long, default_value = "market")]
     order_type: String,
     #[arg(long)]
-    limit_price_mantissa: Option<i64>,
-    #[arg(long)]
-    limit_price_scale: Option<u8>,
+    limit_price: Option<String>,
     #[arg(long)]
     intent_id: Option<String>,
     #[arg(long)]
@@ -357,17 +351,11 @@ struct FillArgs {
     #[arg(long)]
     order_id: String,
     #[arg(long)]
-    quantity_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    quantity_scale: u8,
+    quantity: String,
     #[arg(long)]
-    price_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    price_scale: u8,
-    #[arg(long, default_value_t = 0)]
-    fee_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    fee_scale: u8,
+    price: String,
+    #[arg(long, default_value = "0")]
+    fee: String,
     #[arg(long)]
     occurred_at_unix_nanos: Option<u64>,
 }
@@ -499,12 +487,9 @@ fn run_direct_with_options(
             serde_json::to_value(application.record_fill(ExecutionFillReport {
                 fill_id: kairos_domain_types::FillId::new(args.fill_id)?,
                 order_id: kairos_domain_types::OrderId::new(args.order_id)?,
-                quantity: kairos_domain_types::Quantity::new(
-                    args.quantity_mantissa,
-                    args.quantity_scale,
-                )?,
-                price: kairos_domain_types::Price::new(args.price_mantissa, args.price_scale)?,
-                fee: kairos_domain_types::Money::new(args.fee_mantissa, args.fee_scale),
+                quantity: args.quantity.parse()?,
+                price: args.price.parse()?,
+                fee: args.fee.parse()?,
                 occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
             })?)?
         }
@@ -544,12 +529,8 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
         market_id: args.market_id.map(MarketId::new).transpose()?,
         side: parse_side(&args.side)?,
         order_type: parse_order_type(&args.order_type)?,
-        quantity: Quantity::new(args.quantity_mantissa, args.quantity_scale)?,
-        limit_price: args
-            .limit_price_mantissa
-            .zip(args.limit_price_scale)
-            .map(|(mantissa, scale)| Price::new(mantissa, scale))
-            .transpose()?,
+        quantity: args.quantity.parse()?,
+        limit_price: args.limit_price.as_deref().map(str::parse).transpose()?,
         options: ExecutionOrderOptions {
             time_in_force: args.time_in_force,
             reduce_only: args.reduce_only,
@@ -561,6 +542,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
             tokenize: args.tokenize,
             ..ExecutionOrderOptions::default()
         },
+        submitted_at_unix_nanos: None,
     })
 }
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from kairospy.strategy import StrategyBase
+from kairospy.strategy import Strategy
 
 
-class PrintAaplOptions(StrategyBase):
+class PrintAaplOptions(Strategy):
     """Print Massive AAPL option-chain quotes."""
 
     strategy_id = "print-aapl-options"

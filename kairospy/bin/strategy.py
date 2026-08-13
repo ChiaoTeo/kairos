@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 import sys
 import time
-from typing import Any
+from decimal import Decimal
+from typing import Any, Mapping
 
 from kairospy.application.strategy.services.composition import compose_strategy_process
 from kairospy.application.observability import configure_from_environment, record_gauge
@@ -47,6 +50,17 @@ def _write_backtest_report(composition, workspace) -> None:
     instance = workspace.instance(
         "backtest", composition.host.launch_id, composition.host.instance_id
     )
+    dataset = _replay_dataset_identity(instance.state("market", "replay.jsonl"))
+    config = _file_identity(instance.root / "normalized-config.json")
+    config["summary"] = _backtest_config_summary(
+        instance.root / "normalized-config.json"
+    )
+    final_account = None
+    account_ids = composition.host.context.account.account_ids
+    if account_ids:
+        final_account = asdict(
+            composition.host.context.account.snapshot(account_ids[0])
+        )
     report = {
         "schema_version": 1,
         "launch_id": composition.host.launch_id,
@@ -55,13 +69,27 @@ def _write_backtest_report(composition, workspace) -> None:
         "completed_at_unix_nanos": time.time_ns(),
         "status": composition.host.status.state.value,
         "event_count": composition.host.status.event_count,
+        "dataset": dataset,
+        "config": config,
+        "clock_events": list(composition.host.clock_events),
+        "event_trace": list(composition.host.event_trace),
+        "fills": list(composition.host.backtest_fills),
+        "metrics": _backtest_metrics(
+            composition.host.backtest_fills, composition.host.equity_curve
+        ),
         "equity_curve": list(composition.host.equity_curve),
-        "final_account": (
+        # The final quote can settle an order after the last pre-strategy
+        # mark.  Read Account once more at report time so this field is the
+        # authoritative terminal state, not merely the last curve sample.
+        "final_account": final_account
+        if final_account is not None
+        else (
             composition.host.equity_curve[-1]["snapshot"]
             if composition.host.equity_curve
             else None
         ),
     }
+    report["deterministic_result_sha256"] = _deterministic_result_sha256(report)
     path = instance.state("backtest", "report.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -69,6 +97,200 @@ def _write_backtest_report(composition, workspace) -> None:
         json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
     )
     temporary.replace(path)
+
+
+def _backtest_metrics(
+    fills: list[Mapping[str, Any]], curve: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Stable, integer-preserving summary for machine comparison."""
+    realized_pnl = Decimal("0")
+    total_fees = Decimal("0")
+    for fill in fills:
+        quantity = _wire_decimal(fill.get("quantity"))
+        price = _wire_decimal(fill.get("price"))
+        fee = _wire_decimal(fill.get("fee"))
+        notional = quantity * price
+        if str(fill.get("side", "")).lower() == "sell":
+            realized_pnl += notional
+        else:
+            realized_pnl -= notional
+        total_fees += fee
+    return {
+        "fill_count": len(fills),
+        "buy_fill_count": sum(
+            1 for fill in fills if str(fill.get("side", "")).lower() == "buy"
+        ),
+        "sell_fill_count": sum(
+            1 for fill in fills if str(fill.get("side", "")).lower() == "sell"
+        ),
+        "equity_sample_count": len(curve),
+        "first_equity_time": curve[0].get("observed_at_unix_nanos") if curve else None,
+        "last_equity_time": curve[-1].get("observed_at_unix_nanos") if curve else None,
+        "realized_pnl": _decimal_text(realized_pnl - total_fees),
+        "total_fees": _decimal_text(total_fees),
+    }
+
+
+def _wire_decimal(value: object) -> Decimal:
+    if not isinstance(value, str):
+        return Decimal("0")
+    return Decimal(value)
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _deterministic_result_sha256(report: Mapping[str, Any]) -> str:
+    """Hash only replay-result facts, excluding runtime identity and wall time."""
+    dataset = report.get("dataset")
+    config = report.get("config")
+    fills = report.get("fills", [])
+    normalized_fills = [
+        {
+            key: fill.get(key)
+            for key in (
+                "instrument_id",
+                "side",
+                "quantity",
+                "price",
+                "fee",
+                "occurred_at_unix_nanos",
+            )
+        }
+        for fill in fills
+        if isinstance(fill, Mapping)
+    ]
+    payload = {
+        "dataset": {
+            key: dataset.get(key)
+            for key in (
+                "sha256",
+                "event_count",
+                "first_event_time_unix_nanos",
+                "last_event_time_unix_nanos",
+                "observation_types",
+                "timeframes",
+                "derivations",
+                "source_ids",
+            )
+        }
+        if isinstance(dataset, Mapping)
+        else dataset,
+        "config": {
+            "sha256": config.get("sha256") if isinstance(config, Mapping) else None,
+            "summary": config.get("summary") if isinstance(config, Mapping) else None,
+        },
+        "clock_events": report.get("clock_events", []),
+        "event_trace": report.get("event_trace", []),
+        "fills": normalized_fills,
+        "equity_curve": report.get("equity_curve", []),
+        "final_account": report.get("final_account"),
+        "metrics": report.get("metrics", {}),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _replay_dataset_identity(path: Path) -> dict[str, Any]:
+    """Return stable provenance for the exact replay stream consumed."""
+    identity: dict[str, Any] = {
+        "path": str(path),
+        "available": path.is_file(),
+    }
+    if not path.is_file():
+        return identity
+
+    raw = path.read_bytes()
+    identity["sha256"] = hashlib.sha256(raw).hexdigest()
+    event_count = 0
+    first_event_time: int | None = None
+    last_event_time: int | None = None
+    observation_types: set[str] = set()
+    timeframes: set[str] = set()
+    derivations: set[str] = set()
+    source_ids: set[str] = set()
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        event_count += 1
+        for kind in ("Quote", "Bar", "Trade", "quote", "bar", "trade"):
+            payload = record.get(kind)
+            if not isinstance(payload, dict):
+                continue
+            observation_types.add(kind.lower())
+            event_time = payload.get("observed_at_unix_nanos")
+            if isinstance(event_time, int):
+                first_event_time = (
+                    event_time
+                    if first_event_time is None
+                    else min(first_event_time, event_time)
+                )
+                last_event_time = (
+                    event_time
+                    if last_event_time is None
+                    else max(last_event_time, event_time)
+                )
+            source_id = payload.get("source_id")
+            if isinstance(source_id, str) and source_id:
+                source_ids.add(source_id)
+            timeframe = payload.get("timeframe")
+            if isinstance(timeframe, str) and timeframe:
+                timeframes.add(timeframe)
+            derivation = payload.get("derivation")
+            if isinstance(derivation, str) and derivation:
+                derivations.add(derivation)
+            break
+    identity.update(
+        {
+            "event_count": event_count,
+            "first_event_time_unix_nanos": first_event_time,
+            "last_event_time_unix_nanos": last_event_time,
+            "observation_types": sorted(observation_types),
+            "timeframes": sorted(timeframes),
+            "derivations": sorted(derivations),
+            "source_ids": sorted(source_ids),
+        }
+    )
+    return identity
+
+
+def _backtest_config_summary(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    market = value.get("backtest_market") or value.get("backtest", {}).get("market", {})
+    launch = value.get("launch", {})
+    execution = value.get("execution", {})
+    return {
+        "mode": launch.get("mode") if isinstance(launch, dict) else None,
+        "strategy": launch.get("strategy") if isinstance(launch, dict) else None,
+        "market": market if isinstance(market, dict) else {},
+        "execution": execution if isinstance(execution, dict) else {},
+    }
+
+
+def _file_identity(path: Path) -> dict[str, Any]:
+    """Identify a launch artifact without making reporting depend on it."""
+    if not path.is_file():
+        return {"path": str(path), "available": False}
+    raw = path.read_bytes()
+    return {
+        "path": str(path),
+        "available": True,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
 
 
 async def _run(args: argparse.Namespace) -> None:

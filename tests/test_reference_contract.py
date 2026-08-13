@@ -3,42 +3,116 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from io import StringIO
+import sqlite3
 
 import pytest
 
-from kairospy.infrastructure.contracts.reference import read_manifest
-from kairospy.infrastructure.contracts.reference_client import ReferenceSnapshotClient
-from kairospy.application.reference import validate_reference_runtime
+from kairospy.application.reference import (
+    ReferenceApplication,
+    ReferenceNotFoundError,
+    validate_reference_runtime,
+)
+from kairospy.domain_types import MarketId
+from kairospy.infrastructure.contracts.reference_client import ReferenceClient
 
 
-def test_reference_manifest_requires_complete_view_set(tmp_path) -> None:
-    path = tmp_path / "reference.manifest"
-    path.write_text(
-        json.dumps(
-            {
-                "generation": 3,
-                "event_sequence": 7,
-                "views": [
-                    "reference.catalog",
-                    "reference.entities",
-                    "reference.assets",
-                    "reference.instruments",
-                    "reference.listings",
-                    "reference.markets",
-                    "reference.financial_products",
-                    "reference.execution_accesses",
-                ],
-            }
+def _reference_database(path: Path) -> Path:
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
+        INSERT INTO reference_meta VALUES(1,1,3,7,11);
+        CREATE TABLE reference_entities_current(entity_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, source_id TEXT, market_key TEXT, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, market_type TEXT, asset_type TEXT, underlying_instrument_id TEXT, source_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);
+        CREATE TABLE reference_financial_products_current(product_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, payload TEXT);
+        """
+    )
+    market = {
+        "market_id": "market:binance:spot:BTCUSDT",
+        "market_key": "BTCUSDT",
+        "instrument_id": "instrument:spot:BTC",
+        "listing_id": "listing:binance:spot:BTCUSDT",
+        "exchange_id": "exchange:binance",
+        "market_type": "spot",
+        "source_symbol": "BTCUSDT",
+        "status": "active",
+    }
+    connection.execute(
+        "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            market["market_id"],
+            "binance-spot",
+            market["market_key"],
+            market["instrument_id"],
+            market["listing_id"],
+            market["exchange_id"],
+            market["market_type"],
+            None,
+            None,
+            market["source_symbol"],
+            market["status"],
+            None,
+            json.dumps(market),
         ),
-        encoding="utf-8",
     )
-    assert read_manifest(path)["generation"] == 3
+    connection.commit()
+    connection.close()
+    return path
 
-    path.write_text(
-        '{"generation": 3, "event_sequence": 7, "views": []}', encoding="utf-8"
+
+def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) -> None:
+    database = _reference_database(tmp_path / "reference.sqlite")
+    client = ReferenceClient(database_path=database)
+    assert client.catalog()["generation"] == 3
+    assert client.catalog()["catalog"]["market_count"] == 1
+    assert (
+        client.resolve_market(symbol="BTCUSDT")["instrument_id"]
+        == "instrument:spot:BTC"
     )
-    with pytest.raises(ValueError, match="invalid Reference snapshot manifest"):
-        read_manifest(path)
+    assert all(view["exists"] for view in client.reference_views())
+
+
+def test_reference_application_reads_concrete_sqlite_client(tmp_path: Path) -> None:
+    database = _reference_database(tmp_path / "reference.sqlite")
+    application = ReferenceApplication(ReferenceClient(database_path=database))
+
+    markets = application.find_markets(
+        symbol="BTCUSDT", exchange="binance", market_type="spot"
+    )
+
+    assert len(markets) == 1
+    assert markets[0].id == MarketId("market:binance:spot:BTCUSDT")
+    assert application.require_market(markets[0].id) == markets[0]
+    assert application.market(MarketId("market:missing")) is None
+    with pytest.raises(ReferenceNotFoundError):
+        application.require_market(
+            symbol="ETHUSDT", exchange="binance", market_type="spot"
+        )
+
+
+def test_reference_application_has_no_callable_or_compatibility_facade() -> None:
+    root = Path(__file__).parents[1]
+    application = (root / "kairospy/application/reference/application.py").read_text(
+        encoding="utf-8"
+    )
+    strategy_applications = (
+        root / "kairospy/application/strategy/services/applications.py"
+    ).read_text(encoding="utf-8")
+    public_api = (root / "kairospy/application/reference/__init__.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Callable" not in application
+    assert "Protocol" not in (
+        root / "kairospy/application/reference/validation.py"
+    ).read_text(encoding="utf-8")
+    assert "reference.markets" not in strategy_applications
+    assert "ReferenceClient" not in public_api
+    assert not (root / "kairospy/application/reference/client.py").exists()
+    assert not (root / "kairospy/infrastructure/contracts/reference.py").exists()
 
 
 def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
@@ -61,24 +135,6 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
     }
 
 
-def test_python_reads_the_rust_python_flatbuffers_golden_fixture() -> None:
-    from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import (
-        CatalogSnapshot,
-    )
-
-    payload = bytes.fromhex(
-        (
-            Path(__file__).parent / "fixtures" / "reference_catalog_empty.prc1.hex"
-        ).read_text(encoding="utf-8")
-    )
-    assert CatalogSnapshot.CatalogSnapshotBufferHasIdentifier(payload, 0)
-    snapshot = CatalogSnapshot.GetRootAs(payload, 0)
-    assert snapshot.Header().SnapshotId() == b"reference:0"
-    assert snapshot.Header().ViewKey() == b"reference.catalog"
-    assert snapshot.Payload().EntityCount() == 0
-    assert snapshot.Payload().MarketCount() == 0
-
-
 def test_reference_client_reads_lifecycle_events_by_sequence(
     tmp_path, monkeypatch
 ) -> None:
@@ -94,7 +150,7 @@ def test_reference_client_reads_lifecycle_events_by_sequence(
         "kairospy.infrastructure.contracts.reference_client.request_sync", request_sync
     )
     socket = tmp_path / "reference.sock"
-    result = ReferenceSnapshotClient(socket_path=socket).events(
+    result = ReferenceClient(socket_path=socket).events(
         sequence_from=4, sequence_to=8, limit=9
     )
 
@@ -107,7 +163,9 @@ def test_reference_client_reads_lifecycle_events_by_sequence(
     }
 
 
-def test_reference_client_scopes_refresh_and_provider_controls(tmp_path, monkeypatch) -> None:
+def test_reference_client_scopes_refresh_and_provider_controls(
+    tmp_path, monkeypatch
+) -> None:
     observed: list[tuple[str, str, float]] = []
 
     def request_sync(socket_path, method, target, *, timeout):
@@ -118,7 +176,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(tmp_path, monkeyp
     monkeypatch.setattr(
         "kairospy.infrastructure.contracts.reference_client.request_sync", request_sync
     )
-    client = ReferenceSnapshotClient(socket_path=tmp_path / "reference.sock")
+    client = ReferenceClient(socket_path=tmp_path / "reference.sock")
 
     client.refresh(source="massive-options")
     client.set_source_paused("massive-options", True)
@@ -138,7 +196,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(tmp_path, monkeyp
 
 
 def test_reference_client_filters_execution_accesses_by_provider_and_product() -> None:
-    class Client(ReferenceSnapshotClient):
+    class Client(ReferenceClient):
         def collection(self, view: str):
             assert view == "execution-accesses"
             return [
@@ -170,7 +228,7 @@ def test_reference_client_filters_execution_accesses_by_provider_and_product() -
 
 
 def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() -> None:
-    class Client:
+    class Client(ReferenceClient):
         def health(self):
             return {
                 "status": "ready",
@@ -183,7 +241,7 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() 
                 ],
             }
 
-        def snapshot_views(self):
+        def reference_views(self):
             return [{"view": str(index), "exists": True} for index in range(8)]
 
         def catalog(self):
@@ -208,8 +266,10 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() 
     assert len(result["checks"]) == 7
 
 
-def test_reference_runtime_validation_reports_missing_provider_and_pending_outbox() -> None:
-    class Client:
+def test_reference_runtime_validation_reports_missing_provider_and_pending_outbox() -> (
+    None
+):
+    class Client(ReferenceClient):
         def health(self):
             return {
                 "status": "degraded",
@@ -220,7 +280,7 @@ def test_reference_runtime_validation_reports_missing_provider_and_pending_outbo
                 "providers": [],
             }
 
-        def snapshot_views(self):
+        def reference_views(self):
             return []
 
         def catalog(self):
@@ -243,7 +303,7 @@ def test_reference_runtime_validation_reports_missing_provider_and_pending_outbo
 def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
     monkeypatch,
 ) -> None:
-    class Client:
+    class Client(ReferenceClient):
         def health(self):
             return {
                 "status": "degraded",
@@ -254,7 +314,7 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
                 "providers": [],
             }
 
-        def snapshot_views(self):
+        def reference_views(self):
             return []
 
         def catalog(self):

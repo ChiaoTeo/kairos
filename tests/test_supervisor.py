@@ -28,7 +28,7 @@ def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -
     assert "--aeron-channel" in spec.command
     assert "--reference-changes-stream" in spec.command
     assert "--refresh-interval" in spec.command
-    assert "--snapshot-slot-size-mib" in spec.command
+    assert "--snapshot-slot-size-mib" not in spec.command
     assert "--health-file" in spec.command
     assert "--socket" in spec.command
     assert spec.control_socket == workspace.paths.reference_socket()

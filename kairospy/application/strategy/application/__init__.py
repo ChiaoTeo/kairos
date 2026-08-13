@@ -1,12 +1,8 @@
-"""Public use-case API for user-authored strategies."""
+"""Public lifecycle facade for the Strategy runtime application."""
 
 from ..protocol import (
-    ContextBus,
     EventStream,
-    IntentCommandPort,
     LifecycleJournal,
-    MarketCommandPort,
-    SnapshotReader,
     Strategy,
 )
 from ..services.host import StrategyHost, StrategyHostStatus
@@ -14,16 +10,12 @@ from ..services.loader import StrategyEntrypoint, load_strategy
 from .process import StrategyProcessApplication
 
 __all__ = [
-    "ContextBus",
     "EventStream",
-    "IntentCommandPort",
     "LifecycleJournal",
-    "MarketCommandPort",
-    "SnapshotReader",
     "Strategy",
+    "StrategyEntrypoint",
     "StrategyHost",
     "StrategyHostStatus",
-    "StrategyEntrypoint",
-    "load_strategy",
     "StrategyProcessApplication",
+    "load_strategy",
 ]

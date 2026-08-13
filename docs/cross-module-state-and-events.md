@@ -1,5 +1,12 @@
 # Cross-module state, snapshot, and event architecture
 
+Reference is the deliberate exception to the generic service-snapshot profile:
+its large catalog uses the read-only SQLite contract defined in
+[`reference-sqlite-read-model-design.md`](./reference-sqlite-read-model-design.md),
+plus lifecycle notifications and consumer-owned bounded projections. References
+below to generic mmap snapshots apply to Account, Market, Risk, and Execution,
+not to the Reference catalog.
+
 This document defines how business modules read one another's current state
 and consume changes. It is an implementation contract for the current
 workspace; it does not introduce a new business layer or a global state owner.
@@ -93,9 +100,9 @@ application
 ```
 
 For example, Market composition may construct a
-`ReferenceContractClient`, a `ReferenceEventSubscriber`, and a
+`ReferenceSqliteReader`, a `ReferenceEventSubscriber`, and a
 `MarketSnapshotPublisher`, then inject them into `MarketApplication`. It must
-not read Reference mmap files directly, send raw UDS JSON, construct event
+not open a write-capable Reference database, send raw UDS JSON, construct event
 payloads by hand, or import Reference `service` internals. Those operations
 must go through `kairos-reference-contract`.
 
@@ -176,11 +183,11 @@ state.
 Cross-module dependencies are assembled in composition or System application:
 
 ```text
-Reference snapshot/events -> Market reference projection
+Reference SQLite/events   -> Market reference projection
 
 Account snapshot
 Market snapshot
-Reference snapshot       -> Execution preflight context
+Reference SQLite query   -> Execution preflight context
 Risk snapshot
 
 Risk reservation command  -> authoritative execution admission

@@ -2,45 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.strategy import (
-    CommandResult,
-    EventEnvelope,
-    ArbitrageLegRequest,
-    PairArbitrageRequest,
-    PortfolioRebalanceRequest,
-    PortfolioRebalanceTarget,
-    QuoteProvisioningRequest,
-    QuoteRefreshRequest,
-    SubscriptionRequest,
-    TargetPositionRequest,
-)
+from datetime import datetime
+
+from kairospy.strategy import CommandResult
 
 
 @dataclass(frozen=True, slots=True)
-class SnapshotEnvelope:
-    view_key: str
-    snapshot_id: str
-    owner_actor_id: str
-    event_stream_id: str
-    event_sequence: int
-    generation: int
+class RawEventEnvelope:
+    """Internal transport/runtime envelope; never exported to strategy authors."""
+
+    stream_id: str
+    sequence: int
+    domain: str
+    kind: str
     payload: object
+    occurred_at: datetime | None = None
+    schema_version: int = 1
+    producer: str = ""
+    causation_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not all(
-            (
-                self.view_key.strip(),
-                self.snapshot_id.strip(),
-                self.owner_actor_id.strip(),
-                self.event_stream_id.strip(),
-            )
-        ):
-            raise ValueError("snapshot identity fields are required")
-        if self.event_sequence < 0 or self.generation < 0:
-            raise ValueError("snapshot sequence and generation cannot be negative")
-
-
-MarketSubscriptionRequest = SubscriptionRequest
+        if not self.stream_id.strip() or self.sequence <= 0:
+            raise ValueError("raw event stream and positive sequence are required")
+        if not self.domain.strip() or not self.kind.strip():
+            raise ValueError("raw event domain and kind are required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,31 +50,7 @@ class StrategyCommand:
             raise ValueError("strategy command identity and operation are required")
 
 
-@dataclass(frozen=True, slots=True)
-class IntentCommand:
-    strategy_id: str
-    intent: object
-
-
-@dataclass(frozen=True, slots=True)
-class ContextRequest:
-    operation: str
-    payload: object
-    strategy_id: str
-    request_id: str
-    instance_id: str = ""
-
-
 CommandHandle = CommandResult
-
-
-@dataclass(frozen=True, slots=True)
-class StrategySignal:
-    strategy_id: str
-    intent: object
-    instance_id: str = ""
-    source_stream_id: str | None = None
-    source_sequence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

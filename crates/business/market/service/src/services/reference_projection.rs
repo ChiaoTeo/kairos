@@ -6,7 +6,7 @@ use crate::domain::market::MarketDescriptor;
 
 /// Private owner of the Reference current-state join used by Market.
 pub(crate) struct ReferenceProjection {
-    snapshot_path: Option<PathBuf>,
+    database_path: Option<PathBuf>,
     markets: Option<Vec<MarketDescriptor>>,
     event_sequence: Option<Sequence>,
     recovery_needed: bool,
@@ -15,7 +15,7 @@ pub(crate) struct ReferenceProjection {
 impl ReferenceProjection {
     pub(crate) fn new() -> Self {
         Self {
-            snapshot_path: None,
+            database_path: None,
             markets: None,
             event_sequence: None,
             recovery_needed: false,
@@ -23,7 +23,7 @@ impl ReferenceProjection {
     }
 
     pub(crate) fn configure(&mut self, path: impl Into<PathBuf>) {
-        self.snapshot_path = Some(path.into());
+        self.database_path = Some(path.into());
         self.recovery_needed = true;
     }
 
@@ -52,30 +52,47 @@ impl ReferenceProjection {
             return Ok(self.markets.clone().unwrap_or_default());
         }
         let path = self
-            .snapshot_path
+            .database_path
             .as_ref()
-            .ok_or_else(|| "Reference snapshot is not configured".to_string())?;
-        let snapshot = kairos_reference_contract::ReferenceMmapMarketsReader::open(
-            path,
-            "reference",
-            "reference.lifecycle",
-        )
-        .map_err(|error| error.to_string())?
-        .read()
-        .map_err(|error| error.to_string())?;
+            .ok_or_else(|| "Reference SQLite database is not configured".to_string())?;
+        let reader = kairos_reference_contract::ReferenceSqliteReader::open(path)
+            .map_err(|error| error.to_string())?;
+        let mut query = kairos_reference_contract::SqliteMarketQuery {
+            statuses: vec!["active".into(), "trading".into()],
+            limit: 10_000,
+            ..Default::default()
+        };
+        let mut markets = Vec::new();
+        let mut watermark = None;
+        loop {
+            let page = reader
+                .market_page(&query)
+                .map_err(|error| error.to_string())?;
+            if watermark.is_some_and(|expected| expected != page.watermark) {
+                return Err(
+                    "Reference SQLite watermark changed while rebuilding projection".into(),
+                );
+            }
+            watermark = Some(page.watermark);
+            let page_len = page.markets.len();
+            query.after_market_id = page.markets.last().map(|market| market.market_id.clone());
+            markets.extend(page.markets);
+            if page_len < query.limit {
+                break;
+            }
+        }
+        let watermark = watermark.unwrap_or_default();
         if let Some(expected) = self.event_sequence {
-            if snapshot.event_sequence < expected.get() {
+            if watermark.event_sequence < expected.get() {
                 return Err(format!(
-                    "Reference snapshot event sequence {} is behind required sequence {}",
-                    snapshot.event_sequence,
+                    "Reference SQLite event sequence {} is behind required sequence {}",
+                    watermark.event_sequence,
                     expected.get()
                 ));
             }
         }
-        let markets = snapshot
-            .markets
+        let markets = markets
             .into_iter()
-            .filter(|market| matches!(market.status.as_str(), "active" | "trading"))
             .map(|market| {
                 let mut descriptor = MarketDescriptor::new(
                     market.market_id,
@@ -89,7 +106,7 @@ impl ReferenceProjection {
                 Ok(descriptor)
             })
             .collect::<Result<Vec<_>, String>>()?;
-        self.event_sequence = Some(snapshot.event_sequence.into());
+        self.event_sequence = Some(watermark.event_sequence.into());
         self.markets = Some(markets.clone());
         self.recovery_needed = false;
         Ok(markets)

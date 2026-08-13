@@ -155,6 +155,11 @@ fn binding_matches_market(
                 && market_type.eq_ignore_ascii_case("spot")
                 && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("crypto"))
         }
+        WorkspaceMarketSourceBinding::BinanceEquity { .. } => {
+            exchange.eq_ignore_ascii_case("binance")
+                && market_type.eq_ignore_ascii_case("equity")
+                && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("equity"))
+        }
         WorkspaceMarketSourceBinding::BinanceDerivatives { product, .. } => {
             let expected = match product {
                 WorkspaceBinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
@@ -447,39 +452,10 @@ fn normalize_observation_value(value: &mut serde_json::Value) -> Result<(), Stri
 }
 
 fn fixed_decimal_string(value: &serde_json::Value) -> Result<serde_json::Value, String> {
-    if value.is_string() {
-        return Ok(value.clone());
-    }
-    let object = value
-        .as_object()
-        .ok_or_else(|| "market observation decimal must be an object".to_string())?;
-    let mantissa = object
-        .get("mantissa")
-        .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| "market observation decimal has invalid mantissa".to_string())?;
-    let scale = object
-        .get("scale")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| "market observation decimal has invalid scale".to_string())?;
-    let scale = u32::try_from(scale).map_err(|_| "decimal scale is too large")?;
-    let divisor = 10_i128
-        .checked_pow(scale)
-        .ok_or_else(|| "market observation decimal scale overflows".to_string())?;
-    let mantissa = i128::from(mantissa);
-    let negative = mantissa < 0;
-    let absolute = mantissa.abs();
-    let whole = absolute / divisor;
-    let fraction = format!("{:0width$}", absolute % divisor, width = scale as usize);
-    let rendered = if scale == 0 {
-        whole.to_string()
-    } else {
-        format!("{whole}.{fraction}")
-    };
-    Ok(serde_json::Value::String(if negative {
-        format!("-{rendered}")
-    } else {
-        rendered
-    }))
+    value
+        .as_str()
+        .map(|_| value.clone())
+        .ok_or_else(|| "market observation decimal must be a string".to_string())
 }
 
 impl MarketSnapshotPublisher for MmapMarketSnapshotPublisher {
@@ -503,6 +479,7 @@ fn attach_configured_market_source(
 pub fn default_endpoint(provider: &str) -> &'static str {
     match provider {
         "binance-spot-websocket" => "wss://stream.binance.com:9443/ws",
+        "binance-equity" => "https://api.binance.com",
         "binance-usdm-futures-websocket" => "wss://fstream.binance.com/ws",
         "binance-coinm-futures-websocket" => "wss://dstream.binance.com/ws",
         "binance-usdm-futures-rest" => "https://fapi.binance.com",

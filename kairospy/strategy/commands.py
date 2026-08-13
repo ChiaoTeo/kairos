@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import time_ns
-from typing import Mapping
+from typing import Mapping, TypeVar
+
+
+TCommand = TypeVar("TCommand")
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,3 +71,50 @@ class CommandEnvelope:
             "source": None if self.source is None else self.source.as_dict(),
             "payload": dict(self.payload),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyCommand:
+    """A request delivered to a strategy's optional command lifecycle hook."""
+
+    request_id: str
+    kind: str
+    source: str = ""
+    payload: object | None = None
+
+    def __post_init__(self) -> None:
+        if not self.request_id.strip() or not self.kind.strip():
+            raise ValueError("strategy command request_id and kind are required")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "request_id": self.request_id,
+            "kind": self.kind,
+            "source": self.source,
+            "payload": dict(self.payload)
+            if isinstance(self.payload, Mapping)
+            else self.payload,
+        }
+
+    def require_payload(self, model_type: type[TCommand]) -> TCommand:
+        """Validate an open command payload and restore its concrete type."""
+        if isinstance(self.payload, model_type):
+            return self.payload
+        if self.payload is None:
+            raise ValueError(f"command {self.kind!r} requires a payload")
+        validator = getattr(model_type, "model_validate", None)
+        if callable(validator):
+            value = validator(self.payload)
+            if not isinstance(value, model_type):
+                raise TypeError("command payload validator returned the wrong type")
+            return value
+        if isinstance(self.payload, Mapping):
+            try:
+                return model_type(**dict(self.payload))
+            except TypeError as error:
+                raise ValueError(
+                    f"invalid payload for command {self.kind!r}: {error}"
+                ) from error
+        raise ValueError(
+            f"command {self.kind!r} payload cannot be converted to {model_type.__name__}"
+        )

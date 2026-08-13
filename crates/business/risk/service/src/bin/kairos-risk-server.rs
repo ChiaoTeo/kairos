@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use kairos_risk::composition::{compose_risk_application, MmapRiskSnapshotPublisher};
 use kairos_risk::RiskProcess;
+use kairos_risk::{Amount, EnforcementMode, Metric, PolicyScope, RiskPolicy};
 use kairos_workspace::workspace::Workspace;
 
 #[tokio::main(flavor = "current_thread")]
@@ -30,17 +31,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let health = instance.health("risk")?;
     let state = instance.state(&["risk", "risk-state.json"])?;
     let snapshot = instance.service_snapshot("risk")?;
-    let application = compose_risk_application(
-        format!("risk:{}", args.instance_id),
-        Vec::new(),
-        Some(state),
-    )?;
+    let policies = if args.launch_mode == "backtest" {
+        vec![RiskPolicy {
+            policy_id: kairos_domain_types::PolicyId::new("backtest-notional")?,
+            version: 1.into(),
+            scope: PolicyScope {
+                account_id: None,
+                strategy_id: None,
+                instrument_id: None,
+                exchange_id: None,
+            },
+            metric: Metric::Notional,
+            // The policy is intentionally permissive but real: every replay
+            // order still passes Risk authorization and creates a reservation.
+            limit: Amount::new(1_000_000_000_000, 0)?,
+            enforcement: EnforcementMode::Reject,
+            valid_from_unix_nanos: 0.into(),
+            valid_until_unix_nanos: None,
+            window_nanos: None,
+        }]
+    } else {
+        Vec::new()
+    };
+    let application =
+        compose_risk_application(format!("risk:{}", args.instance_id), policies, Some(state))?;
     RiskProcess::new(
         application,
         socket,
         Duration::from_millis(args.interval_ms),
         Some(health),
     )?
+    .with_replay_clock(args.launch_mode == "backtest")
     .with_snapshot_publisher(MmapRiskSnapshotPublisher::create(
         snapshot,
         1024 * 1024,

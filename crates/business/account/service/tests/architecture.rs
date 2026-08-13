@@ -331,10 +331,10 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
 
     let adapter = fs::read_to_string(account_root.join("src/services/integration.rs"))
         .expect("read Account Integration adapter");
-    assert!(adapter.contains("ReferenceMmapSnapshotSetReader"));
+    assert!(adapter.contains("ReferenceSqliteReader"));
     assert!(adapter.contains("Reference identity resolution expected one match"));
 
     let server = fs::read_to_string(account_root.join("src/bin/kairos-account-server.rs"))
         .expect("read Account server");
-    assert!(server.contains("workspace.child(&[\"snapshots\", \"reference\"])"));
+    assert!(server.contains("workspace.child(&[\"reference\", \"reference.sqlite\"])"));
 }

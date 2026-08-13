@@ -151,7 +151,13 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
     ) -> SystemRestClient:
-        if component in {"reference", "market"}:
+        # A static replay owns its observations locally and does not construct
+        # a provider/reference Aeron source.  Keeping the driver out of this
+        # path makes offline backtests independent from a live workspace
+        # driver (and allows multiple replay instances to run safely).
+        if component == "reference" or (
+            component == "market" and market_runtime_profile != "replay"
+        ):
             self._ensure_aeron_driver()
         runtime = instance_workspace
         runtime_name = socket_name or component
@@ -680,6 +686,12 @@ class ComponentProcessApplication:
         recovery_command: str | None = None,
     ) -> SystemRestClient:
         deadline = time.monotonic() + self.ready_timeout
+        # Readiness polling must remain responsive to an early child exit.
+        # The returned client keeps its normal control timeout once ready.
+        readiness_control = replace(
+            control,
+            timeout=min(control.timeout, 0.1),
+        )
         log_offset = (
             initial_log_offset
             if initial_log_offset is not None
@@ -703,13 +715,6 @@ class ComponentProcessApplication:
 
         while True:
             stream_new_logs()
-            try:
-                health = control.status()
-                if health.get("status") in {"ok", "ready", "running"}:
-                    stream_new_logs()
-                    return control
-            except Exception:
-                pass
             return_code = process.poll() if process is not None else None
             if return_code is not None:
                 stream_new_logs()
@@ -720,6 +725,17 @@ class ComponentProcessApplication:
                     + (f"; last_error={detail}" if detail else "")
                     + (f"; next: {recovery_command}" if recovery_command else "")
                 )
+            # Avoid spending a transport timeout on a socket the child has
+            # not created yet. This also gives the loop a prompt opportunity
+            # to observe process termination under a busy test/runtime host.
+            if control.socket_path.exists():
+                try:
+                    health = readiness_control.status()
+                    if health.get("status") in {"ok", "ready", "running"}:
+                        stream_new_logs()
+                        return control
+                except Exception:
+                    pass
             if time.monotonic() >= deadline:
                 stream_new_logs()
                 raise TimeoutError(

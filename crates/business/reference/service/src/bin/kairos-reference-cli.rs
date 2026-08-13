@@ -7,12 +7,17 @@ use clap::{Args, Parser, Subcommand};
 use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
 use kairos_reference::application::{ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ReferenceCompositionConfig, ReferenceEventWriter,
+    build_application, ensure_database_parent, prepare_massive_cash_dividends,
+    prepare_massive_option_contract_snapshot, ComposedReferenceApplication,
+    MassiveReferenceDatasetConfig, ReferenceCompositionConfig, ReferenceEventWriter,
 };
 use kairos_reference::domain::{Asset, Instrument, Listing};
+use kairos_reference::{CashDividendDatasetRequest, OptionContractSnapshotRequest};
+use kairos_reference_contract::{ReferenceCollection, ReferenceSqliteReader, SqliteMarketQuery};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
+use std::io::Write;
 use std::str::FromStr;
 
 #[tokio::main(flavor = "current_thread")]
@@ -21,6 +26,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = Workspace::open(&args.workspace)?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
     ensure_database_parent(&database)?;
+    let output = args.output.unwrap_or_else(|| {
+        workspace
+            .cli_format()
+            .parse()
+            .expect("workspace output format validated when opened")
+    });
+    if let Command::PrepareOptionContracts(command) = &args.command {
+        let value = prepare_option_contracts(&workspace, command).await?;
+        println!("{}", render(&value, output));
+        return Ok(());
+    }
+    if let Command::PrepareDividends(command) = &args.command {
+        let value = prepare_dividends(&workspace, command).await?;
+        println!("{}", render(&value, output));
+        return Ok(());
+    }
+    if !args.command.requires_publication() {
+        let value = execute_read(&database, args.command)?;
+        println!("{}", render(&value, output));
+        return Ok(());
+    }
     let config = ReferenceCompositionConfig {
         workspace: Some(workspace.root().to_path_buf()),
         database,
@@ -36,54 +62,204 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.command,
     )
     .await?;
-    let output = args.output.unwrap_or_else(|| {
-        workspace
-            .cli_format()
-            .parse()
-            .expect("workspace output format validated when opened")
-    });
     println!("{}", render(&value, output));
     Ok(())
 }
 
+fn execute_read(
+    database: &std::path::Path,
+    command: Command,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let reader = ReferenceSqliteReader::open(database)?;
+    let watermark = reader.watermark()?;
+    let value = match command {
+        Command::Status | Command::Snapshot => json!({
+            "status": "ready",
+            "generation": watermark.generation,
+            "event_sequence": watermark.event_sequence,
+            "committed_at_unix_nanos": watermark.committed_at_unix_nanos,
+            "counts": reader.stats()?,
+            "note": "full catalog snapshots are retired; use bounded query commands",
+        }),
+        Command::Assets { command } => match command {
+            AssetCommand::List(args) => {
+                let mut values = reader.records(ReferenceCollection::Assets, args.limit)?;
+                values.retain(|value| {
+                    matches_json(value, args.query.as_deref())
+                        && matches_field(value, "status", args.status.as_deref())
+                        && (!args.active_only
+                            || value.get("status").and_then(Value::as_str) == Some("active"))
+                });
+                json!(values)
+            }
+            AssetCommand::Show { asset_id } => reader
+                .record(&asset_id)?
+                .ok_or_else(|| format!("unknown asset identifier: {asset_id}"))?,
+            AssetCommand::Add(_) => unreachable!("write command routed to the application"),
+        },
+        Command::Participants { command } => {
+            let entity_type = match command {
+                ParticipantCommand::Brokers => "broker",
+                ParticipantCommand::Exchanges => "exchange",
+                ParticipantCommand::Providers => "data_provider",
+            };
+            let mut values = reader.records(ReferenceCollection::Entities, 10_000)?;
+            values.retain(|value| {
+                value.get("entity_type").and_then(Value::as_str) == Some(entity_type)
+            });
+            json!(values)
+        }
+        Command::Markets { command } => {
+            let (args, resolve) = match command {
+                MarketCommand::List(args) | MarketCommand::Browse(args) => (args, false),
+                MarketCommand::Resolve(args) => (args, true),
+            };
+            let market_id = args.market_id.clone();
+            let values = if let Some(market_id) = market_id {
+                reader.market(&market_id)?.into_iter().collect::<Vec<_>>()
+            } else {
+                reader.markets(&args.into_sqlite_query())?
+            };
+            if resolve {
+                match values.as_slice() {
+                    [market] => json!(market),
+                    [] => return Err("reference market was not found".into()),
+                    _ => return Err("reference market query is ambiguous".into()),
+                }
+            } else {
+                json!(values)
+            }
+        }
+        Command::Events(args) => {
+            debug_assert!(args.action.is_none());
+            let query = args.query;
+            let from = query.sequence_from.unwrap_or(1).saturating_sub(1);
+            let mut events = reader.changes_after(from, query.limit.unwrap_or(256))?;
+            events.retain(|event| {
+                query.sequence_to.is_none_or(|to| {
+                    event
+                        .event_id
+                        .rsplit(':')
+                        .next()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .is_some_and(|sequence| sequence <= to)
+                })
+            });
+            json!(events)
+        }
+        Command::Query(args) => read_query(&reader, args.kind(), args.into_query())?,
+        Command::Search(args) => {
+            let query = ReferenceQuery {
+                text: Some(args.text),
+                limit: Some(args.limit),
+                ..ReferenceQuery::default()
+            };
+            read_query(&reader, ReferenceKind::All, query)?
+        }
+        Command::Show { identifier } => reader
+            .record(&identifier)?
+            .ok_or_else(|| format!("unknown reference identifier: {identifier}"))?,
+        Command::Refresh
+        | Command::Sync
+        | Command::Publish
+        | Command::Instruments { .. }
+        | Command::Listings { .. }
+        | Command::PrepareOptionContracts(_)
+        | Command::PrepareDividends(_) => {
+            unreachable!("write or acquisition command routed to its application")
+        }
+    };
+    Ok(value)
+}
+
+fn read_query(
+    reader: &ReferenceSqliteReader,
+    kind: ReferenceKind,
+    query: ReferenceQuery,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let collections: &[ReferenceCollection] = match kind {
+        ReferenceKind::Entity => &[ReferenceCollection::Entities],
+        ReferenceKind::Asset => &[ReferenceCollection::Assets],
+        ReferenceKind::Instrument => &[ReferenceCollection::Instruments],
+        ReferenceKind::Listing => &[ReferenceCollection::Listings],
+        ReferenceKind::Market => &[ReferenceCollection::Markets],
+        ReferenceKind::FinancialProduct => &[ReferenceCollection::FinancialProducts],
+        ReferenceKind::ExecutionAccess => &[ReferenceCollection::ExecutionAccesses],
+        ReferenceKind::Event => &[ReferenceCollection::LifecycleEvents],
+        ReferenceKind::All => &[
+            ReferenceCollection::Entities,
+            ReferenceCollection::Assets,
+            ReferenceCollection::Instruments,
+            ReferenceCollection::Listings,
+            ReferenceCollection::Markets,
+            ReferenceCollection::FinancialProducts,
+            ReferenceCollection::ExecutionAccesses,
+            ReferenceCollection::LifecycleEvents,
+        ],
+    };
+    let limit = query.limit.unwrap_or(256).clamp(1, 10_000);
+    let mut values = Vec::new();
+    for collection in collections {
+        let remaining = limit.saturating_sub(values.len());
+        if remaining == 0 {
+            break;
+        }
+        let mut records = reader.records(*collection, remaining)?;
+        records.retain(|value| {
+            matches_json(value, query.text.as_deref())
+                && matches_field(value, "status", query.status.as_deref())
+                && matches_field(
+                    value,
+                    "exchange_id",
+                    query.exchange_id.as_ref().map(|value| value.as_str()),
+                )
+                && matches_field(value, "market_type", query.market_type.as_deref())
+                && matches_field(
+                    value,
+                    "underlying_instrument_id",
+                    query.underlying_instrument_id.as_deref(),
+                )
+                && (!query.active_only
+                    || value.get("status").and_then(Value::as_str) == Some("active"))
+        });
+        values.extend(records);
+    }
+    values.truncate(limit);
+    Ok(json!(values))
+}
+
+fn matches_json(value: &Value, text: Option<&str>) -> bool {
+    text.is_none_or(|text| {
+        value
+            .to_string()
+            .to_ascii_lowercase()
+            .contains(&text.to_ascii_lowercase())
+    })
+}
+
+fn matches_field(value: &Value, field: &str, expected: Option<&str>) -> bool {
+    expected.is_none_or(|expected| value.get(field).and_then(Value::as_str) == Some(expected))
+}
+
 async fn execute(
-    application: &mut kairos_reference::ReferenceApplication,
+    application: &mut ComposedReferenceApplication,
     writer: Option<&mut ReferenceEventWriter>,
     command: Command,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let value = match command {
-        Command::Status => json!({
-            "status": "ready",
-            "actor_id": application.actor_id(),
-            "source_id": application.source_id(),
-            "generation": application.catalog().generation,
-            "event_sequence": application.catalog().event_sequence,
-            "entities": application.catalog().entities.len(),
-            "assets": application.catalog().assets.len(),
-            "instruments": application.catalog().instruments.len(),
-            "listings": application.catalog().listings.len(),
-            "market_count": application.catalog().markets.len(),
-            "active_markets": application.catalog().active_market_count(),
-            "events": application.catalog().lifecycle_events.len(),
-        }),
-        Command::Snapshot => json!({
-            "actor_id": application.actor_id(),
-            "generation": application.catalog().generation,
-            "event_sequence": application.catalog().event_sequence,
-            "catalog": application.catalog(),
-        }),
+        Command::Status | Command::Snapshot => unreachable!("read command routed to SQLite"),
         Command::Refresh | Command::Sync => {
             let result = application.refresh().await?;
             publish_pending(writer, application).await?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
-                "events": result.events.len(),
+                "events": result.change_count,
             })
         }
         Command::Publish => {
             publish_pending(writer, application).await?;
-            json!({ "generation": application.catalog().generation })
+            json!({ "generation": application.generation() })
         }
         Command::Assets { command } => {
             let publishes = matches!(&command, AssetCommand::Add(_));
@@ -135,8 +311,9 @@ async fn execute(
                 json!({"generation": generation})
             }
         },
-        Command::Participants { command } => participants(application, command),
-        Command::Markets { command } => markets(application, command)?,
+        Command::Participants { .. } | Command::Markets { .. } => {
+            unreachable!("read command routed to SQLite")
+        }
         Command::Events(args) => match args.action {
             Some(EventAction::Sync(sync)) => {
                 let result = application.refresh().await?;
@@ -172,41 +349,37 @@ async fn execute(
                     "events": events,
                 })
             }
-            None => query(application, ReferenceKind::Event, args.query.into_query())?,
+            None => unreachable!("read command routed to SQLite"),
         },
-        Command::Query(args) => {
-            let kind = args.kind();
-            query(application, kind, args.into_query())?
+        Command::Query(_) | Command::Search(_) | Command::Show { .. } => {
+            unreachable!("read command routed to SQLite")
         }
-        Command::Search(args) => query(
-            application,
-            ReferenceKind::All,
-            ReferenceQuery {
-                text: Some(args.text),
-                limit: Some(args.limit),
-                ..ReferenceQuery::default()
-            },
-        )?,
-        Command::Show { identifier } => serde_json::to_value(application.record(&identifier)?)?,
+        Command::PrepareOptionContracts(_) | Command::PrepareDividends(_) => {
+            unreachable!("acquisition command routed before mutable composition")
+        }
     };
     Ok(value)
 }
 
 fn publish(
     writer: Option<&mut ReferenceEventWriter>,
-    application: &kairos_reference::ReferenceApplication,
+    application: &ComposedReferenceApplication,
     events: &[kairos_reference::domain::LifecycleEvent],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(writer) = writer else {
         return Err("reference publication is not configured for this command".into());
     };
-    writer.publish(application.catalog(), events)?;
+    writer.publish(
+        application.generation(),
+        application.event_sequence(),
+        events,
+    )?;
     Ok(())
 }
 
 async fn publish_pending(
     mut writer: Option<&mut ReferenceEventWriter>,
-    application: &mut kairos_reference::ReferenceApplication,
+    application: &mut ComposedReferenceApplication,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let events = application.pending_events(256).await?;
@@ -223,8 +396,129 @@ async fn publish_pending(
     Ok(())
 }
 
+async fn prepare_option_contracts(
+    workspace: &Workspace,
+    args: &PrepareOptionContractsArgs,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let endpoint = args
+        .endpoint
+        .clone()
+        .or_else(|| {
+            workspace
+                .reference_config()
+                .providers
+                .get("massive")
+                .and_then(|value| value.endpoint.clone())
+        })
+        .unwrap_or_else(|| kairos_reference::composition::default_endpoint("massive").into());
+    let request = OptionContractSnapshotRequest {
+        underlying: args.underlying.clone(),
+        as_of: args.as_of.clone(),
+        expiration_start: args.expiration_start.clone(),
+        expiration_end: args.expiration_end.clone(),
+        option_right: Some(args.option_right.clone()),
+    };
+    let result = prepare_massive_option_contract_snapshot(
+        workspace,
+        &MassiveReferenceDatasetConfig {
+            credential_id: args.credential_id.clone(),
+            endpoint,
+        },
+        &request,
+    )
+    .await?;
+    if let Some(parent) = args.file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = args.file.with_extension("jsonl.tmp");
+    let mut output = std::fs::File::create(&temporary)?;
+    for record in &result.records {
+        serde_json::to_writer(&mut output, record)?;
+        output.write_all(b"\n")?;
+    }
+    output.sync_all()?;
+    std::fs::rename(&temporary, &args.file)?;
+    Ok(json!({
+        "status": "prepared",
+        "snapshot_id": result.snapshot_id,
+        "observed_at_unix_nanos": result.observed_at_unix_nanos,
+        "record_count": result.records.len(),
+        "file": args.file,
+        "source": "massive",
+        "credential_id": args.credential_id,
+        "point_in_time": {
+            "as_of": args.as_of,
+            "expiration_start": args.expiration_start,
+            "expiration_end": args.expiration_end,
+            "option_right": args.option_right,
+        },
+    }))
+}
+
+async fn prepare_dividends(
+    workspace: &Workspace,
+    args: &PrepareDividendsArgs,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let endpoint = args
+        .endpoint
+        .clone()
+        .or_else(|| {
+            workspace
+                .reference_config()
+                .providers
+                .get("massive")
+                .and_then(|value| value.endpoint.clone())
+        })
+        .unwrap_or_else(|| kairos_reference::composition::default_endpoint("massive").into());
+    let request = CashDividendDatasetRequest {
+        ticker: args.ticker.clone(),
+        start_date: args.start_date.clone(),
+        end_date: args.end_date.clone(),
+    };
+    let result = prepare_massive_cash_dividends(
+        workspace,
+        &MassiveReferenceDatasetConfig {
+            credential_id: args.credential_id.clone(),
+            endpoint,
+        },
+        &request,
+    )
+    .await?;
+    write_json_lines_atomically(&args.file, &result.records)?;
+    Ok(json!({
+        "status": "prepared",
+        "record_count": result.records.len(),
+        "file": args.file,
+        "source": "massive",
+        "credential_id": args.credential_id,
+        "coverage": {
+            "ticker": args.ticker,
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+        },
+    }))
+}
+
+fn write_json_lines_atomically<T: serde::Serialize>(
+    file: &std::path::Path,
+    records: &[T],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = file.with_extension("jsonl.tmp");
+    let mut output = std::fs::File::create(&temporary)?;
+    for record in records {
+        serde_json::to_writer(&mut output, record)?;
+        output.write_all(b"\n")?;
+    }
+    output.sync_all()?;
+    std::fs::rename(&temporary, file)?;
+    Ok(())
+}
+
 async fn assets(
-    application: &mut kairos_reference::ReferenceApplication,
+    application: &mut ComposedReferenceApplication,
     command: AssetCommand,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     match command {
@@ -241,97 +535,26 @@ async fn assets(
                 .await?;
             Ok(json!({ "generation": generation }))
         }
-        AssetCommand::List(args) => {
-            let records = application.query(&ReferenceQuery {
-                kind: ReferenceKind::Asset,
-                text: args.query,
-                status: args.status,
-                active_only: args.active_only,
-                limit: Some(args.limit),
-                ..ReferenceQuery::default()
-            });
-            Ok(serde_json::to_value(
-                records
-                    .into_iter()
-                    .filter_map(|record| match record {
-                        kairos_reference::application::ReferenceRecord::Asset(value) => Some(value),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-            )?)
+        AssetCommand::List(_) | AssetCommand::Show { .. } => {
+            unreachable!("read command routed to SQLite")
         }
-        AssetCommand::Show { asset_id } => application
-            .catalog()
-            .assets
-            .get(&asset_id)
-            .map(|value| json!(value))
-            .ok_or_else(|| format!("unknown asset identifier: {asset_id}").into()),
     }
-}
-
-fn participants(
-    application: &kairos_reference::ReferenceApplication,
-    command: ParticipantCommand,
-) -> Value {
-    let kind = match command {
-        ParticipantCommand::Brokers => "broker",
-        ParticipantCommand::Exchanges => "exchange",
-        ParticipantCommand::Providers => "data_provider",
-    };
-    json!(application
-        .catalog()
-        .entities
-        .values()
-        .filter(|value| value.entity_type == kind)
-        .collect::<Vec<_>>())
-}
-
-fn markets(
-    application: &kairos_reference::ReferenceApplication,
-    command: MarketCommand,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let args = match command {
-        MarketCommand::List(args) | MarketCommand::Browse(args) => args,
-        MarketCommand::Resolve(args) => {
-            let market = application.resolve_market(&args.into_query())?;
-            return Ok(json!(market));
-        }
-    };
-    let limit = args.limit;
-    let mut values = application.markets(&args.into_query());
-    if let Some(limit) = limit {
-        values.truncate(limit);
-    }
-    Ok(json!(values))
-}
-
-fn query(
-    application: &kairos_reference::ReferenceApplication,
-    kind: ReferenceKind,
-    mut query: ReferenceQuery,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    query.kind = kind;
-    Ok(serde_json::to_value(application.query(&query))?)
 }
 
 impl MarketQueryArgs {
-    fn into_query(self) -> kairos_reference::MarketQuery {
-        kairos_reference::MarketQuery {
-            market_id: self
-                .market_id
-                .map(|value| kairos_domain_types::MarketId::new(value).expect("valid market id")),
-            exchange_id: self
-                .exchange_id
-                .or(self.exchange)
-                .map(|value| Exchange::new(value).expect("valid exchange id")),
+    fn into_sqlite_query(self) -> SqliteMarketQuery {
+        let mut statuses = self.status.into_iter().collect::<Vec<_>>();
+        if self.active_only && statuses.is_empty() {
+            statuses.push("active".into());
+        }
+        SqliteMarketQuery {
+            source_symbol: self.symbol,
+            exchange_id: self.exchange_id.or(self.exchange),
             market_type: self.market_type.or(self.market),
             asset_type: self.asset_type,
-            source_symbol: self
-                .symbol
-                .map(|value| kairos_domain_types::Symbol::new(value).expect("valid symbol")),
-            active_only: self.active_only,
-            as_of_unix_nanos: None,
-            status: self.status,
+            statuses,
+            limit: self.limit.unwrap_or(256),
+            ..SqliteMarketQuery::default()
         }
     }
 }
@@ -423,6 +646,8 @@ enum Command {
     Refresh,
     Sync,
     Publish,
+    PrepareOptionContracts(PrepareOptionContractsArgs),
+    PrepareDividends(PrepareDividendsArgs),
     Assets {
         #[command(subcommand)]
         command: AssetCommand,
@@ -449,6 +674,42 @@ enum Command {
     Show {
         identifier: String,
     },
+}
+
+#[derive(Debug, Args)]
+struct PrepareOptionContractsArgs {
+    #[arg(long)]
+    underlying: String,
+    #[arg(long)]
+    as_of: String,
+    #[arg(long)]
+    expiration_start: String,
+    #[arg(long)]
+    expiration_end: String,
+    #[arg(long, default_value = "put")]
+    option_right: String,
+    #[arg(long, default_value = "massive-readonly")]
+    credential_id: String,
+    #[arg(long)]
+    endpoint: Option<String>,
+    #[arg(long)]
+    file: std::path::PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct PrepareDividendsArgs {
+    #[arg(long)]
+    ticker: String,
+    #[arg(long)]
+    start_date: String,
+    #[arg(long)]
+    end_date: String,
+    #[arg(long, default_value = "massive-readonly")]
+    credential_id: String,
+    #[arg(long)]
+    endpoint: Option<String>,
+    #[arg(long)]
+    file: std::path::PathBuf,
 }
 
 #[derive(Debug, Subcommand)]

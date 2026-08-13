@@ -31,13 +31,13 @@ pub struct ReferenceCatalog {
 
 impl ReferenceCatalog {
     pub fn apply(&mut self, incoming: ProviderCatalog, now: UnixNanos) -> Vec<LifecycleEvent> {
-        let previous_entities = self.entities.clone();
-        let previous_assets = self.assets.clone();
-        let previous_instruments = self.instruments.clone();
-        let previous_listings = self.listings.clone();
-        let previous_markets = self.markets.clone();
-        let previous_financial_products = self.financial_products.clone();
-        let previous_execution_accesses = self.execution_accesses.clone();
+        let previous_entities = std::mem::take(&mut self.entities);
+        let previous_assets = std::mem::take(&mut self.assets);
+        let previous_instruments = std::mem::take(&mut self.instruments);
+        let previous_listings = std::mem::take(&mut self.listings);
+        let previous_markets = std::mem::take(&mut self.markets);
+        let previous_financial_products = std::mem::take(&mut self.financial_products);
+        let previous_execution_accesses = std::mem::take(&mut self.execution_accesses);
         self.entities = incoming
             .entities
             .into_iter()
@@ -124,7 +124,7 @@ impl ReferenceCatalog {
         );
 
         for (id, next) in &next_markets {
-            match self.markets.get(id) {
+            match previous_markets.get(id) {
                 None => events.push(LifecycleEvent::listed(
                     next,
                     now,
@@ -156,13 +156,14 @@ impl ReferenceCatalog {
                         current_status: Some(next.status),
                         previous_symbol: Some(previous.source_symbol.to_string()),
                         current_symbol: Some(next.source_symbol.to_string()),
+                        ..LifecycleEvent::default()
                     });
                 }
                 _ => {}
             }
         }
         let mut delisted_records = Vec::new();
-        for (id, previous) in &self.markets {
+        for (id, previous) in &previous_markets {
             if !next_markets.contains_key(id) && previous.status != ReferenceStatus::Delisted {
                 let mut delisted = previous.clone();
                 delisted.status = ReferenceStatus::Delisted;
@@ -185,6 +186,7 @@ impl ReferenceCatalog {
                     current_status: Some(ReferenceStatus::Delisted),
                     previous_symbol: None,
                     current_symbol: None,
+                    ..LifecycleEvent::default()
                 });
                 // Keep the delisted record in the catalog so consumers can resolve it.
                 delisted_records.push((id.clone(), delisted));
@@ -199,7 +201,6 @@ impl ReferenceCatalog {
                 .get()
                 .saturating_add(events.len() as u64),
         );
-        self.lifecycle_events.extend(events.iter().cloned());
         if previous_entities != self.entities
             || previous_assets != self.assets
             || previous_instruments != self.instruments
@@ -210,6 +211,23 @@ impl ReferenceCatalog {
         {
             self.generation = Generation::new(self.generation.get().saturating_add(1));
         }
+        for event in &mut events {
+            event.operation = Some(
+                if event.event_type.ends_with("_removed") {
+                    "delete"
+                } else {
+                    "upsert"
+                }
+                .into(),
+            );
+            event.generation = self.generation.get();
+            event.record_payload_json = event
+                .record_kind
+                .as_deref()
+                .zip(event.record_id.as_deref())
+                .and_then(|(kind, id)| record_payload(self, kind, id));
+        }
+        self.lifecycle_events.extend(events.iter().cloned());
         events
     }
 
@@ -224,6 +242,20 @@ impl ReferenceCatalog {
             })
             .count()
     }
+}
+
+fn record_payload(catalog: &ReferenceCatalog, kind: &str, id: &str) -> Option<String> {
+    let value = match kind {
+        "entity" => serde_json::to_value(catalog.entities.get(id)?).ok()?,
+        "asset" => serde_json::to_value(catalog.assets.get(id)?).ok()?,
+        "instrument" => serde_json::to_value(catalog.instruments.get(id)?).ok()?,
+        "listing" => serde_json::to_value(catalog.listings.get(id)?).ok()?,
+        "market" => serde_json::to_value(catalog.markets.get(id)?).ok()?,
+        "financial_product" => serde_json::to_value(catalog.financial_products.get(id)?).ok()?,
+        "execution_access" => serde_json::to_value(catalog.execution_accesses.get(id)?).ok()?,
+        _ => return None,
+    };
+    serde_json::to_string(&value).ok()
 }
 
 #[cfg(test)]

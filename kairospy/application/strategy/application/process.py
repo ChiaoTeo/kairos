@@ -106,8 +106,88 @@ class StrategyProcessApplication:
     def stop(
         self, launch_id: str, instance_id: str, mode: str = "paper"
     ) -> dict[str, Any]:
-        return asyncio.run(
-            UnixRestClient(self.socket(launch_id, instance_id, mode)).request(
-                "POST", "/v1/stop"
+        control_result: dict[str, Any]
+        try:
+            control_result = asyncio.run(
+                UnixRestClient(self.socket(launch_id, instance_id, mode)).request(
+                    "POST", "/v1/stop"
+                )
             )
-        )
+        except (FileNotFoundError, OSError, RuntimeError, TimeoutError) as error:
+            control_result = {
+                "launch_id": launch_id,
+                "instance_id": instance_id,
+                "status": "not_running",
+                "control_error": str(error),
+            }
+        cleanup = self._release_orphaned_subscriptions(launch_id, instance_id, mode)
+        if cleanup is not None:
+            control_result["subscription_cleanup"] = cleanup
+        return control_result
+
+    def _release_orphaned_subscriptions(
+        self, launch_id: str, instance_id: str, mode: str
+    ) -> dict[str, Any] | None:
+        """Reconcile Market ownership even when the Strategy process is dead."""
+        instance = self.workspace.instance(mode, launch_id, instance_id)
+        strategy_id = self._journal_strategy_id(instance.root / "lifecycle.jsonl")
+        if strategy_id is None:
+            return None
+        try:
+            manifest = json.loads(
+                instance.component_manifest().read_text(encoding="utf-8")
+            )
+            market = manifest.get("components", {}).get("market", {})
+            socket_value = market.get("socket") if isinstance(market, Mapping) else None
+            market_socket = (
+                Path(str(socket_value))
+                if socket_value
+                else self.workspace.paths.process_socket("market")
+            )
+            from kairospy.infrastructure.transport.commands import (
+                MarketCommandClient,
+                UnixJsonCommandClient,
+            )
+
+            request_id = (
+                f"{strategy_id}:{instance_id}:market.release_owner:external-stop"
+            )
+            handle = MarketCommandClient(
+                UnixJsonCommandClient(market_socket), launch_id=launch_id
+            ).release_owner(
+                strategy_id=strategy_id,
+                instance_id=instance_id,
+                request_id=request_id,
+            )
+            return {
+                "status": handle.status,
+                "request_id": handle.request_id,
+                "result": dict(handle.result),
+                "error": handle.error,
+            }
+        except (
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            return {"status": "failed", "error": str(error)}
+
+    @staticmethod
+    def _journal_strategy_id(path: Path) -> str | None:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return None
+        for line in reversed(lines):
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            strategy_id = (
+                value.get("strategy_id") if isinstance(value, Mapping) else None
+            )
+            if isinstance(strategy_id, str) and strategy_id.strip():
+                return strategy_id
+        return None

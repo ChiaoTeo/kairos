@@ -1,0 +1,21 @@
+# Paper/manual launch. Account credentials remain workspace-owned and are not
+# stored in this file.
+
+[launch]
+id = "manual-trading"
+mode = "paper"
+strategy = "builtin:interactive"
+
+# `ref` must match an account binding registered in the workspace.
+[accounts.paper]
+ref = "paper-account"
+enabled = true
+
+[paper.market]
+scope = "instance"
+profile = "paper-instance"
+
+[execution]
+enabled = true
+provider = "simulated"
+product = "spot"

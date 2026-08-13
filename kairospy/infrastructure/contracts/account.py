@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
+from decimal import Decimal
+import sys
 
+from kairospy.application.account import (
+    AccountSnapshot,
+    Balance,
+    DataFreshness,
+    Position,
+)
+from kairospy.application.reference import InstrumentRef
+from kairospy.domain_types import AccountId, InstrumentId
+from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from .base import CommandEnvelope, MmapSnapshotReader, QueryEnvelope
 from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
 
@@ -42,6 +53,12 @@ class AccountContractClient:
     def mark_to_market(self, update: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._post("/v1/mark-to-market", update)
 
+    def advance_time(self, event_time_unix_nanos: int) -> Mapping[str, Any]:
+        return self._post(
+            "/v1/time/advance",
+            {"event_time_unix_nanos": event_time_unix_nanos},
+        )
+
     def _get(self, path: str, **params: object) -> Mapping[str, Any]:
         query = "&".join(
             f"{key}={value}" for key, value in params.items() if value is not None
@@ -64,6 +81,104 @@ def _response(status: int, value: Mapping[str, Any]) -> Mapping[str, Any]:
     return value
 
 
+class AccountMmapProjection:
+    """Synchronous Account application projection decoded from mmap."""
+
+    def __init__(self, path: str | Path) -> None:
+        sys.modules.setdefault("kairos", _generated_kairos)
+        self._reader = snapshot_reader(path)
+
+    @property
+    def path(self) -> Path:
+        return self._reader.path
+
+    def snapshot(self, account_id: AccountId) -> AccountSnapshot:
+        contract = self._reader.read()
+        from kairospy.infrastructure.transport.generated.kairos.account.v1.AccountsSnapshot import (
+            AccountsSnapshot,
+        )
+
+        root = AccountsSnapshot.GetRootAs(contract.payload, 0)
+        payload = cast(Any, root.Payload())
+        if payload is None:
+            raise ValueError("Account snapshot payload is missing")
+        account = next(
+            (
+                cast(Any, payload.Accounts(index))
+                for index in range(payload.AccountsLength())
+                if _text(cast(Any, payload.Accounts(index)).AccountId())
+                == str(account_id)
+            ),
+            None,
+        )
+        if account is None:
+            raise ValueError(
+                f"account {account_id!s} is not present in Account projection"
+            )
+        balances = tuple(
+            Balance(
+                account_id=account_id,
+                asset=_text(value.AssetCode()) or _text(value.AssetId()) or "",
+                total=_decimal64(value.Total()) or Decimal("0"),
+                available=_decimal64(value.Available()) or Decimal("0"),
+                reserved=_decimal64(value.Locked()) or Decimal("0"),
+            )
+            for value in _table_items(account, "Balances")
+        )
+        positions = tuple(
+            Position(
+                account_id=account_id,
+                instrument=_instrument(_text(value.InstrumentId()) or ""),
+                quantity=_decimal64(value.Quantity()) or Decimal("0"),
+                average_price=_decimal64(value.AveragePrice()),
+                market_value=_market_value(value),
+                unrealized_pnl=_decimal64(value.UnrealizedPnl()),
+            )
+            for value in _table_items(account, "Positions")
+        )
+        return AccountSnapshot(
+            account_id=account_id,
+            equity=_decimal64(account.Equity()),
+            balances=balances,
+            positions=positions,
+            freshness=DataFreshness.STALE if account.Stale() else DataFreshness.FRESH,
+            generation=contract.metadata.generation,
+            event_sequence=contract.metadata.event_sequence,
+        )
+
+
+def _text(value: bytes | None) -> str | None:
+    return None if value is None else value.decode("utf-8")
+
+
+def _table_items(value: object, name: str) -> tuple[Any, ...]:
+    table = cast(Any, value)
+    length = int(getattr(table, f"{name}Length")())
+    result = tuple(getattr(table, name)(index) for index in range(length))
+    if any(item is None for item in result):
+        raise ValueError(f"Account snapshot contains an empty {name} entry")
+    return cast(tuple[Any, ...], result)
+
+
+def _decimal64(value: object | None) -> Decimal | None:
+    if value is None:
+        return None
+    mantissa = int(getattr(value, "Mantissa")())
+    scale = int(getattr(value, "Scale")())
+    return Decimal(mantissa).scaleb(-scale)
+
+
+def _instrument(value: str) -> InstrumentRef:
+    identifier = InstrumentId(value)
+    return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
+
+
+def _market_value(value: object) -> Decimal | None:
+    quantity = _decimal64(getattr(value, "Quantity")())
+    mark = _decimal64(getattr(value, "MarkPrice")())
+    return None if quantity is None or mark is None else quantity * mark
+
+
 def backtest_mark_to_market(
     path: str | Path,
     event,
@@ -72,44 +187,44 @@ def backtest_mark_to_market(
     quote_asset: str = "USDT",
 ) -> Mapping[str, Any] | None:
     """Apply the latest strategy-visible quote to Account during replay."""
-    from kairospy.infrastructure.transport.market import QuoteView
+    from kairospy.infrastructure.transport.market import BarView, QuoteView
 
-    if event.kind != "quote" or not isinstance(event.payload, QuoteView):
+    if event.kind == "bar" and isinstance(event.payload, BarView):
+        quote = event.payload
+        mark = Decimal(quote.close.value)
+        instrument_id = quote.instrument_id
+        event_time = quote.event_time_unix_nanos
+    elif event.kind == "quote" and isinstance(event.payload, QuoteView):
+        quote = event.payload
+        prices = [
+            value.value
+            for value in (quote.bid_price, quote.ask_price)
+            if value is not None
+        ]
+        if not prices:
+            return None
+        mark = sum((Decimal(value) for value in prices), Decimal("0")) / len(prices)
+        instrument_id = quote.instrument_id
+        event_time = quote.event_time_unix_nanos
+    else:
         return None
-    quote = event.payload
-    prices = [
-        value.value for value in (quote.bid_price, quote.ask_price) if value is not None
-    ]
-    if not prices:
-        return None
-    from decimal import Decimal
-
-    mark = sum((Decimal(value) for value in prices), Decimal("0")) / len(prices)
     client = AccountContractClient(path)
     result = client.mark_to_market(
         {
             "segment_key": segment_key,
-            "instrument_id": quote.instrument_id,
+            "instrument_id": instrument_id,
             "quote_asset": quote_asset,
             "mark_price": _decimal_wire(mark),
-            "observed_at_unix_nanos": quote.event_time_unix_nanos,
+            "observed_at_unix_nanos": event_time,
         }
     )
     return {"result": result, "snapshot": client.snapshot()}
 
 
-def _decimal_wire(value) -> dict[str, int]:
-    normalized = value.normalize()
-    sign, digits, exponent = normalized.as_tuple()
-    mantissa = int("".join(str(digit) for digit in digits) or "0")
-    if sign:
-        mantissa = -mantissa
-    if exponent >= 0:
-        mantissa *= 10**exponent
-        scale = 0
-    else:
-        scale = -exponent
-    return {"mantissa": mantissa, "scale": scale}
+def _decimal_wire(value) -> str:
+    if not value.is_finite():
+        raise ValueError("decimal value must be finite")
+    return format(value, "f")
 
 
 def snapshot_reader(path: str | Path) -> MmapSnapshotReader:
@@ -122,6 +237,7 @@ def snapshot_reader(path: str | Path) -> MmapSnapshotReader:
 
 __all__ = [
     "AccountContractClient",
+    "AccountMmapProjection",
     "CommandEnvelope",
     "QueryEnvelope",
     "backtest_mark_to_market",

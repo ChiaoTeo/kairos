@@ -34,6 +34,10 @@ impl InstrumentType {
 pub struct InstrumentQuery {
     pub instrument_type: InstrumentType,
     pub underlying: Option<String>,
+    pub as_of: Option<String>,
+    pub expiration_date_gte: Option<String>,
+    pub expiration_date_lte: Option<String>,
+    pub contract_type: Option<String>,
 }
 
 impl InstrumentQuery {
@@ -41,6 +45,10 @@ impl InstrumentQuery {
         Self {
             instrument_type: InstrumentType::Equity,
             underlying: None,
+            as_of: None,
+            expiration_date_gte: None,
+            expiration_date_lte: None,
+            contract_type: None,
         }
     }
 
@@ -48,6 +56,31 @@ impl InstrumentQuery {
         Self {
             instrument_type: InstrumentType::Option,
             underlying: underlying.filter(|value| !value.trim().is_empty()),
+            as_of: None,
+            expiration_date_gte: None,
+            expiration_date_lte: None,
+            contract_type: None,
         }
     }
+
+    pub fn as_of(mut self, value: impl Into<String>) -> Self {
+        self.as_of = non_empty(value);
+        self
+    }
+
+    pub fn expiration_between(mut self, start: impl Into<String>, end: impl Into<String>) -> Self {
+        self.expiration_date_gte = non_empty(start);
+        self.expiration_date_lte = non_empty(end);
+        self
+    }
+
+    pub fn contract_type(mut self, value: impl Into<String>) -> Self {
+        self.contract_type = non_empty(value);
+        self
+    }
+}
+
+fn non_empty(value: impl Into<String>) -> Option<String> {
+    let value = value.into();
+    (!value.trim().is_empty()).then_some(value)
 }

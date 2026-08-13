@@ -25,10 +25,34 @@ pub struct Capability {
     pub can_trade: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecimalValue {
     pub mantissa: i64,
     pub scale: u8,
+}
+
+impl Serialize for DecimalValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(
+            &crate::model::format_decimal(self.mantissa, self.scale)
+                .map_err(serde::ser::Error::custom)?,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for DecimalValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let (mantissa, scale) =
+            crate::model::parse_decimal(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { mantissa, scale })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

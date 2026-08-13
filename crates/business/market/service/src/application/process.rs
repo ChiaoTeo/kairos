@@ -47,6 +47,8 @@ struct CommandEnvelope<T> {
     idempotency_key: String,
     operation: String,
     strategy_id: String,
+    #[serde(default)]
+    launch_id: Option<String>,
     instance_id: String,
     payload: T,
 }
@@ -55,6 +57,7 @@ struct CommandEnvelope<T> {
 struct SubscribeRequest {
     request_id: String,
     strategy_id: String,
+    launch_id: Option<String>,
     instance_id: String,
     subject: String,
     selectors: Vec<String>,
@@ -70,6 +73,9 @@ struct SubscribeRequest {
 struct UnsubscribePayload {
     subscription_id: String,
 }
+
+#[derive(Debug, Default, Deserialize)]
+struct ReleaseOwnerPayload {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceEvent {
@@ -106,6 +112,27 @@ pub trait MarketSnapshotPublisher: Send {
     fn publish(&mut self, snapshot: &MarketSnapshot) -> Result<(), String>;
 }
 
+enum MarketHistoryRecorder {
+    Noop,
+    Jsonl(crate::services::history::JsonlMarketHistoryRecorder),
+}
+
+impl MarketHistoryRecorder {
+    async fn record(&mut self, events: &[(u64, crate::MarketEvent)]) -> Result<(), String> {
+        match self {
+            Self::Noop => Ok(()),
+            Self::Jsonl(recorder) => recorder.record(events).await,
+        }
+    }
+
+    async fn shutdown(&mut self) -> Result<(), String> {
+        match self {
+            Self::Noop => Ok(()),
+            Self::Jsonl(recorder) => recorder.shutdown().await,
+        }
+    }
+}
+
 /// The sole asynchronous task which serializes every MarketActor mutation.
 /// This is task/mailbox mechanics around the Actor, not a second business
 /// runtime or state owner.
@@ -123,6 +150,7 @@ struct MarketActorTask {
     reference: ReferenceProjection,
     command_results: BTreeMap<String, CachedCommandResult>,
     source_activator: Option<Box<dyn SourceActivator>>,
+    history_recorder: MarketHistoryRecorder,
 }
 
 #[derive(Clone)]
@@ -239,6 +267,7 @@ impl MarketProcess {
                 reference: ReferenceProjection::new(),
                 command_results: BTreeMap::new(),
                 source_activator,
+                history_recorder: MarketHistoryRecorder::Noop,
             },
             socket_path: socket_path.into(),
             event_socket_path: event_socket_path.into(),
@@ -255,7 +284,7 @@ impl MarketProcess {
         self
     }
 
-    pub fn with_reference_snapshot(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn with_reference_database(mut self, path: impl Into<PathBuf>) -> Self {
         self.actor_task.reference.configure(path);
         self
     }
@@ -263,6 +292,14 @@ impl MarketProcess {
     pub fn with_reference_events<S: ReferenceChangeSource + 'static>(mut self, source: S) -> Self {
         self.reference_events = Some(Box::new(source));
         self.actor_task.reference.require_recovery(None);
+        self
+    }
+
+    pub(crate) fn with_history_recorder(
+        mut self,
+        recorder: crate::services::history::JsonlMarketHistoryRecorder,
+    ) -> Self {
+        self.actor_task.history_recorder = MarketHistoryRecorder::Jsonl(recorder);
         self
     }
 
@@ -399,7 +436,12 @@ impl MarketActorTask {
                         EngineCommand::Http(request) => {
                             let body = String::from_utf8_lossy(&request.body);
                             let mut response = self.handle_request(&request.method, &request.path, &body).await;
-                            if matches!(request.path.as_str(), "/v1/subscribe" | "/v1/unsubscribe")
+                            if matches!(
+                                request.path.as_str(),
+                                "/v1/subscribe"
+                                    | "/v1/unsubscribe"
+                                    | "/v1/subscriptions/release-owner"
+                            )
                                 && (200..300).contains(&response.status)
                             {
                                 if let Some(activator) = self.source_activator.as_deref_mut() {
@@ -459,7 +501,9 @@ impl MarketActorTask {
                             json!({"error": error.to_string()}),
                         );
                     }
-                    event_publication.publish(self.application.drain_events_limited(1_024))?;
+                    let events = self.application.drain_events_limited(1_024);
+                    self.history_recorder.record(&events).await?;
+                    event_publication.publish(events)?;
                 }
                 _ = snapshot_ticks.tick() => {
                     self.publish_snapshot()?;
@@ -511,8 +555,11 @@ impl MarketActorTask {
         self.application
             .shutdown_sources(self.shutdown_timeout)
             .await?;
-        event_publication.publish(self.application.drain_events_limited(1_024))?;
+        let events = self.application.drain_events_limited(1_024);
+        self.history_recorder.record(&events).await?;
+        event_publication.publish(events)?;
         event_publication.drain(self.shutdown_timeout).await?;
+        self.history_recorder.shutdown().await?;
         self.publish_snapshot()?;
         info!(
             event = "actor_task_stopped",
@@ -563,7 +610,10 @@ impl MarketActorTask {
             "market control request",
             json!({"method": method, "path": path}),
         );
-        let command_key = if matches!(path, "/v1/subscribe" | "/v1/unsubscribe") {
+        let command_key = if matches!(
+            path,
+            "/v1/subscribe" | "/v1/unsubscribe" | "/v1/subscriptions/release-owner"
+        ) {
             serde_json::from_str::<Value>(body)
                 .ok()
                 .and_then(|value| {
@@ -604,6 +654,7 @@ impl MarketActorTask {
             },
             "/v1/subscribe" => self.subscribe(body),
             "/v1/unsubscribe" => self.unsubscribe(body),
+            "/v1/subscriptions/release-owner" => self.release_owner(body),
             "/v1/recover" => match self.application.recover_sources().await {
                 Ok(()) => (202, json!({"status":"recovering"})),
                 Err(error) => (422, json!({"error": error.to_string()})),
@@ -737,6 +788,7 @@ impl MarketActorTask {
         let request = SubscribeRequest {
             request_id: value.command_id,
             strategy_id: value.strategy_id,
+            launch_id: value.launch_id,
             instance_id: value.instance_id,
             subject: value.payload.subject,
             selectors: value.payload.selectors,
@@ -823,9 +875,14 @@ impl MarketActorTask {
                 active_only: true,
                 ..Default::default()
             };
+            let owner_id = strategy_subscription_owner(
+                request.launch_id.as_deref(),
+                &request.instance_id,
+                &request.strategy_id,
+            );
             let result = self.application.subscribe_dynamic_with_selectors(
                 subscription_id.clone(),
-                request.strategy_id.clone(),
+                owner_id,
                 query,
                 markets,
                 request.selectors.clone(),
@@ -906,9 +963,14 @@ impl MarketActorTask {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
+        let owner_id = strategy_subscription_owner(
+            request.launch_id.as_deref(),
+            &request.instance_id,
+            &request.strategy_id,
+        );
         let result = self.application.subscribe_static_with_selectors(
             subscription_id,
-            request.strategy_id,
+            owner_id,
             descriptor,
             request.selectors.clone(),
         );
@@ -966,23 +1028,89 @@ impl MarketActorTask {
             );
         }
         let request_id = value.command_id;
+        let owner_id = strategy_subscription_owner(
+            value.launch_id.as_deref(),
+            &value.instance_id,
+            &value.strategy_id,
+        );
         let subscription_id = value.payload.subscription_id;
         let id = match SubscriptionId::new(subscription_id) {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
-        if self.application.unsubscribe(&id) {
-            (
+        match self.application.unsubscribe_owned(&id, &owner_id) {
+            Ok(true) => (
                 202,
                 json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"accepted"}),
-            )
-        } else {
-            (
+            ),
+            Ok(false) => (
                 404,
                 json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"rejected", "error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
-            )
+            ),
+            Err(error) => (
+                409,
+                json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"rejected", "error":{"code":"market.subscription_owner_mismatch","message":error.to_string(),"retryable":false}}),
+            ),
         }
     }
+
+    fn release_owner(&mut self, body: &str) -> (u16, Value) {
+        let value: CommandEnvelope<ReleaseOwnerPayload> = match serde_json::from_str(body) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    400,
+                    json!({"error":{"code":"command.invalid_json","message":format!("invalid release-owner command: {error}"),"retryable":false}}),
+                )
+            }
+        };
+        if value.schema_version != 1
+            || value.operation != "market.release_owner"
+            || value.command_id.trim().is_empty()
+            || value.idempotency_key.trim().is_empty()
+            || value.strategy_id.trim().is_empty()
+            || value.instance_id.trim().is_empty()
+        {
+            return (
+                422,
+                json!({"error":{"code":"command.invalid_envelope","message":"unsupported release-owner command schema or identity","retryable":false}}),
+            );
+        }
+        let owner_id = strategy_subscription_owner(
+            value.launch_id.as_deref(),
+            &value.instance_id,
+            &value.strategy_id,
+        );
+        let removed = self.application.release_subscription_owner(&owner_id);
+        (
+            202,
+            json!({
+                "schema_version": 1,
+                "command_id": value.command_id,
+                "request_id": value.command_id,
+                "status": "accepted",
+                "result": {
+                    "owner_id": owner_id,
+                    "removed_subscription_ids": removed,
+                    "removed_count": removed.len(),
+                }
+            }),
+        )
+    }
+}
+
+fn strategy_subscription_owner(
+    launch_id: Option<&str>,
+    instance_id: &str,
+    strategy_id: &str,
+) -> String {
+    serde_json::to_string(&json!([
+        "strategy",
+        launch_id.unwrap_or_default(),
+        instance_id,
+        strategy_id
+    ]))
+    .expect("strategy subscription owner is serializable")
 }
 
 fn log_event(level: &str, message: &str, fields: Value) {
@@ -1005,11 +1133,7 @@ mod tests {
     use crate::services::event_wire::{encode_event, encode_observation_event};
     use crate::{MarketApplication, MarketEvent, OrderBook, PriceLevel};
     use kairos_protocol::InstanceIdentity;
-    use kairos_reference_contract::model::Market as ReferenceMarket;
-    use kairos_reference_contract::transport::{
-        ReferenceMmapSnapshotConfig, ReferenceMmapSnapshotWriter,
-    };
-    use kairos_reference_contract::ReferenceCatalog;
+    use kairos_reference_contract::ReferenceMarket;
     use serde_json::json;
     use std::collections::VecDeque;
     use std::time::Duration;
@@ -1227,6 +1351,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_release_is_scoped_idempotent_and_enforced_by_unsubscribe() {
+        let root = tempfile::tempdir().unwrap();
+        let mut process = MarketProcess::new(
+            MarketApplication::new("test-market", 10).unwrap(),
+            NullPublisher,
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        let subscribe = |command_id: &str, launch_id: &str, strategy_id: &str| {
+            serde_json::to_string(&json!({
+                "schema_version": 1,
+                "command_id": command_id,
+                "idempotency_key": command_id,
+                "operation": "market.subscribe",
+                "strategy_id": strategy_id,
+                "launch_id": launch_id,
+                "instance_id": "instance-1",
+                "payload": {
+                    "subject": "market.BTCUSDT",
+                    "selectors": ["quote"],
+                    "exchange": "binance",
+                    "market_type": "spot",
+                    "asset_type": "crypto",
+                    "params": {},
+                    "dynamic": false
+                }
+            }))
+            .unwrap()
+        };
+        for body in [
+            subscribe("subscription-a", "launch-a", "same-name"),
+            subscribe("subscription-b", "launch-b", "same-name"),
+        ] {
+            assert_eq!(
+                process
+                    .actor_task
+                    .handle_request("POST", "/v1/subscribe", &body)
+                    .await
+                    .status,
+                202
+            );
+        }
+        let wrong_owner_unsubscribe = serde_json::to_string(&json!({
+            "schema_version": 1,
+            "command_id": "wrong-owner-unsubscribe",
+            "idempotency_key": "wrong-owner-unsubscribe",
+            "operation": "market.unsubscribe",
+            "strategy_id": "same-name",
+            "launch_id": "launch-b",
+            "instance_id": "instance-1",
+            "payload": {"subscription_id": "subscription-a"}
+        }))
+        .unwrap();
+        assert_eq!(
+            process
+                .actor_task
+                .handle_request("POST", "/v1/unsubscribe", &wrong_owner_unsubscribe)
+                .await
+                .status,
+            409
+        );
+
+        let release = serde_json::to_string(&json!({
+            "schema_version": 1,
+            "command_id": "release-a",
+            "idempotency_key": "release-a",
+            "operation": "market.release_owner",
+            "strategy_id": "same-name",
+            "launch_id": "launch-a",
+            "instance_id": "instance-1",
+            "payload": {}
+        }))
+        .unwrap();
+        let released = process
+            .actor_task
+            .handle_request("POST", "/v1/subscriptions/release-owner", &release)
+            .await;
+        assert_eq!(released.status, 202);
+        assert_eq!(released.payload["result"]["removed_count"], 1);
+        let subscriptions = process.actor_task.application.snapshot().subscriptions;
+        assert_eq!(subscriptions.len(), 1);
+        assert_eq!(subscriptions[0].id.0, "subscription-b");
+
+        let repeated = release.replace("release-a", "release-a-again");
+        let released = process
+            .actor_task
+            .handle_request("POST", "/v1/subscriptions/release-owner", &repeated)
+            .await;
+        assert_eq!(released.status, 202);
+        assert_eq!(released.payload["result"]["removed_count"], 0);
+    }
+
+    #[tokio::test]
     async fn replay_pause_resume_controls_the_source_without_a_polling_path() {
         let root = tempfile::tempdir().unwrap();
         let mut application = MarketApplication::new("replay-market", 10).unwrap();
@@ -1385,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_missing_reference_snapshot_keeps_projection_in_error() {
+    fn configured_missing_reference_database_keeps_projection_in_error() {
         let root = tempfile::tempdir().unwrap();
         let mut process = MarketProcess::new(
             MarketApplication::new("test-market", 10).unwrap(),
@@ -1395,7 +1614,7 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap()
-        .with_reference_snapshot(root.path().join("missing-markets.snapshot"));
+        .with_reference_database(root.path().join("missing-reference.sqlite"));
 
         assert!(process.actor_task.recover_reference_projection().is_err());
         assert!(process.actor_task.reference.recovery_needed());
@@ -1403,27 +1622,15 @@ mod tests {
     }
 
     #[test]
-    fn reference_snapshot_builds_market_projection_and_clears_recovery() {
+    fn reference_database_builds_market_projection_and_clears_recovery() {
         let root = tempfile::tempdir().unwrap();
-        let path = |name: &str| root.path().join(name);
-        let markets_path = path("markets.snapshot");
-        let mut writer = ReferenceMmapSnapshotWriter::create(ReferenceMmapSnapshotConfig {
-            catalog_path: path("catalog.snapshot"),
-            entities_path: path("entities.snapshot"),
-            assets_path: path("assets.snapshot"),
-            instruments_path: path("instruments.snapshot"),
-            listings_path: path("listings.snapshot"),
-            markets_path: markets_path.clone(),
-            financial_products_path: path("financial-products.snapshot"),
-            execution_accesses_path: path("execution-accesses.snapshot"),
-            slot_size: 64 * 1024,
-            actor_id: "reference".into(),
-            event_stream_id: "reference.lifecycle".into(),
-            identity: InstanceIdentity::new("workspace", "reference", "global"),
-        })
-        .unwrap();
+        let database = root.path().join("reference.sqlite");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL); INSERT INTO reference_meta VALUES(1,1,1,1,0); CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, source_id TEXT, market_key TEXT, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, market_type TEXT, asset_type TEXT, underlying_instrument_id TEXT, source_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT); CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);").unwrap();
         let market = ReferenceMarket {
+            source_id: Some("binance-spot".into()),
             market_id: "market:binance:spot:BTCUSDT".into(),
+            market_key: "BTCUSDT".into(),
             instrument_id: "instrument:spot:BTC".into(),
             listing_id: "listing:binance:spot:BTC:USDT".into(),
             exchange_id: "exchange:binance".into(),
@@ -1431,15 +1638,41 @@ mod tests {
             asset_type: Some("crypto".into()),
             source_symbol: "BTCUSDT".into(),
             status: "active".into(),
-            ..ReferenceMarket::default()
+            base_asset_id: None,
+            quote_asset_id: None,
+            underlying_instrument_id: None,
+            price_tick: None,
+            quantity_tick: None,
+            minimum_quantity: None,
+            minimum_notional: None,
+            price_precision: 0,
+            quantity_precision: 0,
+            contract_size: None,
+            effective_from_unix_nanos: 0,
+            effective_to_unix_nanos: None,
         };
-        let mut catalog = ReferenceCatalog {
-            generation: 1,
-            event_sequence: 1,
-            ..ReferenceCatalog::default()
-        };
-        catalog.markets.insert(market.market_id.clone(), market);
-        writer.publish(&catalog).unwrap();
+        let payload = serde_json::to_string(&market).unwrap();
+        let effective_to = market.effective_to_unix_nanos.map(|value| value as i64);
+        connection
+            .execute(
+                "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    &market.market_id,
+                    &market.source_id,
+                    &market.market_key,
+                    &market.instrument_id,
+                    &market.listing_id,
+                    &market.exchange_id,
+                    &market.market_type,
+                    &market.asset_type,
+                    &market.underlying_instrument_id,
+                    &market.source_symbol,
+                    &market.status,
+                    effective_to,
+                    payload
+                ],
+            )
+            .unwrap();
         let mut process = MarketProcess::new(
             MarketApplication::new("test-market", 10).unwrap(),
             NullPublisher,
@@ -1448,7 +1681,7 @@ mod tests {
             Duration::from_millis(10),
         )
         .unwrap()
-        .with_reference_snapshot(markets_path);
+        .with_reference_database(database.clone());
 
         process.actor_task.recover_reference_projection().unwrap();
 
@@ -1474,9 +1707,12 @@ mod tests {
         assert!(error.contains("behind required sequence 2"));
         assert!(process.actor_task.reference.recovery_needed());
 
-        catalog.generation = 2;
-        catalog.event_sequence = 2;
-        writer.publish(&catalog).unwrap();
+        connection
+            .execute(
+                "UPDATE reference_meta SET generation = 2, event_sequence = 2 WHERE id = 1",
+                [],
+            )
+            .unwrap();
         process.actor_task.recover_reference_projection().unwrap();
         assert_eq!(
             process.actor_task.reference.event_sequence(),

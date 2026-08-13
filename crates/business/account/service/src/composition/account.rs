@@ -50,9 +50,9 @@ pub struct AccountOptions {
     /// Provider-native symbol owned by this Account binding for Binance
     /// isolated margin. It is never inferred from a canonical Market ID.
     pub isolated_margin_symbol: Option<String>,
-    /// Workspace Reference snapshot-set root used to resolve provider symbols
-    /// into canonical business identity.
-    pub reference_snapshot_root: Option<PathBuf>,
+    /// Workspace Reference SQLite database used read-only to resolve provider
+    /// symbols into canonical business identity.
+    pub reference_database: Option<PathBuf>,
 }
 
 pub struct AccountComposition {
@@ -860,9 +860,9 @@ fn parse_initial_balance(value: &str) -> Result<Balance, String> {
 
 fn load_instrument_resolver(options: &AccountOptions) -> Result<AccountInstrumentResolver, String> {
     options
-        .reference_snapshot_root
+        .reference_database
         .as_ref()
-        .map(AccountInstrumentResolver::from_reference_snapshot)
+        .map(AccountInstrumentResolver::from_reference_database)
         .transpose()
         .map(|value| value.unwrap_or_default())
 }
@@ -1054,7 +1054,7 @@ mod secret_tests {
             port: 4002,
             client_id: 0,
             isolated_margin_symbol: None,
-            reference_snapshot_root: None,
+            reference_database: None,
         }
     }
 

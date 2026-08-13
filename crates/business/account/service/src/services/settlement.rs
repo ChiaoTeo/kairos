@@ -26,7 +26,7 @@ pub(crate) fn settle_paper_fill(
         .unwrap_or_else(|| Position {
             instrument_id: fill.instrument_id.clone(),
             market_id: None,
-            quantity: SignedQuantity::new(0, fill.quantity.scale()),
+            quantity: SignedQuantity::ZERO,
             average_price: None,
             mark_price: None,
             unrealized_pnl: None,
@@ -37,7 +37,7 @@ pub(crate) fn settle_paper_fill(
     let previous_average = position
         .average_price
         .unwrap_or_else(|| kairos_domain_types::Price::new(1, 0).expect("positive fallback price"));
-    let fill_quantity = SignedQuantity::new(fill.quantity.mantissa(), fill.quantity.scale());
+    let fill_quantity = SignedQuantity::new(fill.quantity.mantissa(), fill.quantity.scale())?;
     let (next_quantity, next_average, realized_pnl) = match fill.side {
         FillSide::Buy => {
             let next_quantity = previous_quantity.checked_add(fill_quantity)?;
@@ -50,7 +50,7 @@ pub(crate) fn settle_paper_fill(
                 } else {
                     fill.price
                 };
-            (next_quantity, next_average, Money::new(0, 0))
+            (next_quantity, next_average, Money::ZERO)
         }
         FillSide::Sell => {
             let next_quantity = previous_quantity.checked_sub(fill_quantity)?;
@@ -61,7 +61,7 @@ pub(crate) fn settle_paper_fill(
                     fill_quantity
                 }
             } else {
-                SignedQuantity::new(0, fill_quantity.scale())
+                SignedQuantity::ZERO
             };
             let realized_pnl = if closing_quantity.is_positive() && position.average_price.is_some()
             {
@@ -69,7 +69,7 @@ pub(crate) fn settle_paper_fill(
                     .checked_sub(previous_average)?
                     .checked_mul(closing_quantity)?
             } else {
-                Money::new(0, 0)
+                Money::ZERO
             };
             let next_average = if next_quantity.is_positive() {
                 previous_average
@@ -90,7 +90,7 @@ pub(crate) fn settle_paper_fill(
     position.realized_pnl = Some(
         position
             .realized_pnl
-            .unwrap_or(Money::new(0, 0))
+            .unwrap_or(Money::ZERO)
             .checked_add(realized_pnl)?,
     );
     position.updated_at_unix_nanos = fill.occurred_at_unix_nanos;
@@ -155,7 +155,7 @@ fn balance_after_delta(
         .unwrap_or(Balance {
             asset_id,
             asset_code: kairos_domain_types::Currency::new(asset_code)?,
-            total: SignedQuantity::new(0, delta.scale()),
+            total: SignedQuantity::ZERO,
             available: None,
             locked: None,
             borrowed: None,

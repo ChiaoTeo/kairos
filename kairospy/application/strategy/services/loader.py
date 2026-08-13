@@ -22,6 +22,12 @@ class StrategyEntrypoint:
 def load_strategy(
     ref: str, *, root: Path, params: Mapping[str, object] | None = None
 ) -> StrategyEntrypoint:
+    if ref == "builtin:interactive":
+        from kairospy.strategy.interactive import InteractiveStrategy
+
+        strategy = InteractiveStrategy()
+        validate_strategy(strategy)
+        return StrategyEntrypoint(ref, strategy, None)
     if ":" not in ref:
         raise ValueError("strategy ref must be module:callable")
     module_name, attribute = ref.split(":", 1)

@@ -19,7 +19,8 @@ those facts.
 
 ## Kairos mapping
 
-- Integration exposes only an async `InstrumentCatalogConnection` projection.
+- Integration exposes async `InstrumentCatalogConnection` and single-symbol
+  `MarketQuote` query projections.
 - `BUY_SELL`, `BUY_ONLY`, and `SELL_ONLY` are active; `NONE` and `OFFMARKET` are inactive.
 - Provider symbols become canonical US equity instruments in Reference.
 - Reference records Binance as an execution access and retains the provider symbol.
@@ -34,9 +35,11 @@ spot instruments.
 
 ## Deliberately unsupported
 
-No quote, order-entry, cancel, open-order, history, or order-event endpoint is inferred from this
-catalog contract. Those capabilities require their own provider evidence, failure semantics, and
-tests before they can be added.
+The quote capability uses `GET /sapi/v1/equity/market/quote?symbol=AAPL` with
+the API-key header. A successful empty response body is normalized to
+`Ok(None)` rather than treated as JSON `null` or a malformed response. The
+query uses bounded query retry semantics. Order-entry, cancel, open-order,
+history, and order-event endpoints remain unsupported.
 
 ## Upstream and license
 

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_domain_types::{InstrumentId, MarketId};
+use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::application::{
     AsyncHistoricalMarketDataConnection, HistoricalMarketRequest, MarketEventKind,
 };
@@ -58,36 +59,66 @@ async fn download(
     workspace_root: Option<&PathBuf>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let provider = command.provider;
-    let endpoint = command.endpoint.unwrap_or_else(|| match provider {
-        HistoricalProvider::Massive => "https://api.massive.com".into(),
-        HistoricalProvider::Binance => "https://data-api.binance.vision".into(),
+    let workspace = workspace_root.map(Workspace::open).transpose()?;
+    let configured_endpoint = workspace.as_ref().and_then(|workspace| {
+        workspace
+            .reference_config()
+            .providers
+            .get(provider.as_str())
+            .and_then(|value| value.endpoint.clone())
     });
+    let endpoint = command
+        .endpoint
+        .or(configured_endpoint)
+        .unwrap_or_else(|| match provider {
+            HistoricalProvider::Massive => "https://api.massive.com".into(),
+            HistoricalProvider::Binance => "https://data-api.binance.vision".into(),
+        });
     let start_time_unix_nanos = millis_to_nanos(command.start)?;
     let end_time_unix_nanos = millis_to_nanos(command.end)?;
+    let data_kind = match command.data_kind {
+        HistoricalDataKind::Bar => kairos_integration::application::MarketDataKind::Bar,
+        HistoricalDataKind::Quote => kairos_integration::application::MarketDataKind::Quote,
+        HistoricalDataKind::Trade => kairos_integration::application::MarketDataKind::Trade,
+    };
     let request = HistoricalMarketRequest {
         symbol: kairos_domain_types::Symbol::new(command.symbol.clone())
             .map_err(|error| error.to_string())?,
-        data_kind: kairos_integration::application::MarketDataKind::Bar,
+        data_kind,
         start_time_unix_nanos,
         end_time_unix_nanos,
         interval: Some(command.interval.clone()),
-        adjusted: Some(false),
+        adjusted: Some(command.adjusted),
     };
     let events = match provider {
         HistoricalProvider::Massive => {
+            let api_key = if let Some(value) = command.api_key.clone() {
+                value
+            } else {
+                workspace_root
+                    .ok_or("Massive download requires --workspace or the deprecated --api-key")?;
+                let workspace = workspace
+                    .as_ref()
+                    .ok_or("Massive download workspace could not be opened")?;
+                let credentials_root = workspace.child(&["credentials"])?;
+                load_workspace_credential(
+                    &credentials_root,
+                    "massive",
+                    command.credential_id.as_deref(),
+                )?
+                .ok_or("Massive workspace credential does not exist")?
+                .api_key
+            };
             let provider = MassiveConnection::connect(MassiveConnectionConfig {
                 environment: "public".into(),
                 rest_base_url: endpoint,
-                api_key: secrecy::SecretString::new(
-                    command
-                        .api_key
-                        .clone()
-                        .ok_or("Massive --api-key is required")?
-                        .into(),
-                ),
+                api_key: secrecy::SecretString::new(api_key.into()),
             })?;
             provider
-                .historical_market(MassiveMarketType::Equity)?
+                .historical_market(match command.market_type {
+                    HistoricalMarketType::Equity => MassiveMarketType::Equity,
+                    HistoricalMarketType::Option => MassiveMarketType::Option,
+                })?
                 .fetch(&request)
                 .await?
         }
@@ -99,11 +130,23 @@ async fn download(
     };
     let symbol = command.symbol.to_ascii_uppercase();
     let market_id = command.market_id.unwrap_or_else(|| match provider {
-        HistoricalProvider::Massive => format!("market:massive:equity:{symbol}"),
+        HistoricalProvider::Massive => match command.market_type {
+            HistoricalMarketType::Equity => format!("market:massive:equity:{symbol}"),
+            HistoricalMarketType::Option => format!("market:massive:options:{symbol}"),
+        },
         HistoricalProvider::Binance => format!("market:binance:spot:{symbol}"),
     });
+    if matches!(provider, HistoricalProvider::Massive)
+        && matches!(command.market_type, HistoricalMarketType::Option)
+        && command.instrument_id.is_none()
+    {
+        return Err("Massive option download requires Reference-owned --instrument-id".into());
+    }
     let instrument_id = command.instrument_id.unwrap_or_else(|| match provider {
-        HistoricalProvider::Massive => format!("instrument:equity:US:{symbol}:common"),
+        HistoricalProvider::Massive => match command.market_type {
+            HistoricalMarketType::Equity => format!("instrument:equity:US:{symbol}:common"),
+            HistoricalMarketType::Option => unreachable!("validated above"),
+        },
         HistoricalProvider::Binance => format!("instrument:spot:{symbol}"),
     });
     let output = command.file;
@@ -116,23 +159,54 @@ async fn download(
     let mut body = String::new();
     let mut count = 0usize;
     for event in events {
-        if event.kind != MarketEventKind::Bar {
-            continue;
-        }
-        let bar = event.bar.ok_or("historical bar payload is missing")?;
-        let observation = kairos_market::MarketObservation::Bar(kairos_market::Bar {
-            market_id: MarketId::new(&market_id)?,
-            instrument_id: InstrumentId::new(&instrument_id)?,
-            timeframe: bar.timeframe,
-            open: bar.open,
-            high: bar.high,
-            low: bar.low,
-            close: bar.close,
-            volume: bar.volume,
-            observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id: provider.as_str().into(),
-            derivation: bar.derivation,
-        });
+        let observation = match event.kind {
+            MarketEventKind::Bar => {
+                let bar = event.bar.ok_or("historical bar payload is missing")?;
+                kairos_market::MarketObservation::Bar(kairos_market::Bar {
+                    market_id: MarketId::new(&market_id)?,
+                    instrument_id: InstrumentId::new(&instrument_id)?,
+                    timeframe: bar.timeframe,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                    observed_at_unix_nanos: event.observed_at_unix_nanos,
+                    source_id: provider.as_str().into(),
+                    derivation: bar.derivation,
+                })
+            }
+            MarketEventKind::Quote => {
+                kairos_market::MarketObservation::Quote(kairos_market::Quote {
+                    market_id: MarketId::new(&market_id)?,
+                    instrument_id: InstrumentId::new(&instrument_id)?,
+                    bid_price: event.price,
+                    bid_quantity: event.quantity,
+                    ask_price: event.ask_price,
+                    ask_quantity: event.ask_quantity,
+                    observed_at_unix_nanos: event.observed_at_unix_nanos,
+                    source_id: provider.as_str().into(),
+                })
+            }
+            MarketEventKind::Trade => {
+                kairos_market::MarketObservation::Trade(kairos_market::Trade {
+                    market_id: MarketId::new(&market_id)?,
+                    instrument_id: InstrumentId::new(&instrument_id)?,
+                    trade_id: event
+                        .sequence
+                        .map(|value| format!("massive:{}", value.get())),
+                    price: event.price.ok_or("historical trade price is missing")?,
+                    quantity: event
+                        .quantity
+                        .ok_or("historical trade quantity is missing")?,
+                    cost: None,
+                    aggressor_side: None,
+                    observed_at_unix_nanos: event.observed_at_unix_nanos,
+                    source_id: provider.as_str().into(),
+                })
+            }
+            _ => continue,
+        };
         body.push_str(&serde_json::to_string(&observation)?);
         body.push('\n');
         count += 1;
@@ -140,12 +214,17 @@ async fn download(
     std::fs::write(&output, body)?;
     let manifest = serde_json::json!({
         "dataset_id": command.dataset_id,
+        "provider": provider.as_str(),
         "source": provider.as_str(),
         "symbol": command.symbol,
         "market_id": market_id,
         "instrument_id": instrument_id,
-        "data_kind": "bar",
+        "data_kind": command.data_kind.as_str(),
+        "observation_type": command.data_kind.as_str(),
+        "market_type": command.market_type.as_str(),
         "interval": command.interval,
+        "timeframe": command.interval,
+        "adjusted": command.adjusted,
         "start_time_unix_millis": command.start,
         "end_time_unix_millis": command.end,
         "event_count": count,
@@ -377,10 +456,16 @@ struct DownloadCommand {
     provider: HistoricalProvider,
     #[arg(long)]
     api_key: Option<String>,
+    #[arg(long, default_value = "massive-readonly")]
+    credential_id: Option<String>,
     #[arg(long)]
     endpoint: Option<String>,
     #[arg(long)]
     symbol: String,
+    #[arg(long, value_enum, default_value_t = HistoricalMarketType::Equity)]
+    market_type: HistoricalMarketType,
+    #[arg(long, value_enum, default_value_t = HistoricalDataKind::Bar)]
+    data_kind: HistoricalDataKind,
     #[arg(long)]
     market_id: Option<String>,
     #[arg(long)]
@@ -391,6 +476,8 @@ struct DownloadCommand {
     end: i64,
     #[arg(long, default_value = "1m")]
     interval: String,
+    #[arg(long, default_value_t = false)]
+    adjusted: bool,
     #[arg(long, default_value = "market-history")]
     dataset_id: String,
     #[arg(long)]
@@ -401,6 +488,38 @@ struct DownloadCommand {
 enum HistoricalProvider {
     Binance,
     Massive,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum HistoricalMarketType {
+    Equity,
+    Option,
+}
+
+impl HistoricalMarketType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Equity => "equity",
+            Self::Option => "option",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum HistoricalDataKind {
+    Bar,
+    Quote,
+    Trade,
+}
+
+impl HistoricalDataKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bar => "bar",
+            Self::Quote => "quote",
+            Self::Trade => "trade",
+        }
+    }
 }
 
 impl HistoricalProvider {

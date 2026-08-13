@@ -420,10 +420,10 @@ impl AccountRuntime {
 
 fn unrealized_pnl(position: &Position) -> Result<Money, String> {
     let Some(average_price) = position.average_price else {
-        return Ok(Money::new(0, 0));
+        return Ok(Money::ZERO);
     };
     let Some(mark_price) = position.mark_price else {
-        return Ok(Money::new(0, 0));
+        return Ok(Money::ZERO);
     };
     mark_price
         .checked_sub(average_price)
@@ -441,8 +441,9 @@ fn calculate_equity(
         .iter()
         .find(|value| value.asset_code.eq_ignore_ascii_case(quote_asset))
         .map(|value| value.total)
-        .unwrap_or(SignedQuantity::new(0, 0));
-    let mut equity = Money::new(balance.mantissa(), balance.scale());
+        .unwrap_or(SignedQuantity::ZERO);
+    let mut equity =
+        Money::new(balance.mantissa(), balance.scale()).map_err(|error| error.to_string())?;
     for position in positions {
         if let Some(mark_price) = position.mark_price {
             equity = equity

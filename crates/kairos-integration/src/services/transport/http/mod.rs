@@ -696,10 +696,14 @@ fn parse_response_with_metadata(
         })
         .collect();
     let body = response.text()?;
-    let body = serde_json::from_str(&body).map_err(|error| ExchangeError::InvalidJson {
-        message: error.to_string(),
-        body: diagnostic_body(&body),
-    })?;
+    let body = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(&body).map_err(|error| ExchangeError::InvalidJson {
+            message: error.to_string(),
+            body: diagnostic_body(&body),
+        })?
+    };
     Ok(HttpJsonResponse { body, headers })
 }
 
@@ -717,10 +721,14 @@ async fn parse_async_response_with_metadata(
         })
         .collect();
     let body = response.text().await?;
-    let body = serde_json::from_str(&body).map_err(|error| ExchangeError::InvalidJson {
-        message: error.to_string(),
-        body: diagnostic_body(&body),
-    })?;
+    let body = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(&body).map_err(|error| ExchangeError::InvalidJson {
+            message: error.to_string(),
+            body: diagnostic_body(&body),
+        })?
+    };
     Ok(HttpJsonResponse { body, headers })
 }
 

@@ -9,7 +9,10 @@ use crate::application::{
     SnapshotWatermark, SubmitOrder,
 };
 use crate::domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
-use kairos_domain_types::{InstrumentId, MarketId, OrderId, Price, Quantity, UnixNanos};
+use kairos_domain_types::{
+    InstrumentId, MarketId, Money, OrderId, Price, Quantity, SignedQuantity, UnixNanos,
+};
+use rust_decimal::Decimal;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +52,6 @@ struct MarketProjection {
 #[derive(Clone)]
 struct ReferenceProjection {
     health: ReferenceHealth,
-    markets: Vec<ReferenceMarket>,
     refreshed_at: Instant,
 }
 
@@ -70,10 +72,11 @@ struct DependencyProjection {
 pub struct SocketExecutionPreflight {
     accounts: BTreeMap<String, PathBuf>,
     market_snapshot: Option<PathBuf>,
+    reference_database: Option<PathBuf>,
     risk: Option<PathBuf>,
     reservations: BTreeMap<String, String>,
-    reservation_amounts: BTreeMap<String, i64>,
-    reservation_quantities: BTreeMap<String, i64>,
+    reservation_amounts: BTreeMap<String, RiskAmount>,
+    reservation_quantities: BTreeMap<String, Quantity>,
     reservation_requests: BTreeMap<String, SubmitOrder>,
     orders: BTreeMap<String, (String, String)>,
     dependency_watermarks: DependencyWatermarks,
@@ -83,11 +86,25 @@ pub struct SocketExecutionPreflight {
     account_clients: BTreeMap<String, AccountContractClient>,
     risk_client: Option<RiskContractClient>,
     simulated_settlement: bool,
+    allow_backtest_trade_authorization: bool,
+    allow_backtest_reference_without_projection: bool,
+    allow_backtest_balance_without_projection: bool,
+    skip_backtest_risk_authorization: bool,
+    business_time_unix_nanos: Option<u64>,
+    reservation_ttl_nanos: u64,
 }
 
 const MAX_PRICE_DEVIATION_BPS: i64 = 500;
 
 impl SocketExecutionPreflight {
+    /// Backtest market events are delivered directly to the deterministic
+    /// simulator.  They may be Bars without a live Quote snapshot, so the
+    /// live quote projection must not reject an otherwise valid intent.
+    pub fn without_market_snapshot(mut self) -> Self {
+        self.market_snapshot = None;
+        self
+    }
+
     pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
         let manifest_path = path.as_ref().to_path_buf();
         let value: Value = serde_json::from_slice(
@@ -124,13 +141,14 @@ impl SocketExecutionPreflight {
                 .join("market")
                 .join("market.snapshot")
         });
-        let reference_snapshot = instance_root.map(|root| root.join("snapshots").join("reference"));
+        let reference_database =
+            instance_root.map(|root| root.join("reference").join("reference.sqlite"));
         let projection = Arc::new(RwLock::new(DependencyProjection::default()));
         let projection_stop = Arc::new(AtomicBool::new(false));
         let projection_workers = Self::start_projection_workers(
             accounts.clone(),
             market_snapshot.clone(),
-            reference_snapshot.clone(),
+            reference_database.clone(),
             endpoint("risk"),
             Arc::clone(&projection),
             Arc::clone(&projection_stop),
@@ -138,6 +156,7 @@ impl SocketExecutionPreflight {
         Ok(Self {
             accounts,
             market_snapshot,
+            reference_database,
             risk: endpoint("risk"),
             reservations: BTreeMap::new(),
             reservation_amounts: BTreeMap::new(),
@@ -151,11 +170,44 @@ impl SocketExecutionPreflight {
             account_clients: BTreeMap::new(),
             risk_client: None,
             simulated_settlement: false,
+            allow_backtest_trade_authorization: false,
+            allow_backtest_reference_without_projection: false,
+            allow_backtest_balance_without_projection: false,
+            skip_backtest_risk_authorization: false,
+            business_time_unix_nanos: None,
+            reservation_ttl_nanos: 60_000_000_000,
         })
     }
 
     pub fn with_simulated_settlement(mut self, enabled: bool) -> Self {
         self.simulated_settlement = enabled;
+        self
+    }
+
+    pub fn with_backtest_trade_authorization(mut self, enabled: bool) -> Self {
+        self.allow_backtest_trade_authorization = enabled;
+        if enabled {
+            // A replay may advance business time by hours between the order
+            // and the next executable Bar. Keep the reservation bounded, but
+            // long enough for the configured replay window rather than using
+            // the live 60-second acknowledgement deadline.
+            self.reservation_ttl_nanos = 7 * 24 * 60 * 60 * 1_000_000_000;
+        }
+        self
+    }
+
+    pub fn with_backtest_reference_without_projection(mut self, enabled: bool) -> Self {
+        self.allow_backtest_reference_without_projection = enabled;
+        self
+    }
+
+    pub fn with_backtest_balance_without_projection(mut self, enabled: bool) -> Self {
+        self.allow_backtest_balance_without_projection = enabled;
+        self
+    }
+
+    pub fn with_backtest_risk_without_projection(mut self, enabled: bool) -> Self {
+        self.skip_backtest_risk_authorization = enabled;
         self
     }
 
@@ -193,7 +245,7 @@ impl SocketExecutionPreflight {
     fn start_projection_workers(
         accounts: BTreeMap<String, PathBuf>,
         market_snapshot: Option<PathBuf>,
-        reference_snapshot: Option<PathBuf>,
+        reference_database: Option<PathBuf>,
         risk: Option<PathBuf>,
         projection: Arc<RwLock<DependencyProjection>>,
         stop: Arc<AtomicBool>,
@@ -280,14 +332,12 @@ impl SocketExecutionPreflight {
                 }
             }));
         }
-        if let Some(snapshot_root) = reference_snapshot {
+        if let Some(database) = reference_database {
             let projection = Arc::clone(&projection);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
                 let reader = loop {
-                    match kairos_reference_contract::ReferenceMmapSnapshotSetReader::open(
-                        &snapshot_root,
-                    ) {
+                    match kairos_reference_contract::ReferenceSqliteReader::open(&database) {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
@@ -298,13 +348,13 @@ impl SocketExecutionPreflight {
                 let mut last_watermark = None;
                 while !stop.load(Ordering::Acquire) {
                     let result = (|| {
-                        let snapshot = reader.read().map_err(|error| error.to_string())?;
+                        let watermark = reader.watermark().map_err(|error| error.to_string())?;
                         let health = ReferenceHealth {
                             status: "ready".into(),
-                            generation: snapshot.generation,
-                            event_sequence: snapshot.event_sequence,
+                            generation: watermark.generation,
+                            event_sequence: watermark.event_sequence,
                         };
-                        let watermark = (snapshot.generation, snapshot.event_sequence);
+                        let watermark = (watermark.generation, watermark.event_sequence);
                         if (health.generation, health.event_sequence) != watermark {
                             return Err("Reference health and snapshot watermark disagree".into());
                         }
@@ -317,19 +367,8 @@ impl SocketExecutionPreflight {
                             }
                             return Ok::<_, String>(None);
                         }
-                        let markets = snapshot
-                            .markets
-                            .into_iter()
-                            .map(reference_market_from_snapshot)
-                            .collect::<Vec<_>>();
                         let value = ReferenceProjection {
                             health,
-                            markets: markets
-                                .into_iter()
-                                .filter(|market| {
-                                    matches!(market.status.as_str(), "active" | "trading")
-                                })
-                                .collect(),
                             refreshed_at: Instant::now(),
                         };
                         last_watermark = Some(watermark);
@@ -463,19 +502,83 @@ impl SocketExecutionPreflight {
         }
     }
 
+    /// Backtest commands are serialized by the StrategyHost. Refresh the
+    /// account projection synchronously at that barrier so a fill settled by
+    /// Account is visible to the very next target-position intent.
+    fn refresh_account_projections(&mut self) -> Result<(), String> {
+        let account_ids: Vec<String> = self.accounts.keys().cloned().collect();
+        for account_id in account_ids {
+            if !self.account_clients.contains_key(&account_id) {
+                let socket = self
+                    .accounts
+                    .get(&account_id)
+                    .ok_or_else(|| format!("account is not bound: {account_id}"))?
+                    .clone();
+                let client =
+                    AccountContractClient::connect(socket).map_err(|error| error.to_string())?;
+                self.account_clients.insert(account_id.clone(), client);
+            }
+            let client = self
+                .account_clients
+                .get(&account_id)
+                .ok_or_else(|| format!("account client is unavailable: {account_id}"))?;
+            let value = AccountProjection {
+                health: client.health().map_err(|error| error.to_string())?,
+                capabilities: client.capabilities().map_err(|error| error.to_string())?,
+                balances: client.balances(None).map_err(|error| error.to_string())?,
+                positions: client.positions(None).map_err(|error| error.to_string())?,
+                refreshed_at: Instant::now(),
+            };
+            self.projection
+                .write()
+                .map_err(|_| "account projection lock poisoned".to_string())?
+                .accounts
+                .insert(account_id, value);
+        }
+        Ok(())
+    }
+
     fn reference_market(
         &self,
         market_id: Option<&str>,
         instrument_id: &str,
     ) -> Result<ReferenceMarket, String> {
-        self.reference_projection()?
-            .markets
-            .into_iter()
-            .find(|market| {
-                market_id.is_some_and(|id| market.market_id == id)
-                    || market.instrument_id == instrument_id
-            })
-            .ok_or_else(|| format!("reference market is not projected: {instrument_id}"))
+        let projected = self.reference_projection()?;
+        let database = self
+            .reference_database
+            .as_ref()
+            .ok_or_else(|| "Reference SQLite database is not configured".to_string())?;
+        let reader = kairos_reference_contract::ReferenceSqliteReader::open(database)
+            .map_err(|error| error.to_string())?;
+        let watermark = reader.watermark().map_err(|error| error.to_string())?;
+        if watermark.generation != projected.health.generation
+            || watermark.event_sequence != projected.health.event_sequence
+        {
+            return Err("Reference projection watermark changed during preflight".into());
+        }
+        let markets = if let Some(market_id) = market_id {
+            reader
+                .market(market_id)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .collect()
+        } else {
+            reader
+                .markets(&kairos_reference_contract::SqliteMarketQuery {
+                    instrument_id: Some(instrument_id.to_owned()),
+                    statuses: vec!["active".into(), "trading".into()],
+                    limit: 2,
+                    ..Default::default()
+                })
+                .map_err(|error| error.to_string())?
+        };
+        let [market] = markets.as_slice() else {
+            return Err(format!(
+                "Reference market resolution expected one match for {instrument_id}, found {}",
+                markets.len()
+            ));
+        };
+        Ok(market.clone())
     }
 
     fn health(&self, account_id: &str) -> Result<(), String> {
@@ -488,7 +591,7 @@ impl SocketExecutionPreflight {
             .capabilities
             .into_iter()
             .any(|item| item.account_id == account_id && item.can_trade);
-        if !can_trade {
+        if !can_trade && !self.allow_backtest_trade_authorization {
             return Err(format!(
                 "account {account_id} does not have trade authorization"
             ));
@@ -500,7 +603,7 @@ impl SocketExecutionPreflight {
         &mut self,
         request: &SubmitOrder,
         reservation_id: String,
-        amount: i64,
+        amount: RiskAmount,
     ) -> Result<(), String> {
         let health = self.risk_projection()?.health;
         let account = self.account_projection(request.account_id.as_str())?;
@@ -538,9 +641,14 @@ impl SocketExecutionPreflight {
             .options
             .quote_asset
             .as_deref()
-            .and_then(|asset| find_available(&account.balances, asset))
-            .unwrap_or_default()
-            .max(0);
+            .map(|asset| find_available(&account.balances, asset))
+            .transpose()?
+            .flatten()
+            .unwrap_or(Decimal::ZERO)
+            .max(Decimal::ZERO);
+        let available_margin = risk_amount(available_margin)?;
+        let business_time_unix_nanos = self.business_time_unix_nanos;
+        let reservation_ttl_nanos = self.reservation_ttl_nanos;
         let decision = self
             .risk_client()?
             .authorize_and_reserve(&AuthorizeRequest {
@@ -560,12 +668,13 @@ impl SocketExecutionPreflight {
                     .map(ToString::to_string)
                     .unwrap_or_else(|| request.segment_key.to_string()),
                 metric: Metric::Notional,
-                amount: RiskAmount {
-                    mantissa: amount,
-                    scale: request.quantity.scale(),
-                },
-                at_unix_nanos: now_unix_nanos(),
-                reservation_ttl_nanos: 60_000_000_000,
+                amount,
+                at_unix_nanos: request
+                    .submitted_at_unix_nanos
+                    .map(|value| value.get())
+                    .or(business_time_unix_nanos)
+                    .unwrap_or_else(now_unix_nanos),
+                reservation_ttl_nanos,
                 dependency_generation: health.generation,
                 dependency_event_sequence: health.event_sequence,
                 context: Some(RiskContext {
@@ -580,11 +689,11 @@ impl SocketExecutionPreflight {
                         mantissa: 0,
                         scale: 0,
                     },
-                    available_margin: RiskAmount {
-                        mantissa: available_margin,
+                    available_margin,
+                    current_pnl: RiskAmount {
+                        mantissa: 0,
                         scale: 0,
                     },
-                    current_pnl: 0,
                     current_drawdown: RiskAmount {
                         mantissa: 0,
                         scale: 0,
@@ -628,24 +737,22 @@ impl SocketExecutionPreflight {
             self.health(leg.account_id.as_str())?;
             let (side, quantity) = if leg.target_position {
                 let positions = self.account_projection(leg.account_id.as_str())?.positions;
-                let current = find_position(&positions, leg.instrument_id.as_str())
-                    .unwrap_or((0, leg.quantity.scale()));
-                let target =
-                    scale_decimal(leg.quantity.mantissa(), leg.quantity.scale(), current.1)?;
+                let current =
+                    find_position(&positions, leg.instrument_id.as_str())?.unwrap_or(Decimal::ZERO);
+                let target = decimal_quantity(leg.quantity)?;
                 let delta = target
-                    .checked_sub(current.0)
+                    .checked_sub(current)
                     .ok_or_else(|| "explicit intent leg quantity overflow".to_string())?;
-                if delta == 0 {
+                if delta == Decimal::ZERO {
                     continue;
                 }
                 (
-                    if delta > 0 {
+                    if delta > Decimal::ZERO {
                         OrderSide::Buy
                     } else {
                         OrderSide::Sell
                     },
-                    Quantity::new(delta.unsigned_abs() as i64, current.1)
-                        .map_err(|error| error.to_string())?,
+                    quantity_from_decimal(delta.abs())?,
                 )
             } else {
                 if leg.quantity.mantissa() <= 0 {
@@ -670,6 +777,7 @@ impl SocketExecutionPreflight {
                 quantity,
                 limit_price: leg.limit_price,
                 options: leg.options.clone(),
+                submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
             });
         }
         if intent.intent_type == crate::domain::IntentType::PairArbitrage
@@ -699,6 +807,10 @@ impl Drop for SocketExecutionPreflight {
 }
 
 enum PreflightRequest {
+    AdvanceTime {
+        event_time_unix_nanos: u64,
+        reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+    },
     Plan {
         intent: Box<ExecuteStrategyIntent>,
         reply: std::sync::mpsc::SyncSender<Result<Vec<SubmitOrder>, String>>,
@@ -730,8 +842,7 @@ enum PreflightRequest {
     },
     Resize {
         order_id: String,
-        remaining_quantity_mantissa: i64,
-        quantity_scale: u8,
+        remaining_quantity: Quantity,
         reply: std::sync::mpsc::SyncSender<Result<(), String>>,
     },
     Release {
@@ -826,6 +937,12 @@ impl QueuedExecutionPreflight {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
             match request {
+                PreflightRequest::AdvanceTime {
+                    event_time_unix_nanos,
+                    reply,
+                } => {
+                    let _ = reply.send(preflight.advance_time(event_time_unix_nanos));
+                }
                 PreflightRequest::Plan { intent, reply } => {
                     let _ = reply.send(preflight.plan_intent(&intent));
                 }
@@ -854,15 +971,10 @@ impl QueuedExecutionPreflight {
                 }
                 PreflightRequest::Resize {
                     order_id,
-                    remaining_quantity_mantissa,
-                    quantity_scale,
+                    remaining_quantity,
                     reply,
                 } => {
-                    let _ = reply.send(preflight.resize_order(
-                        &order_id,
-                        remaining_quantity_mantissa,
-                        quantity_scale,
-                    ));
+                    let _ = reply.send(preflight.resize_order(&order_id, remaining_quantity));
                 }
                 PreflightRequest::Release { order_id, reply } => {
                     let _ = reply.send(preflight.release_order(&order_id));
@@ -925,6 +1037,18 @@ impl Drop for QueuedExecutionPreflight {
 }
 
 impl ExecutionPreflight for QueuedExecutionPreflight {
+    fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), String> {
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        self.request(
+            PreflightRequest::AdvanceTime {
+                event_time_unix_nanos,
+                reply: reply_tx,
+            },
+            reply_rx,
+            false,
+        )
+    }
+
     fn dependency_watermarks(&self) -> DependencyWatermarks {
         self.watermarks
             .read()
@@ -1021,18 +1145,12 @@ impl ExecutionPreflight for QueuedExecutionPreflight {
         )
     }
 
-    fn resize_order(
-        &mut self,
-        order_id: &str,
-        remaining_quantity_mantissa: i64,
-        quantity_scale: u8,
-    ) -> Result<(), String> {
+    fn resize_order(&mut self, order_id: &str, remaining_quantity: Quantity) -> Result<(), String> {
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             PreflightRequest::Resize {
                 order_id: order_id.into(),
-                remaining_quantity_mantissa,
-                quantity_scale,
+                remaining_quantity,
                 reply: reply_tx,
             },
             reply_rx,
@@ -1066,11 +1184,23 @@ impl ExecutionPreflight for QueuedExecutionPreflight {
 }
 
 impl ExecutionPreflight for SocketExecutionPreflight {
+    fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), String> {
+        if self
+            .business_time_unix_nanos
+            .is_some_and(|current| event_time_unix_nanos < current)
+        {
+            return Err("execution business time cannot move backwards".into());
+        }
+        self.business_time_unix_nanos = Some(event_time_unix_nanos);
+        Ok(())
+    }
+
     fn dependency_watermarks(&self) -> DependencyWatermarks {
         self.dependency_watermarks.clone()
     }
 
     fn plan_intent(&mut self, intent: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
+        self.refresh_account_projections()?;
         self.refresh_watermarks();
         if !intent.legs.is_empty() {
             return self.plan_explicit_legs(intent);
@@ -1081,24 +1211,28 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 return Err("market snapshot has no quotes".into());
             }
             if let Some(limit) = intent.limit_price {
-                validate_market_price(&quotes, intent, limit.mantissa(), limit.scale())?;
+                validate_market_price(&quotes, intent, limit)?;
             }
         }
         let mut orders = Vec::with_capacity(intent.account_ids.len());
         for (index, account_id) in intent.account_ids.iter().enumerate() {
             self.health(account_id.as_str())?;
-            let positions = self.account_projection(account_id.as_str())?.positions;
-            let current = find_position(&positions, intent.instrument_id.as_str())
-                .unwrap_or((0, intent.target_quantity.scale()));
-            let target = scale_decimal(
-                intent.target_quantity.mantissa(),
-                intent.target_quantity.scale(),
-                current.1,
-            )?;
+            // In replay, the preceding market barrier may have synchronously
+            // settled a simulated fill through Account.  Read the authoritative
+            // Account endpoint here instead of the asynchronously refreshed
+            // projection: a worker refresh can otherwise publish an older
+            // watermark between `refresh_account_projections` and this plan.
+            let positions = self
+                .account_client(account_id.as_str())?
+                .positions(None)
+                .map_err(|error| error.to_string())?;
+            let current =
+                find_position(&positions, intent.instrument_id.as_str())?.unwrap_or(Decimal::ZERO);
+            let target = decimal_quantity(intent.target_quantity)?;
             let delta = target
-                .checked_sub(current.0)
+                .checked_sub(current)
                 .ok_or_else(|| "intent quantity overflow".to_string())?;
-            if delta == 0 {
+            if delta == Decimal::ZERO {
                 continue;
             }
             let limit_price = intent.limit_price;
@@ -1110,7 +1244,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
                 market_id: intent.market_id.clone(),
-                side: if delta > 0 {
+                side: if delta > Decimal::ZERO {
                     OrderSide::Buy
                 } else {
                     OrderSide::Sell
@@ -1120,10 +1254,10 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 } else {
                     OrderType::Market
                 },
-                quantity: Quantity::new(delta.unsigned_abs() as i64, current.1)
-                    .map_err(|error| error.to_string())?,
+                quantity: quantity_from_decimal(delta.abs())?,
                 limit_price,
                 options: intent.order_options.clone(),
+                submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
             });
         }
         Ok(orders)
@@ -1175,11 +1309,13 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         {
             return Err("limit price must be positive".into());
         }
-        let market = self.reference_market(
-            request.market_id.as_ref().map(MarketId::as_str),
-            request.instrument_id.as_str(),
-        )?;
-        validate_reference_rules(&market, request)?;
+        if !self.allow_backtest_reference_without_projection {
+            let market = self.reference_market(
+                request.market_id.as_ref().map(MarketId::as_str),
+                request.instrument_id.as_str(),
+            )?;
+            validate_reference_rules(&market, request)?;
+        }
         let balances = self
             .account_projection(request.account_id.as_str())?
             .balances;
@@ -1195,20 +1331,24 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 .strip_suffix("USDT")
                 .map(|value| value.to_string()),
         };
-        if let Some(asset) = asset {
-            let needed = if request.side == OrderSide::Buy {
-                request
-                    .quantity
-                    .mantissa()
-                    .checked_mul(request.limit_price.map_or(0, |price| price.mantissa()))
-                    .ok_or_else(|| "order notional overflow".to_string())?
-            } else {
-                request.quantity.mantissa()
-            };
-            let available = find_available(&balances, &asset)
-                .ok_or_else(|| format!("no available balance for {asset}"))?;
-            if available < needed {
-                return Err(format!("insufficient available balance for {asset}"));
+        if !self.allow_backtest_balance_without_projection {
+            if let Some(asset) = asset {
+                let quantity = decimal_quantity(request.quantity)?;
+                let needed = if request.side == OrderSide::Buy {
+                    match request.limit_price {
+                        Some(price) => quantity
+                            .checked_mul(decimal_price(price)?)
+                            .ok_or_else(|| "order notional overflow".to_string())?,
+                        None => Decimal::ZERO,
+                    }
+                } else {
+                    quantity
+                };
+                let available = find_available(&balances, &asset)?
+                    .ok_or_else(|| format!("no available balance for {asset}"))?;
+                if available < needed {
+                    return Err(format!("insufficient available balance for {asset}"));
+                }
             }
         }
         if let Some(policy) = request.options.maker.as_ref() {
@@ -1216,10 +1356,8 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 let positions = self
                     .account_projection(request.account_id.as_str())?
                     .positions;
-                let inventory_scale = max_inventory.scale();
-                let current = find_position(&positions, request.instrument_id.as_str())
-                    .and_then(|(value, scale)| scale_decimal(value, scale, inventory_scale).ok())
-                    .unwrap_or_default();
+                let current = find_position(&positions, request.instrument_id.as_str())?
+                    .unwrap_or(Decimal::ZERO);
                 let reserved = self
                     .reservation_requests
                     .values()
@@ -1227,42 +1365,28 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                         value.account_id == request.account_id.as_str()
                             && value.instrument_id == request.instrument_id.as_str()
                     })
-                    .try_fold(0_i64, |total, value| -> Result<i64, String> {
+                    .try_fold(Decimal::ZERO, |total, value| -> Result<Decimal, String> {
+                        let quantity = decimal_quantity(value.quantity)?;
                         let signed = if value.side == OrderSide::Buy {
-                            scale_decimal(
-                                value.quantity.mantissa(),
-                                value.quantity.scale(),
-                                inventory_scale,
-                            )?
+                            quantity
                         } else {
-                            -scale_decimal(
-                                value.quantity.mantissa(),
-                                value.quantity.scale(),
-                                inventory_scale,
-                            )?
+                            -quantity
                         };
                         total
                             .checked_add(signed)
                             .ok_or_else(|| "maker inventory reservation overflow".to_string())
                     })?;
+                let request_quantity = decimal_quantity(request.quantity)?;
                 let signed_request = if request.side == OrderSide::Buy {
-                    scale_decimal(
-                        request.quantity.mantissa(),
-                        request.quantity.scale(),
-                        inventory_scale,
-                    )?
+                    request_quantity
                 } else {
-                    -scale_decimal(
-                        request.quantity.mantissa(),
-                        request.quantity.scale(),
-                        inventory_scale,
-                    )?
+                    -request_quantity
                 };
                 let projected = current
                     .checked_add(reserved)
                     .and_then(|value| value.checked_add(signed_request))
                     .ok_or_else(|| "maker inventory projection overflow".to_string())?;
-                if projected.unsigned_abs() > max_inventory.mantissa().unsigned_abs() {
+                if projected.abs() > decimal_signed_quantity(max_inventory)?.abs() {
                     return Err(format!(
                         "maker inventory guard exceeded for {}: projected={}, limit={}",
                         request.instrument_id, projected, max_inventory
@@ -1282,12 +1406,20 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             return Err("risk projection is not ready".into());
         }
         let reservation_id = format!("execution:{}", request.order_id);
-        let amount = request
-            .quantity
-            .mantissa()
-            .checked_mul(request.limit_price.map_or(1, |price| price.mantissa()))
-            .ok_or_else(|| "risk notional overflow".to_string())?;
-        self.authorize_risk(request, reservation_id.clone(), amount)?;
+        let quantity = decimal_quantity(request.quantity)?;
+        let price = request
+            .limit_price
+            .map(decimal_price)
+            .transpose()?
+            .unwrap_or(Decimal::ONE);
+        let amount = risk_amount(
+            quantity
+                .checked_mul(price)
+                .ok_or_else(|| "risk notional overflow".to_string())?,
+        )?;
+        if !self.skip_backtest_risk_authorization {
+            self.authorize_risk(request, reservation_id.clone(), amount)?;
+        }
         self.reservations.insert(
             request.order_id.to_string(),
             format!("execution:{}", request.order_id),
@@ -1295,7 +1427,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         self.reservation_amounts
             .insert(request.order_id.to_string(), amount);
         self.reservation_quantities
-            .insert(request.order_id.to_string(), request.quantity.mantissa());
+            .insert(request.order_id.to_string(), request.quantity);
         self.reservation_requests
             .insert(request.order_id.to_string(), request.clone());
         Ok(())
@@ -1340,26 +1472,19 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             .cloned()
             .ok_or_else(|| format!("order fact is not prepared: {}", fill.order_id))?;
         let side = if fill.side == OrderSide::Buy {
-            "Buy"
+            "buy"
         } else {
-            "Sell"
+            "sell"
         };
         if self.simulated_settlement {
-            let notional = fill
-                .quantity
-                .mantissa()
-                .checked_mul(fill.price.mantissa())
+            let notional = decimal_quantity(fill.quantity)?
+                .checked_mul(decimal_price(fill.price)?)
                 .ok_or_else(|| "simulated settlement notional overflow".to_string())?;
             let settlement_delta = if fill.side == OrderSide::Buy {
-                -notional
+                risk_amount(-notional)?
             } else {
-                notional
+                risk_amount(notional)?
             };
-            let settlement_scale = fill
-                .quantity
-                .scale()
-                .checked_add(fill.price.scale())
-                .ok_or_else(|| "simulated settlement decimal scale overflow".to_string())?;
             return self
                 .account_client(&account_id)?
                 .publish_simulated_fill(&kairos_account_contract::client::SimulatedFill {
@@ -1378,8 +1503,8 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                     side: side.into(),
                     settlement_asset: "USDT".into(),
                     settlement_delta: AccountDecimal {
-                        mantissa: settlement_delta,
-                        scale: settlement_scale,
+                        mantissa: settlement_delta.mantissa,
+                        scale: settlement_delta.scale,
                     },
                     fee_asset: "USDT".into(),
                     fee_amount: AccountDecimal {
@@ -1409,12 +1534,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             })
             .map_err(|error| error.to_string())
     }
-    fn resize_order(
-        &mut self,
-        order_id: &str,
-        remaining_quantity_mantissa: i64,
-        quantity_scale: u8,
-    ) -> Result<(), String> {
+    fn resize_order(&mut self, order_id: &str, remaining_quantity: Quantity) -> Result<(), String> {
         let old_id = self
             .reservations
             .get(order_id)
@@ -1429,44 +1549,48 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             .reservation_quantities
             .get(order_id)
             .copied()
-            .unwrap_or(remaining_quantity_mantissa)
-            .max(1);
-        let amount = (remaining_quantity_mantissa as i128)
-            .checked_mul(previous.max(1) as i128)
-            .and_then(|value| value.checked_div(original_quantity as i128))
-            .and_then(|value| i64::try_from(value).ok())
-            .unwrap_or(original_quantity);
+            .unwrap_or(remaining_quantity);
+        let previous = decimal_risk_amount(previous)?;
+        let original_quantity = decimal_quantity(original_quantity)?;
+        let remaining = decimal_quantity(remaining_quantity)?;
+        let amount = risk_amount(
+            previous
+                .checked_mul(remaining)
+                .and_then(|value| value.checked_div(original_quantity))
+                .ok_or_else(|| "risk reservation resize overflow".to_string())?,
+        )?;
         let mut replacement = self
             .reservation_requests
             .get(order_id)
             .cloned()
             .ok_or_else(|| "order reservation context is missing".to_string())?;
-        replacement.quantity = Quantity::new(remaining_quantity_mantissa, quantity_scale)
-            .map_err(|error| error.to_string())?;
+        replacement.quantity = remaining_quantity;
+        let business_time_unix_nanos = self.business_time_unix_nanos;
         self.risk_client()?
             .resize(
                 &old_id,
-                &RiskAmount {
-                    mantissa: amount,
-                    scale: quantity_scale,
-                },
-                now_unix_nanos(),
+                &amount,
+                business_time_unix_nanos.unwrap_or_else(now_unix_nanos),
             )
             .map_err(|error| error.to_string())?;
         self.reservations.insert(order_id.to_owned(), old_id);
         self.reservation_amounts.insert(order_id.to_owned(), amount);
         self.reservation_quantities
-            .insert(order_id.to_owned(), remaining_quantity_mantissa);
+            .insert(order_id.to_owned(), remaining_quantity);
         self.reservation_requests
             .insert(order_id.to_owned(), replacement);
         Ok(())
     }
     fn release_order(&mut self, order_id: &str) -> Result<(), String> {
-        if self.risk.is_some() {
+        if self.risk.is_some() && !self.skip_backtest_risk_authorization {
             let reservation_id = self.reservations.get(order_id).cloned();
             if let Some(reservation_id) = reservation_id {
+                let business_time_unix_nanos = self.business_time_unix_nanos;
                 self.risk_client()?
-                    .release(&reservation_id, now_unix_nanos())
+                    .release(
+                        &reservation_id,
+                        business_time_unix_nanos.unwrap_or_else(now_unix_nanos),
+                    )
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -1477,11 +1601,15 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         Ok(())
     }
     fn consume_order(&mut self, order_id: &str) -> Result<(), String> {
-        if self.risk.is_some() {
+        if self.risk.is_some() && !self.skip_backtest_risk_authorization {
             let reservation_id = self.reservations.get(order_id).cloned();
             if let Some(reservation_id) = reservation_id {
+                let business_time_unix_nanos = self.business_time_unix_nanos;
                 self.risk_client()?
-                    .consume(&reservation_id, now_unix_nanos())
+                    .consume(
+                        &reservation_id,
+                        business_time_unix_nanos.unwrap_or_else(now_unix_nanos),
+                    )
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -1490,35 +1618,6 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         self.reservation_quantities.remove(order_id);
         self.reservation_requests.remove(order_id);
         Ok(())
-    }
-}
-
-fn reference_market_from_snapshot(
-    market: kairos_reference_contract::model::Market,
-) -> ReferenceMarket {
-    ReferenceMarket {
-        market_id: market.market_id,
-        source_id: None,
-        market_key: market.market_key,
-        instrument_id: market.instrument_id,
-        listing_id: market.listing_id,
-        exchange_id: market.exchange_id,
-        market_type: market.market_type,
-        asset_type: market.asset_type,
-        source_symbol: market.source_symbol,
-        base_asset_id: market.base_asset_id,
-        quote_asset_id: market.quote_asset_id,
-        underlying_instrument_id: market.underlying_instrument_id,
-        status: market.status,
-        price_tick: market.price_tick,
-        quantity_tick: market.quantity_tick,
-        minimum_quantity: market.minimum_quantity,
-        minimum_notional: market.minimum_notional,
-        price_precision: market.price_precision,
-        quantity_precision: market.quantity_precision,
-        contract_size: market.contract_size,
-        effective_from_unix_nanos: market.effective_from_unix_nanos,
-        effective_to_unix_nanos: market.effective_to_unix_nanos,
     }
 }
 
@@ -1530,27 +1629,59 @@ fn validate_reference_rules(market: &ReferenceMarket, request: &SubmitOrder) -> 
     ) {
         return Err("instrument or market is not tradable".into());
     }
-    let quantity =
-        request.quantity.mantissa() as f64 / 10_f64.powi(request.quantity.scale() as i32);
-    if let Some(minimum) = market.minimum_quantity.as_deref().and_then(parse_float) {
-        if quantity < minimum {
+    if let Some(minimum) = market
+        .minimum_quantity
+        .as_deref()
+        .map(str::parse::<Quantity>)
+        .transpose()
+        .map_err(|error| error.to_string())?
+    {
+        if request.quantity < minimum {
             return Err("order quantity is below the market minimum".into());
         }
     }
-    if let Some(tick) = market.quantity_tick.as_deref().and_then(parse_float) {
-        if !is_multiple(quantity, tick) {
+    if let Some(tick) = market
+        .quantity_tick
+        .as_deref()
+        .map(str::parse::<Quantity>)
+        .transpose()
+        .map_err(|error| error.to_string())?
+    {
+        if !request
+            .quantity
+            .is_multiple_of(tick)
+            .map_err(|error| error.to_string())?
+        {
             return Err("order quantity violates lot size".into());
         }
     }
     if let Some(price_value) = request.limit_price {
-        let price = price_value.mantissa() as f64 / 10_f64.powi(price_value.scale() as i32);
-        if let Some(tick) = market.price_tick.as_deref().and_then(parse_float) {
-            if !is_multiple(price, tick) {
+        if let Some(tick) = market
+            .price_tick
+            .as_deref()
+            .map(str::parse::<Price>)
+            .transpose()
+            .map_err(|error| error.to_string())?
+        {
+            if !price_value
+                .is_multiple_of(tick)
+                .map_err(|error| error.to_string())?
+            {
                 return Err("order price violates tick size".into());
             }
         }
-        if let Some(minimum) = market.minimum_notional.as_deref().and_then(parse_float) {
-            if price * quantity < minimum {
+        if let Some(minimum) = market
+            .minimum_notional
+            .as_deref()
+            .map(str::parse::<Money>)
+            .transpose()
+            .map_err(|error| error.to_string())?
+        {
+            if price_value
+                .checked_mul(request.quantity)
+                .map_err(|error| error.to_string())?
+                < minimum
+            {
                 return Err("order notional is below the market minimum".into());
             }
         }
@@ -1574,61 +1705,46 @@ fn account_order_status(status: ExecutionOrderStatus) -> &'static str {
     }
 }
 
-fn parse_float(value: &str) -> Option<f64> {
-    value.parse().ok().filter(|value: &f64| *value > 0.0)
-}
-
-fn is_multiple(value: f64, step: f64) -> bool {
-    let quotient = value / step;
-    (quotient - quotient.round()).abs() < 1e-8
-}
-
 fn find_available(
     response: &kairos_account_contract::client::BalancesResponse,
     asset: &str,
-) -> Option<i64> {
+) -> Result<Option<Decimal>, String> {
     response
         .accounts
         .iter()
         .flat_map(|group| group.2.iter())
         .find(|balance| balance.asset_code.eq_ignore_ascii_case(asset))
-        .and_then(|balance| balance.available.as_ref().map(|value| value.mantissa))
+        .and_then(|balance| balance.available.as_ref())
+        .map(|value| {
+            Decimal::try_new(value.mantissa, u32::from(value.scale))
+                .map_err(|_| "available balance cannot be represented as a decimal".to_string())
+        })
+        .transpose()
 }
 
 fn find_position(
     response: &kairos_account_contract::client::PositionsResponse,
     instrument: &str,
-) -> Option<(i64, u8)> {
+) -> Result<Option<Decimal>, String> {
     response
         .accounts
         .iter()
         .flat_map(|group| group.2.iter())
         .find(|position| position.instrument_id.eq_ignore_ascii_case(instrument))
-        .map(|position| (position.quantity.mantissa, position.quantity.scale))
-}
-
-fn scale_decimal(mantissa: i64, from: u8, to: u8) -> Result<i64, String> {
-    if from == to {
-        return Ok(mantissa);
-    }
-    if from < to {
-        mantissa
-            .checked_mul(
-                10_i64
-                    .checked_pow((to - from) as u32)
-                    .ok_or_else(|| "quantity scale overflow".to_string())?,
+        .map(|position| {
+            Decimal::try_new(
+                position.quantity.mantissa,
+                u32::from(position.quantity.scale),
             )
-            .ok_or_else(|| "quantity scale overflow".to_string())
-    } else {
-        Ok(mantissa / 10_i64.pow((from - to) as u32))
-    }
+            .map_err(|_| "position quantity cannot be represented as a decimal".to_string())
+        })
+        .transpose()
 }
 
 fn validate_market_price(
     quotes: &[kairos_market_contract::Quote],
     intent: &ExecuteStrategyIntent,
-    limit_mantissa: i64,
-    limit_scale: u8,
+    limit: Price,
 ) -> Result<(), String> {
     let quote = quotes
         .iter()
@@ -1643,12 +1759,12 @@ fn validate_market_price(
         .clone()
         .or_else(|| quote.bid_price.clone())
         .ok_or_else(|| "market quote has no executable side".to_string())?;
-    let limit = limit_mantissa as f64 / 10_f64.powi(limit_scale as i32);
-    let reference = reference
-        .parse::<f64>()
+    let limit = decimal_price(limit)?;
+    let reference = Decimal::from_str_exact(&reference)
         .map_err(|_| "market quote price is invalid".to_string())?;
-    if reference <= 0.0
-        || ((limit - reference).abs() / reference) * 10_000.0 > MAX_PRICE_DEVIATION_BPS as f64
+    if reference <= Decimal::ZERO
+        || ((limit - reference).abs() / reference) * Decimal::from(10_000_u32)
+            > Decimal::from(MAX_PRICE_DEVIATION_BPS)
     {
         return Err("limit price deviates too far from the current market quote".into());
     }
@@ -1683,9 +1799,9 @@ fn validate_pair_constraints(
             OrderSide::Sell => quote.bid_price.as_deref(),
         }
         .ok_or_else(|| format!("quote has no executable side: {}", order.instrument_id))?
-        .parse::<f64>()
+        .parse::<Decimal>()
         .map_err(|_| format!("invalid market quote price: {}", order.instrument_id))?;
-        if executable <= 0.0 {
+        if executable <= Decimal::ZERO {
             return Err(format!(
                 "market quote is not positive: {}",
                 order.instrument_id
@@ -1701,12 +1817,13 @@ fn validate_pair_constraints(
                 .map(|price| (price.mantissa(), price.scale())),
             intent.max_slippage_bps,
         ) {
-            let limit = limit.0 as f64 / 10_f64.powi(limit.1 as i32);
+            let limit = Decimal::try_new(limit.0, u32::from(limit.1))
+                .map_err(|_| "pair limit price is invalid".to_string())?;
             let slippage_bps = match order.side {
-                OrderSide::Buy => (limit - executable) / executable * 10_000.0,
-                OrderSide::Sell => (executable - limit) / executable * 10_000.0,
+                OrderSide::Buy => (limit - executable) / executable * Decimal::from(10_000_u32),
+                OrderSide::Sell => (executable - limit) / executable * Decimal::from(10_000_u32),
             };
-            if slippage_bps > max_slippage as f64 {
+            if slippage_bps > Decimal::from(max_slippage) {
                 return Err(format!(
                     "pair leg {} exceeds max slippage: {:.2} bps > {} bps",
                     order.instrument_id, slippage_bps, max_slippage
@@ -1717,9 +1834,10 @@ fn validate_pair_constraints(
     if let Some(min_edge) = intent.min_edge_bps {
         let buy = buy_price.ok_or_else(|| "pair arbitrage requires a buy leg".to_string())?;
         let sell = sell_price.ok_or_else(|| "pair arbitrage requires a sell leg".to_string())?;
-        let gross_edge_bps = (sell - buy) / buy * 10_000.0;
-        let net_edge_bps = gross_edge_bps - intent.estimated_fee_bps.unwrap_or_default() as f64;
-        if net_edge_bps < min_edge as f64 {
+        let gross_edge_bps = (sell - buy) / buy * Decimal::from(10_000_u32);
+        let net_edge_bps =
+            gross_edge_bps - Decimal::from(intent.estimated_fee_bps.unwrap_or_default());
+        if net_edge_bps < Decimal::from(min_edge) {
             return Err(format!(
                 "pair net edge is below minimum: {:.2} bps < {} bps (gross={:.2}, fees={})",
                 net_edge_bps,
@@ -1757,9 +1875,11 @@ fn validate_quote_provisioning(orders: &[SubmitOrder]) -> Result<(), String> {
         .limit_price
         .map(|price| (price.mantissa(), price.scale()))
         .ok_or_else(|| "quote provisioning ask must be a limit order".to_string())?;
-    let bid_value = bid_price.0 as f64 / 10_f64.powi(bid_price.1 as i32);
-    let ask_value = ask_price.0 as f64 / 10_f64.powi(ask_price.1 as i32);
-    if bid_value <= 0.0 || ask_value <= bid_value {
+    let bid_value = Decimal::try_new(bid_price.0, u32::from(bid_price.1))
+        .map_err(|_| "quote bid price is invalid".to_string())?;
+    let ask_value = Decimal::try_new(ask_price.0, u32::from(ask_price.1))
+        .map_err(|_| "quote ask price is invalid".to_string())?;
+    if bid_value <= Decimal::ZERO || ask_value <= bid_value {
         return Err("quote provisioning requires a positive bid below ask".into());
     }
     Ok(())
@@ -1804,6 +1924,51 @@ fn validate_quote_freshness(
     Ok(())
 }
 
+fn decimal_quantity(value: Quantity) -> Result<Decimal, String> {
+    Decimal::try_new(value.mantissa(), u32::from(value.scale()))
+        .map_err(|_| "quantity cannot be represented as a decimal".to_string())
+}
+
+fn decimal_signed_quantity(value: SignedQuantity) -> Result<Decimal, String> {
+    Decimal::try_new(value.mantissa(), u32::from(value.scale()))
+        .map_err(|_| "signed quantity cannot be represented as a decimal".to_string())
+}
+
+fn quantity_from_decimal(value: Decimal) -> Result<Quantity, String> {
+    let value = value.normalize();
+    if value < Decimal::ZERO || value.scale() > u32::from(kairos_domain_types::MAX_DECIMAL_SCALE) {
+        return Err("quantity is outside the supported decimal range".into());
+    }
+    Quantity::new(
+        i64::try_from(value.mantissa())
+            .map_err(|_| "quantity exceeds Decimal64 range".to_string())?,
+        value.scale() as u8,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn decimal_price(value: Price) -> Result<Decimal, String> {
+    Decimal::try_new(value.mantissa(), u32::from(value.scale()))
+        .map_err(|_| "price cannot be represented as a decimal".to_string())
+}
+
+fn decimal_risk_amount(value: RiskAmount) -> Result<Decimal, String> {
+    Decimal::try_new(value.mantissa, u32::from(value.scale))
+        .map_err(|_| "risk amount cannot be represented as a decimal".to_string())
+}
+
+fn risk_amount(value: Decimal) -> Result<RiskAmount, String> {
+    let value = value.normalize();
+    if value.scale() > u32::from(kairos_domain_types::MAX_DECIMAL_SCALE) {
+        return Err("risk amount exceeds 18 fractional digits".into());
+    }
+    Ok(RiskAmount {
+        mantissa: i64::try_from(value.mantissa())
+            .map_err(|_| "risk amount exceeds Decimal64 range".to_string())?,
+        scale: value.scale() as u8,
+    })
+}
+
 fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1813,13 +1978,11 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DependencyCircuit, DependencyProjection, SocketExecutionPreflight};
-    use kairos_protocol::InstanceIdentity;
-    use kairos_reference_contract::model::Market;
-    use kairos_reference_contract::transport::{
-        ReferenceMmapSnapshotConfig, ReferenceMmapSnapshotWriter,
+    use super::{
+        decimal_price, decimal_quantity, risk_amount, DependencyCircuit, DependencyProjection,
+        SocketExecutionPreflight,
     };
-    use kairos_reference_contract::ReferenceCatalog;
+    use kairos_domain_types::{Price, Quantity};
     use std::collections::BTreeMap;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -1828,52 +1991,17 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn reference_snapshot_set_builds_execution_projection_and_watermark() {
+    fn reference_database_builds_execution_watermark() {
         let root = tempfile::tempdir().unwrap();
-        let path = |name: &str| root.path().join(name);
-        let mut writer = ReferenceMmapSnapshotWriter::create(ReferenceMmapSnapshotConfig {
-            catalog_path: path("catalog.snapshot"),
-            entities_path: path("entities.snapshot"),
-            assets_path: path("assets.snapshot"),
-            instruments_path: path("instruments.snapshot"),
-            listings_path: path("listings.snapshot"),
-            markets_path: path("markets.snapshot"),
-            financial_products_path: path("financial-products.snapshot"),
-            execution_accesses_path: path("execution-accesses.snapshot"),
-            slot_size: 64 * 1024,
-            actor_id: "reference".into(),
-            event_stream_id: "reference.lifecycle".into(),
-            identity: InstanceIdentity::new("workspace", "reference", "global"),
-        })
-        .unwrap();
-        let market = Market {
-            market_id: "market:binance:spot:BTCUSDT".into(),
-            instrument_id: "instrument:spot:BTC".into(),
-            listing_id: "listing:binance:spot:BTC:USDT".into(),
-            exchange_id: "exchange:binance".into(),
-            market_type: "spot".into(),
-            source_symbol: "BTCUSDT".into(),
-            status: "active".into(),
-            price_tick: Some("0.01".into()),
-            quantity_tick: Some("0.001".into()),
-            minimum_quantity: Some("0.001".into()),
-            minimum_notional: Some("10".into()),
-            ..Market::default()
-        };
-        let mut catalog = ReferenceCatalog {
-            generation: 7,
-            event_sequence: 11,
-            ..ReferenceCatalog::default()
-        };
-        catalog.markets.insert(market.market_id.clone(), market);
-        writer.publish(&catalog).unwrap();
+        let database = root.path().join("reference.sqlite");
+        rusqlite::Connection::open(&database).unwrap().execute_batch("CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL); INSERT INTO reference_meta VALUES(1,1,7,11,0);").unwrap();
 
         let projection = Arc::new(RwLock::new(DependencyProjection::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let workers = SocketExecutionPreflight::start_projection_workers(
             BTreeMap::new(),
             None,
-            Some(root.path().to_path_buf()),
+            Some(database),
             None,
             Arc::clone(&projection),
             Arc::clone(&stop),
@@ -1898,11 +2026,6 @@ mod tests {
         let reference = state.reference.as_ref().unwrap();
         assert_eq!(reference.health.generation, 7);
         assert_eq!(reference.health.event_sequence, 11);
-        assert_eq!(reference.markets.len(), 1);
-        assert_eq!(
-            reference.markets[0].market_id,
-            "market:binance:spot:BTCUSDT"
-        );
     }
 
     #[test]
@@ -1928,5 +2051,14 @@ mod tests {
             circuit.record(&failure);
         }
         assert!(circuit.permits(false));
+    }
+
+    #[test]
+    fn risk_notional_preserves_quantity_and_price_scales() {
+        let quantity = decimal_quantity(Quantity::new(2, 0).unwrap()).unwrap();
+        let price = decimal_price(Price::new(1_005, 1).unwrap()).unwrap();
+        let amount = risk_amount(quantity * price).unwrap();
+
+        assert_eq!((amount.mantissa, amount.scale), (201, 0));
     }
 }

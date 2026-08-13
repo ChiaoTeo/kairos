@@ -3,6 +3,26 @@
 本文记录实现进度，不定义架构。长期设计规则见
 [`integration-session-and-operation-design.md`](integration-session-and-operation-design.md)。
 
+## 2026-08-13 Reference SQLite read-model migration（主体完成，bounded promotion 待收口）
+
+- 新增 `reference-sqlite-read-model-design.md`，Reference 数据面改为单写者 SQLite
+  current tables + lifecycle publication cursor + consumer-owned bounded projection；
+- 新增 schema metadata 和七类规范化 current tables，旧 whole-catalog JSON 在 migration
+  中一次性导入后删除；Rust/Python contract 均以 read-only/query-only SQLite 连接读取；
+- Account 已按 provider instrument scoped query 并按 generation 失效 identity cache；
+  Execution 只监控 watermark、preflight 按 market/instrument 查询；Market 使用有界分页恢复；
+- 删除 Reference 八视图 mmap writer/reader、manifest 依赖和 snapshot slot 配置；Python
+  Strategy/CLI 已切换到 SQLite contract；
+- lifecycle publication 改为 durable history + 单 `published_sequence` cursor，删除重复 payload
+  outbox；current rows 按主键增量 upsert，未变化 payload 不重写；
+- production ReferenceActor 只常驻 generation/sequence/count 元数据，provider last-good 在一次
+  reconcile 内从 SQLite 装载并在完成后释放；健康读模型和事件发布不再克隆完整 catalog；
+- 删除 Reference 全量 FlatBuffer snapshot schema、编码器与 golden fixture；CLI 读取直接走有界
+  SQLite contract，`snapshot` 命令仅返回水位/计数和迁移提示，不再 dump 全量目录；
+- focused SQLite round-trip、Market recovery、Execution watermark、Python Reference contract、
+  Aeron change-event 和百万行有界读取验收通过；尚待把 refresh 期间的完整 canonical candidate
+  与 Massive 完成页合并替换为 SQLite source-fact 分页 promotion，才能满足写端全程有界内存目标。
+
 ## 当前基线
 
 - `Integration::new`、`ConnectionSpec`、`IntegrationCapability` 和 `dyn Connection` 在 `crates/` 中当前均为零命中。
@@ -363,7 +383,7 @@ Account async slice 验收重点：
 - 删除 Integration `canonical_account_identity` 及所有 provider adapter 中的 canonical
   instrument/market 构造；`ExternalPosition`、`ExternalOpenOrder`、`ExternalFillEvent` 统一只携带
   participant-owned `ProviderInstrumentRef`；
-- Account composition 从 `snapshots/reference` 的一致 snapshot-set 加载 markets/instruments，按
+- Account composition 从 Reference read-only SQLite contract 按需加载 markets/instruments，按
   participant、provider instrument type 与 source symbol 要求唯一匹配；缺失或歧义会拒绝应用
   snapshot/event，不以字符串 grammar 回退；
 - IBKR equity 通过 Reference canonical equity instrument symbol 解析，market 保持 `None`，不再

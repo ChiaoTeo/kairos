@@ -43,7 +43,7 @@ fn fill_report(
         order_id: OrderId::new(order_id.into()).unwrap(),
         quantity: kairos_domain_types::Quantity::new(quantity, 0).unwrap(),
         price: Price::new(price, 0).unwrap(),
-        fee: kairos_domain_types::Money::new(fee, 0),
+        fee: kairos_domain_types::Money::new(fee, 0).unwrap(),
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
     }
 }
@@ -72,6 +72,7 @@ fn submit_order(
         quantity: Quantity::new(quantity, 0).unwrap(),
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
         options: Default::default(),
+        submitted_at_unix_nanos: None,
     }
 }
 
@@ -93,6 +94,7 @@ fn strategy_intent(
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
         source_snapshot_id: None,
         source_event_sequence: None,
+        source_event_time_unix_nanos: None,
         reason: String::new(),
         intent_type: Default::default(),
         completion_policy: Default::default(),
@@ -321,6 +323,7 @@ impl ExecutionPreflight for TestPreflight {
                     quantity: leg.quantity,
                     limit_price: leg.limit_price,
                     options: leg.options.clone(),
+                    submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
                 })
                 .collect());
         }
@@ -344,6 +347,7 @@ impl ExecutionPreflight for TestPreflight {
                 quantity: intent.target_quantity,
                 limit_price: intent.limit_price,
                 options: Default::default(),
+                submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
             })
             .collect())
     }
@@ -1753,8 +1757,8 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
             source_id: "replay".into(),
         })],
         simulation: SimulationConfig {
-            fee_bps: 10.0,
-            slippage_bps: 0.0,
+            fee_bps: "10".parse().unwrap(),
+            slippage_bps: "0".parse().unwrap(),
             enforce_quote_quantity: true,
         },
         ..Default::default()
@@ -1818,8 +1822,7 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })
         .unwrap();
     audit
@@ -1833,8 +1836,7 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })
         .unwrap();
     let events = audit

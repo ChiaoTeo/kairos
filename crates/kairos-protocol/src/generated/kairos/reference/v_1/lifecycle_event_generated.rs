@@ -34,6 +34,9 @@ impl<'a> LifecycleEvent<'a> {
     pub const VT_CURRENT_STATUS: ::flatbuffers::VOffsetT = 26;
     pub const VT_PREVIOUS_SYMBOL: ::flatbuffers::VOffsetT = 28;
     pub const VT_CURRENT_SYMBOL: ::flatbuffers::VOffsetT = 30;
+    pub const VT_OPERATION: ::flatbuffers::VOffsetT = 32;
+    pub const VT_GENERATION: ::flatbuffers::VOffsetT = 34;
+    pub const VT_RECORD_PAYLOAD_JSON: ::flatbuffers::VOffsetT = 36;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -50,7 +53,14 @@ impl<'a> LifecycleEvent<'a> {
         args: &'args LifecycleEventArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<LifecycleEvent<'bldr>> {
         let mut builder = LifecycleEventBuilder::new(_fbb);
+        builder.add_generation(args.generation);
         builder.add_event_time_unix_nanos(args.event_time_unix_nanos);
+        if let Some(x) = args.record_payload_json {
+            builder.add_record_payload_json(x);
+        }
+        if let Some(x) = args.operation {
+            builder.add_operation(x);
+        }
         if let Some(x) = args.current_symbol {
             builder.add_current_symbol(x);
         }
@@ -244,6 +254,39 @@ impl<'a> LifecycleEvent<'a> {
             )
         }
     }
+    #[inline]
+    pub fn operation(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(LifecycleEvent::VT_OPERATION, None)
+        }
+    }
+    #[inline]
+    pub fn generation(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(LifecycleEvent::VT_GENERATION, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn record_payload_json(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                LifecycleEvent::VT_RECORD_PAYLOAD_JSON,
+                None,
+            )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for LifecycleEvent<'_> {
@@ -323,6 +366,17 @@ impl ::flatbuffers::Verifiable for LifecycleEvent<'_> {
                 Self::VT_CURRENT_SYMBOL,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "operation",
+                Self::VT_OPERATION,
+                false,
+            )?
+            .visit_field::<u64>("generation", Self::VT_GENERATION, false)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "record_payload_json",
+                Self::VT_RECORD_PAYLOAD_JSON,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -342,6 +396,9 @@ pub struct LifecycleEventArgs<'a> {
     pub current_status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub previous_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub current_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub operation: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub generation: u64,
+    pub record_payload_json: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for LifecycleEventArgs<'a> {
     #[inline]
@@ -361,6 +418,9 @@ impl<'a> Default for LifecycleEventArgs<'a> {
             current_status: None,
             previous_symbol: None,
             current_symbol: None,
+            operation: None,
+            generation: 0,
+            record_payload_json: None,
         }
     }
 }
@@ -468,6 +528,28 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> LifecycleEventBuilder<'a, 'b,
         );
     }
     #[inline]
+    pub fn add_operation(&mut self, operation: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            LifecycleEvent::VT_OPERATION,
+            operation,
+        );
+    }
+    #[inline]
+    pub fn add_generation(&mut self, generation: u64) {
+        self.fbb_
+            .push_slot::<u64>(LifecycleEvent::VT_GENERATION, generation, 0);
+    }
+    #[inline]
+    pub fn add_record_payload_json(
+        &mut self,
+        record_payload_json: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            LifecycleEvent::VT_RECORD_PAYLOAD_JSON,
+            record_payload_json,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> LifecycleEventBuilder<'a, 'b, A> {
@@ -505,6 +587,9 @@ impl ::core::fmt::Debug for LifecycleEvent<'_> {
         ds.field("current_status", &self.current_status());
         ds.field("previous_symbol", &self.previous_symbol());
         ds.field("current_symbol", &self.current_symbol());
+        ds.field("operation", &self.operation());
+        ds.field("generation", &self.generation());
+        ds.field("record_payload_json", &self.record_payload_json());
         ds.finish()
     }
 }

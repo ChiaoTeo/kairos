@@ -6,6 +6,7 @@ use crate::services::participants::massive::{MassiveAsyncRestClient, MassiveStoc
 use crate::services::transport::http::ExchangeError;
 
 use super::config::{MassiveChannelConfig, MassiveConnectionConfig};
+use super::dividends::MassiveDividendCatalog;
 use super::market_data::{
     MassiveAsyncHistoricalMarket, MassiveAsyncLiveMarket, MassiveHistoricalMarket,
 };
@@ -36,6 +37,12 @@ impl MassiveConnection {
         MassiveInstrumentCatalog {
             descriptor: self.descriptor(query.instrument_type),
             client: configure_async_client(self.client.clone(), &query),
+        }
+    }
+
+    pub fn dividend_catalog(&self) -> MassiveDividendCatalog {
+        MassiveDividendCatalog {
+            client: self.client.clone().for_equity(),
         }
     }
 
@@ -121,6 +128,15 @@ fn configure_async_client(
     if let Some(underlying) = &query.underlying {
         client = client.with_option_underlying(underlying.clone());
     }
+    if let Some(as_of) = &query.as_of {
+        client = client.with_option_as_of(as_of.clone());
+    }
+    if let (Some(start), Some(end)) = (&query.expiration_date_gte, &query.expiration_date_lte) {
+        client = client.with_option_expiration_range(start.clone(), end.clone());
+    }
+    if let Some(contract_type) = &query.contract_type {
+        client = client.with_option_contract_type(contract_type.clone());
+    }
     client
 }
 
@@ -134,6 +150,15 @@ fn configure_blocking_client(
     };
     if let Some(underlying) = &query.underlying {
         client = client.with_option_underlying(underlying.clone());
+    }
+    if let Some(as_of) = &query.as_of {
+        client = client.with_option_as_of(as_of.clone());
+    }
+    if let (Some(start), Some(end)) = (&query.expiration_date_gte, &query.expiration_date_lte) {
+        client = client.with_option_expiration_range(start.clone(), end.clone());
+    }
+    if let Some(contract_type) = &query.contract_type {
+        client = client.with_option_contract_type(contract_type.clone());
     }
     client
 }

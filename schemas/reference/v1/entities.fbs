@@ -68,25 +68,6 @@ table Market {
   underlying_instrument_id:string;
 }
 
-table Catalog {
-  entity_count:ulong;
-  asset_count:ulong;
-  instrument_count:ulong;
-  listing_count:ulong;
-  market_count:ulong;
-  financial_product_count:ulong;
-  active_market_count:ulong;
-  lifecycle_event_count:ulong;
-  entities:[kairos.reference.v1.Entity];
-  assets:[kairos.reference.v1.Asset];
-  instruments:[kairos.reference.v1.Instrument];
-  listings:[kairos.reference.v1.Listing];
-  markets:[kairos.reference.v1.Market];
-  financial_products:[kairos.reference.v1.FinancialProduct];
-  execution_access_count:ulong;
-  execution_accesses:[kairos.reference.v1.ExecutionAccess];
-}
-
 table Entity {
   entity_id:string (required);
   entity_type:string (required);
@@ -109,6 +90,9 @@ table LifecycleEvent {
   current_status:string;
   previous_symbol:string;
   current_symbol:string;
+  operation:string;
+  generation:ulong;
+  record_payload_json:string;
 }
 
 table FinancialProduct {

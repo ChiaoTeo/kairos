@@ -59,10 +59,8 @@ pub struct ExpireIntentCommand {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RefreshQuoteCommand {
     pub intent_id: String,
-    pub bid_price_mantissa: i64,
-    pub bid_price_scale: u8,
-    pub ask_price_mantissa: i64,
-    pub ask_price_scale: u8,
+    pub bid_price: crate::model::Decimal,
+    pub ask_price: crate::model::Decimal,
     pub quote_observed_at_unix_nanos: u64,
     #[serde(default)]
     pub reason: String,

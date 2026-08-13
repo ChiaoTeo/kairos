@@ -1,12 +1,17 @@
 use std::path::Path;
 
+use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::participants::binance::{
     self, ConnectionDomain as BinanceConnectionDomain,
+};
+use kairos_integration::participants::binance::{
+    BinanceConnection, BinanceConnectionConfig, BinanceQuotaAllocation,
 };
 use kairos_workspace::{
     WorkspaceBinanceDerivativeProduct, WorkspaceBinanceDerivativeTransport,
     WorkspaceBinanceSpotTransport, WorkspaceMarketSourceBinding,
 };
+use secrecy::SecretString;
 
 use crate::MarketApplication;
 
@@ -15,11 +20,43 @@ use super::positive_interval;
 
 pub(super) fn attach(
     application: &mut MarketApplication,
-    _credentials_root: &Path,
+    credentials_root: &Path,
     source_id: &str,
     binding: &WorkspaceMarketSourceBinding,
 ) -> Result<(), String> {
     match binding {
+        WorkspaceMarketSourceBinding::BinanceEquity {
+            credential_id,
+            endpoint,
+            snapshot_interval_ms,
+            ..
+        } => {
+            let credential =
+                load_workspace_credential(credentials_root, "binance", Some(credential_id))?
+                    .ok_or_else(|| {
+                        format!("Market source {source_id} requires a Binance credential")
+                    })?;
+            let provider = BinanceConnection::connect(BinanceConnectionConfig {
+                environment: "public".into(),
+                rest_base_url: endpoint
+                    .clone()
+                    .unwrap_or_else(|| default_endpoint("binance-equity").to_owned()),
+                quota: BinanceQuotaAllocation {
+                    request_weight_per_minute: 1_200,
+                    cancel_reserve_weight: 0,
+                },
+                shared_quota: None,
+            })
+            .map_err(|error| error.to_string())?;
+            return super::super::attach_binance_snapshot(
+                application,
+                source_id,
+                "equity",
+                "equity",
+                provider.equity_market_quote(SecretString::new(credential.api_key.into())),
+                positive_interval(source_id, *snapshot_interval_ms)?,
+            );
+        }
         WorkspaceMarketSourceBinding::BinanceSpot {
             transport,
             endpoint,

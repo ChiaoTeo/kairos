@@ -54,9 +54,13 @@ impl SqlxExecutionAudit {
         F: FnOnce(SqlitePool) -> Fut,
         Fut: std::future::Future<Output = sqlx::Result<T>>,
     {
-        self.runtime
-            .block_on(operation(self.pool.clone()))
-            .map_err(|error| error.to_string())
+        let run = operation(self.pool.clone());
+        let result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.runtime.block_on(run))
+        } else {
+            self.runtime.block_on(run)
+        };
+        result.map_err(|error| error.to_string())
     }
 
     pub fn publish_batch(
@@ -227,8 +231,7 @@ mod tests {
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         };
         audit.publish(&event).unwrap();
         audit.publish(&event).unwrap();

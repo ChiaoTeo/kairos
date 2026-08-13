@@ -103,8 +103,69 @@ uv run kairos project init my-project --id my-project --non-interactive
 配置、状态、socket、日志和 launch 实例都限制在该 workspace 内。找不到 workspace
 时，先运行 `kairos project init`；自动化环境使用带 `--non-interactive` 的完整命令。
 
+不熟悉 TOML 时，可以用交互式向导创建或修改 launch 配置：
+
+```bash
+kairos launch init manual-trading
+kairos launch edit manual-trading
+```
+
+向导会在保存前展示摘要，并复用 launch 配置校验；`live` 配置仍应在启动前通过
+`launch diagnose validate` 和安全检查确认。脚本和 CI 继续使用直接编辑 TOML 与
+`launch start` 的非交互路径。
+
 项目代码保留在项目目录，Kairos 的 manifest、配置、状态、运行时文件和数据统一放在
 `<project>/.kairos/` 下。
+
+统一数据入口与 Python `Kairos.open(project).data` 进入同一个 Project-scoped
+Data Application。`plan` 只审阅，不下载；`execute` 才会显式获取缺失数据：
+
+```bash
+uv run kairos data list --workspace my-project --output json
+uv run kairos data plan requirements.json --workspace my-project --output json
+uv run kairos data execute requirements.json --expected-plan-hash <plan-hash> --max-concurrency 2 --workspace my-project --output json
+uv run kairos data execution <plan-hash> --workspace my-project --output json
+uv run kairos data set list --workspace my-project --output json
+```
+
+`requirements.json` 是 `DataRequirement` 对象数组。命令返回逻辑 Dataset、
+DatasetSetRef、Plan Hash 和执行 Journal，不暴露内部数据文件路径；Provider 凭据只允许
+引用 `credential_id`。
+
+Research 使用相同 Project 与固定版本的 `DatasetSetRef`。在查看 Holdout 结果前先锁定
+研究计划；完成研究后，再用同一个计划和证据文件发布 Gate 2。CLI 与
+`Kairos.open(project).research` 调用同一个 Research Application：
+
+```bash
+uv run kairos research plan lock research-plan.json --workspace my-project --output json
+uv run kairos research plan show <research-plan-hash> --workspace my-project --output json
+uv run kairos research gate publish research-plan.json research-evidence.json --workspace my-project --output json
+uv run kairos research gate show <research-plan-hash> --workspace my-project --output json
+```
+
+`research-plan.json` 是 `ResearchSpec.as_dict()` 的持久化形式；
+`research-evidence.json` 包含 `results`、`conclusion` 和 `limitations`。计划锁和 Gate
+报告属于所选 Project 的 `.kairos/state/research`，研究源码仍位于独立仓库。
+
+Research 是面向研究者的 API 门面，不是独立运行时。它只承担三类职责：便捷操作
+Project Data、便捷启动 Canonical Launch，以及通过计划锁、参数预算、Holdout 纪律和
+Gate 证据规定研究规范：
+
+```python
+kairos = Kairos.open("my-project")
+
+# 与 kairos.data 完全相同的 Project 数据通路
+snapshot = kairos.research.data.snapshot(read_plan)
+
+# 与 kairos.launches 完全相同的 Launch Application
+started = await kairos.research.launches.start("spy-put-spread-backtest")
+
+# 参数研究可以有界并发启动多个独立 Canonical Backtest/Launch
+batch = await kairos.research.backtests.run_many(cases, max_concurrency=2)
+```
+
+不存在 `research run`、Research Host 或 Research Process。研究者自己的 Python、
+Notebook 和测试负责组织研究；所有正式回测仍进入现有 Launch + Config 通路。
 
 launch 配置放在 workspace 的 `config/launches/<launch-id>.toml`，账户只通过
 `ref` 引用 workspace 账户；运行时生成的 normalized config 和状态属于
@@ -171,6 +232,47 @@ uv run kairospy launch status btc-sma --workspace my-project
 uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
 ```
+
+Launch 可以配置零个、一个或多个账户，并可关闭 Execution。账户只启动
+`enabled = true` 的项；未配置 `[execution]` 时保持默认启动，显式设置
+`enabled = false` 可只运行观察或研究 launch：
+
+```toml
+[launch]
+id = "manual-trading"
+mode = "paper"
+strategy = "builtin:interactive"
+
+[accounts.main]
+ref = "main"
+enabled = true
+
+[accounts.secondary]
+ref = "secondary"
+enabled = true
+
+[execution]
+enabled = true
+provider = "simulated"
+product = "spot"
+```
+
+使用内置交互策略时，可以把 Python 代码直接发送到当前 Strategy instance：
+
+```bash
+uv run kairospy launch attach manual-trading --python --workspace my-project
+```
+
+代码在 Strategy process 内的 `on_command` 生命周期入口执行，可以访问
+`strategy`、`context`、`accounts`、`execution` 和 `market`。账户查询使用异步
+方法，例如 `await accounts.current("main")`；普通用户策略也可以
+自行实现 `on_command`，定义自己的 command kind 和处理逻辑。
+
+Strategy 的行情订阅返回 owner-scoped `SubscriptionLease`，实例停止或失败时由运行时自动
+批量释放。需要独立于策略长期采集的行情，应在 Workspace manifest 中配置
+`[market.collections.<name>]`；它由 Workspace 而不是 Strategy 拥有，数据持续追加到
+`data/market/collections/<name>/events.jsonl`。完整的 Context 能力与配置示例见
+[Strategy Context 与 Market Collection 设计](docs/strategy-context-and-market-collection-design.md)。
 
 `launch status` 返回 launch 整体状态，同时包含策略状态、依赖组件状态以及异常组件；
 mode 由 launch 配置和 instance identity 决定，查询、日志和停止命令不需要重复传入
@@ -248,7 +350,9 @@ launch 停止后保留共享服务供下一次运行复用。
 导出时间线数据：
 
 ```bash
-uv run kairospy launch timeline export --latest binance-spot-btc-sma-backtest
+uv run kairospy launch instance timeline export \
+  binance-spot-btc-sma-backtest <instance-id> \
+  --destination timeline.jsonl
 ```
 
 Reference 验证 CLI

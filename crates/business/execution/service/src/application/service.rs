@@ -35,7 +35,7 @@ use kairos_integration::application::{
 use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use tracing::{debug, info, warn};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SubmitOrder {
     pub order_id: OrderId,
     pub intent_id: Option<IntentId>,
@@ -48,107 +48,8 @@ pub struct SubmitOrder {
     pub quantity: Quantity,
     pub limit_price: Option<Price>,
     pub options: ExecutionOrderOptions,
-}
-
-#[derive(Deserialize)]
-struct SubmitOrderWire {
-    order_id: String,
-    intent_id: Option<String>,
-    account_id: String,
-    segment_key: String,
-    instrument_id: String,
-    market_id: Option<String>,
-    side: OrderSide,
-    order_type: OrderType,
-    quantity_mantissa: i64,
-    quantity_scale: u8,
-    limit_price_mantissa: Option<i64>,
-    limit_price_scale: Option<u8>,
-    #[serde(default)]
-    options: ExecutionOrderOptions,
-}
-
-impl<'de> Deserialize<'de> for SubmitOrder {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = SubmitOrderWire::deserialize(deserializer)?;
-        let limit_price = match (wire.limit_price_mantissa, wire.limit_price_scale) {
-            (Some(mantissa), Some(scale)) => {
-                Some(Price::new(mantissa, scale).map_err(serde::de::Error::custom)?)
-            }
-            (None, None) => None,
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "limit price mantissa/scale must match",
-                ))
-            }
-        };
-        Ok(Self {
-            order_id: OrderId::new(wire.order_id).map_err(serde::de::Error::custom)?,
-            intent_id: wire
-                .intent_id
-                .map(IntentId::new)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            account_id: AccountId::new(wire.account_id).map_err(serde::de::Error::custom)?,
-            segment_key: SegmentKey::new(wire.segment_key).map_err(serde::de::Error::custom)?,
-            instrument_id: InstrumentId::new(wire.instrument_id)
-                .map_err(serde::de::Error::custom)?,
-            market_id: wire
-                .market_id
-                .map(MarketId::new)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            side: wire.side,
-            order_type: wire.order_type,
-            quantity: Quantity::new(wire.quantity_mantissa, wire.quantity_scale)
-                .map_err(serde::de::Error::custom)?,
-            limit_price,
-            options: wire.options,
-        })
-    }
-}
-
-impl Serialize for SubmitOrder {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct Wire<'a> {
-            order_id: &'a str,
-            intent_id: Option<&'a str>,
-            account_id: &'a str,
-            segment_key: &'a str,
-            instrument_id: &'a str,
-            market_id: Option<&'a str>,
-            side: OrderSide,
-            order_type: OrderType,
-            quantity_mantissa: i64,
-            quantity_scale: u8,
-            limit_price_mantissa: Option<i64>,
-            limit_price_scale: Option<u8>,
-            options: &'a ExecutionOrderOptions,
-        }
-        Wire {
-            order_id: self.order_id.as_str(),
-            intent_id: self.intent_id.as_ref().map(IntentId::as_str),
-            account_id: self.account_id.as_str(),
-            segment_key: self.segment_key.as_str(),
-            instrument_id: self.instrument_id.as_str(),
-            market_id: self.market_id.as_ref().map(MarketId::as_str),
-            side: self.side,
-            order_type: self.order_type,
-            quantity_mantissa: self.quantity.mantissa(),
-            quantity_scale: self.quantity.scale(),
-            limit_price_mantissa: self.limit_price.map(Price::mantissa),
-            limit_price_scale: self.limit_price.map(Price::scale),
-            options: &self.options,
-        }
-        .serialize(serializer)
-    }
+    /// Business time of the causal event. `None` means use processing time.
+    pub submitted_at_unix_nanos: Option<UnixNanos>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -197,71 +98,13 @@ pub struct ReplaceOrder {
 /// Execution-owned operation.  Strategies provide a fresh quote; Execution
 /// owns the cancel/re-submit sequence and keeps the old orders in the same
 /// plan for audit and fill aggregation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RefreshQuoteIntent {
     pub intent_id: IntentId,
     pub bid_price: Price,
     pub ask_price: Price,
     pub quote_observed_at: UnixNanos,
     pub reason: String,
-}
-
-#[derive(Deserialize)]
-struct RefreshQuoteIntentWire {
-    intent_id: String,
-    bid_price_mantissa: i64,
-    bid_price_scale: u8,
-    ask_price_mantissa: i64,
-    ask_price_scale: u8,
-    quote_observed_at_unix_nanos: u64,
-    #[serde(default)]
-    reason: String,
-}
-
-impl<'de> Deserialize<'de> for RefreshQuoteIntent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = RefreshQuoteIntentWire::deserialize(deserializer)?;
-        Ok(Self {
-            intent_id: IntentId::new(wire.intent_id).map_err(serde::de::Error::custom)?,
-            bid_price: Price::new(wire.bid_price_mantissa, wire.bid_price_scale)
-                .map_err(serde::de::Error::custom)?,
-            ask_price: Price::new(wire.ask_price_mantissa, wire.ask_price_scale)
-                .map_err(serde::de::Error::custom)?,
-            quote_observed_at: UnixNanos::from(wire.quote_observed_at_unix_nanos),
-            reason: wire.reason,
-        })
-    }
-}
-
-impl Serialize for RefreshQuoteIntent {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct Wire<'a> {
-            intent_id: &'a str,
-            bid_price_mantissa: i64,
-            bid_price_scale: u8,
-            ask_price_mantissa: i64,
-            ask_price_scale: u8,
-            quote_observed_at_unix_nanos: u64,
-            reason: &'a str,
-        }
-        Wire {
-            intent_id: self.intent_id.as_str(),
-            bid_price_mantissa: self.bid_price.mantissa(),
-            bid_price_scale: self.bid_price.scale(),
-            ask_price_mantissa: self.ask_price.mantissa(),
-            ask_price_scale: self.ask_price.scale(),
-            quote_observed_at_unix_nanos: self.quote_observed_at.get(),
-            reason: &self.reason,
-        }
-        .serialize(serializer)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -273,7 +116,7 @@ pub struct QuoteObservation {
     pub observed_at_unix_nanos: UnixNanos,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionFillReport {
     pub fill_id: FillId,
     pub order_id: OrderId,
@@ -281,72 +124,6 @@ pub struct ExecutionFillReport {
     pub price: Price,
     pub fee: Money,
     pub occurred_at_unix_nanos: Option<UnixNanos>,
-}
-
-#[derive(Deserialize)]
-struct ExecutionFillReportWire {
-    fill_id: String,
-    order_id: String,
-    quantity_mantissa: i64,
-    quantity_scale: u8,
-    price_mantissa: i64,
-    price_scale: u8,
-    #[serde(default)]
-    fee_mantissa: i64,
-    #[serde(default)]
-    fee_scale: u8,
-    occurred_at_unix_nanos: Option<u64>,
-}
-
-impl<'de> Deserialize<'de> for ExecutionFillReport {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = ExecutionFillReportWire::deserialize(deserializer)?;
-        Ok(Self {
-            fill_id: FillId::new(wire.fill_id).map_err(serde::de::Error::custom)?,
-            order_id: OrderId::new(wire.order_id).map_err(serde::de::Error::custom)?,
-            quantity: Quantity::new(wire.quantity_mantissa, wire.quantity_scale)
-                .map_err(serde::de::Error::custom)?,
-            price: Price::new(wire.price_mantissa, wire.price_scale)
-                .map_err(serde::de::Error::custom)?,
-            fee: Money::new(wire.fee_mantissa, wire.fee_scale),
-            occurred_at_unix_nanos: wire.occurred_at_unix_nanos.map(UnixNanos::from),
-        })
-    }
-}
-
-impl Serialize for ExecutionFillReport {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct Wire<'a> {
-            fill_id: &'a str,
-            order_id: &'a str,
-            quantity_mantissa: i64,
-            quantity_scale: u8,
-            price_mantissa: i64,
-            price_scale: u8,
-            fee_mantissa: i64,
-            fee_scale: u8,
-            occurred_at_unix_nanos: Option<u64>,
-        }
-        Wire {
-            fill_id: self.fill_id.as_str(),
-            order_id: self.order_id.as_str(),
-            quantity_mantissa: self.quantity.mantissa(),
-            quantity_scale: self.quantity.scale(),
-            price_mantissa: self.price.mantissa(),
-            price_scale: self.price.scale(),
-            fee_mantissa: self.fee.mantissa(),
-            fee_scale: self.fee.scale(),
-            occurred_at_unix_nanos: self.occurred_at_unix_nanos.map(UnixNanos::get),
-        }
-        .serialize(serializer)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -365,9 +142,7 @@ pub struct ExecutionEvent {
     #[serde(default)]
     pub fill_id: Option<FillId>,
     #[serde(default)]
-    pub filled_quantity_mantissa: Option<i64>,
-    #[serde(default)]
-    pub filled_quantity_scale: Option<u8>,
+    pub filled_quantity: Option<Quantity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -585,7 +360,7 @@ pub enum IntentStatus {
     ReconciliationRequired,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecuteStrategyIntent {
     pub intent_id: IntentId,
     pub strategy_id: String,
@@ -599,6 +374,7 @@ pub struct ExecuteStrategyIntent {
     pub limit_price: Option<Price>,
     pub source_snapshot_id: Option<String>,
     pub source_event_sequence: Option<Sequence>,
+    pub source_event_time_unix_nanos: Option<UnixNanos>,
     pub reason: String,
     pub intent_type: IntentType,
     pub completion_policy: CompletionPolicy,
@@ -631,6 +407,7 @@ impl Default for ExecuteStrategyIntent {
             limit_price: None,
             source_snapshot_id: None,
             source_event_sequence: None,
+            source_event_time_unix_nanos: None,
             reason: String::new(),
             intent_type: IntentType::default(),
             completion_policy: CompletionPolicy::default(),
@@ -646,169 +423,7 @@ impl Default for ExecuteStrategyIntent {
     }
 }
 
-#[derive(Deserialize)]
-struct ExecuteStrategyIntentWire {
-    intent_id: String,
-    strategy_id: String,
-    launch_id: String,
-    instance_id: String,
-    instrument_id: String,
-    market_id: Option<String>,
-    account_ids: Vec<String>,
-    segment_key: String,
-    target_quantity_mantissa: i64,
-    quantity_scale: u8,
-    limit_price_mantissa: Option<i64>,
-    limit_price_scale: Option<u8>,
-    #[serde(default)]
-    source_snapshot_id: Option<String>,
-    #[serde(default)]
-    source_event_sequence: Option<u64>,
-    #[serde(default)]
-    reason: String,
-    #[serde(default)]
-    intent_type: IntentType,
-    #[serde(default)]
-    completion_policy: CompletionPolicy,
-    #[serde(default)]
-    failure_policy: FailurePolicy,
-    #[serde(default)]
-    legs: Vec<IntentLegRequest>,
-    #[serde(default)]
-    deadline_unix_nanos: Option<u64>,
-    #[serde(default)]
-    min_edge_bps: Option<u32>,
-    #[serde(default)]
-    max_slippage_bps: Option<u32>,
-    #[serde(default)]
-    estimated_fee_bps: Option<u32>,
-    #[serde(default)]
-    hedge_policy: Option<HedgePolicy>,
-    #[serde(default)]
-    order_options: ExecutionOrderOptions,
-}
-
-impl<'de> Deserialize<'de> for ExecuteStrategyIntent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = ExecuteStrategyIntentWire::deserialize(deserializer)?;
-        let limit_price = match (wire.limit_price_mantissa, wire.limit_price_scale) {
-            (Some(mantissa), Some(scale)) => {
-                Some(Price::new(mantissa, scale).map_err(serde::de::Error::custom)?)
-            }
-            (None, None) => None,
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "limit price mantissa/scale must match",
-                ))
-            }
-        };
-        Ok(Self {
-            intent_id: IntentId::new(wire.intent_id).map_err(serde::de::Error::custom)?,
-            strategy_id: wire.strategy_id,
-            launch_id: wire.launch_id,
-            instance_id: wire.instance_id,
-            instrument_id: InstrumentId::new(wire.instrument_id)
-                .map_err(serde::de::Error::custom)?,
-            market_id: wire
-                .market_id
-                .map(MarketId::new)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            account_ids: wire
-                .account_ids
-                .into_iter()
-                .map(AccountId::new)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(serde::de::Error::custom)?,
-            segment_key: SegmentKey::new(wire.segment_key).map_err(serde::de::Error::custom)?,
-            target_quantity: Quantity::new(wire.target_quantity_mantissa, wire.quantity_scale)
-                .map_err(serde::de::Error::custom)?,
-            limit_price,
-            source_snapshot_id: wire.source_snapshot_id,
-            source_event_sequence: wire.source_event_sequence.map(Sequence::from),
-            reason: wire.reason,
-            intent_type: wire.intent_type,
-            completion_policy: wire.completion_policy,
-            failure_policy: wire.failure_policy,
-            legs: wire.legs,
-            deadline_unix_nanos: wire.deadline_unix_nanos.map(UnixNanos::from),
-            min_edge_bps: wire.min_edge_bps,
-            max_slippage_bps: wire.max_slippage_bps,
-            estimated_fee_bps: wire.estimated_fee_bps,
-            hedge_policy: wire.hedge_policy,
-            order_options: wire.order_options,
-        })
-    }
-}
-
-impl Serialize for ExecuteStrategyIntent {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct Wire<'a> {
-            intent_id: &'a str,
-            strategy_id: &'a str,
-            launch_id: &'a str,
-            instance_id: &'a str,
-            instrument_id: &'a str,
-            market_id: Option<&'a str>,
-            account_ids: Vec<&'a str>,
-            segment_key: &'a str,
-            target_quantity_mantissa: i64,
-            quantity_scale: u8,
-            limit_price_mantissa: Option<i64>,
-            limit_price_scale: Option<u8>,
-            source_snapshot_id: &'a Option<String>,
-            source_event_sequence: Option<u64>,
-            reason: &'a str,
-            intent_type: &'a IntentType,
-            completion_policy: &'a CompletionPolicy,
-            failure_policy: &'a FailurePolicy,
-            legs: &'a Vec<IntentLegRequest>,
-            deadline_unix_nanos: Option<u64>,
-            min_edge_bps: Option<u32>,
-            max_slippage_bps: Option<u32>,
-            estimated_fee_bps: Option<u32>,
-            hedge_policy: &'a Option<HedgePolicy>,
-            order_options: &'a ExecutionOrderOptions,
-        }
-        Wire {
-            intent_id: self.intent_id.as_str(),
-            strategy_id: &self.strategy_id,
-            launch_id: &self.launch_id,
-            instance_id: &self.instance_id,
-            instrument_id: self.instrument_id.as_str(),
-            market_id: self.market_id.as_ref().map(MarketId::as_str),
-            account_ids: self.account_ids.iter().map(AccountId::as_str).collect(),
-            segment_key: self.segment_key.as_str(),
-            target_quantity_mantissa: self.target_quantity.mantissa(),
-            quantity_scale: self.target_quantity.scale(),
-            limit_price_mantissa: self.limit_price.map(Price::mantissa),
-            limit_price_scale: self.limit_price.map(Price::scale),
-            source_snapshot_id: &self.source_snapshot_id,
-            source_event_sequence: self.source_event_sequence.map(Sequence::get),
-            reason: &self.reason,
-            intent_type: &self.intent_type,
-            completion_policy: &self.completion_policy,
-            failure_policy: &self.failure_policy,
-            legs: &self.legs,
-            deadline_unix_nanos: self.deadline_unix_nanos.map(UnixNanos::get),
-            min_edge_bps: self.min_edge_bps,
-            max_slippage_bps: self.max_slippage_bps,
-            estimated_fee_bps: self.estimated_fee_bps,
-            hedge_policy: &self.hedge_policy,
-            order_options: &self.order_options,
-        }
-        .serialize(serializer)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IntentLegRequest {
     pub leg_id: LegId,
     pub account_id: AccountId,
@@ -820,100 +435,6 @@ pub struct IntentLegRequest {
     pub limit_price: Option<Price>,
     pub target_position: bool,
     pub options: ExecutionOrderOptions,
-}
-
-#[derive(Deserialize)]
-struct IntentLegRequestWire {
-    leg_id: String,
-    account_id: String,
-    segment_key: String,
-    instrument_id: String,
-    market_id: Option<String>,
-    side: OrderSide,
-    quantity_mantissa: i64,
-    quantity_scale: u8,
-    limit_price_mantissa: Option<i64>,
-    limit_price_scale: Option<u8>,
-    #[serde(default)]
-    target_position: bool,
-    #[serde(default)]
-    options: ExecutionOrderOptions,
-}
-
-impl<'de> Deserialize<'de> for IntentLegRequest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = IntentLegRequestWire::deserialize(deserializer)?;
-        let limit_price = match (wire.limit_price_mantissa, wire.limit_price_scale) {
-            (Some(mantissa), Some(scale)) => {
-                Some(Price::new(mantissa, scale).map_err(serde::de::Error::custom)?)
-            }
-            (None, None) => None,
-            _ => {
-                return Err(serde::de::Error::custom(
-                    "limit price mantissa/scale must match",
-                ))
-            }
-        };
-        Ok(Self {
-            leg_id: LegId::new(wire.leg_id).map_err(serde::de::Error::custom)?,
-            account_id: AccountId::new(wire.account_id).map_err(serde::de::Error::custom)?,
-            segment_key: SegmentKey::new(wire.segment_key).map_err(serde::de::Error::custom)?,
-            instrument_id: InstrumentId::new(wire.instrument_id)
-                .map_err(serde::de::Error::custom)?,
-            market_id: wire
-                .market_id
-                .map(MarketId::new)
-                .transpose()
-                .map_err(serde::de::Error::custom)?,
-            side: wire.side,
-            quantity: Quantity::new(wire.quantity_mantissa, wire.quantity_scale)
-                .map_err(serde::de::Error::custom)?,
-            limit_price,
-            target_position: wire.target_position,
-            options: wire.options,
-        })
-    }
-}
-
-impl Serialize for IntentLegRequest {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct Wire<'a> {
-            leg_id: &'a str,
-            account_id: &'a str,
-            segment_key: &'a str,
-            instrument_id: &'a str,
-            market_id: Option<&'a str>,
-            side: OrderSide,
-            quantity_mantissa: i64,
-            quantity_scale: u8,
-            limit_price_mantissa: Option<i64>,
-            limit_price_scale: Option<u8>,
-            target_position: bool,
-            options: &'a ExecutionOrderOptions,
-        }
-        Wire {
-            leg_id: self.leg_id.as_str(),
-            account_id: self.account_id.as_str(),
-            segment_key: self.segment_key.as_str(),
-            instrument_id: self.instrument_id.as_str(),
-            market_id: self.market_id.as_ref().map(MarketId::as_str),
-            side: self.side,
-            quantity_mantissa: self.quantity.mantissa(),
-            quantity_scale: self.quantity.scale(),
-            limit_price_mantissa: self.limit_price.map(Price::mantissa),
-            limit_price_scale: self.limit_price.map(Price::scale),
-            target_position: self.target_position,
-            options: &self.options,
-        }
-        .serialize(serializer)
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1022,6 +543,17 @@ pub struct ExecutionApplication {
 }
 
 impl ExecutionApplication {
+    /// Advance the replay business clock and its composition-owned
+    /// dependencies.  The application remains the state owner; concrete
+    /// Account/Risk calls stay behind the preflight boundary.
+    pub fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), ExecutionError> {
+        if let Some(preflight) = self.preflight.as_mut() {
+            preflight
+                .advance_time(event_time_unix_nanos)
+                .map_err(ExecutionError::Invalid)?;
+        }
+        Ok(())
+    }
     pub fn with_dependencies(
         actor_id: impl Into<String>,
         order_entry: Option<Box<dyn OrderEntryConnection>>,
@@ -1241,14 +773,16 @@ impl ExecutionApplication {
             // missing from the local journal.  This keeps recovery idempotent
             // even when the same order appears in both open-orders and
             // history, or when the query window overlaps a previous recovery.
-            let remote_filled = rescale_decimal(
+            let remote_filled = Quantity::new(
                 remote_order.filled_quantity.mantissa(),
                 remote_order.filled_quantity.scale(),
-                local.quantity.scale(),
-            );
+            )
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
             match remote_filled {
-                Ok(remote_filled) if remote_filled > local.filled_quantity.mantissa() => {
-                    let delta = remote_filled.saturating_sub(local.filled_quantity.mantissa());
+                remote_filled if remote_filled > local.filled_quantity => {
+                    let delta = remote_filled
+                        .checked_sub(local.filled_quantity)
+                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
                     let price = remote_order
                         .average_fill_price
                         .map(|value| (value.mantissa(), value.scale()));
@@ -1263,15 +797,14 @@ impl ExecutionApplication {
                                 "reconcile:{}:{}:{}",
                                 remote_order.order_id,
                                 remote_filled,
-                                local.quantity.scale()
+                                remote_filled.scale()
                             ))
                             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                             order_id: local.order_id.clone(),
-                            quantity: Quantity::new(delta, local.quantity.scale())
-                                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                            quantity: delta,
                             price: Price::new(price.0, price.1)
                                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-                            fee: Money::new(0, 0),
+                            fee: Money::ZERO,
                             occurred_at_unix_nanos: remote_order.occurred_at_unix_nanos,
                         });
                         match fill_result {
@@ -1289,20 +822,15 @@ impl ExecutionApplication {
                                 .into();
                     }
                 }
-                Ok(remote_filled) if remote_filled < local.filled_quantity.mantissa() => {
+                remote_filled if remote_filled < local.filled_quantity => {
                     reconciled_status = ExecutionOrderStatus::Unknown;
                     reconciliation_reason = format!(
                         "remote cumulative fill {} is behind local fill {}; manual reconciliation required",
                         remote_filled,
-                        local.filled_quantity.mantissa()
+                        local.filled_quantity
                     );
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    reconciled_status = ExecutionOrderStatus::Unknown;
-                    reconciliation_reason =
-                        format!("remote fill quantity cannot be rescaled: {error}");
-                }
+                _ => {}
             }
 
             let local =
@@ -1333,8 +861,7 @@ impl ExecutionApplication {
                     occurred_at_unix_nanos: next.updated_at_unix_nanos,
                     reason: next.reason.clone(),
                     fill_id: None,
-                    filled_quantity_mantissa: None,
-                    filled_quantity_scale: None,
+                    filled_quantity: None,
                 })?;
                 changed += 1;
             }
@@ -1432,8 +959,12 @@ impl ExecutionApplication {
                 .as_ref()
                 .map(|value| parse_decimal(&value.to_string()))
                 .transpose()?
-                .map(|value| Money::new(value.0, value.1))
-                .unwrap_or_else(|| Money::new(0, 0));
+                .map(|value| {
+                    Money::new(value.0, value.1)
+                        .map_err(|error| ExecutionError::Invalid(error.to_string()))
+                })
+                .transpose()?
+                .unwrap_or(Money::ZERO);
             let fill_id = event.execution_id.clone().unwrap_or(
                 FillId::new(format!(
                     "remote:{}:{}",
@@ -1473,8 +1004,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: next.updated_at_unix_nanos,
             reason: next.reason.clone(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         info!(event = "remote_execution_event_reconciled", component = "execution", order_id = %next.order_id, status = ?next.status, "remote execution event reconciled");
         Ok(next)
@@ -1562,8 +1092,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: unknown.last_seen_at_unix_nanos,
             reason: local.reason.clone(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         if let (Some(quantity), Some(price)) = (unknown.fill_quantity, unknown.fill_price) {
             return self.record_fill(ExecutionFillReport {
@@ -1575,7 +1104,7 @@ impl ExecutionApplication {
                     .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                 quantity,
                 price,
-                fee: unknown.fee_amount.unwrap_or_else(|| Money::new(0, 0)),
+                fee: unknown.fee_amount.unwrap_or(Money::ZERO),
                 occurred_at_unix_nanos: Some(unknown.last_seen_at_unix_nanos),
             });
         }
@@ -1642,56 +1171,47 @@ impl ExecutionApplication {
         let Some(plan) = state.plan.as_ref() else {
             return Ok(None);
         };
-        let filled_for = |leg_id: &str| -> Result<i64, ExecutionError> {
+        let filled_for = |leg_id: &str| -> Result<Quantity, ExecutionError> {
             let Some(leg) = plan.legs.iter().find(|leg| leg.leg_id == leg_id) else {
                 return Err(ExecutionError::Invalid(format!(
                     "hedge leg is missing from execution plan: {leg_id}"
                 )));
             };
-            leg.order_ids.iter().try_fold(0_i64, |total, order_id| {
-                total
-                    .checked_add(
-                        self.orders
-                            .get(order_id.as_str())
-                            .map(|order| order.filled_quantity.mantissa())
-                            .unwrap_or_default(),
-                    )
-                    .ok_or_else(|| ExecutionError::Invalid("hedge fill quantity overflow".into()))
-            })
+            leg.order_ids
+                .iter()
+                .try_fold(Quantity::ZERO, |total, order_id| {
+                    total
+                        .checked_add(
+                            self.orders
+                                .get(order_id.as_str())
+                                .map(|order| order.filled_quantity)
+                                .unwrap_or(Quantity::ZERO),
+                        )
+                        .map_err(|_| ExecutionError::Invalid("hedge fill quantity overflow".into()))
+                })
         };
         let leader = filled_for(&policy.leader_leg_id)?;
         let hedge = filled_for(&policy.hedge_leg_id)?;
-        let leader_scale = plan
-            .legs
-            .iter()
-            .find(|leg| leg.leg_id == policy.leader_leg_id)
-            .map(|leg| leg.quantity_scale)
-            .ok_or_else(|| ExecutionError::Invalid("leader leg is missing".into()))?;
-        let hedge_scale = plan
-            .legs
-            .iter()
-            .find(|leg| leg.leg_id == policy.hedge_leg_id)
-            .map(|leg| leg.quantity_scale)
-            .ok_or_else(|| ExecutionError::Invalid("hedge leg is missing".into()))?;
         let required = policy
-            .required_hedge_quantity(leader, 0)
+            .required_hedge_quantity(leader, Quantity::ZERO)
             .map_err(ExecutionError::Invalid)?;
-        let unhedged = required.saturating_sub(hedge);
+        let unhedged = if hedge >= required {
+            Quantity::ZERO
+        } else {
+            required
+                .checked_sub(hedge)
+                .map_err(|error| ExecutionError::Invalid(error.to_string()))?
+        };
         Ok(Some(HedgeRequirement {
             intent_id: typed_intent_id(intent_id),
             leader_leg_id: policy.leader_leg_id.clone(),
             hedge_leg_id: policy.hedge_leg_id.clone(),
-            leader_filled_quantity: Quantity::new(leader, leader_scale)
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-            hedge_filled_quantity: Quantity::new(hedge, hedge_scale)
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-            required_hedge_quantity: Quantity::new(required, hedge_scale)
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-            unhedged_quantity: Quantity::new(unhedged, hedge_scale)
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+            leader_filled_quantity: leader,
+            hedge_filled_quantity: hedge,
+            required_hedge_quantity: required,
+            unhedged_quantity: unhedged,
             max_unhedged_quantity: policy.max_unhedged_quantity,
-            within_tolerance: policy.max_unhedged_quantity.scale() == hedge_scale
-                && unhedged <= policy.max_unhedged_quantity.mantissa(),
+            within_tolerance: unhedged <= policy.max_unhedged_quantity,
             compensation_attempts: state.compensation_attempts,
             max_compensation_attempts: policy.max_compensation_attempts,
         }))
@@ -1814,6 +1334,7 @@ impl ExecutionApplication {
                 .expect("validated compensating quantity"),
             limit_price: template.limit_price,
             options,
+            submitted_at_unix_nanos: Some(template.submitted_at_unix_nanos),
         };
         if let Some(current) = self.intents.get_mut(intent_id) {
             current.compensation_attempts = current.compensation_attempts.saturating_add(1);
@@ -1969,8 +1490,12 @@ impl ExecutionApplication {
             .plan_intent(&intent)
             .map_err(ExecutionError::Invalid)?;
         let planned_orders = expand_child_orders(&intent, planned_orders)?;
+        let business_now = intent
+            .source_event_time_unix_nanos
+            .map(UnixNanos::get)
+            .unwrap_or_else(now_nanos);
         if planned_orders.is_empty() {
-            let now = now_nanos();
+            let now = business_now;
             let state = IntentState {
                 intent: intent.clone(),
                 status: IntentStatus::Satisfied,
@@ -2016,7 +1541,7 @@ impl ExecutionApplication {
                 "intent plan contains an order outside its intent accounts".into(),
             ));
         }
-        let now = now_nanos();
+        let now = business_now;
         let plan = build_single_intent_plan(&intent, &planned_orders)?;
         let state = IntentState {
             intent: intent.clone(),
@@ -2049,7 +1574,7 @@ impl ExecutionApplication {
             reason: String::new(),
             dependency_watermarks: state.dependency_watermarks.clone(),
         })?;
-        self.advance_due_intent_orders(now_nanos(), usize::MAX)?;
+        self.advance_due_intent_orders(business_now, usize::MAX)?;
         Ok(self
             .intents
             .get(intent.intent_id.as_str())
@@ -2442,10 +1967,10 @@ impl ExecutionApplication {
         }
         let completed = orders
             .iter()
-            .try_fold(0_i64, |total, order| {
-                total.checked_add(order.filled_quantity.mantissa())
+            .try_fold(Quantity::ZERO, |total, order| {
+                total.checked_add(order.filled_quantity)
             })
-            .ok_or_else(|| ExecutionError::Invalid("intent completed quantity overflow".into()))?;
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
         self.refresh_plan_progress(intent_id, &orders)?;
         let has_pending = self
             .intents
@@ -2469,8 +1994,8 @@ impl ExecutionApplication {
         });
         let target_reached = state.intent.completion_policy
             == CompletionPolicy::TargetQuantityReached
-            && state.intent.target_quantity.mantissa() > 0
-            && completed >= state.intent.target_quantity.mantissa();
+            && state.intent.target_quantity > Quantity::ZERO
+            && completed >= state.intent.target_quantity;
         let hedge_within_tolerance =
             if state.intent.completion_policy == CompletionPolicy::HedgeWithinTolerance {
                 self.hedge_requirement(intent_id)
@@ -2482,7 +2007,7 @@ impl ExecutionApplication {
             };
         let best_effort_complete = state.intent.completion_policy == CompletionPolicy::BestEffort
             && !has_active
-            && completed > 0;
+            && completed > Quantity::ZERO;
         let policy_satisfied =
             !has_active && (target_reached || hedge_within_tolerance || best_effort_complete);
         let status = if (all_filled || policy_satisfied) && !has_pending && !has_failed {
@@ -2490,7 +2015,7 @@ impl ExecutionApplication {
         } else if all_canceled && !has_pending {
             IntentStatus::Canceled
         } else if has_pending {
-            if completed > 0 {
+            if completed > Quantity::ZERO {
                 IntentStatus::PartiallyFilled
             } else {
                 IntentStatus::Executing
@@ -2509,7 +2034,7 @@ impl ExecutionApplication {
                 crate::domain::IntentLifecycle::Failed => IntentStatus::Failed,
                 crate::domain::IntentLifecycle::Canceled => IntentStatus::Canceled,
                 _ if has_active => {
-                    if completed > 0 {
+                    if completed > Quantity::ZERO {
                         IntentStatus::PartiallyFilled
                     } else {
                         IntentStatus::Executing
@@ -2523,13 +2048,13 @@ impl ExecutionApplication {
                 .any(|order| order.status == ExecutionOrderStatus::Unknown)
             {
                 IntentStatus::ReconciliationRequired
-            } else if completed > 0 {
+            } else if completed > Quantity::ZERO {
                 IntentStatus::PartiallyFilled
             } else {
                 IntentStatus::Executing
             }
         } else if has_failed {
-            if completed > 0 {
+            if completed > Quantity::ZERO {
                 IntentStatus::PartiallyFilled
             } else {
                 IntentStatus::Failed
@@ -2537,7 +2062,7 @@ impl ExecutionApplication {
         } else {
             IntentStatus::Executing
         };
-        if state.status == status && state.completed_quantity.mantissa() == completed {
+        if state.status == status && state.completed_quantity == completed {
             return Ok(());
         }
         self.commit_intent(IntentEvent {
@@ -2545,7 +2070,7 @@ impl ExecutionApplication {
             event_sequence: 0.into(),
             status,
             order_ids: state.order_ids,
-            completed_quantity: completed_quantity(&state.intent, completed),
+            completed_quantity: completed,
             occurred_at_unix_nanos: now_nanos().into(),
             reason: match status {
                 IntentStatus::Satisfied => "all child orders filled".into(),
@@ -2619,16 +2144,14 @@ impl ExecutionApplication {
                 .iter()
                 .filter(|order| leg.order_ids.iter().any(|id| id == &order.order_id))
                 .collect();
-            let completed = leg_orders.iter().try_fold(0_i64, |total, order| {
-                total.checked_add(order.filled_quantity.mantissa())
-            });
-            let Some(completed) = completed else {
-                return Err(ExecutionError::Invalid(
-                    "execution leg completed quantity overflow".into(),
-                ));
-            };
-            leg.completed_quantity = crate::domain::Quantity::new(completed, leg.quantity_scale)
-                .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+            leg.completed_quantity = leg_orders
+                .iter()
+                .try_fold(Quantity::ZERO, |total, order| {
+                    total.checked_add(order.filled_quantity)
+                })
+                .map_err(|_| {
+                    ExecutionError::Invalid("execution leg completed quantity overflow".into())
+                })?;
             let next = if leg_orders.is_empty() {
                 leg.lifecycle
             } else if leg_orders
@@ -2713,8 +2236,7 @@ impl ExecutionApplication {
             request.instrument_id.to_string(),
             request.side,
             request.order_type,
-            request.quantity.mantissa(),
-            request.quantity.scale(),
+            request.quantity,
             now_nanos(),
         )
         .map_err(ExecutionError::Invalid)?;
@@ -2838,17 +2360,11 @@ impl ExecutionApplication {
         if current.status.terminal() {
             return Err(ExecutionError::Invalid("order is terminal".into()));
         }
-        if current.filled_quantity.scale() != request.quantity.scale() {
-            return Err(ExecutionError::Invalid(
-                "fill quantity scale must match order quantity scale".into(),
-            ));
-        }
         let filled = current
             .filled_quantity
-            .mantissa()
-            .checked_add(request.quantity.mantissa())
-            .ok_or_else(|| ExecutionError::Invalid("filled quantity overflow".into()))?;
-        if filled > current.quantity.mantissa() {
+            .checked_add(request.quantity)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        if filled > current.quantity {
             return Err(ExecutionError::Invalid(
                 "cumulative fill exceeds order quantity".into(),
             ));
@@ -2857,10 +2373,9 @@ impl ExecutionApplication {
             .occurred_at_unix_nanos
             .unwrap_or_else(|| now_nanos().into());
         let mut next = current.clone();
-        next.filled_quantity = crate::domain::Quantity::new(filled, request.quantity.scale())
-            .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+        next.filled_quantity = filled;
         next.updated_at_unix_nanos = crate::domain::UnixNanos::new(now.get());
-        next.status = if filled == next.quantity.mantissa() {
+        next.status = if filled == next.quantity {
             ExecutionOrderStatus::Filled
         } else {
             ExecutionOrderStatus::PartiallyFilled
@@ -2881,7 +2396,8 @@ impl ExecutionApplication {
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
             price: crate::domain::Price::new(request.price.mantissa(), request.price.scale())
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-            fee: crate::domain::Money::new(request.fee.mantissa(), request.fee.scale()),
+            fee: crate::domain::Money::new(request.fee.mantissa(), request.fee.scale())
+                .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
             occurred_at_unix_nanos: crate::domain::UnixNanos::new(now.get()),
         };
         self.orders.insert(next.order_id.clone(), next.clone());
@@ -2896,8 +2412,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now,
             reason: String::new(),
             fill_id: Some(request.fill_id.clone()),
-            filled_quantity_mantissa: Some(filled),
-            filled_quantity_scale: Some(next.filled_quantity.scale()),
+            filled_quantity: Some(filled),
         })?;
         if let Some(preflight) = self.preflight.as_mut() {
             preflight
@@ -2915,13 +2430,10 @@ impl ExecutionApplication {
             } else if next.status == ExecutionOrderStatus::PartiallyFilled {
                 let remaining = next
                     .quantity
-                    .mantissa()
-                    .checked_sub(next.filled_quantity.mantissa())
-                    .ok_or_else(|| {
-                        ExecutionError::Invalid("remaining quantity underflow".into())
-                    })?;
+                    .checked_sub(next.filled_quantity)
+                    .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
                 preflight
-                    .resize_order(&next.order_id, remaining, next.quantity.scale())
+                    .resize_order(&next.order_id, remaining)
                     .map_err(ExecutionError::Invalid)?;
             }
         }
@@ -2943,7 +2455,10 @@ impl ExecutionApplication {
                 "live order submission requires explicit confirmation".into(),
             ));
         }
-        let now = now_nanos();
+        let now = request
+            .submitted_at_unix_nanos
+            .map(UnixNanos::get)
+            .unwrap_or_else(now_nanos);
         if self.orders.contains_key(request.order_id.as_str()) {
             return Err(ExecutionError::Invalid("order_id already exists".into()));
         }
@@ -2967,8 +2482,7 @@ impl ExecutionApplication {
             request.instrument_id.to_string(),
             request.side,
             request.order_type,
-            request.quantity.mantissa(),
-            request.quantity.scale(),
+            request.quantity,
             now,
         )
         .map_err(ExecutionError::Invalid)?;
@@ -2989,8 +2503,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         Ok((order, connection_request))
     }
@@ -3041,8 +2554,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: occurred_at,
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         if let Some(preflight) = self.preflight.as_mut() {
             preflight
@@ -3087,8 +2599,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now.into(),
             reason,
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         if let Some(intent_id) = order.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
@@ -3155,8 +2666,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now.into(),
             reason,
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         if let Some(intent_id) = order.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
@@ -3226,8 +2736,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now.into(),
             reason: request.reason,
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         })?;
         if let Some(preflight) = self.preflight.as_mut() {
             preflight
@@ -3302,11 +2811,7 @@ impl ExecutionApplication {
                 "quote refresh prices must be positive".into(),
             ));
         }
-        let bid =
-            request.bid_price.mantissa() as f64 / 10_f64.powi(request.bid_price.scale() as i32);
-        let ask =
-            request.ask_price.mantissa() as f64 / 10_f64.powi(request.ask_price.scale() as i32);
-        if bid >= ask {
+        if request.bid_price >= request.ask_price {
             return Err(ExecutionError::Invalid(
                 "quote refresh requires bid below ask".into(),
             ));
@@ -3429,6 +2934,7 @@ impl ExecutionApplication {
                     .expect("validated quote price"),
                 ),
                 options,
+                submitted_at_unix_nanos: Some(request.quote_observed_at),
             };
             replacement.options.post_only = Some(true);
             let order = match self.submit(replacement) {
@@ -3538,8 +3044,6 @@ impl ExecutionApplication {
             let (Some(bid), Some(ask)) = (quote.bid_price, quote.ask_price) else {
                 continue;
             };
-            let (bid_mantissa, bid_scale) = parse_decimal(&bid.to_string())?;
-            let (ask_mantissa, ask_scale) = parse_decimal(&ask.to_string())?;
             let changed = self
                 .intents
                 .get(intent_id.as_str())
@@ -3552,14 +3056,10 @@ impl ExecutionApplication {
                             .flat_map(|leg| leg.order_ids.iter().rev())
                             .filter_map(|id| self.orders.get(id))
                             .find(|order| !order.status.terminal())
-                            .and_then(|order| {
-                                order
-                                    .limit_price
-                                    .map(|price| (price.mantissa(), price.scale()))
-                            })
+                            .and_then(|order| order.limit_price)
                     };
-                    current_price(OrderSide::Buy) != Some((bid_mantissa, bid_scale))
-                        || current_price(OrderSide::Sell) != Some((ask_mantissa, ask_scale))
+                    current_price(OrderSide::Buy) != Some(bid)
+                        || current_price(OrderSide::Sell) != Some(ask)
                 })
                 .unwrap_or(false);
             if !changed {
@@ -3567,8 +3067,8 @@ impl ExecutionApplication {
             }
             match self.refresh_quote_intent(RefreshQuoteIntent {
                 intent_id,
-                bid_price: Price::new(bid_mantissa, bid_scale).expect("validated bid price"),
-                ask_price: Price::new(ask_mantissa, ask_scale).expect("validated ask price"),
+                bid_price: bid,
+                ask_price: ask,
                 quote_observed_at: quote.observed_at_unix_nanos,
                 reason: "projected market quote changed".into(),
             }) {
@@ -3836,22 +3336,19 @@ fn build_single_intent_plan(
         .into_iter()
         .map(|(leg_id, leg_orders)| {
             let order = leg_orders[0];
-            let target_quantity_mantissa = leg_orders
+            let target_quantity = leg_orders
                 .iter()
-                .try_fold(0_i64, |total, order| {
-                    total.checked_add(order.quantity.mantissa())
+                .try_fold(Quantity::ZERO, |total, order| {
+                    total.checked_add(order.quantity)
                 })
-                .ok_or_else(|| {
-                    ExecutionError::Invalid("execution leg target quantity overflow".into())
-                })?;
+                .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
             let mut leg = ExecutionLeg::new(
                 leg_id,
                 order.account_id.to_string(),
                 order.segment_key.to_string(),
                 order.instrument_id.to_string(),
                 order.side,
-                target_quantity_mantissa,
-                order.quantity.scale(),
+                target_quantity,
             )
             .map_err(ExecutionError::Invalid)?;
             leg.market_id = order.market_id.clone();
@@ -3974,26 +3471,6 @@ fn parse_decimal(value: &str) -> Result<(i64, u8), ExecutionError> {
         if negative { -mantissa } else { mantissa },
         fraction.len() as u8,
     ))
-}
-
-fn rescale_decimal(mantissa: i64, from_scale: u8, to_scale: u8) -> Result<i64, ExecutionError> {
-    if from_scale == to_scale {
-        return Ok(mantissa);
-    }
-    if to_scale > from_scale {
-        let factor = 10_i128.pow(u32::from(to_scale - from_scale));
-        return i64::try_from(i128::from(mantissa) * factor)
-            .map_err(|_| ExecutionError::Invalid("decimal rescale overflow".into()));
-    }
-    let factor = 10_i128.pow(u32::from(from_scale - to_scale));
-    let value = i128::from(mantissa);
-    if value % factor != 0 {
-        return Err(ExecutionError::Invalid(
-            "decimal rescale would lose precision".into(),
-        ));
-    }
-    i64::try_from(value / factor)
-        .map_err(|_| ExecutionError::Invalid("decimal rescale overflow".into()))
 }
 
 pub(crate) fn remote_status(value: &str) -> ExecutionOrderStatus {

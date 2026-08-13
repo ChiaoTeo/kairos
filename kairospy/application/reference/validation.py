@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Protocol
+from typing import Any
+
+from kairospy.infrastructure.contracts.reference_client import ReferenceClient
 
 
 PUBLIC_REFERENCE_SOURCES = (
@@ -21,44 +23,36 @@ PUBLIC_REFERENCE_SOURCES = (
 MASSIVE_REFERENCE_SOURCES = ("massive-equity", "massive-options")
 
 
-class ReferenceValidationClient(Protocol):
-    def health(self) -> dict[str, Any]: ...
-
-    def snapshot_views(self) -> list[dict[str, Any]]: ...
-
-    def catalog(self) -> dict[str, Any]: ...
-
-    def events(
-        self,
-        *,
-        sequence_from: int | None = None,
-        sequence_to: int | None = None,
-        limit: int = 256,
-    ) -> dict[str, Any]: ...
-
-
 def validate_reference_runtime(
-    client: ReferenceValidationClient,
+    client: ReferenceClient,
     *,
     required_sources: Iterable[str] | None = None,
     require_published: bool = True,
 ) -> dict[str, Any]:
     """Validate the running process, snapshots, durable tail, and providers."""
     health = client.health()
-    views = client.snapshot_views()
+    views = client.reference_views()
     snapshot = client.catalog()
     event_sequence = _integer(health.get("event_sequence"))
     tail = (
         client.events(sequence_from=event_sequence, limit=1)
         if event_sequence > 0
-        else {"generation": snapshot.get("generation"), "event_sequence": 0, "events": []}
+        else {
+            "generation": snapshot.get("generation"),
+            "event_sequence": 0,
+            "events": [],
+        }
     )
     provider_rows = health.get("providers")
-    provider_by_id = {
-        str(row.get("source_id")): row
-        for row in provider_rows
-        if isinstance(row, dict) and row.get("source_id") is not None
-    } if isinstance(provider_rows, list) else {}
+    provider_by_id = (
+        {
+            str(row.get("source_id")): row
+            for row in provider_rows
+            if isinstance(row, dict) and row.get("source_id") is not None
+        }
+        if isinstance(provider_rows, list)
+        else {}
+    )
     required = tuple(
         dict.fromkeys(
             str(value)
@@ -93,7 +87,7 @@ def validate_reference_runtime(
     )
     missing_views = [str(view.get("view")) for view in views if not view.get("exists")]
     check(
-        "snapshot_views_complete",
+        "reference_views_complete",
         len(views) == 8 and not missing_views,
         {"view_count": len(views), "missing": missing_views},
     )
@@ -102,7 +96,8 @@ def validate_reference_runtime(
     snapshot_sequence = _integer(snapshot.get("event_sequence"))
     check(
         "snapshot_watermark_matches_health",
-        health_generation == snapshot_generation and event_sequence == snapshot_sequence,
+        health_generation == snapshot_generation
+        and event_sequence == snapshot_sequence,
         {
             "health_generation": health_generation,
             "snapshot_generation": snapshot_generation,
@@ -110,7 +105,8 @@ def validate_reference_runtime(
             "snapshot_event_sequence": snapshot_sequence,
         },
     )
-    catalog = snapshot.get("catalog") if isinstance(snapshot.get("catalog"), dict) else {}
+    catalog_value = snapshot.get("catalog")
+    catalog: dict[str, Any] = catalog_value if isinstance(catalog_value, dict) else {}
     health_market_count = _integer(health.get("market_count"))
     snapshot_market_count = _integer(catalog.get("market_count"))
     check(

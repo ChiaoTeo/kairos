@@ -2,7 +2,7 @@
 
 use kairos_domain_types::{
     AssetId, Exchange, ExecutionAccessId, InstrumentId, IssuerId, ListingId, MarketId,
-    ProviderSymbol, ReferenceStatus, Symbol, UnixNanos,
+    ProviderSymbol, Rate, ReferenceStatus, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,12 @@ pub struct LifecycleEvent {
     pub current_status: Option<ReferenceStatus>,
     pub previous_symbol: Option<String>,
     pub current_symbol: Option<String>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub record_payload_json: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -215,14 +221,12 @@ impl ProviderCatalog {
         fn non_negative_decimal(value: Option<&str>, label: &str) -> ReferenceResult<()> {
             if let Some(value) = value {
                 required(value, label)?;
-                if value.trim_start().starts_with('-') {
+                let decimal = value.trim().parse::<Rate>().map_err(|_| {
+                    ReferenceError::Invalid(format!("{label} is not a valid decimal"))
+                })?;
+                if decimal < Rate::ZERO {
                     return Err(ReferenceError::Invalid(format!(
                         "{label} must not be negative"
-                    )));
-                }
-                if value.trim().parse::<f64>().is_err() {
-                    return Err(ReferenceError::Invalid(format!(
-                        "{label} is not a valid decimal"
                     )));
                 }
             }

@@ -21,7 +21,6 @@ class ReferenceProcessConfig:
     aeron_dir: Path | None = None
     refresh_interval: str = "5m"
     reference_changes_stream: int = REFERENCE_CHANGES_STREAM
-    snapshot_slot_size_mib: int = 64
     run_mode: str = "daemon"
     stop_timeout: float = 15.0
 
@@ -38,8 +37,6 @@ class ReferenceProcessConfig:
             )
         if not self.aeron_channel.strip():
             raise ValueError("reference Aeron channel is required")
-        if not 1 <= self.snapshot_slot_size_mib <= 4096:
-            raise ValueError("snapshot_slot_size_mib must be between 1 and 4096")
 
     def process_spec(self) -> ProcessSpec:
         socket_path = self.workspace.paths.reference_socket()
@@ -55,8 +52,6 @@ class ReferenceProcessConfig:
             self.refresh_interval,
             "--reference-changes-stream",
             str(self.reference_changes_stream),
-            "--snapshot-slot-size-mib",
-            str(self.snapshot_slot_size_mib),
         ]
         if self.aeron_dir is not None:
             command.extend(("--aeron-dir", str(self.aeron_dir)))

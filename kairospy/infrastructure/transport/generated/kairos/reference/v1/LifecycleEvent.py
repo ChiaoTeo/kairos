@@ -122,8 +122,29 @@ class LifecycleEvent(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # LifecycleEvent
+    def Operation(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # LifecycleEvent
+    def Generation(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # LifecycleEvent
+    def RecordPayloadJson(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def LifecycleEventStart(builder):
-    builder.StartObject(14)
+    builder.StartObject(17)
 
 def Start(builder):
     LifecycleEventStart(builder)
@@ -211,6 +232,24 @@ def LifecycleEventAddCurrentSymbol(builder, currentSymbol):
 
 def AddCurrentSymbol(builder, currentSymbol):
     LifecycleEventAddCurrentSymbol(builder, currentSymbol)
+
+def LifecycleEventAddOperation(builder, operation):
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(operation), 0)
+
+def AddOperation(builder, operation):
+    LifecycleEventAddOperation(builder, operation)
+
+def LifecycleEventAddGeneration(builder, generation):
+    builder.PrependUint64Slot(15, generation, 0)
+
+def AddGeneration(builder, generation):
+    LifecycleEventAddGeneration(builder, generation)
+
+def LifecycleEventAddRecordPayloadJson(builder, recordPayloadJson):
+    builder.PrependUOffsetTRelativeSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(recordPayloadJson), 0)
+
+def AddRecordPayloadJson(builder, recordPayloadJson):
+    LifecycleEventAddRecordPayloadJson(builder, recordPayloadJson)
 
 def LifecycleEventEnd(builder):
     return builder.EndObject()

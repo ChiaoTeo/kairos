@@ -23,6 +23,7 @@ pub(super) fn attach_configured(
 ) -> Result<(), String> {
     match binding {
         WorkspaceMarketSourceBinding::BinanceSpot { .. }
+        | WorkspaceMarketSourceBinding::BinanceEquity { .. }
         | WorkspaceMarketSourceBinding::BinanceDerivatives { .. } => {
             binance::attach(application, credentials_root, source_id, binding)
         }

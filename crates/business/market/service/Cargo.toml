@@ -11,7 +11,6 @@ name = "kairos_market"
 path = "src/lib.rs"
 
 [dependencies]
-async-trait.workspace = true
 axum = "0.8"
 kairos-domain-types = { path = "../../../kairos-domain-types" }
 kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
@@ -33,6 +32,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+rusqlite.workspace = true
 tempfile = "3"
 
 [[bench]]

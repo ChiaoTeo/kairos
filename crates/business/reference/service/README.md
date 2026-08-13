@@ -44,7 +44,6 @@ Transport and runtime options use the canonical names below:
 --aeron-channel <URI>
 --reference-changes-stream <ID>
 --refresh-interval <30s|5m|1h>
---snapshot-slot-size-mib <MiB>
 --run-mode <daemon|once>
 ```
 
@@ -104,11 +103,10 @@ therefore identifies the canonical instrument as a US equity and records Binance
 as the execution provider without asserting that every returned symbol is listed
 on Nasdaq.
 
-If no Aeron consumer is running, refresh still commits and publishes the mmap
-snapshot, and reports `publication_pending=true`; durable lifecycle events remain
-in the outbox. Use `reference validate --allow-pending-publication` for a
-snapshot-only deployment, or run the configured lifecycle consumer when event
-delivery is required.
+If no Aeron consumer is running, refresh remains committed in SQLite. Durable
+lifecycle rows and the publication cursor allow the publisher to resume without
+copying every event payload into a second outbox table. Consumers recover their
+bounded projections from the read-only SQLite contract.
 
 Normal process control does not require a provider flag. The default registry
 skips credential files with no resolved API key, includes credentialed sources

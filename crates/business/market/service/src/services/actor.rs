@@ -448,6 +448,57 @@ impl MarketActor {
         removed
     }
 
+    pub fn unsubscribe_owned(
+        &mut self,
+        id: &SubscriptionId,
+        owner_id: &str,
+    ) -> Result<bool, String> {
+        let existing_owner = self
+            .static_subscriptions
+            .get(id)
+            .map(|subscription| subscription.owner_id.as_str())
+            .or_else(|| {
+                self.dynamic_intents
+                    .get(id)
+                    .map(|intent| intent.owner_id.as_str())
+            });
+        let Some(existing_owner) = existing_owner else {
+            return Ok(false);
+        };
+        if existing_owner != owner_id {
+            return Err(format!(
+                "subscription {} belongs to a different owner",
+                id.0
+            ));
+        }
+        Ok(self.unsubscribe(id))
+    }
+
+    pub fn release_owner(&mut self, owner_id: &str) -> Vec<SubscriptionId> {
+        let mut removed = self
+            .static_subscriptions
+            .iter()
+            .filter(|(_, subscription)| subscription.owner_id == owner_id)
+            .map(|(id, _)| id.clone())
+            .chain(
+                self.dynamic_intents
+                    .iter()
+                    .filter(|(_, intent)| intent.owner_id == owner_id)
+                    .map(|(id, _)| id.clone()),
+            )
+            .collect::<Vec<_>>();
+        removed.sort();
+        removed.dedup();
+        for id in &removed {
+            self.static_subscriptions.remove(id);
+            self.dynamic_intents.remove(id);
+        }
+        if !removed.is_empty() {
+            self.generation += 1;
+        }
+        removed
+    }
+
     pub fn set_member_requirement(
         &mut self,
         subscription_id: &SubscriptionId,

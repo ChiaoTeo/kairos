@@ -11,8 +11,8 @@ ReferenceActor owns versioned definitions of the trading world:
 
 | Root | Purpose |
 | --- | --- |
-| `reference/v1/catalog.fbs` | Catalog completeness and counts |
-| `reference/v1/markets.fbs` | Indexed market definitions and trading rules |
+Reference current-state projections are owned by the versioned read-only
+SQLite contract; Reference FlatBuffer projections were retired.
 | `reference/v1/lifecycle.fbs` | Recent lifecycle facts plus a recovery watermark |
 
 Reference data is effective-dated. A consumer must use the snapshot's `as_of`

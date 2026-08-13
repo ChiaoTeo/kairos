@@ -2,6 +2,7 @@ pub mod actor;
 pub(crate) mod control;
 pub(crate) mod event_publication;
 pub(crate) mod event_wire;
+pub(crate) mod history;
 pub(crate) mod messages;
 pub mod reference;
 pub(crate) mod reference_projection;

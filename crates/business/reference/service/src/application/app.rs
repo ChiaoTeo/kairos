@@ -6,11 +6,13 @@
 
 use crate::domain::LifecycleEvent;
 use crate::domain::ProviderHealth;
-use crate::domain::{Asset, Instrument, Listing, Market, ReferenceError, ReferenceResult};
+use crate::domain::{Asset, Instrument, Listing, ReferenceResult};
+#[cfg(test)]
+use crate::domain::{Market, ReferenceError};
 
-use crate::application::queries::{
-    LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceRecord,
-};
+use crate::application::queries::{LifecycleQuery, ReferenceQuery, ReferenceRecord};
+#[cfg(test)]
+use crate::application::queries::{MarketQuery, ReferenceKind};
 use crate::services::actor::ReferenceActor;
 use crate::services::providers::ReferenceSource;
 use crate::services::store::CatalogStore;
@@ -18,8 +20,8 @@ use kairos_domain_types::{Generation, Sequence};
 use tracing::{info, warn};
 
 /// Public application boundary for reference data.
-pub struct ReferenceApplication {
-    actor: ReferenceActor,
+pub struct ReferenceApplication<S, C> {
+    actor: ReferenceActor<S, C>,
 }
 
 /// Immutable read-side view. It contains no provider, SQLite connection, or
@@ -29,7 +31,9 @@ pub struct ReferenceApplication {
 pub struct ReferenceReadModel {
     actor_id: String,
     source_id: String,
-    catalog: crate::domain::ReferenceCatalog,
+    generation: Generation,
+    event_sequence: Sequence,
+    market_count: usize,
     provider_health: Vec<ProviderHealth>,
     outbox_depth: usize,
 }
@@ -39,14 +43,20 @@ pub struct ReferenceRefreshResult {
     pub generation: Generation,
     pub event_sequence: Sequence,
     pub changed: bool,
+    pub change_count: usize,
     pub events: Vec<LifecycleEvent>,
 }
 
-impl ReferenceApplication {
+#[allow(private_bounds)]
+impl<S, C> ReferenceApplication<S, C>
+where
+    S: ReferenceSource,
+    C: CatalogStore,
+{
     pub(crate) async fn new(
         actor_id: impl Into<String>,
-        source: Box<dyn ReferenceSource>,
-        store: Box<dyn CatalogStore>,
+        source: S,
+        store: C,
     ) -> ReferenceResult<Self> {
         Ok(Self {
             actor: ReferenceActor::new(actor_id, source, store).await?,
@@ -61,7 +71,9 @@ impl ReferenceApplication {
         ReferenceReadModel {
             actor_id: self.actor_id().to_owned(),
             source_id: self.source_id().to_owned(),
-            catalog: self.actor.catalog.clone(),
+            generation: self.actor.metadata.generation,
+            event_sequence: self.actor.metadata.event_sequence,
+            market_count: self.actor.metadata.market_count,
             provider_health: self.provider_health(),
             outbox_depth: self.actor.pending_event_count().await.unwrap_or(0),
         }
@@ -73,6 +85,18 @@ impl ReferenceApplication {
 
     pub fn provider_health(&self) -> Vec<ProviderHealth> {
         self.actor.provider_health()
+    }
+
+    pub fn generation(&self) -> Generation {
+        self.actor.metadata.generation
+    }
+
+    pub fn event_sequence(&self) -> Sequence {
+        self.actor.metadata.event_sequence
+    }
+
+    pub fn market_count(&self) -> usize {
+        self.actor.metadata.market_count
     }
 
     pub async fn set_source_paused(
@@ -100,6 +124,7 @@ impl ReferenceApplication {
             generation: result.generation,
             event_sequence: result.event_sequence,
             changed: result.changed,
+            change_count: result.event_count,
             events: result.events,
         })
     }
@@ -167,13 +192,14 @@ impl ReferenceApplication {
             component = "reference",
             generation = result.generation.get(),
             event_sequence = result.event_sequence.get(),
-            change_count = result.events.len(),
+            change_count = result.event_count,
             "reference refresh completed"
         );
         Ok(ReferenceRefreshResult {
             generation: result.generation,
             event_sequence: result.event_sequence,
             changed: result.changed,
+            change_count: result.event_count,
             events: result.events,
         })
     }
@@ -181,7 +207,7 @@ impl ReferenceApplication {
     pub async fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<Generation> {
         info!(event = "reference_asset_upsert_started", component = "reference", asset_id = %asset.asset_id, "reference asset upsert started");
         self.actor.upsert_asset(asset).await?;
-        let generation = self.actor.catalog.generation;
+        let generation = self.actor.metadata.generation;
         info!(
             event = "reference_asset_upsert_completed",
             component = "reference",
@@ -196,12 +222,12 @@ impl ReferenceApplication {
         instrument: Instrument,
     ) -> ReferenceResult<Generation> {
         self.actor.upsert_instrument(instrument).await?;
-        Ok(self.actor.catalog.generation)
+        Ok(self.actor.metadata.generation)
     }
 
     pub async fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<Generation> {
         self.actor.upsert_listing(listing).await?;
-        Ok(self.actor.catalog.generation)
+        Ok(self.actor.metadata.generation)
     }
 
     pub async fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
@@ -330,10 +356,12 @@ impl ReferenceApplication {
     ///
     /// The returned reference is read-only; mutation remains owned by this
     /// application instance and its actor.
+    #[cfg(test)]
     pub fn catalog(&self) -> &crate::domain::ReferenceCatalog {
         &self.actor.catalog
     }
 
+    #[cfg(test)]
     pub fn markets(&self, query: &MarketQuery) -> Vec<Market> {
         self.actor
             .catalog
@@ -344,6 +372,7 @@ impl ReferenceApplication {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn resolve_market(&self, query: &MarketQuery) -> ReferenceResult<Market> {
         let markets = self.markets(query);
         match markets.as_slice() {
@@ -355,6 +384,7 @@ impl ReferenceApplication {
 
     /// Execute the complete read-side catalog query used by the verification
     /// CLI. The application owns filtering so server and CLI cannot drift.
+    #[cfg(test)]
     pub fn query(&self, query: &ReferenceQuery) -> Vec<ReferenceRecord> {
         let mut records = Vec::new();
         let include = |kind: ReferenceKind| query.kind == ReferenceKind::All || query.kind == kind;
@@ -564,6 +594,7 @@ impl ReferenceApplication {
         records
     }
 
+    #[cfg(test)]
     pub fn record(&self, identifier: &str) -> ReferenceResult<ReferenceRecord> {
         let mut matches = Vec::new();
         if let Some(value) = self.actor.catalog.entities.get(identifier) {
@@ -608,7 +639,13 @@ impl ReferenceApplication {
     }
 }
 
-impl ReferenceApplication {
+#[cfg(test)]
+#[allow(private_bounds)]
+impl<S, C> ReferenceApplication<S, C>
+where
+    S: ReferenceSource,
+    C: CatalogStore,
+{
     fn recent_lifecycle_events(&self, query: &LifecycleQuery) -> Vec<LifecycleEvent> {
         let mut events = self
             .actor
@@ -642,288 +679,16 @@ impl ReferenceReadModel {
         self.outbox_depth
     }
 
-    pub fn catalog(&self) -> &crate::domain::ReferenceCatalog {
-        &self.catalog
-    }
-
     pub fn generation(&self) -> Generation {
-        self.catalog.generation
+        self.generation
     }
 
-    pub fn markets(&self, query: &MarketQuery) -> Vec<Market> {
-        self.catalog
-            .markets
-            .values()
-            .filter(|market| query.matches(market))
-            .cloned()
-            .collect()
+    pub fn event_sequence(&self) -> Sequence {
+        self.event_sequence
     }
 
-    pub fn resolve_market(&self, query: &MarketQuery) -> ReferenceResult<Market> {
-        let markets = self.markets(query);
-        match markets.as_slice() {
-            [market] => Ok(market.clone()),
-            [] => Err(ReferenceError::Invalid(query.not_found_message())),
-            _ => Err(ReferenceError::Invalid(query.ambiguous_message())),
-        }
-    }
-
-    pub fn lifecycle_events(&self, query: &LifecycleQuery) -> Vec<LifecycleEvent> {
-        let mut events = self
-            .catalog
-            .lifecycle_events
-            .iter()
-            .filter(|event| query.matches(event_sequence(event).into(), event))
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(limit) = query.limit {
-            events.truncate(limit);
-        }
-        events
-    }
-
-    pub fn query(&self, query: &ReferenceQuery) -> Vec<ReferenceRecord> {
-        let mut records = Vec::new();
-        let include = |kind: ReferenceKind| query.kind == ReferenceKind::All || query.kind == kind;
-        if include(ReferenceKind::Entity) {
-            records.extend(
-                self.catalog
-                    .entities
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.entity_id,
-                                &value.entity_type,
-                                &value.name,
-                            ])
-                            && query
-                                .exchange_id
-                                .as_deref()
-                                .is_none_or(|exchange| exchange == value.entity_id)
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::Entity),
-            );
-        }
-        if include(ReferenceKind::Asset) {
-            records.extend(
-                self.catalog
-                    .assets
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.asset_id,
-                                &value.code,
-                                value.name.as_deref().unwrap_or(""),
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::Asset),
-            );
-        }
-        if include(ReferenceKind::Instrument) {
-            records.extend(
-                self.catalog
-                    .instruments
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.instrument_id,
-                                &value.symbol,
-                                value.name.as_deref().unwrap_or(""),
-                                value.instrument_type.as_str(),
-                            ])
-                            && query.underlying_instrument_id.as_deref().is_none_or(|id| {
-                                value.underlying_instrument_id.as_deref() == Some(id)
-                            })
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::Instrument),
-            );
-        }
-        if include(ReferenceKind::Listing) {
-            records.extend(
-                self.catalog
-                    .listings
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query
-                                .exchange_id
-                                .as_deref()
-                                .is_none_or(|exchange| exchange == value.exchange_id.as_str())
-                            && query.as_of_unix_nanos.is_none_or(|at| {
-                                value.effective_from_unix_nanos <= at
-                                    && value.effective_to_unix_nanos.is_none_or(|end| at < end)
-                            })
-                            && query.matches_text(&[
-                                &value.listing_id,
-                                &value.instrument_id,
-                                &value.exchange_symbol,
-                                value.exchange_id.as_str(),
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::Listing),
-            );
-        }
-        if include(ReferenceKind::Market) {
-            let market_query = MarketQuery {
-                exchange_id: query.exchange_id.clone(),
-                market_type: query.market_type.clone(),
-                asset_type: query.asset_type.clone(),
-                source_symbol: query
-                    .text
-                    .as_deref()
-                    .and_then(|value| kairos_domain_types::Symbol::new(value).ok()),
-                active_only: query.active_only,
-                as_of_unix_nanos: query.as_of_unix_nanos,
-                status: query.status.clone(),
-                ..MarketQuery::default()
-            };
-            records.extend(
-                self.markets(&market_query)
-                    .into_iter()
-                    .filter(|market| {
-                        query
-                            .underlying_instrument_id
-                            .as_deref()
-                            .is_none_or(|underlying| {
-                                self.catalog
-                                    .markets
-                                    .get(&market.market_id)
-                                    .and_then(|value| value.underlying_instrument_id.as_deref())
-                                    == Some(underlying)
-                            })
-                    })
-                    .map(ReferenceRecord::Market),
-            );
-        }
-        if include(ReferenceKind::FinancialProduct) {
-            records.extend(
-                self.catalog
-                    .financial_products
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.product_id,
-                                &value.provider_product_id,
-                                &value.product_type,
-                                &value.name,
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::FinancialProduct),
-            );
-        }
-        if include(ReferenceKind::ExecutionAccess) {
-            records.extend(
-                self.catalog
-                    .execution_accesses
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query
-                                .exchange_id
-                                .as_deref()
-                                .is_none_or(|provider| provider == value.provider_id)
-                            && query.matches_text(&[
-                                &value.access_id,
-                                &value.market_id,
-                                &value.provider_id,
-                                &value.product_family,
-                                &value.provider_symbol,
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::ExecutionAccess),
-            );
-        }
-        if include(ReferenceKind::Event) {
-            let lifecycle_query = LifecycleQuery {
-                sequence_from: query.sequence_from,
-                sequence_to: query.sequence_to,
-                exchange_id: query.exchange_id.clone(),
-                event_time_from_unix_nanos: query.event_time_from_unix_nanos,
-                event_time_to_unix_nanos: query.event_time_to_unix_nanos,
-                limit: None,
-                ..LifecycleQuery::default()
-            };
-            records.extend(
-                self.lifecycle_events(&lifecycle_query)
-                    .into_iter()
-                    .filter(|value| {
-                        query.matches_status(
-                            value
-                                .current_status
-                                .as_ref()
-                                .map(|status| status.as_str())
-                                .unwrap_or(""),
-                        ) && query.matches_text(&[
-                            &value.event_id,
-                            &value.event_type,
-                            value.record_kind.as_deref().unwrap_or(""),
-                            value.record_id.as_deref().unwrap_or(""),
-                            value.market_id.as_deref().unwrap_or(""),
-                            value.source_symbol.as_deref().unwrap_or(""),
-                        ]) && query
-                            .record_kind
-                            .as_deref()
-                            .is_none_or(|kind| value.record_kind.as_deref() == Some(kind))
-                    })
-                    .map(ReferenceRecord::Event),
-            );
-        }
-        if let Some(limit) = query.limit {
-            records.truncate(limit);
-        }
-        records
-    }
-
-    pub fn record(&self, identifier: &str) -> ReferenceResult<ReferenceRecord> {
-        let mut matches = Vec::new();
-        if let Some(value) = self.catalog.entities.get(identifier) {
-            matches.push(ReferenceRecord::Entity(value.clone()));
-        }
-        if let Some(value) = self.catalog.assets.get(identifier) {
-            matches.push(ReferenceRecord::Asset(value.clone()));
-        }
-        if let Some(value) = self.catalog.instruments.get(identifier) {
-            matches.push(ReferenceRecord::Instrument(value.clone()));
-        }
-        if let Some(value) = self.catalog.listings.get(identifier) {
-            matches.push(ReferenceRecord::Listing(value.clone()));
-        }
-        if let Some(value) = self.catalog.markets.get(identifier) {
-            matches.push(ReferenceRecord::Market(value.clone()));
-        }
-        if let Some(value) = self.catalog.financial_products.get(identifier) {
-            matches.push(ReferenceRecord::FinancialProduct(value.clone()));
-        }
-        if let Some(value) = self.catalog.execution_accesses.get(identifier) {
-            matches.push(ReferenceRecord::ExecutionAccess(value.clone()));
-        }
-        matches.extend(
-            self.catalog
-                .lifecycle_events
-                .iter()
-                .filter(|value| value.event_id == identifier)
-                .cloned()
-                .map(ReferenceRecord::Event),
-        );
-        match matches.as_slice() {
-            [record] => Ok(record.clone()),
-            [] => Err(ReferenceError::Invalid(format!(
-                "unknown reference identifier: {identifier}"
-            ))),
-            _ => Err(ReferenceError::Invalid(format!(
-                "reference identifier is ambiguous: {identifier}"
-            ))),
-        }
+    pub fn market_count(&self) -> usize {
+        self.market_count
     }
 }
 

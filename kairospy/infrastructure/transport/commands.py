@@ -6,20 +6,23 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
-from kairospy.strategy import (
-    CommandHandle,
-    CommandEnvelope,
+from kairospy.strategy import CommandHandle, CommandEnvelope
+from kairospy.application.execution import (
     HedgePolicy,
     MakerExecutionPolicy,
-    MarketSubscriptionRequest,
     PairArbitrageRequest,
     PortfolioRebalanceRequest,
     QuoteProvisioningRequest,
     QuoteRefreshRequest,
     SplitOrderPolicy,
     TargetPositionRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    OrderRequest,
+    ReplaceOrderRequest,
 )
-from kairospy.application.strategy.domain.messages import StrategySignal
+from kairospy.application.market import SubscriptionRequest as MarketSubscriptionRequest
+from kairospy.application.reference import InstrumentRef
 from ..unix_http import request_sync
 
 
@@ -36,7 +39,7 @@ class UnixJsonCommandClient:
         return request_sync(self.socket_path, method, path, body, timeout=self.timeout)
 
 
-class MarketUnixCommandPort:
+class MarketCommandClient:
     def __init__(
         self, client: UnixJsonCommandClient, *, launch_id: str | None = None
     ) -> None:
@@ -93,6 +96,7 @@ class MarketUnixCommandPort:
             operation="market.unsubscribe",
             strategy_id=strategy_id,
             instance_id=instance_id,
+            launch_id=self.launch_id,
             payload={"subscription_id": subscription_id},
         )
         status, value = self.client.request(
@@ -100,8 +104,28 @@ class MarketUnixCommandPort:
         )
         return _handle(request_id, status, value)
 
+    def release_owner(
+        self,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        envelope = CommandEnvelope(
+            command_id=request_id,
+            operation="market.release_owner",
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            launch_id=self.launch_id,
+            payload={},
+        )
+        status, value = self.client.request(
+            "POST", "/v1/subscriptions/release-owner", envelope.as_dict()
+        )
+        return _handle(request_id, status, value)
 
-class ExecutionIntentCommandPort:
+
+class ExecutionCommandClient:
     def __init__(
         self,
         client: UnixJsonCommandClient,
@@ -171,17 +195,14 @@ class ExecutionIntentCommandPort:
                     "account_ids": account_ids,
                     "segment_key": self.default_segment,
                     "instrument_id": request.instrument_id,
-                    "kind": "TargetPosition",
-                    "target_quantity_mantissa": _decimal(request.quantity)["mantissa"],
-                    "quantity_scale": _decimal(request.quantity)["scale"],
-                    "limit_price_mantissa": None
+                    "intent_type": "TargetPosition",
+                    "target_quantity": _decimal(request.quantity),
+                    "limit_price": None
                     if request.limit_price is None
-                    else _decimal(request.limit_price)["mantissa"],
-                    "limit_price_scale": None
-                    if request.limit_price is None
-                    else _decimal(request.limit_price)["scale"],
+                    else _decimal(request.limit_price),
                     "source_snapshot_id": request.source_snapshot_id,
                     "source_event_sequence": request.source_event_sequence,
+                    "source_event_time_unix_nanos": request.source_event_time_unix_nanos,
                     "reason": request.reason,
                     "order_options": _execution_options(request.split, request.maker),
                 }
@@ -191,6 +212,116 @@ class ExecutionIntentCommandPort:
             "POST", "/v1/intents/submit", envelope.as_dict()
         )
         return _handle(request_id, status, value)
+
+    def submit_order(
+        self,
+        request: OrderRequest,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        if not self.allow_trading:
+            return CommandHandle(
+                request_id,
+                "rejected",
+                error="launch live trading is disabled by safety policy",
+            )
+        body = _direct_order_body(request, order_id=request.request_id or request_id)
+        status, value = self.client.request("POST", "/v1/submit", body)
+        return _handle(request_id, status, value)
+
+    def cancel_intent(
+        self,
+        intent_id: str,
+        *,
+        reason: str,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        status, value = self.client.request(
+            "POST", "/v1/intents/cancel", {"intent_id": intent_id, "reason": reason}
+        )
+        return _handle(request_id, status, value)
+
+    def cancel_order(
+        self,
+        order_id: str,
+        *,
+        reason: str,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        status, value = self.client.request(
+            "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
+        )
+        return _handle(request_id, status, value)
+
+    def replace_order(
+        self,
+        order_id: str,
+        request: ReplaceOrderRequest,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        status, value = self.client.request("GET", "/v1/orders")
+        if status >= 400:
+            return _handle(request_id, status, value)
+        orders = value.get("orders", ())
+        original = next(
+            (
+                item
+                for item in orders
+                if isinstance(item, Mapping) and item.get("order_id") == order_id
+            ),
+            None,
+        )
+        if original is None:
+            return CommandHandle(request_id, "rejected", error="order not found")
+        replacement = _replacement_body(
+            original, request, request_id=request.request_id or request_id
+        )
+        status, value = self.client.request(
+            "POST", "/v1/replace", {"order_id": order_id, "replacement": replacement}
+        )
+        return _handle(request_id, status, value)
+
+    def cancel_all(
+        self,
+        *,
+        instrument_id: str | None,
+        account_id: str | None,
+        reason: str,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        query = (
+            "" if account_id is None else f"?{urlencode({'account_id': account_id})}"
+        )
+        status, value = self.client.request("GET", f"/v1/open-orders{query}")
+        if status >= 400:
+            return _handle(request_id, status, value)
+        canceled: list[str] = []
+        for item in value.get("orders", ()):
+            if not isinstance(item, Mapping):
+                continue
+            if instrument_id is not None and item.get("instrument_id") != instrument_id:
+                continue
+            order_id = item.get("order_id")
+            if not isinstance(order_id, str):
+                continue
+            cancel_status, cancel_value = self.client.request(
+                "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
+            )
+            if cancel_status >= 400:
+                return _handle(request_id, cancel_status, cancel_value)
+            canceled.append(order_id)
+        return CommandHandle(request_id, "accepted", {"order_ids": canceled})
 
     def pair_arbitrage(
         self,
@@ -228,14 +359,10 @@ class ExecutionIntentCommandPort:
                     "instrument_id": leg.instrument_id,
                     "market_id": None,
                     "side": leg.side.capitalize(),
-                    "quantity_mantissa": _decimal(leg.quantity)["mantissa"],
-                    "quantity_scale": _decimal(leg.quantity)["scale"],
-                    "limit_price_mantissa": None
+                    "quantity": _decimal(leg.quantity),
+                    "limit_price": None
                     if leg.limit_price is None
-                    else _decimal(leg.limit_price)["mantissa"],
-                    "limit_price_scale": None
-                    if leg.limit_price is None
-                    else _decimal(leg.limit_price)["scale"],
+                    else _decimal(leg.limit_price),
                     "target_position": False,
                     "options": _execution_options(leg.split, leg.maker),
                 }
@@ -249,10 +376,8 @@ class ExecutionIntentCommandPort:
             "market_id": None,
             "account_ids": account_ids,
             "segment_key": legs[0].segment_key,
-            "target_quantity_mantissa": 0,
-            "quantity_scale": 0,
-            "limit_price_mantissa": None,
-            "limit_price_scale": None,
+            "target_quantity": "0",
+            "limit_price": None,
             "source_snapshot_id": None,
             "source_event_sequence": None,
             "reason": request.reason,
@@ -316,14 +441,10 @@ class ExecutionIntentCommandPort:
                     "instrument_id": target.instrument_id,
                     "market_id": None,
                     "side": "Buy",
-                    "quantity_mantissa": _decimal(target.quantity)["mantissa"],
-                    "quantity_scale": _decimal(target.quantity)["scale"],
-                    "limit_price_mantissa": None
+                    "quantity": _decimal(target.quantity),
+                    "limit_price": None
                     if target.limit_price is None
-                    else _decimal(target.limit_price)["mantissa"],
-                    "limit_price_scale": None
-                    if target.limit_price is None
-                    else _decimal(target.limit_price)["scale"],
+                    else _decimal(target.limit_price),
                     "target_position": True,
                     "options": _execution_options(target.split, target.maker),
                 }
@@ -338,10 +459,8 @@ class ExecutionIntentCommandPort:
             "market_id": None,
             "account_ids": account_ids,
             "segment_key": first.segment_key,
-            "target_quantity_mantissa": 0,
-            "quantity_scale": 0,
-            "limit_price_mantissa": None,
-            "limit_price_scale": None,
+            "target_quantity": "0",
+            "limit_price": None,
             "source_snapshot_id": None,
             "source_event_sequence": None,
             "reason": request.reason,
@@ -397,10 +516,8 @@ class ExecutionIntentCommandPort:
             "market_id": request.market_id,
             "account_ids": account_ids,
             "segment_key": request.segment_key,
-            "target_quantity_mantissa": 0,
-            "quantity_scale": 0,
-            "limit_price_mantissa": None,
-            "limit_price_scale": None,
+            "target_quantity": "0",
+            "limit_price": None,
             "source_snapshot_id": None,
             "source_event_sequence": None,
             "reason": request.reason,
@@ -415,10 +532,8 @@ class ExecutionIntentCommandPort:
                     "instrument_id": request.instrument_id,
                     "market_id": request.market_id,
                     "side": "Buy",
-                    "quantity_mantissa": _decimal(request.bid_quantity)["mantissa"],
-                    "quantity_scale": _decimal(request.bid_quantity)["scale"],
-                    "limit_price_mantissa": _decimal(request.bid_price)["mantissa"],
-                    "limit_price_scale": _decimal(request.bid_price)["scale"],
+                    "quantity": _decimal(request.bid_quantity),
+                    "limit_price": _decimal(request.bid_price),
                     "target_position": False,
                     "options": {
                         **_execution_options(None, request.maker),
@@ -432,10 +547,8 @@ class ExecutionIntentCommandPort:
                     "instrument_id": request.instrument_id,
                     "market_id": request.market_id,
                     "side": "Sell",
-                    "quantity_mantissa": _decimal(request.ask_quantity)["mantissa"],
-                    "quantity_scale": _decimal(request.ask_quantity)["scale"],
-                    "limit_price_mantissa": _decimal(request.ask_price)["mantissa"],
-                    "limit_price_scale": _decimal(request.ask_price)["scale"],
+                    "quantity": _decimal(request.ask_quantity),
+                    "limit_price": _decimal(request.ask_price),
                     "target_position": False,
                     "options": {
                         **_execution_options(None, request.maker),
@@ -482,11 +595,9 @@ class ExecutionIntentCommandPort:
             launch_id=self.launch_id,
             payload={
                 "intent_id": request.intent_id,
-                "bid_price_mantissa": _decimal(request.bid_price)["mantissa"],
-                "bid_price_scale": _decimal(request.bid_price)["scale"],
-                "ask_price_mantissa": _decimal(request.ask_price)["mantissa"],
-                "ask_price_scale": _decimal(request.ask_price)["scale"],
-                "quote_observed_at_unix_nanos": request.quote_observed_at_unix_nanos,
+                "bid_price": _decimal(request.bid_price),
+                "ask_price": _decimal(request.ask_price),
+                "quote_observed_at": request.quote_observed_at_unix_nanos,
                 "reason": request.reason,
             },
         )
@@ -495,78 +606,73 @@ class ExecutionIntentCommandPort:
         )
         return _handle(request_id, status, value)
 
-    def publish(self, signal: StrategySignal) -> CommandHandle:
-        if not isinstance(signal.intent, TargetPositionRequest):
-            return CommandHandle(
-                f"{signal.strategy_id}:signal:unsupported",
-                "rejected",
-                error="live intent port requires TargetPositionRequest",
-            )
-        request_id = f"{signal.strategy_id}:signal:{signal.source_sequence or 0}"
-        return self.target_position(
-            signal.intent,
-            strategy_id=signal.strategy_id,
-            instance_id=signal.instance_id,
-            request_id=request_id,
-        )
+
+def _decimal(value: Decimal) -> str:
+    return format(value, "f")
 
 
-class ExecutionIntentQueryPort:
-    """Read-only strategy/system facade for Execution-owned intent state."""
-
-    def __init__(self, client: UnixJsonCommandClient) -> None:
-        self.client = client
-
-    def get_intent(self, intent_id: str) -> dict[str, Any]:
-        status, value = self.client.request(
-            "GET", f"/v1/intent?{urlencode({'intent_id': intent_id})}"
-        )
-        if status >= 400:
-            raise RuntimeError(str(value.get("error", "intent query failed")))
-        return value
-
-    def list_intents(self) -> list[dict[str, Any]]:
-        status, value = self.client.request("GET", "/v1/intents")
-        if status >= 400:
-            raise RuntimeError(str(value.get("error", "intent query failed")))
-        return list(value.get("intents", []))
-
-    def intent_events(
-        self,
-        intent_id: str | None = None,
-        *,
-        after_sequence: int = 0,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-        path = "/v1/intent-events"
-        params: dict[str, str | int] = {"after_sequence": after_sequence}
-        if intent_id is not None:
-            params["intent_id"] = intent_id
-        if limit is not None:
-            params["limit"] = limit
-        path = f"{path}?{urlencode(params)}"
-        status, value = self.client.request("GET", path)
-        if status >= 400:
-            raise RuntimeError(str(value.get("error", "intent event query failed")))
-        return list(value.get("events", []))
-
-    def hedge_requirement(self, intent_id: str) -> dict[str, Any] | None:
-        status, value = self.client.request(
-            "GET", f"/v1/intent-hedge?{urlencode({'intent_id': intent_id})}"
-        )
-        if status >= 400:
-            raise RuntimeError(
-                str(value.get("error", "hedge requirement query failed"))
-            )
-        return value
+def _direct_order_body(request: OrderRequest, *, order_id: str) -> dict[str, object]:
+    instrument = (
+        request.instrument.id
+        if isinstance(request.instrument, InstrumentRef)
+        else request.instrument
+    )
+    return {
+        "order_id": order_id,
+        "intent_id": None,
+        "account_id": str(request.account),
+        "segment_key": "spot",
+        "instrument_id": str(instrument),
+        "market_id": None,
+        "side": request.side.value.capitalize(),
+        "order_type": "Limit" if isinstance(request, LimitOrderRequest) else "Market",
+        "quantity": _decimal(request.quantity),
+        "limit_price": None
+        if isinstance(request, MarketOrderRequest)
+        else _decimal(request.limit_price),
+        "options": {
+            "time_in_force": request.time_in_force.value.upper(),
+            "reduce_only": request.reduce_only,
+            "post_only": request.post_only
+            if isinstance(request, LimitOrderRequest)
+            else False,
+        },
+        "submitted_at_unix_nanos": None,
+    }
 
 
-def _decimal(value: Decimal) -> dict[str, int]:
-    value = value.normalize()
-    exponent = value.as_tuple().exponent
-    scale = max(0, -exponent) if isinstance(exponent, int) else 0
-    mantissa = int(value * (10**scale))
-    return {"mantissa": mantissa, "scale": scale}
+def _replacement_body(
+    original: Mapping[str, object],
+    request: ReplaceOrderRequest,
+    *,
+    request_id: str,
+) -> dict[str, object]:
+    options: dict[str, object] = {}
+    raw_options = original.get("options")
+    if isinstance(raw_options, Mapping):
+        for key, value in raw_options.items():
+            if isinstance(key, str):
+                options[key] = value
+    if request.time_in_force is not None:
+        options["time_in_force"] = request.time_in_force.value.upper()
+    return {
+        "order_id": request_id,
+        "intent_id": original.get("intent_id"),
+        "account_id": original.get("account_id"),
+        "segment_key": original.get("segment_key", "spot"),
+        "instrument_id": original.get("instrument_id"),
+        "market_id": original.get("market_id"),
+        "side": original.get("side"),
+        "order_type": original.get("order_type"),
+        "quantity": _decimal(request.quantity)
+        if request.quantity is not None
+        else original.get("quantity"),
+        "limit_price": _decimal(request.limit_price)
+        if request.limit_price is not None
+        else original.get("limit_price"),
+        "options": options,
+        "submitted_at_unix_nanos": None,
+    }
 
 
 def _execution_options(
@@ -576,27 +682,35 @@ def _execution_options(
     options: dict[str, object] = {}
     if split is not None:
         options["split"] = {
-            "max_child_quantity_mantissa": None
+            "max_child_quantity": None
             if split.max_child_quantity is None
-            else _decimal(split.max_child_quantity)["mantissa"],
+            else _decimal(split.max_child_quantity),
             "child_count": split.child_count,
-            "min_child_quantity_mantissa": None
+            "min_child_quantity": None
             if split.min_child_quantity is None
-            else _decimal(split.min_child_quantity)["mantissa"],
-            "interval_millis": split.interval_millis,
+            else _decimal(split.min_child_quantity),
+            "interval": None
+            if split.interval_millis is None
+            else split.interval_millis * 1_000_000,
         }
     if maker is not None:
         options["maker"] = {
-            "min_interval_millis": maker.min_interval_millis,
+            "min_interval": None
+            if maker.min_interval_millis is None
+            else maker.min_interval_millis * 1_000_000,
             "max_orders_per_window": maker.max_orders_per_window,
-            "window_millis": maker.window_millis,
-            "max_inventory_abs_mantissa": None
+            "window": None
+            if maker.window_millis is None
+            else maker.window_millis * 1_000_000,
+            "max_inventory_abs": None
             if maker.max_inventory_abs is None
-            else _decimal(maker.max_inventory_abs)["mantissa"],
-            "target_inventory_mantissa": None
+            else _decimal(maker.max_inventory_abs),
+            "target_inventory": None
             if maker.target_inventory is None
-            else _decimal(maker.target_inventory)["mantissa"],
-            "max_quote_age_millis": maker.max_quote_age_millis,
+            else _decimal(maker.target_inventory),
+            "max_quote_age": None
+            if maker.max_quote_age_millis is None
+            else maker.max_quote_age_millis * 1_000_000,
         }
     return options
 
@@ -607,13 +721,15 @@ def _hedge_policy(policy: HedgePolicy | None) -> dict[str, object] | None:
     return {
         "leader_leg_id": policy.leader_leg_id,
         "hedge_leg_id": policy.hedge_leg_id,
-        "ratio_numerator": policy.ratio_numerator,
-        "ratio_denominator": policy.ratio_denominator,
-        "contract_multiplier_numerator": policy.contract_multiplier_numerator,
-        "contract_multiplier_denominator": policy.contract_multiplier_denominator,
-        "max_unhedged_quantity_mantissa": _decimal(policy.max_unhedged_quantity)[
-            "mantissa"
-        ],
+        "ratio": {
+            "numerator": policy.ratio_numerator,
+            "denominator": policy.ratio_denominator,
+        },
+        "contract_multiplier": {
+            "numerator": policy.contract_multiplier_numerator,
+            "denominator": policy.contract_multiplier_denominator,
+        },
+        "max_unhedged_quantity": _decimal(policy.max_unhedged_quantity),
         "compensate_on_failure": policy.compensate_on_failure,
         "max_compensation_attempts": policy.max_compensation_attempts,
     }

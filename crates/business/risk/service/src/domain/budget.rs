@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 /// Risk quantities are non-negative fixed-point values.  The wire contract
 /// remains i64-compatible, while arithmetic is performed through Decimal so
 /// values with different scales cannot be accidentally compared as integers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Amount {
-    pub mantissa: i64,
-    pub scale: u8,
+    mantissa: i64,
+    scale: u8,
 }
 
 impl Amount {
@@ -23,10 +23,13 @@ impl Amount {
     };
 
     pub fn new(mantissa: i64, scale: u8) -> Result<Self, String> {
-        if mantissa < 0 {
+        if mantissa < 0 || scale > 18 {
             return Err("risk amounts cannot be negative".into());
         }
-        Ok(Self { mantissa, scale })
+        let value = RustDecimal::try_new(mantissa, u32::from(scale))
+            .map_err(|_| "risk amount overflow".to_string())?
+            .normalize();
+        Self::from_decimal(value)
     }
 
     pub fn checked_add(self, other: Self) -> Result<Self, String> {
@@ -64,6 +67,34 @@ impl Amount {
             i64::try_from(value.mantissa()).map_err(|_| "risk amount overflow".to_string())?;
         let scale = u8::try_from(value.scale()).map_err(|_| "risk amount overflow".to_string())?;
         Ok(Self { mantissa, scale })
+    }
+}
+
+impl Serialize for Amount {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(
+            &self
+                .as_decimal()
+                .map_err(serde::ser::Error::custom)?
+                .to_string(),
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let value = RustDecimal::from_str_exact(&value).map_err(serde::de::Error::custom)?;
+        if value.is_sign_negative() {
+            return Err(serde::de::Error::custom("risk amounts cannot be negative"));
+        }
+        Self::from_decimal(value.normalize()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -129,7 +160,7 @@ impl Default for RiskContext {
             current_exposure: Amount::ZERO,
             current_margin: Amount::ZERO,
             available_margin: Amount::ZERO,
-            current_pnl: Money::new(0, 0),
+            current_pnl: Money::default(),
             current_drawdown: Amount::ZERO,
             market_is_fresh: true,
             leverage_bps: BasisPoints::new(0),
@@ -203,7 +234,7 @@ impl RiskPolicy {
         if self.window_nanos.is_some_and(|window| window.get() == 0) {
             return Err("policy window must be positive".into());
         }
-        if self.limit == Amount::ZERO || self.limit.mantissa < 0 {
+        if self.limit == Amount::ZERO {
             return Err("policy limit must be positive".into());
         }
         Ok(())

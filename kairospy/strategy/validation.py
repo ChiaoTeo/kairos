@@ -7,7 +7,16 @@ class StrategyContractError(ValueError):
     """Raised when a loaded strategy does not implement the public contract."""
 
 
-_LIFECYCLE = ("on_start", "on_data", "on_intent", "on_clock", "on_system", "on_end")
+_LIFECYCLE = (
+    "on_start",
+    "on_market",
+    "on_account",
+    "on_risk",
+    "on_execution",
+    "on_clock",
+    "on_system",
+    "on_end",
+)
 
 
 def validate_strategy(strategy: object) -> None:

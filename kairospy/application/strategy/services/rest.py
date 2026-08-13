@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 from aiohttp import web
 
 from ..domain.lifecycle import StrategyLifecycle
+from kairospy.strategy import StrategyCommand
 from .host import StrategyHost, StrategyHostStatus
 
 
@@ -21,6 +23,7 @@ class StrategyControlServer:
         self._runner: web.AppRunner | None = None
         self._site: web.UnixSite | None = None
         self._event_task: asyncio.Task[None] | None = None
+        self._command_tasks: dict[str, asyncio.Task[object]] = {}
         self._stopped = asyncio.Event()
 
     async def start(self) -> None:
@@ -53,6 +56,7 @@ class StrategyControlServer:
             self._stopped.set()
 
     async def close(self) -> None:
+        self.host.close()
         if self._event_task is not None and not self._event_task.done():
             self._event_task.cancel()
             try:
@@ -60,6 +64,9 @@ class StrategyControlServer:
             except asyncio.CancelledError:
                 pass
         self._event_task = None
+        for task in tuple(self._command_tasks.values()):
+            task.cancel()
+        self._command_tasks.clear()
         self._stopped.set()
         if self._runner is None:
             return
@@ -73,12 +80,12 @@ class StrategyControlServer:
             target = request.path
             if request.query_string:
                 target += f"?{request.query_string}"
-            result = self._dispatch(request.method, target, body)
+            result = await self._dispatch(request.method, target, body)
             return web.json_response(result)
         except Exception as error:
             return web.json_response({"error": str(error)}, status=400)
 
-    def _dispatch(self, method: str, path: str, body: bytes) -> dict[str, Any]:
+    async def _dispatch(self, method: str, path: str, body: bytes) -> dict[str, Any]:
         if method == "GET" and path == "/v1/health":
             status = self.host.status
             return self._status(status) | {
@@ -89,11 +96,52 @@ class StrategyControlServer:
             }
         if method == "GET" and path == "/v1/status":
             return self._status(self.host.status)
+        if method == "POST" and path == "/v1/command":
+            payload = json.loads(body or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("command body must be an object")
+            command = StrategyCommand(
+                request_id=str(payload.get("request_id") or "").strip(),
+                kind=str(payload.get("kind") or "").strip(),
+                source=str(payload.get("source") or ""),
+                payload=(
+                    payload.get("payload")
+                    if isinstance(payload.get("payload"), dict)
+                    else {}
+                ),
+            )
+            task = asyncio.create_task(self.host.command(command))
+            self._command_tasks[command.request_id] = task
+            try:
+                result = await task
+            finally:
+                self._command_tasks.pop(command.request_id, None)
+            return {
+                "request_id": result.request_id,
+                "status": result.status,
+                "result": dict(result.result),
+                "error": result.error,
+                "error_code": result.error_code,
+                "retryable": result.retryable,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        if method == "POST" and path == "/v1/command/cancel":
+            payload = json.loads(body or b"{}")
+            request_id = str(payload.get("request_id") or "").strip()
+            if not request_id:
+                raise ValueError("command cancel requires request_id")
+            task = self._command_tasks.get(request_id)
+            if task is None:
+                return {"request_id": request_id, "status": "not_found"}
+            task.cancel()
+            return {"request_id": request_id, "status": "cancel_requested"}
         if method == "POST" and path == "/v1/start":
             return self._status(self.host.start())
         if method == "POST" and path == "/v1/enable":
             result = self.host.enable()
             self._event_task = asyncio.create_task(self.host.run())
+            self._event_task.add_done_callback(self._event_task_finished)
             return self._status(result)
         if method == "POST" and path == "/v1/pause":
             return self._status(self.host.pause())
@@ -108,6 +156,11 @@ class StrategyControlServer:
             self._stopped.set()
             return self._status(result)
         raise ValueError(f"unsupported strategy control request: {method} {path}")
+
+    def _event_task_finished(self, task: asyncio.Task[None]) -> None:
+        """Wake the process lifecycle when a finite replay reaches EOF."""
+        if not task.cancelled():
+            self._stopped.set()
 
     def _status(self, status: StrategyHostStatus) -> dict[str, Any]:
         last_event_time = (

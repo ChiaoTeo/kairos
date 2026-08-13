@@ -8,9 +8,6 @@ import struct
 from pathlib import Path
 
 from kairospy.infrastructure.contracts.base import MmapSnapshotReader
-from kairospy.infrastructure.contracts.market import (
-    snapshot_reader as contract_snapshot_reader,
-)
 from kairospy.infrastructure.transport import (
     EventStreamGap,
     MmapMarketSnapshotReader,
@@ -114,8 +111,8 @@ def test_python_reads_rust_market_snapshot_contract(tmp_path: Path) -> None:
     assert snapshot.event_stream_id == "market.events"
     assert snapshot.event_sequence == 4
     assert snapshot.generation == 7
-    assert snapshot.payload.current("BTCUSDT") is None
-    assert contract_snapshot_reader(path).read("market.current").event_sequence == 4
+    assert snapshot.quotes == ()
+    assert MmapMarketSnapshotReader(path).read("market.current").event_sequence == 4
 
     generic = MmapSnapshotReader(
         path,

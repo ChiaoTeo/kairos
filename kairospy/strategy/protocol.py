@@ -1,124 +1,101 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping, Sequence
-from datetime import datetime
-from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol
+from collections.abc import Mapping
+from typing import Protocol, TypeAlias
 
-if TYPE_CHECKING:
-    from . import StrategyLogger
+from kairospy.application.account import AccountApplication, AccountEvent
+from kairospy.application.execution import ExecutionApplication, ExecutionEvent
+from kairospy.application.market import MarketApplication, MarketEvent
+from kairospy.application.reference import ReferenceApplication
+from kairospy.application.risk import RiskApplication, RiskEvent
 
-from .events import EventEnvelope
-from .requests import (
-    PairArbitrageRequest,
-    PortfolioRebalanceRequest,
-    QuoteProvisioningRequest,
-    QuoteRefreshRequest,
-    SubscriptionRequest,
-    TargetPositionRequest,
-)
+from .clock import StrategyClock
+from .commands import StrategyCommand
+from .events import ClockEvent, SystemEvent
+from .identity import StrategyIdentity
+from .logging import StrategyLogger
 from .results import CommandResult
+from .state import StrategyState
 
 
-class StrategyContextProtocol(Protocol):
-    """Only capability surface exposed to user-authored strategy code."""
+StrategyEvent: TypeAlias = (
+    MarketEvent | AccountEvent | RiskEvent | ExecutionEvent | ClockEvent | SystemEvent
+)
+
+
+class StrategyContext(Protocol):
+    """Stable, application-oriented surface exposed to strategy code."""
 
     strategy_id: str
+    launch_id: str
     instance_id: str
-    state: MutableMapping[str, object]
-    logger: "StrategyLogger"
-    reference: object
+    identity: StrategyIdentity
+    params: Mapping[str, object]
+    state: StrategyState
+    logger: StrategyLogger
+    reference: ReferenceApplication
+    market: MarketApplication
+    account: AccountApplication
+    risk: RiskApplication
+    execution: ExecutionApplication
+    clock: StrategyClock
 
     @property
-    def now(self) -> datetime | None: ...
-
-    @property
-    def event(self) -> EventEnvelope | None: ...
-
-    def subscribe(
-        self,
-        subject: str,
-        *,
-        selectors: Sequence[str] = (),
-        exchange: str | None = None,
-        market_type: str | None = None,
-        asset_type: str | None = None,
-        identity: str | None = None,
-        params: Mapping[str, object] | None = None,
-        dynamic: bool = False,
-    ) -> CommandResult: ...
-
-    def unsubscribe(self, subscription: object) -> CommandResult: ...
-
-    def target_position(
-        self,
-        instrument: str,
-        quantity: Decimal | str | int | float,
-        *,
-        account: str | None = None,
-        accounts: Sequence[str] | None = None,
-        limit_price: Decimal | str | int | float | None = None,
-        reason: str = "",
-        intent_id: str | None = None,
-    ) -> CommandResult: ...
-
-    def pair_arbitrage(self, request: PairArbitrageRequest) -> CommandResult: ...
-
-    def portfolio_rebalance(
-        self, request: PortfolioRebalanceRequest
-    ) -> CommandResult: ...
-
-    def quote_provisioning(
-        self, request: QuoteProvisioningRequest
-    ) -> CommandResult: ...
-
-    def refresh_quote(self, request: QuoteRefreshRequest) -> CommandResult: ...
-
-    def view(self, view_key: str, default: object = None) -> object: ...
-
-    def require_view(self, view_key: str) -> object: ...
+    def event(self) -> StrategyEvent | None: ...
 
 
 class StrategyProtocol(Protocol):
-    """Lifecycle protocol implemented by every user strategy."""
-
     strategy_id: str
 
-    def on_start(self, context: StrategyContextProtocol) -> None: ...
-    def on_data(
-        self, context: StrategyContextProtocol, event: EventEnvelope
-    ) -> None: ...
-    def on_intent(
-        self, context: StrategyContextProtocol, event: EventEnvelope
-    ) -> None: ...
-    def on_clock(
-        self, context: StrategyContextProtocol, event: EventEnvelope
-    ) -> None: ...
-    def on_system(
-        self, context: StrategyContextProtocol, event: EventEnvelope
-    ) -> None: ...
-    def on_end(self, context: StrategyContextProtocol) -> None: ...
+    def on_start(self, ctx: StrategyContext) -> None: ...
+    def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None: ...
+    def on_account(self, ctx: StrategyContext, event: AccountEvent) -> None: ...
+    def on_risk(self, ctx: StrategyContext, event: RiskEvent) -> None: ...
+    def on_execution(self, ctx: StrategyContext, event: ExecutionEvent) -> None: ...
+    def on_clock(self, ctx: StrategyContext, event: ClockEvent) -> None: ...
+    def on_system(self, ctx: StrategyContext, event: SystemEvent) -> None: ...
+    async def on_command(
+        self, ctx: StrategyContext, command: StrategyCommand
+    ) -> CommandResult: ...
+    def on_end(self, ctx: StrategyContext) -> None: ...
 
 
-class StrategyBase:
-    """Convenience implementation of the complete public lifecycle contract."""
+class Strategy:
+    """Convenience base implementing the complete typed lifecycle."""
 
     strategy_id = "strategy"
+    log_on_market = False
 
-    def on_start(self, context: StrategyContextProtocol) -> None:
+    def on_start(self, ctx: StrategyContext) -> None:
         return None
 
-    def on_data(self, context: StrategyContextProtocol, event: EventEnvelope) -> None:
+    def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
         return None
 
-    def on_intent(self, context: StrategyContextProtocol, event: EventEnvelope) -> None:
+    def on_account(self, ctx: StrategyContext, event: AccountEvent) -> None:
         return None
 
-    def on_clock(self, context: StrategyContextProtocol, event: EventEnvelope) -> None:
+    def on_risk(self, ctx: StrategyContext, event: RiskEvent) -> None:
         return None
 
-    def on_system(self, context: StrategyContextProtocol, event: EventEnvelope) -> None:
+    def on_execution(self, ctx: StrategyContext, event: ExecutionEvent) -> None:
         return None
 
-    def on_end(self, context: StrategyContextProtocol) -> None:
+    def on_clock(self, ctx: StrategyContext, event: ClockEvent) -> None:
+        return None
+
+    def on_system(self, ctx: StrategyContext, event: SystemEvent) -> None:
+        return None
+
+    async def on_command(
+        self, ctx: StrategyContext, command: StrategyCommand
+    ) -> CommandResult:
+        return CommandResult(
+            command.request_id,
+            "rejected",
+            error=f"unsupported strategy command: {command.kind}",
+            error_code="unsupported_command",
+        )
+
+    def on_end(self, ctx: StrategyContext) -> None:
         return None

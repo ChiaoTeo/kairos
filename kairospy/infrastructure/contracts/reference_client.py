@@ -1,66 +1,54 @@
-"""Reference snapshot and low-frequency query contract client."""
+"""Reference SQLite and low-frequency control contract client."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import sqlite3
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 from kairospy.infrastructure.unix_http import request_sync
 
 
 @dataclass(frozen=True, slots=True)
-class ReferenceSnapshotClient:
-    """Read Reference projections through the contract-owned transports."""
+class ReferenceClient:
+    """Read Reference state from the contract-owned read-only SQLite model."""
 
     socket_path: Path | None = None
-    snapshot_path: Path | None = None
-    entities_snapshot_path: Path | None = None
-    assets_snapshot_path: Path | None = None
-    instruments_snapshot_path: Path | None = None
-    listings_snapshot_path: Path | None = None
-    markets_snapshot_path: Path | None = None
-    financial_products_snapshot_path: Path | None = None
-    execution_accesses_snapshot_path: Path | None = None
+    database_path: Path | None = None
     timeout: float = 5.0
 
-    def snapshot_views(self) -> list[dict[str, Any]]:
-        views = (
-            ("catalog", self.snapshot_path, "reference.catalog", "PRC1"),
-            ("entities", self.entities_snapshot_path, "reference.entities", "PRS1"),
-            ("assets", self.assets_snapshot_path, "reference.assets", "PRS1"),
-            (
-                "instruments",
-                self.instruments_snapshot_path,
-                "reference.instruments",
-                "PRS1",
-            ),
-            ("listings", self.listings_snapshot_path, "reference.listings", "PRS1"),
-            ("markets", self.markets_snapshot_path, "reference.markets", "PRD1"),
-            (
-                "financial-products",
-                self.financial_products_snapshot_path,
-                "reference.financial_products",
-                "PRS1",
-            ),
-            (
-                "execution-accesses",
-                self.execution_accesses_snapshot_path,
-                "reference.execution_accesses",
-                "PRS1",
-            ),
-        )
+    def reference_views(self) -> list[dict[str, Any]]:
+        tables = {
+            "catalog": "reference_meta",
+            "entities": "reference_entities_current",
+            "assets": "reference_assets_current",
+            "instruments": "reference_instruments_current",
+            "listings": "reference_listings_current",
+            "markets": "reference_markets_current",
+            "financial-products": "reference_financial_products_current",
+            "execution-accesses": "reference_execution_accesses_current",
+        }
+        existing: set[str] = set()
+        if self.database_path is not None and self.database_path.exists():
+            with self._connection() as connection:
+                existing = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
         return [
             {
                 "view": view,
-                "view_key": view_key,
-                "file_identifier": identifier,
-                "path": str(path) if path is not None else None,
-                "exists": path.exists() if path is not None else False,
+                "view_key": f"reference.{view.replace('-', '_')}",
+                "table": table,
+                "path": str(self.database_path) if self.database_path else None,
+                "exists": table in existing,
             }
-            for view, path, view_key, identifier in views
+            for view, table in tables.items()
         ]
 
     def request(
@@ -154,59 +142,45 @@ class ReferenceSnapshotClient:
         if not underlying.strip():
             raise ValueError("underlying is required")
         return self.request(
-            "/v1/options/coverage/add"
-            if enabled
-            else "/v1/options/coverage/remove",
+            "/v1/options/coverage/add" if enabled else "/v1/options/coverage/remove",
             method="POST",
             timeout=max(self.timeout, 120.0),
             underlying=underlying,
         )
 
-    def snapshot(self) -> dict[str, Any]:
-        return self.catalog()
-
     def catalog(self) -> dict[str, Any]:
-        if self.snapshot_path is None:
-            raise RuntimeError("Reference catalog snapshot path is not configured")
-        payload, generation = self._read_payload(self.snapshot_path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.CatalogSnapshot import (
-            CatalogSnapshot,
-        )
-
-        self._require_identifier(payload, b"PRC1", "Reference catalog")
-        root = CatalogSnapshot.GetRootAs(payload, 0)
-        header = root.Header()
-        catalog = root.Payload()
-        if header is None or catalog is None:
-            raise RuntimeError(
-                "Reference catalog snapshot is missing header or payload"
+        with self._connection() as connection:
+            meta = connection.execute(
+                "SELECT generation,event_sequence FROM reference_meta WHERE id = 1"
+            ).fetchone()
+            if meta is None:
+                raise RuntimeError("Reference SQLite metadata is missing")
+            names = {
+                "entity": "reference_entities_current",
+                "asset": "reference_assets_current",
+                "instrument": "reference_instruments_current",
+                "listing": "reference_listings_current",
+                "market": "reference_markets_current",
+                "financial_product": "reference_financial_products_current",
+                "execution_access": "reference_execution_accesses_current",
+            }
+            counts = {
+                f"{name}_count": int(
+                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                )
+                for name, table in names.items()
+            }
+            active_market_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM reference_markets_current WHERE status IN ('active','trading')"
+                ).fetchone()[0]
             )
-        collections = {
-            name: self._decode_table_collection(catalog, name)
-            for name in (
-                "entities",
-                "assets",
-                "instruments",
-                "listings",
-                "markets",
-                "financial_products",
-                "execution_accesses",
-            )
-        }
         return {
-            "actor_id": self._text(header.OwnerActorId()),
-            "generation": header.Generation() or generation,
-            "event_sequence": header.EventSequence(),
+            "generation": int(meta[0]),
+            "event_sequence": int(meta[1]),
             "catalog": {
-                "entity_count": catalog.EntityCount(),
-                "asset_count": catalog.AssetCount(),
-                "instrument_count": catalog.InstrumentCount(),
-                "listing_count": catalog.ListingCount(),
-                "market_count": catalog.MarketCount(),
-                "financial_product_count": catalog.FinancialProductCount(),
-                "active_market_count": catalog.ActiveMarketCount(),
-                "lifecycle_event_count": catalog.LifecycleEventCount(),
-                **collections,
+                **counts,
+                "active_market_count": active_market_count,
             },
         }
 
@@ -221,62 +195,34 @@ class ReferenceSnapshotClient:
         status: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        if self.markets_snapshot_path is None:
-            raise RuntimeError("Reference markets snapshot path is not configured")
         if exchange_id is not None and not exchange_id.startswith("exchange:"):
             exchange_id = f"exchange:{exchange_id}"
-        payload, _ = self._read_payload(self.markets_snapshot_path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import (
-            MarketsSnapshot,
+        clauses: list[str] = []
+        params: list[object] = []
+        filters = (
+            ("source_symbol", symbol),
+            ("exchange_id", exchange_id),
+            ("market_type", market_type),
+            ("asset_type", asset_type),
+            ("status", status),
         )
-
-        self._require_identifier(payload, b"PRD1", "Reference markets")
-        data = MarketsSnapshot.GetRootAs(payload, 0).Payload()
-        if data is None:
-            raise RuntimeError("Reference markets snapshot is missing payload")
-        result: list[dict[str, Any]] = []
-        for index in range(data.MarketsLength()):
-            market = data.Markets(index)
-            if market is None:
-                continue
-            value = {
-                "market_id": self._text(market.MarketId()),
-                "market_key": self._text(market.MarketKey()),
-                "instrument_id": self._text(market.InstrumentId()),
-                "listing_id": self._text(market.ListingId()),
-                "exchange_id": self._text(market.ExchangeId()),
-                "market_type": self._text(market.MarketType()),
-                "symbol": self._text(market.SourceSymbol()),
-                "base_asset_id": self._text(market.BaseAssetId()),
-                "quote_asset_id": self._text(market.QuoteAssetId()),
-                "status": self._text(market.Status()),
-                "asset_type": self._text(market.AssetType()),
-                "underlying_instrument_id": self._text(market.UnderlyingInstrumentId()),
-                "price_tick": self._decimal(market.PriceTick()),
-                "quantity_tick": self._decimal(market.QuantityTick()),
-                "minimum_quantity": self._decimal(market.MinimumQuantity()),
-                "minimum_notional": self._decimal(market.MinimumNotional()),
-                "contract_size": self._decimal(market.ContractSize()),
-                "price_precision": market.PricePrecision(),
-                "quantity_precision": market.QuantityPrecision(),
-                "effective_from_unix_nanos": market.EffectiveFromUnixNanos(),
-                "effective_to_unix_nanos": market.EffectiveToUnixNanos(),
-            }
-            if symbol is not None and value["symbol"] != symbol:
-                continue
-            if exchange_id is not None and value["exchange_id"] != exchange_id:
-                continue
-            if market_type is not None and value["market_type"] != market_type:
-                continue
-            if asset_type is not None and value.get("asset_type") != asset_type:
-                continue
-            if status is not None and value["status"] != status:
-                continue
-            if active_only and value["status"] != "active":
-                continue
-            result.append(value)
-            if limit is not None and len(result) >= limit:
-                break
+        for column, value in filters:
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(value)
+        if active_only:
+            clauses.append("status IN ('active','trading')")
+        sql = "SELECT payload FROM reference_markets_current"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY market_id LIMIT ?"
+        params.append(max(1, min(limit or 10_000, 10_000)))
+        with self._connection() as connection:
+            result = [
+                json.loads(str(row[0])) for row in connection.execute(sql, params)
+            ]
+        for value in result:
+            value["symbol"] = value.get("source_symbol")
         return result
 
     def execution_accesses(
@@ -313,29 +259,24 @@ class ReferenceSnapshotClient:
         return result
 
     def collection(self, view: str) -> list[dict[str, Any]]:
-        paths = {
-            "entities": self.entities_snapshot_path,
-            "assets": self.assets_snapshot_path,
-            "instruments": self.instruments_snapshot_path,
-            "listings": self.listings_snapshot_path,
-            "financial-products": self.financial_products_snapshot_path,
-            "execution-accesses": self.execution_accesses_snapshot_path,
+        tables = {
+            "entities": "reference_entities_current",
+            "assets": "reference_assets_current",
+            "instruments": "reference_instruments_current",
+            "listings": "reference_listings_current",
+            "financial-products": "reference_financial_products_current",
+            "execution-accesses": "reference_execution_accesses_current",
         }
-        path = paths.get(view)
-        if path is None:
-            raise RuntimeError(
-                f"Reference collection snapshot path is not configured: {view}"
-            )
-        payload, _ = self._read_payload(path)
-        from kairospy.infrastructure.transport.generated.kairos.reference.v1.ReferenceCollectionsSnapshot import (
-            ReferenceCollectionsSnapshot,
-        )
-
-        self._require_identifier(payload, b"PRS1", f"Reference {view}")
-        data = ReferenceCollectionsSnapshot.GetRootAs(payload, 0).Payload()
-        if data is None:
-            raise RuntimeError(f"Reference {view} snapshot is missing payload")
-        return self._decode_table_collection(data, view)
+        table = tables.get(view)
+        if table is None:
+            raise ValueError(f"unsupported Reference collection: {view}")
+        with self._connection() as connection:
+            return [
+                self._camelize(json.loads(str(row[0])))
+                for row in connection.execute(
+                    f"SELECT payload FROM {table} ORDER BY 1 LIMIT 10000"
+                )
+            ]
 
     def resolve_market(self, **filters: object) -> dict[str, Any]:
         markets = self.markets(
@@ -350,74 +291,31 @@ class ReferenceSnapshotClient:
             raise RuntimeError("Reference market resolution is not unique")
         return markets[0]
 
-    def _read_payload(self, path: Path) -> tuple[bytes, int]:
+    def _connection(self) -> sqlite3.Connection:
+        if self.database_path is None:
+            raise RuntimeError("Reference SQLite database path is not configured")
         try:
-            snapshot = SharedSnapshotReader(path).read()
-        except (OSError, ValueError, RuntimeError) as error:
-            raise RuntimeError(f"invalid Reference shared snapshot: {path}") from error
-        manifest_path = path.parent / "reference.manifest"
-        if manifest_path.exists():
-            from kairospy.infrastructure.contracts.reference import read_manifest
-
-            manifest = read_manifest(manifest_path)
-            if snapshot.generation != manifest["generation"]:
-                raise RuntimeError(
-                    f"Reference snapshot generation {snapshot.generation} does not match "
-                    f"manifest generation {manifest['generation']}"
-                )
-        return snapshot.payload, snapshot.generation
-
-    @staticmethod
-    def _require_identifier(payload: bytes, identifier: bytes, label: str) -> None:
-        if len(payload) < 8 or payload[4:8] != identifier:
-            raise RuntimeError(f"invalid {label} snapshot identifier")
+            connection = sqlite3.connect(
+                f"file:{self.database_path}?mode=ro", uri=True, timeout=self.timeout
+            )
+            connection.execute("PRAGMA query_only = ON")
+            version = connection.execute(
+                "SELECT schema_version FROM reference_meta WHERE id = 1"
+            ).fetchone()
+        except sqlite3.Error as error:
+            raise RuntimeError(f"Reference SQLite read failed: {error}") from error
+        if version is None or int(version[0]) != 1:
+            connection.close()
+            raise RuntimeError("unsupported Reference SQLite schema")
+        return connection
 
     @staticmethod
-    def _text(value: bytes | None) -> str | None:
-        return None if value is None else value.decode("utf-8")
-
-    @staticmethod
-    def _decimal(value: Any) -> str | None:
-        if value is None:
-            return None
-        mantissa = value.Mantissa()
-        scale = value.Scale()
-        sign = "-" if mantissa < 0 else ""
-        digits = str(abs(mantissa)).rjust(scale + 1, "0")
-        return (
-            f"{sign}{digits}"
-            if scale == 0
-            else f"{sign}{digits[:-scale]}.{digits[-scale:]}"
-        )
-
-    def _decode_table_collection(self, table: Any, view: str) -> list[dict[str, Any]]:
-        field = view.replace("-", "_")
-        method_name = "".join(part.title() for part in field.split("_"))
-        length = getattr(table, f"{method_name}Length")()
-        getter = getattr(table, method_name)
-        return [
-            self._decode_reference_record(getter(index))
-            for index in range(length)
-            if getter(index) is not None
-        ]
-
-    @staticmethod
-    def _decode_reference_record(value: Any) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name in dir(value):
-            if not name or not name[0].isupper() or name.endswith("Length"):
-                continue
-            method = getattr(value, name)
-            if not callable(method):
-                continue
-            try:
-                field = method()
-            except TypeError:
-                continue
-            if isinstance(field, bytes):
-                field = field.decode("utf-8")
-            result[name[0].lower() + name[1:]] = field
-        return result
+    def _camelize(value: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key.split("_")[0]
+            + "".join(part.title() for part in key.split("_")[1:]): item
+            for key, item in value.items()
+        }
 
 
-__all__ = ["ReferenceSnapshotClient"]
+__all__ = ["ReferenceClient"]

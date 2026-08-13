@@ -23,6 +23,8 @@ pub struct RiskProcess {
     health_file: Option<PathBuf>,
     stop_requested: bool,
     interval: Duration,
+    replay_clock: bool,
+    business_time_unix_nanos: Option<u64>,
     snapshot_publisher: Option<Box<dyn RiskSnapshotPublisher>>,
 }
 
@@ -55,8 +57,18 @@ impl RiskProcess {
             health_file,
             stop_requested: false,
             interval,
+            replay_clock: false,
+            business_time_unix_nanos: None,
             snapshot_publisher: None,
         })
+    }
+
+    /// In replay mode, business time advances only through the explicit
+    /// `/v1/time/advance` barrier; the wall-clock maintenance tick must not
+    /// expire reservations from a historical run.
+    pub fn with_replay_clock(mut self, enabled: bool) -> Self {
+        self.replay_clock = enabled;
+        self
     }
 
     pub fn with_snapshot_publisher<P>(mut self, publisher: P) -> Self
@@ -94,7 +106,9 @@ impl RiskProcess {
                     let _ = request.response.send(response);
                 }
                 _ = ticks.tick() => {
-                    let _ = self.application.expire(crate::ExpireReservations { at_unix_nanos: unix_now_nanos().into() });
+                    if !self.replay_clock {
+                        let _ = self.application.expire(crate::ExpireReservations { at_unix_nanos: unix_now_nanos().into() });
+                    }
                     self.publish_snapshot();
                     let _ = self.write_health("ready").await;
                 }
@@ -133,6 +147,40 @@ impl RiskProcess {
                 Ok(value) => (200, value),
                 Err(error) => (500, serde_json::json!({"error": error.to_string()})),
             },
+            "/v1/time/advance" => {
+                let value: serde_json::Value = serde_json::from_str(raw_body)
+                    .map_err(|error| error.to_string())
+                    .unwrap_or_default();
+                let Some(at) = value
+                    .get("event_time_unix_nanos")
+                    .and_then(serde_json::Value::as_u64)
+                else {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        serde_json::json!({"error":"event_time_unix_nanos is required"}),
+                    );
+                };
+                if self
+                    .business_time_unix_nanos
+                    .is_some_and(|current| at < current)
+                {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        serde_json::json!({"error":"business time cannot move backwards"}),
+                    );
+                }
+                self.business_time_unix_nanos = Some(at);
+                let expired = self
+                    .application
+                    .expire(crate::ExpireReservations {
+                        at_unix_nanos: at.into(),
+                    })
+                    .unwrap_or_default();
+                (
+                    200,
+                    serde_json::json!({"event_time_unix_nanos":at,"expired":expired}),
+                )
+            }
             "/v1/publish_policy" => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
@@ -412,8 +460,9 @@ mod tests {
         let socket = directory.path().join("risk.sock");
         let application =
             crate::composition::compose_risk_application("risk", Vec::new(), None).unwrap();
-        let process =
-            RiskProcess::new(application, &socket, Duration::from_millis(10), None).unwrap();
+        let process = RiskProcess::new(application, &socket, Duration::from_millis(10), None)
+            .unwrap()
+            .with_replay_clock(true);
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let task = tokio::task::spawn_local(process.run());
@@ -428,12 +477,21 @@ mod tests {
                 assert_eq!(health["status"], "ready");
                 let snapshot = client.request_json("GET", "/v1/snapshot", None).await.unwrap();
                 assert_eq!(snapshot["actor_id"], "risk");
-                let policy = r#"{"policy":{"policy_id":"account-notional","version":1,"scope":{"account_id":"main","strategy_id":null,"instrument_id":null,"exchange_id":null},"metric":"notional","limit":{"mantissa":100,"scale":0},"enforcement":"reject","valid_from_unix_nanos":0,"valid_until_unix_nanos":null}}"#;
+                let policy = r#"{"policy":{"policy_id":"account-notional","version":1,"scope":{"account_id":"main","strategy_id":null,"instrument_id":null,"exchange_id":null},"metric":"notional","limit":"100","enforcement":"reject","valid_from_unix_nanos":0,"valid_until_unix_nanos":null}}"#;
                 let configured = client.request_json("POST", "/v1/publish_policy", Some(policy.as_bytes())).await.unwrap();
                 assert_eq!(configured["status"], "active");
-                let request = r#"{"request_id":"request-1","idempotency_key":"key-1","reservation_id":"reservation-1","account_id":"main","strategy_id":"strategy","instrument_id":"instrument","exchange_id":"exchange","metric":"notional","amount":{"mantissa":40,"scale":0},"at_unix_nanos":1,"reservation_ttl_nanos":100,"dependency_generation":1,"dependency_event_sequence":1}"#;
+                let request = r#"{"request_id":"request-1","idempotency_key":"key-1","reservation_id":"reservation-1","account_id":"main","strategy_id":"strategy","instrument_id":"instrument","exchange_id":"exchange","metric":"notional","amount":"40","at_unix_nanos":1,"reservation_ttl_nanos":100,"dependency_generation":1,"dependency_event_sequence":1}"#;
                 let decision = client.request_json("POST", "/v1/authorize_and_reserve", Some(request.as_bytes())).await.unwrap();
                 assert_eq!(decision["allowed"], true);
+                let advance = client
+                    .request_json(
+                        "POST",
+                        "/v1/time/advance",
+                        Some(br#"{"event_time_unix_nanos":101}"#),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(advance["expired"], 1);
                 let stop = client.request_json("POST", "/v1/stop", None).await.unwrap();
                 assert_eq!(stop["status"], "stopping");
                 task.await.unwrap().unwrap();

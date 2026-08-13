@@ -14,7 +14,6 @@ from kairospy.application.system import (
 )
 from decimal import Decimal
 from decimal import InvalidOperation
-from kairospy.application.timeline import TimelineApplication
 from kairospy.application.config import ConfigApplication
 from kairospy.application.account import (
     AccountAdminApplication,
@@ -50,15 +49,6 @@ def _required_decimal(value: str, name: str) -> Decimal:
     return parsed
 
 
-def _decimal_payload(value: Decimal) -> tuple[int, int]:
-    normalized = value.normalize()
-    exponent = normalized.as_tuple().exponent
-    if not isinstance(exponent, int):
-        raise ValueError("decimal payload must be finite")
-    scale = max(0, -exponent)
-    return int(normalized * (10**scale)), scale
-
-
 def _execution_submit_args(
     account: dict[str, object],
     *,
@@ -75,7 +65,6 @@ def _execution_submit_args(
     provider = str(account.get("broker") or account.get("exchange") or "simulated")
     provider = "okx" if provider == "okex" else provider
     segment = str(account.get("product_family") or account.get("segment") or "spot")
-    quantity_mantissa, quantity_scale = _decimal_payload(quantity)
     arguments = [
         "submit",
         "--order-id",
@@ -86,10 +75,8 @@ def _execution_submit_args(
         segment,
         "--instrument-id",
         instrument_id,
-        "--quantity-mantissa",
-        str(quantity_mantissa),
-        "--quantity-scale",
-        str(quantity_scale),
+        "--quantity",
+        format(quantity, "f"),
         "--side",
         side,
         "--order-type",
@@ -106,10 +93,7 @@ def _execution_submit_args(
     if environment == "live":
         arguments.append("--confirm-live")
     if limit_price is not None:
-        mantissa, scale = _decimal_payload(limit_price)
-        arguments.extend(
-            ("--limit-price-mantissa", str(mantissa), "--limit-price-scale", str(scale))
-        )
+        arguments.extend(("--limit-price", format(limit_price, "f")))
     if intent_id:
         arguments.extend(("--intent-id", intent_id))
     if market_id:
@@ -188,7 +172,6 @@ account_app = typer.Typer(no_args_is_help=True, help="Private account command re
 market_app = typer.Typer(no_args_is_help=True, help="Private market command registry")
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
 system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
-timeline_app = typer.Typer(no_args_is_help=True, help="Timeline commands")
 
 
 @project_app.command(
@@ -747,13 +730,24 @@ def market_data_download(
     if endpoint:
         arguments.extend(("--endpoint", endpoint))
     result = MarketCliApplication(owner).run(arguments)
-    if storage_format == "parquet":
-        entry = MarketDataApplication(owner.paths.state / "market").ingest(
-            name, Path(result["path"]), format="parquet"
-        )
-        result = {**result, "dataset": entry, "storage_format": "parquet"}
-    elif storage_format != "jsonl":
+    if storage_format not in {"parquet", "jsonl"}:
         raise typer.BadParameter("--storage-format must be parquet or jsonl")
+    entry = MarketDataApplication(owner.paths.state / "market").ingest(
+        name,
+        Path(result["path"]),
+        format=storage_format,
+        metadata={
+            "provider": result.get("source", provider),
+            "symbol": result.get("symbol", symbol),
+            "market_id": result.get("market_id", market_id),
+            "instrument_id": result.get("instrument_id", instrument_id),
+            "observation_type": result.get("data_kind", "bar"),
+            "timeframe": result.get("interval", interval),
+            "start_time_unix_millis": result.get("start_time_unix_millis", start),
+            "end_time_unix_millis": result.get("end_time_unix_millis", end),
+        },
+    )
+    result = {**result, "dataset": entry, "storage_format": storage_format}
     _emit(result, output)
 
 
@@ -1193,18 +1187,6 @@ def config_status(
     )
 
 
-@timeline_app.command("status")
-def timeline_status(
-    workspace: Path = typer.Option(None, "--workspace"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    owner = WorkspaceApplication().open(workspace)
-    _emit(
-        {"workspace_id": owner.workspace_id, "timeline_root": str(owner.paths.run)},
-        output,
-    )
-
-
 @system_app.command("status")
 def system_status(
     component: str = typer.Option(..., "--component"),
@@ -1359,21 +1341,3 @@ def system_supervise(
         _emit(value[component], output)
         return
     supervisor.run_forever(interval=interval)
-
-
-@timeline_app.command("list")
-def timeline_list(
-    file: Path = typer.Option(..., "--file"),
-    limit: int | None = typer.Option(None, "--limit"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    _emit(TimelineApplication().list(file, limit=limit), output)
-
-
-@timeline_app.command("export")
-def timeline_export(
-    file: Path = typer.Option(..., "--file"),
-    destination: Path = typer.Option(..., "--destination", "--output-file"),
-    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-) -> None:
-    _emit({"destination": str(TimelineApplication().export(file, destination))}, output)

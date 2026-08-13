@@ -67,8 +67,12 @@ impl SqlxExecutionStore {
         T: Send + 'static,
     {
         let pool = self.pool.clone();
-        self.runtime
-            .block_on(async move { operation(&pool).await.map_err(|error| error.to_string()) })
+        let run = async move { operation(&pool).await.map_err(|error| error.to_string()) };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.runtime.block_on(run))
+        } else {
+            self.runtime.block_on(run)
+        }
     }
 
     fn checkpoint(&self, snapshot: &ExecutionSnapshot) -> Result<(), String> {
@@ -273,8 +277,7 @@ mod tests {
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         };
         let mut store = SqlxExecutionStore::new(&path).unwrap();
         store.append_event(&event).unwrap();
@@ -304,8 +307,7 @@ mod tests {
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
-            filled_quantity_mantissa: None,
-            filled_quantity_scale: None,
+            filled_quantity: None,
         };
         let mut store = SqlxExecutionStore::new(path).unwrap();
         store.append_event(&event).unwrap();

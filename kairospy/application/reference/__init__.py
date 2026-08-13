@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .client import ReferenceSnapshotClient
+from .application import (
+    AmbiguousReferenceError,
+    ReferenceApplication,
+    ReferenceNotFoundError,
+)
+from .cli import ReferenceCliApplication
+from .models import InstrumentRef, Market, MarketStatus, TradingRules
 from .validation import (
     MASSIVE_REFERENCE_SOURCES,
     PUBLIC_REFERENCE_SOURCES,
@@ -13,6 +19,13 @@ from .validation import (
 __all__ = [
     "MASSIVE_REFERENCE_SOURCES",
     "PUBLIC_REFERENCE_SOURCES",
-    "ReferenceSnapshotClient",
+    "ReferenceCliApplication",
+    "ReferenceApplication",
+    "ReferenceNotFoundError",
+    "AmbiguousReferenceError",
+    "InstrumentRef",
+    "Market",
+    "MarketStatus",
+    "TradingRules",
     "validate_reference_runtime",
 ]

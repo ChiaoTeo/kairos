@@ -1,6 +1,6 @@
 //! Aeron publication service for Reference change events.
 
-use crate::encoding::FlatbuffersSnapshotEncoder;
+use crate::encoding::FlatbuffersChangeEncoder;
 use crate::event::{EventEnvelope, EventPublisher};
 use crate::model::{LifecycleEvent as ContractLifecycleEvent, ReferenceCatalog as ContractCatalog};
 use crate::transport::AeronEventPublisher;
@@ -9,7 +9,7 @@ use crate::{ContractError, ContractResult};
 /// Publishes Reference change events through Aeron.
 pub struct ReferenceAeronEventWriter {
     changes: AeronEventPublisher,
-    encoder: FlatbuffersSnapshotEncoder,
+    encoder: FlatbuffersChangeEncoder,
 }
 
 impl ReferenceAeronEventWriter {
@@ -25,7 +25,7 @@ impl ReferenceAeronEventWriter {
                 .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self {
             changes,
-            encoder: FlatbuffersSnapshotEncoder::new(actor_id, event_stream_id),
+            encoder: FlatbuffersChangeEncoder::new(actor_id, event_stream_id),
         })
     }
 

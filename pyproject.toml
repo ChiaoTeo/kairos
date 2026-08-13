@@ -66,8 +66,8 @@ exclude = ["kairospy/infrastructure/transport/generated"]
 select = ["E4", "E7", "E9"]
 
 [tool.pyright]
-include = ["kairospy", "tests"]
-exclude = ["**/__pycache__", "kairospy/infrastructure/transport/generated", "tests"]
+include = ["kairospy", "examples", "tests/public_api"]
+exclude = ["**/__pycache__", "kairospy/infrastructure/transport/generated"]
 typeCheckingMode = "basic"
 reportMissingImports = "error"
 reportMissingTypeStubs = "none"

@@ -26,8 +26,6 @@ The first read-only roots are:
 
 ```text
 ReferenceActor:
-  projection/reference/v1/catalog.fbs
-  projection/reference/v1/markets.fbs
   projection/reference/v1/lifecycle.fbs
 
 MarketActor:

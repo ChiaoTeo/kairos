@@ -2,9 +2,77 @@
 
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Decimal(pub String);
+
+impl Default for Decimal {
+    fn default() -> Self {
+        Self("0".into())
+    }
+}
+
+impl Decimal {
+    pub fn parts(&self) -> Result<(i64, u8), String> {
+        let (negative, unsigned) = self
+            .0
+            .strip_prefix('-')
+            .map_or((false, self.0.as_str()), |value| (true, value));
+        let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        if whole.is_empty()
+            || fraction.len() > 18
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err("expected a decimal string with at most 18 fractional digits".into());
+        }
+        let magnitude = format!("{whole}{fraction}")
+            .parse::<i128>()
+            .map_err(|_| "decimal value is too large")?;
+        let mantissa = i64::try_from(if negative { -magnitude } else { magnitude })
+            .map_err(|_| "decimal value is too large")?;
+        Ok((mantissa, fraction.len() as u8))
+    }
+}
+
+impl serde::Serialize for Decimal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.parts().map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Decimal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        let value = Self(value);
+        value.parts().map_err(serde::de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod decimal_tests {
+    use super::Decimal;
+
+    #[test]
+    fn execution_decimal_contract_is_a_string() {
+        let value = serde_json::from_str::<Decimal>("\"0.001250\"").unwrap();
+        assert_eq!(value.parts().unwrap(), (1_250, 6));
+        assert!(serde_json::from_str::<Decimal>(r#"{"mantissa":1250,"scale":6}"#).is_err());
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum OrderSide {
+    #[serde(alias = "buy")]
     Buy,
+    #[serde(alias = "sell")]
     Sell,
 }
 
@@ -52,13 +120,10 @@ pub struct ExecutionOrder {
     pub market_id: Option<String>,
     pub side: OrderSide,
     pub order_type: OrderType,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
+    pub quantity: Decimal,
+    pub limit_price: Option<Decimal>,
     pub remote_order_id: Option<String>,
-    pub filled_quantity_mantissa: i64,
-    pub filled_quantity_scale: u8,
+    pub filled_quantity: Decimal,
     pub status: ExecutionOrderStatus,
     pub submitted_at_unix_nanos: u64,
     pub updated_at_unix_nanos: u64,
@@ -76,12 +141,9 @@ pub struct ExecutionFill {
     pub intent_id: Option<String>,
     pub instrument_id: String,
     pub side: OrderSide,
-    pub quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub price_mantissa: i64,
-    pub price_scale: u8,
-    pub fee_mantissa: i64,
-    pub fee_scale: u8,
+    pub quantity: Decimal,
+    pub price: Decimal,
+    pub fee: Decimal,
     pub occurred_at_unix_nanos: u64,
 }
 
@@ -112,10 +174,8 @@ pub struct ExecuteStrategyIntent {
     pub market_id: Option<String>,
     pub account_ids: Vec<String>,
     pub segment_key: String,
-    pub target_quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
+    pub target_quantity: Decimal,
+    pub limit_price: Option<Decimal>,
     pub source_snapshot_id: Option<String>,
     pub source_event_sequence: Option<u64>,
     pub reason: String,
@@ -148,7 +208,8 @@ pub struct IntentState {
     pub order_ids: Vec<String>,
     #[serde(default)]
     pub plan: Option<crate::plan::ExecutionPlan>,
-    pub completed_quantity_mantissa: i64,
+    #[serde(default)]
+    pub completed_quantity: Decimal,
     pub updated_at_unix_nanos: u64,
     pub reason: String,
     #[serde(default)]
@@ -182,7 +243,8 @@ pub struct IntentEvent {
     pub event_sequence: u64,
     pub status: IntentStatus,
     pub order_ids: Vec<String>,
-    pub completed_quantity_mantissa: i64,
+    #[serde(default)]
+    pub completed_quantity: Decimal,
     pub occurred_at_unix_nanos: u64,
     pub reason: String,
     #[serde(default)]
@@ -216,6 +278,5 @@ pub struct ExecutionEvent {
     pub occurred_at_unix_nanos: u64,
     pub reason: String,
     pub fill_id: Option<String>,
-    pub filled_quantity_mantissa: Option<i64>,
-    pub filled_quantity_scale: Option<u8>,
+    pub filled_quantity: Option<Decimal>,
 }

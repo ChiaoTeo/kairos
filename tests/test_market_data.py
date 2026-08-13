@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.application.market import MarketDataApplication, materialize_replay_file
+from kairospy.application.market import (
+    MarketDataApplication,
+    materialize_replay_file,
+    validate_replay_window,
+)
 
 
 def _bar(time: int) -> dict:
@@ -57,3 +61,40 @@ def test_market_dataset_ingest_round_trips_parquet_and_materializes_replay(
     assert named_replay.read_text(encoding="utf-8") == replay.read_text(
         encoding="utf-8"
     )
+
+
+def test_market_dataset_can_derive_explicit_synthetic_quotes_from_bars(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "events.jsonl"
+    source.write_text(json.dumps(_bar(1)) + "\n", encoding="utf-8")
+    app = MarketDataApplication(tmp_path / "state" / "market")
+    app.ingest("btc-1h", source, format="jsonl")
+
+    entry = app.derive_synthetic_quotes("btc-1h", "btc-quotes", spread_bps="10")
+
+    assert entry["observation_types"] == ["Quote"]
+    quote = app.read_events("btc-quotes")[0]["Quote"]
+    assert quote["bid_price"] == "100.44975"
+    assert quote["ask_price"] == "100.55025"
+    assert quote["derivation"] == "synthetic_quote"
+
+
+def test_replay_window_validation_proves_dataset_coverage(tmp_path: Path) -> None:
+    source = tmp_path / "events.jsonl"
+    source.write_text(
+        "".join(json.dumps(_bar(time)) + "\n" for time in (10, 20)),
+        encoding="utf-8",
+    )
+
+    result = validate_replay_window(
+        source,
+        start_time_unix_nanos=10,
+        end_time_unix_nanos=20,
+    )
+
+    assert result == {
+        "event_count": 2,
+        "first_time_unix_nanos": 10,
+        "last_time_unix_nanos": 20,
+    }

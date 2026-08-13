@@ -8,6 +8,31 @@ use std::fmt;
 use rust_decimal::Decimal as RustDecimal;
 use serde::{Deserialize, Serialize};
 
+/// Domain decimals use an `i64` coefficient, so at most 18 fractional digits
+/// can be represented without pretending that additional precision exists.
+pub const MAX_DECIMAL_SCALE: u8 = 18;
+
+fn normalize_decimal_parts(
+    mut mantissa: i64,
+    mut scale: u8,
+    type_name: &'static str,
+) -> Result<(i64, u8), DomainTypeError> {
+    if scale > MAX_DECIMAL_SCALE {
+        return Err(DomainTypeError::Invalid {
+            type_name,
+            reason: "decimal scale exceeds 18 digits",
+        });
+    }
+    if mantissa == 0 {
+        return Ok((0, 0));
+    }
+    while scale > 0 && mantissa % 10 == 0 {
+        mantissa /= 10;
+        scale -= 1;
+    }
+    Ok((mantissa, scale))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DomainTypeError {
     Empty {
@@ -277,9 +302,7 @@ mod tests {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Quantity {
     mantissa: i64,
     scale: u8,
@@ -287,17 +310,21 @@ pub struct Quantity {
 
 /// A signed asset/inventory quantity. Order quantities use `Quantity`; this
 /// type is reserved for positions and balance deltas that may cross zero.
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct SignedQuantity {
     mantissa: i64,
     scale: u8,
 }
 
 impl SignedQuantity {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
+    pub const ZERO: Self = Self {
+        mantissa: 0,
+        scale: 0,
+    };
+
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "SignedQuantity")?;
+        Ok(Self { mantissa, scale })
     }
 
     pub const fn mantissa(self) -> i64 {
@@ -310,6 +337,11 @@ impl SignedQuantity {
 }
 
 impl Quantity {
+    pub const ZERO: Self = Self {
+        mantissa: 0,
+        scale: 0,
+    };
+
     pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
         if mantissa < 0 {
             return Err(DomainTypeError::Invalid {
@@ -317,6 +349,7 @@ impl Quantity {
                 reason: "negative values are not allowed",
             });
         }
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "Quantity")?;
         Ok(Self { mantissa, scale })
     }
 
@@ -346,7 +379,7 @@ impl Quantity {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Price {
     mantissa: i64,
     scale: u8,
@@ -354,17 +387,21 @@ pub struct Price {
 
 /// A signed difference between two prices. Unlike `Price`, zero and negative
 /// values are valid because a delta describes a relationship, not a quote.
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct PriceDelta {
     mantissa: i64,
     scale: u8,
 }
 
 impl PriceDelta {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
+    pub const ZERO: Self = Self {
+        mantissa: 0,
+        scale: 0,
+    };
+
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "PriceDelta")?;
+        Ok(Self { mantissa, scale })
     }
 
     pub const fn mantissa(self) -> i64 {
@@ -385,6 +422,7 @@ impl Price {
         if mantissa <= 0 {
             return Err(DomainTypeError::NonPositive { type_name: "Price" });
         }
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "Price")?;
         Ok(Self { mantissa, scale })
     }
 
@@ -396,17 +434,21 @@ impl Price {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Money {
     mantissa: i64,
     scale: u8,
 }
 
 impl Money {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
+    pub const ZERO: Self = Self {
+        mantissa: 0,
+        scale: 0,
+    };
+
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "Money")?;
+        Ok(Self { mantissa, scale })
     }
 
     pub const fn mantissa(self) -> i64 {
@@ -418,9 +460,7 @@ impl Money {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Rate {
     mantissa: i64,
     scale: u8,
@@ -479,8 +519,14 @@ impl Ratio {
 }
 
 impl Rate {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
+    pub const ZERO: Self = Self {
+        mantissa: 0,
+        scale: 0,
+    };
+
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
+        let (mantissa, scale) = normalize_decimal_parts(mantissa, scale, "Rate")?;
+        Ok(Self { mantissa, scale })
     }
 
     pub const fn mantissa(self) -> i64 {
@@ -581,7 +627,7 @@ macro_rules! signed_fixed_decimal_impl {
                     type_name: stringify!($name),
                     reason: "decimal value is too large",
                 })?;
-                Ok(Self::new(mantissa, scale))
+                Self::new(mantissa, scale)
             }
         }
 
@@ -611,6 +657,53 @@ signed_fixed_decimal_impl!(Rate);
 signed_fixed_decimal_impl!(PriceDelta);
 
 signed_fixed_decimal_impl!(SignedQuantity);
+
+macro_rules! decimal_value_semantics {
+    ($name:ident) => {
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.collect_str(self)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                value.parse().map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl Ord for $name {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                decimal_value(self.mantissa, self.scale)
+                    .expect("domain decimal invariant")
+                    .cmp(
+                        &decimal_value(other.mantissa, other.scale)
+                            .expect("domain decimal invariant"),
+                    )
+            }
+        }
+
+        impl PartialOrd for $name {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+    };
+}
+
+decimal_value_semantics!(Quantity);
+decimal_value_semantics!(SignedQuantity);
+decimal_value_semantics!(Price);
+decimal_value_semantics!(PriceDelta);
+decimal_value_semantics!(Money);
+decimal_value_semantics!(Rate);
 
 fn decimal_value(mantissa: i64, scale: u8) -> Result<RustDecimal, DomainTypeError> {
     RustDecimal::try_new(mantissa, u32::from(scale)).map_err(|_| DomainTypeError::Invalid {
@@ -661,6 +754,18 @@ impl Quantity {
             .cmp(&decimal_value(other.mantissa, other.scale)?))
     }
 
+    pub fn is_multiple_of(self, increment: Self) -> Result<bool, DomainTypeError> {
+        if increment.is_zero() {
+            return Err(DomainTypeError::Invalid {
+                type_name: "Quantity",
+                reason: "increment cannot be zero",
+            });
+        }
+        Ok((decimal_value(self.mantissa, self.scale)?
+            % decimal_value(increment.mantissa, increment.scale)?)
+        .is_zero())
+    }
+
     pub fn checked_mul(self, price: Price) -> Result<Money, DomainTypeError> {
         let value = decimal_value(self.mantissa, self.scale)?
             .checked_mul(decimal_value(price.mantissa, price.scale)?)
@@ -669,7 +774,7 @@ impl Quantity {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(Money::new(mantissa, scale))
+        Money::new(mantissa, scale)
     }
 }
 
@@ -687,11 +792,11 @@ impl SignedQuantity {
     pub fn checked_neg(self) -> Result<Self, DomainTypeError> {
         self.mantissa
             .checked_neg()
-            .map(|mantissa| Self::new(mantissa, self.scale))
             .ok_or(DomainTypeError::Invalid {
                 type_name: "SignedQuantity",
                 reason: "arithmetic overflow",
             })
+            .and_then(|mantissa| Self::new(mantissa, self.scale))
     }
 
     pub fn checked_add(self, other: Self) -> Result<Self, DomainTypeError> {
@@ -702,7 +807,7 @@ impl SignedQuantity {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(Self::new(mantissa, scale))
+        Self::new(mantissa, scale)
     }
 
     pub fn checked_sub(self, other: Self) -> Result<Self, DomainTypeError> {
@@ -722,11 +827,17 @@ impl SignedQuantity {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(Money::new(mantissa, scale))
+        Money::new(mantissa, scale)
     }
 }
 
 impl Price {
+    pub fn is_multiple_of(self, increment: Self) -> Result<bool, DomainTypeError> {
+        Ok((decimal_value(self.mantissa, self.scale)?
+            % decimal_value(increment.mantissa, increment.scale)?)
+        .is_zero())
+    }
+
     pub fn checked_sub(self, other: Self) -> Result<PriceDelta, DomainTypeError> {
         let value = decimal_value(self.mantissa, self.scale)?
             .checked_sub(decimal_value(other.mantissa, other.scale)?)
@@ -735,7 +846,7 @@ impl Price {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(PriceDelta::new(mantissa, scale))
+        PriceDelta::new(mantissa, scale)
     }
 
     pub fn checked_mul(self, quantity: Quantity) -> Result<Money, DomainTypeError> {
@@ -769,7 +880,7 @@ impl PriceDelta {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(Money::new(mantissa, scale))
+        Money::new(mantissa, scale)
     }
 }
 
@@ -783,11 +894,11 @@ impl Money {
     pub fn checked_neg(self) -> Result<Self, DomainTypeError> {
         self.mantissa
             .checked_neg()
-            .map(|mantissa| Self::new(mantissa, self.scale))
             .ok_or(DomainTypeError::Invalid {
                 type_name: "Money",
                 reason: "arithmetic overflow",
             })
+            .and_then(|mantissa| Self::new(mantissa, self.scale))
     }
     pub fn checked_add(self, other: Self) -> Result<Self, DomainTypeError> {
         let value = decimal_value(self.mantissa, self.scale)?
@@ -797,7 +908,7 @@ impl Money {
                 reason: "arithmetic overflow",
             })?;
         let (mantissa, scale) = decimal_parts(value)?;
-        Ok(Self::new(mantissa, scale))
+        Self::new(mantissa, scale)
     }
 
     pub fn checked_sub(self, other: Self) -> Result<Self, DomainTypeError> {
@@ -900,6 +1011,28 @@ unit_u64_type!(UnixNanos);
 unit_u64_type!(Generation);
 unit_u64_type!(DurationNanos);
 unit_u64_type!(BasisPoints);
+
+/// Shared business-time context for cross-module commands and events.
+///
+/// `event_time` is the provider/replay time which determines business
+/// behavior.  Processing and wall-clock timestamps belong to observability or
+/// transport layers and must not replace this value in deterministic flows.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
+)]
+pub struct EventContext {
+    pub event_time: UnixNanos,
+    pub sequence: Sequence,
+}
+
+impl EventContext {
+    pub const fn new(event_time: UnixNanos, sequence: Sequence) -> Self {
+        Self {
+            event_time,
+            sequence,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1030,10 +1163,40 @@ mod more_tests {
     fn numeric_types_are_semantically_distinct() {
         let quantity = Quantity::new(10, 2).unwrap();
         let price = Price::new(10, 2).unwrap();
-        let price_delta = PriceDelta::new(0, 2);
+        let price_delta = PriceDelta::new(0, 2).unwrap();
         assert_eq!(quantity.mantissa(), price.mantissa());
-        assert_eq!(price_delta.to_string(), "0.00");
+        assert_eq!(price_delta.to_string(), "0");
         assert!(Quantity::positive(0, 0).is_err());
+    }
+
+    #[test]
+    fn decimals_are_canonical_and_compare_by_numeric_value() {
+        assert_eq!(Quantity::new(100, 2).unwrap(), Quantity::new(1, 0).unwrap());
+        assert!(Quantity::new(15, 1).unwrap() < Quantity::new(2, 0).unwrap());
+        assert_eq!(Money::new(-1200, 3).unwrap().to_string(), "-1.2");
+        assert_eq!(SignedQuantity::new(0, 18).unwrap().scale(), 0);
+    }
+
+    #[test]
+    fn decimal_json_is_a_validated_canonical_string() {
+        let price = serde_json::from_str::<Price>("\"42110.500\"").unwrap();
+        assert_eq!(price, Price::new(421_105, 1).unwrap());
+        assert_eq!(serde_json::to_string(&price).unwrap(), "\"42110.5\"");
+        assert!(serde_json::from_str::<Price>(r#"{"mantissa":421105,"scale":1}"#).is_err());
+        assert!(serde_json::from_str::<Price>("\"0\"").is_err());
+        assert!(serde_json::from_str::<Quantity>("\"0.0000000000000000001\"").is_err());
+    }
+
+    #[test]
+    fn increments_are_checked_with_exact_decimal_arithmetic() {
+        assert!(Quantity::new(125, 3)
+            .unwrap()
+            .is_multiple_of(Quantity::new(5, 3).unwrap())
+            .unwrap());
+        assert!(!Price::new(10_001, 2)
+            .unwrap()
+            .is_multiple_of(Price::new(5, 2).unwrap())
+            .unwrap());
     }
 
     #[test]

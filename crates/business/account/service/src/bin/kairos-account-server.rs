@@ -94,7 +94,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         args.passphrase.clone()
     };
     let mut options = args.options(record.as_ref(), api_key, secret, passphrase);
-    options.reference_snapshot_root = Some(workspace.child(&["snapshots", "reference"])?);
+    options.reference_database = Some(workspace.child(&["reference", "reference.sqlite"])?);
     let shared_quota_ledger = workspace
         .state_root()
         .join("integration")
@@ -325,7 +325,7 @@ impl Args {
             client_id: self.client_id,
             isolated_margin_symbol: record
                 .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
-            reference_snapshot_root: None,
+            reference_database: None,
         }
     }
 }
