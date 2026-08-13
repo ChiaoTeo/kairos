@@ -1,0 +1,19 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskCurrentState {
+  policy_version:ulong;
+  limits:[LimitUsage] (required);
+  active_reservations:[Reservation] (required);
+  circuits:[CircuitState] (required);
+}
+
+table RiskCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  state:RiskCurrentState (required);
+}
+
+root_type RiskCurrentView;
+file_identifier "RXV2";

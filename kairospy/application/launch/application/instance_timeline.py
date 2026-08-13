@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -31,11 +32,11 @@ class LaunchInstanceTimelineApplication:
     def export(self, destination: str | Path) -> Path:
         output = Path(destination)
         output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("w", encoding="utf-8") as stream:
-            for record in self._records():
-                stream.write(
-                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-                )
+        # Validate the audit artifact before exporting it, then preserve its
+        # original bytes. Export must not rewrite key order or whitespace.
+        list(self._records())
+        if self.path.resolve() != output.resolve():
+            shutil.copyfile(self.path, output)
         return output
 
     def _records(self) -> Iterator[dict[str, Any]]:

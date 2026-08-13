@@ -188,6 +188,27 @@ fn provider_catalog() -> ProviderCatalog {
     }
 }
 
+#[test]
+fn one_listing_can_back_multiple_markets_on_different_exchanges() {
+    let mut catalog = provider_catalog();
+    catalog.entities.push(Entity {
+        entity_id: "exchange:iex".into(),
+        entity_type: "exchange".into(),
+        name: "IEX".into(),
+        status: "active".into(),
+        ..Default::default()
+    });
+    let mut iex_market = catalog.markets[0].clone();
+    iex_market.market_id = market_id("market:iex:spot:BTCUSDT");
+    iex_market.market_key = "iex.spot.BTCUSDT".into();
+    iex_market.exchange_id = Exchange::new("exchange:iex").unwrap();
+    catalog.markets.push(iex_market);
+
+    catalog
+        .validate()
+        .expect("one listing may reference multiple trading exchanges");
+}
+
 #[tokio::test]
 async fn application_reconciles_reference_catalog() {
     let mut application = application().await;

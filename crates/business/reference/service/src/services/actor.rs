@@ -244,7 +244,7 @@ where
             record_kind: Some("asset".into()),
             record_id: Some(asset_id.to_string()),
             operation: Some("upsert".into()),
-            generation: next.generation.get(),
+            generation: next.generation.get().into(),
             record_payload_json: next
                 .assets
                 .get(asset_id.as_str())
@@ -285,7 +285,7 @@ where
             record_kind: Some("instrument".into()),
             record_id: Some(instrument_id.to_string()),
             operation: Some("upsert".into()),
-            generation: next.generation.get(),
+            generation: next.generation.get().into(),
             record_payload_json: next
                 .instruments
                 .get(&instrument_id)
@@ -326,7 +326,7 @@ where
             record_kind: Some("listing".into()),
             record_id: Some(listing_id.to_string()),
             operation: Some("upsert".into()),
-            generation: next.generation.get(),
+            generation: next.generation.get().into(),
             record_payload_json: next
                 .listings
                 .get(&listing_id)
@@ -446,6 +446,7 @@ fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
         markets: catalog.markets.values().cloned().collect(),
         financial_products: catalog.financial_products.values().cloned().collect(),
         execution_accesses: catalog.execution_accesses.values().cloned().collect(),
+        market_data_accesses: catalog.market_data_accesses.values().cloned().collect(),
     }
 }
 

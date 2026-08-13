@@ -1,5 +1,5 @@
 use crate::model::{
-    ExecutionOrderStatus, ExecutionSnapshot, IntentState, IntentStatus, OrderSide, OrderType,
+    ExecutionCurrentView, ExecutionOrderStatus, IntentState, IntentStatus, OrderSide, OrderType,
 };
 use flatbuffers::FlatBufferBuilder;
 use kairos_protocol::generated::kairos::{
@@ -28,7 +28,7 @@ impl SharedExecutionSnapshotPublisher {
             actor_id: actor_id.into(),
         })
     }
-    pub fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String> {
+    pub fn publish(&mut self, snapshot: &ExecutionCurrentView) -> Result<(), String> {
         self.writer
             .publish(
                 snapshot.generation,
@@ -54,7 +54,7 @@ impl SharedIntentSnapshotPublisher {
             actor_id: actor_id.into(),
         })
     }
-    pub fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String> {
+    pub fn publish(&mut self, snapshot: &ExecutionCurrentView) -> Result<(), String> {
         self.writer
             .publish(
                 snapshot.generation,
@@ -64,7 +64,7 @@ impl SharedIntentSnapshotPublisher {
     }
 }
 
-fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>, String> {
+fn encode_orders(snapshot: &ExecutionCurrentView, actor_id: &str) -> Result<Vec<u8>, String> {
     let mut builder = FlatBufferBuilder::new();
     let orders = snapshot
         .orders
@@ -152,13 +152,7 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
             orders: Some(vector),
         },
     );
-    let header = make_header(
-        &mut builder,
-        actor_id,
-        "execution.orders",
-        "execution.events",
-        snapshot,
-    );
+    let header = make_header(&mut builder, actor_id, "execution.orders", snapshot);
     let root = execution_fb::OrdersSnapshot::create(
         &mut builder,
         &execution_fb::OrdersSnapshotArgs {
@@ -170,7 +164,7 @@ fn encode_orders(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>
     Ok(builder.finished_data().to_vec())
 }
 
-fn encode_intents(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8>, String> {
+fn encode_intents(snapshot: &ExecutionCurrentView, actor_id: &str) -> Result<Vec<u8>, String> {
     let mut builder = FlatBufferBuilder::new();
     let intents = snapshot
         .intents
@@ -190,13 +184,7 @@ fn encode_intents(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8
             intents: Some(vector),
         },
     );
-    let header = make_header(
-        &mut builder,
-        actor_id,
-        "execution.intents",
-        "execution.intent-events",
-        snapshot,
-    );
+    let header = make_header(&mut builder, actor_id, "execution.intents", snapshot);
     let root = intent_fb::IntentSnapshot::create(
         &mut builder,
         &intent_fb::IntentSnapshotArgs {
@@ -208,7 +196,7 @@ fn encode_intents(snapshot: &ExecutionSnapshot, actor_id: &str) -> Result<Vec<u8
     Ok(builder.finished_data().to_vec())
 }
 
-fn encode_intent<'a>(
+pub(crate) fn encode_intent<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     state: &IntentState,
 ) -> Result<flatbuffers::WIPOffset<intent_fb::Intent<'a>>, String> {
@@ -270,29 +258,37 @@ fn make_header<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     actor_id: &str,
     view_key: &str,
-    stream_id: &str,
-    snapshot: &ExecutionSnapshot,
+    snapshot: &ExecutionCurrentView,
 ) -> flatbuffers::WIPOffset<SnapshotHeader<'a>> {
     let now = now_unix_nanos();
+    let as_of = snapshot
+        .orders
+        .iter()
+        .map(|order| order.updated_at_unix_nanos)
+        .chain(
+            snapshot
+                .intents
+                .iter()
+                .map(|intent| intent.updated_at_unix_nanos),
+        )
+        .max()
+        .unwrap_or_default();
     let snapshot_id = builder.create_string(&format!("{view_key}:{}", snapshot.generation));
     let view_key = builder.create_string(view_key);
     let owner_actor_id = builder.create_string(actor_id);
-    let event_stream_id = builder.create_string(stream_id);
     SnapshotHeader::create(
         builder,
         &SnapshotHeaderArgs {
             snapshot_id: Some(snapshot_id),
             view_key: Some(view_key),
             owner_actor_id: Some(owner_actor_id),
-            event_stream_id: Some(event_stream_id),
             workspace_id: None,
             launch_id: None,
             instance_id: None,
-            event_sequence: snapshot.event_sequence,
             version: 1,
             generation: snapshot.generation,
             generated_at_unix_nanos: now,
-            as_of_unix_nanos: now,
+            as_of_unix_nanos: as_of,
             complete: true,
         },
     )
@@ -378,16 +374,10 @@ mod tests {
     #[test]
     fn publishers_write_verifiable_snapshots() {
         let directory = tempfile::tempdir().unwrap();
-        let snapshot = ExecutionSnapshot {
-            actor_id: "execution:test".into(),
+        let snapshot = ExecutionCurrentView {
             generation: 1,
-            event_sequence: 1,
             orders: vec![],
-            events: vec![],
-            fills: vec![],
             intents: vec![],
-            intent_events: vec![],
-            intent_idempotency: Default::default(),
         };
         let orders_path = directory.path().join("orders.snapshot");
         let mut orders =
@@ -420,15 +410,14 @@ mod tests {
     #[test]
     fn order_encoding_aligns_canonical_zero_with_fractional_quantity() {
         let directory = tempfile::tempdir().unwrap();
-        let snapshot = ExecutionSnapshot {
-            actor_id: "execution:test".into(),
+        let snapshot = ExecutionCurrentView {
             generation: 1,
-            event_sequence: 1,
             orders: vec![crate::model::ExecutionOrder {
                 order_id: "order-1".into(),
                 plan_id: None,
                 leg_id: None,
                 intent_id: None,
+                strategy_id: Some("strategy:test".into()),
                 account_id: "paper".into(),
                 segment_key: "spot".into(),
                 instrument_id: "BTCUSDT".into(),
@@ -444,16 +433,50 @@ mod tests {
                 updated_at_unix_nanos: 1,
                 reason: String::new(),
             }],
-            events: vec![],
-            fills: vec![],
             intents: vec![],
-            intent_events: vec![],
-            intent_idempotency: Default::default(),
         };
         let path = directory.path().join("orders.snapshot");
         let mut publisher =
             SharedExecutionSnapshotPublisher::create(&path, 1024 * 1024, "execution:test").unwrap();
 
         publisher.publish(&snapshot).unwrap();
+    }
+
+    #[test]
+    fn snapshot_header_carries_generation_and_business_as_of_time() {
+        let snapshot = ExecutionCurrentView {
+            generation: 9,
+            orders: vec![crate::model::ExecutionOrder {
+                order_id: "order-1".into(),
+                plan_id: None,
+                leg_id: None,
+                intent_id: None,
+                strategy_id: None,
+                account_id: "paper".into(),
+                segment_key: "spot".into(),
+                instrument_id: "BTCUSDT".into(),
+                market_id: None,
+                side: OrderSide::Buy,
+                order_type: OrderType::Market,
+                quantity: crate::model::Decimal("1".into()),
+                limit_price: None,
+                remote_order_id: None,
+                filled_quantity: crate::model::Decimal("0".into()),
+                status: ExecutionOrderStatus::Accepted,
+                submitted_at_unix_nanos: 120,
+                updated_at_unix_nanos: 456,
+                reason: String::new(),
+            }],
+            intents: vec![],
+        };
+
+        let payload = encode_orders(&snapshot, "execution:test").unwrap();
+        let root = execution_fb::root_as_orders_snapshot(&payload).unwrap();
+        let header = root.header();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.generation(), 9);
+        assert_eq!(header.as_of_unix_nanos(), 456);
+        assert!(header.generated_at_unix_nanos() > 0);
+        assert!(header.complete());
     }
 }

@@ -5,22 +5,21 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.strategy.domain.messages import RawEventEnvelope
+from kairospy.application.market.events import MarketEventRecord
 from kairospy.application.execution.mapping import (
     map_execution_fill,
     map_execution_intent,
     map_execution_order,
 )
 from kairospy.application.market.mapping import map_market_event
-from kairospy.infrastructure.transport.market import BarView, DecimalValue
-from kairospy.strategy import BarEvent, IntentStatus, OrderStatus
+from kairospy.infrastructure.transport.market import BarView, DecimalValue, GreeksView
+from kairospy.strategy import BarEvent, GreeksEvent, IntentStatus, OrderStatus
 
 
 def test_market_mapper_preserves_decimal_precision_and_unix_nanos() -> None:
-    raw = RawEventEnvelope(
+    raw = MarketEventRecord(
         "market.events",
         7,
-        "market",
         "bar",
         BarView(
             "instrument:test:SPY",
@@ -36,21 +35,19 @@ def test_market_mapper_preserves_decimal_precision_and_unix_nanos() -> None:
             "provider",
         ),
     )
-    event = map_market_event(raw, dispatch_sequence=3)
+    event = map_market_event(raw)
     assert isinstance(event, BarEvent)
     assert event.data.open == Decimal("123.456789")
     assert event.data.close == Decimal("123.999999")
     assert event.data.occurred_at.tzinfo is timezone.utc
     assert event.data.occurred_at_unix_nanos == 1_704_067_200_123_456_789
     assert event.metadata.sequence == 7
-    assert event.metadata.dispatch_sequence == 3
 
 
 def test_market_mapper_rejects_discriminator_payload_mismatch() -> None:
-    raw = RawEventEnvelope(
+    raw = MarketEventRecord(
         "market.events",
         1,
-        "market",
         "quote",
         BarView(
             "instrument:test:SPY",
@@ -67,12 +64,43 @@ def test_market_mapper_rejects_discriminator_payload_mismatch() -> None:
         ),
     )
     with pytest.raises(ValueError, match="does not match"):
-        map_market_event(raw, dispatch_sequence=1)
+        map_market_event(raw)
+
+
+def test_market_mapper_exposes_option_greeks_without_losing_precision() -> None:
+    raw = MarketEventRecord(
+        "market.events",
+        8,
+        "greeks",
+        GreeksView(
+            "instrument:test:SPY-PUT",
+            "market:test:SPY-PUT",
+            1_710_000_000_000_000_000,
+            DecimalValue(45000, 2),
+            DecimalValue(-250000, 6),
+            DecimalValue(1250, 6),
+            DecimalValue(123456, 6),
+            DecimalValue(-654321, 6),
+            DecimalValue(234567, 6),
+            1_704_067_200_123_456_789,
+            "test",
+            "provider",
+        ),
+    )
+
+    event = map_market_event(raw)
+
+    assert isinstance(event, GreeksEvent)
+    assert event.data.strike == Decimal("450.00")
+    assert event.data.delta == Decimal("-0.250000")
+    assert event.data.implied_volatility == Decimal("0.234567")
+    assert event.data.occurred_at_unix_nanos == 1_704_067_200_123_456_789
 
 
 def test_execution_mapper_builds_intent_order_and_fill_projections() -> None:
     intent = map_execution_intent(
         {
+            "strategy_id": "strategy-a",
             "intent": {
                 "intent_id": "intent-1",
                 "instrument_id": "instrument:test:SPY",
@@ -83,11 +111,11 @@ def test_execution_mapper_builds_intent_order_and_fill_projections() -> None:
             "status": "Executing",
             "order_ids": ["order-1"],
         },
-        event_sequence=4,
     )
     order = map_execution_order(
         {
             "order_id": "order-1",
+            "strategy_id": "strategy-a",
             "intent_id": "intent-1",
             "instrument_id": "instrument:test:SPY",
             "account_id": "paper",
@@ -98,7 +126,6 @@ def test_execution_mapper_builds_intent_order_and_fill_projections() -> None:
             "status": "PartiallyFilled",
             "updated_at_unix_nanos": 1_704_067_200_000_000_000,
         },
-        event_sequence=5,
     )
     fill = map_execution_fill(
         {
@@ -121,6 +148,7 @@ def test_execution_mapper_rejects_legacy_decimal_objects() -> None:
         map_execution_order(
             {
                 "order_id": "order-legacy",
+                "strategy_id": "strategy-a",
                 "instrument_id": "instrument:test:SPY",
                 "account_id": "paper",
                 "side": "Buy",
@@ -129,5 +157,4 @@ def test_execution_mapper_rejects_legacy_decimal_objects() -> None:
                 "status": "Accepted",
                 "updated_at_unix_nanos": 1,
             },
-            event_sequence=1,
         )

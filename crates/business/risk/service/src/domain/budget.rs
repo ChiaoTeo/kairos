@@ -57,6 +57,15 @@ impl Amount {
             .unwrap_or_else(|_| self.mantissa.cmp(&other.mantissa))
     }
 
+    /// Raw fixed-point parts for explicit persistence and wire-boundary mapping.
+    pub const fn mantissa(self) -> i64 {
+        self.mantissa
+    }
+
+    pub const fn scale(self) -> u8 {
+        self.scale
+    }
+
     fn as_decimal(self) -> Result<RustDecimal, String> {
         RustDecimal::try_new(self.mantissa, u32::from(self.scale))
             .map_err(|_| "risk amount overflow".to_string())
@@ -294,6 +303,10 @@ pub enum ReservationStatus {
 pub struct Reservation {
     pub reservation_id: ReservationId,
     pub request_id: RequestId,
+    #[serde(default)]
+    pub account_id: Option<AccountId>,
+    #[serde(default)]
+    pub strategy_id: Option<StrategyId>,
     pub idempotency_key: IdempotencyKey,
     pub allocations: Vec<Allocation>,
     pub status: ReservationStatus,

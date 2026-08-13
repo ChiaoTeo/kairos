@@ -76,51 +76,60 @@ def test_data_cli_plan_execute_journal_set_and_gate_share_applications(
         encoding="utf-8",
     )
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "plan",
-            str(requirements),
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "data",
+                "plan",
+                str(requirements),
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     plan = json.loads(output.getvalue())
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "execute",
-            str(requirements),
-            "--expected-plan-hash",
-            plan["plan_hash"],
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "data",
+                "execute",
+                str(requirements),
+                "--expected-plan-hash",
+                plan["plan_hash"],
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     executed = json.loads(output.getvalue())
     assert executed["execution"]["status"] == "complete"
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "execution",
-            plan["plan_hash"],
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "data",
+                "execution",
+                plan["plan_hash"],
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     assert json.loads(output.getvalue())["status"] == "complete"
 
     requirements.write_text(
@@ -128,48 +137,60 @@ def test_data_cli_plan_execute_journal_set_and_gate_share_applications(
         encoding="utf-8",
     )
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "execute",
-            str(requirements),
-            "--expected-plan-hash",
-            plan["plan_hash"],
-            "--workspace",
-            str(project),
-        ],
-        output,
-    ) != 0
+    assert (
+        execute_argv(
+            [
+                "data",
+                "execute",
+                str(requirements),
+                "--expected-plan-hash",
+                plan["plan_hash"],
+                "--workspace",
+                str(project),
+            ],
+            output,
+        )
+        != 0
+    )
     assert "reviewed data plan changed" in output.getvalue()
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "set",
-            "show",
-            "spy-cli",
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
-    assert json.loads(output.getvalue())["composition_hash"] == dataset_set.composition_hash
+    assert (
+        execute_argv(
+            [
+                "data",
+                "set",
+                "show",
+                "spy-cli",
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert (
+        json.loads(output.getvalue())["composition_hash"]
+        == dataset_set.composition_hash
+    )
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "data",
-            "gate",
-            "show",
-            dataset_set.composition_hash,
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "data",
+                "gate",
+                "show",
+                dataset_set.composition_hash,
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     assert json.loads(output.getvalue())["status"] == "passed"

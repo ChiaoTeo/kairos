@@ -1,5 +1,11 @@
 # 时间驱动运行时与回测设计
 
+> **实现命名更新（2026-08-14）**：本文的时间语义仍有效；其中历史 `StrategyHost` 名称现对应
+> `StrategyApplication` 协调和私有 `StrategyCallbackHost` 回调托管。回测协调使用 Launch-owned 具体
+> `StrategyBacktestDriver`，不存在通用 `BacktestRuntime` protocol。mmap current view 永远不承载事件，
+> 也不参与时间线事件恢复。事件流权威边界见
+> [`strategy-application-and-event-flow-refactor-design.md`](./strategy-application-and-event-flow-refactor-design.md)。
+
 ## 1. 背景
 
 当前项目已经具备 Market Replay、Strategy、Execution Simulator、Account

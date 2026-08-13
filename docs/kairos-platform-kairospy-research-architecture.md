@@ -1199,6 +1199,21 @@ kairos.data.plan / execute
 
 ## 18. 实施路线
 
+### 阶段零：业务数据传输契约 Gate 0
+
+在构建最小交易闭环前，先按
+[`business-transport-contract-audit.md`](./business-transport-contract-audit.md)
+核对 Account、Execution、Market 和 Risk 的 Aeron 事件与 mmap 当前状态：
+
+- 从 Strategy、Backtest 和 Research 的真实调用需求反推 active contract；
+- 保证 Aeron 和 mmap 业务 payload 是带 file identifier 的 FlatBuffers；
+- 删除 Rust 模型之间通过 serde JSON 完成的发布映射；
+- 固定 Workspace Aeron Media Driver、stream identity、sequence 和实例隔离；
+- 明确事件缺口是 owner-native resync 还是显式 fail-closed；
+- 验证 Rust/Python 解码以及 Replay/Live 公共事件语义一致。
+
+Gate 0 不要求发布所有已有 schema，也不允许用 mmap diff 冒充事件恢复。
+
 ### 阶段一：统一 Kairospy 公共入口
 
 - 增加 `Kairos.open()`；

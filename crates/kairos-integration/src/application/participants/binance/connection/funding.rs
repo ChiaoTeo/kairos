@@ -15,6 +15,18 @@ pub struct BinanceTransfer {
     pub(super) client: BinanceSpotAccountClient,
 }
 
+impl BinanceSimpleEarn {
+    pub fn descriptor(&self) -> &ConnectionDescriptor {
+        &self.descriptor
+    }
+}
+
+impl BinanceTransfer {
+    pub fn descriptor(&self) -> &ConnectionDescriptor {
+        &self.descriptor
+    }
+}
+
 impl AsyncEarnConnection for BinanceSimpleEarn {
     async fn products(
         &mut self,

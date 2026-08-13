@@ -32,8 +32,7 @@ the slot is a publication error; resizing requires recreating the resource as
 part of process startup. The payload must be a complete FlatBuffers message
 with a schema-specific root and file identifier.
 
-The FlatBuffers `SnapshotHeader` inside each slot carries the owning Actor,
-the publication generation, the event stream identifier, and the event
-sequence watermark. The mmap generation protects slot publication; the event
-sequence protects snapshot-to-event-stream handoff. They are different
-monotonic values and must not be conflated.
+The FlatBuffers `SnapshotHeader` inside each slot carries the owning Actor and
+snapshot publication metadata such as generation and as-of time. It never
+carries an event stream identifier, event sequence, cursor, join point, or
+replay position. Event continuity belongs to a separate event contract.

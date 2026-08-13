@@ -10,9 +10,10 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    load_replay_events, load_replay_events_many, ExecutionEstimate, MarketApplication, MarketError,
-    MarketProcess, MarketSnapshot, MarketSnapshotPublisher, OrderBookSide, ReconcileResult,
-    ReferenceChangeSource, ReferenceEvent, SubscriptionState,
+    load_replay_events, load_replay_events_many, ExecutionEstimate, MarketApplication,
+    MarketCurrentFreshness, MarketCurrentView, MarketError, MarketProcess, MarketSnapshot,
+    MarketSnapshotPublisher, OrderBookSide, ReconcileResult, ReferenceChangeSource, ReferenceEvent,
+    SubscriptionState,
 };
 pub use domain::events::MarketEvent;
 pub use domain::freshness::FeedStatus;

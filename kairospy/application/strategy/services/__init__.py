@@ -1,31 +1,34 @@
-"""Private strategy runtime services selected by composition."""
+"""Private Strategy services, exposed lazily to avoid facade dependency cycles."""
 
-from .fakes import (
-    InMemoryApplicationPorts,
-    InMemoryEventStream,
-    InMemoryLifecycleJournal,
-    InMemoryMarketSnapshotReader,
-)
-from .composition import StrategyProcessComposition, compose_strategy_process
-from .context import StrategyClientBundle, StrategyContext
-from .host import StrategyHost, StrategyHostStatus
-from .journal import JsonlLifecycleJournal
-from .loader import StrategyEntrypoint, load_strategy
-from .rest import StrategyControlServer
+from __future__ import annotations
 
-__all__ = [
-    "InMemoryApplicationPorts",
-    "InMemoryEventStream",
-    "InMemoryLifecycleJournal",
-    "InMemoryMarketSnapshotReader",
-    "StrategyClientBundle",
-    "StrategyContext",
-    "StrategyControlServer",
-    "StrategyEntrypoint",
-    "StrategyHost",
-    "StrategyHostStatus",
-    "JsonlLifecycleJournal",
-    "StrategyProcessComposition",
-    "compose_strategy_process",
-    "load_strategy",
-]
+from importlib import import_module
+
+
+_EXPORTS = {
+    "InMemoryApplicationPorts": (".fakes", "InMemoryApplicationPorts"),
+    "InMemoryMarketEventSource": (".fakes", "InMemoryMarketEventSource"),
+    "InMemoryLifecycleJournal": (".fakes", "InMemoryLifecycleJournal"),
+    "InMemoryMarketSnapshotReader": (".fakes", "InMemoryMarketSnapshotReader"),
+    "build_in_memory_strategy_applications": (
+        ".fakes",
+        "build_in_memory_strategy_applications",
+    ),
+    "StrategyContext": (".context", "StrategyContext"),
+    "StrategyControlServer": (".rest", "StrategyControlServer"),
+    "StrategyEntrypoint": (".loader", "StrategyEntrypoint"),
+    "StrategyLifecycleJournal": (".journal", "StrategyLifecycleJournal"),
+    "load_strategy": (".loader", "load_strategy"),
+}
+
+__all__ = tuple(_EXPORTS)
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attribute = _EXPORTS[name]
+    except KeyError as error:
+        raise AttributeError(name) from error
+    value = getattr(import_module(f"{__name__}{module_name}"), attribute)
+    globals()[name] = value
+    return value

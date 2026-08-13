@@ -7,7 +7,14 @@ from enum import StrEnum
 from typing import TypeAlias
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, FillId, InstrumentId, IntentId, OrderId
+from kairospy.domain_types import (
+    AccountId,
+    FillId,
+    InstrumentId,
+    IntentId,
+    OrderId,
+    SegmentKey,
+)
 
 
 class OrderSide(StrEnum):
@@ -80,10 +87,13 @@ class MarketOrderRequest:
     reduce_only: bool = False
     reason: str = ""
     request_id: str | None = None
+    segment: SegmentKey | str = "spot"
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
             raise ValueError("order quantity must be positive")
+        if not str(self.segment).strip():
+            raise ValueError("order segment is required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +108,13 @@ class LimitOrderRequest:
     reduce_only: bool = False
     reason: str = ""
     request_id: str | None = None
+    segment: SegmentKey | str = "spot"
 
     def __post_init__(self) -> None:
         if self.quantity <= 0 or self.limit_price <= 0:
             raise ValueError("limit order quantity and price must be positive")
+        if not str(self.segment).strip():
+            raise ValueError("order segment is required")
 
 
 OrderRequest: TypeAlias = MarketOrderRequest | LimitOrderRequest
@@ -138,6 +151,21 @@ class IntentReceipt:
     delivery_certainty: DeliveryCertainty
     error: str | None = None
 
+    @property
+    def accepted(self) -> bool:
+        return self.status in {SubmissionStatus.ACCEPTED, SubmissionStatus.DUPLICATE}
+
+    @property
+    def may_have_been_sent(self) -> bool:
+        return self.delivery_certainty is not DeliveryCertainty.NOT_SENT
+
+    def require_accepted(self) -> IntentReceipt:
+        if not self.accepted:
+            raise RuntimeError(
+                self.error or f"Execution request {self.request_id} was rejected"
+            )
+        return self
+
 
 @dataclass(frozen=True, slots=True)
 class OrderCommandReceipt:
@@ -148,6 +176,21 @@ class OrderCommandReceipt:
     delivery_certainty: DeliveryCertainty
     error: str | None = None
 
+    @property
+    def accepted(self) -> bool:
+        return self.status in {SubmissionStatus.ACCEPTED, SubmissionStatus.DUPLICATE}
+
+    @property
+    def may_have_been_sent(self) -> bool:
+        return self.delivery_certainty is not DeliveryCertainty.NOT_SENT
+
+    def require_accepted(self) -> OrderCommandReceipt:
+        if not self.accepted:
+            raise RuntimeError(
+                self.error or f"Execution request {self.request_id} was rejected"
+            )
+        return self
+
 
 @dataclass(frozen=True, slots=True)
 class BulkOrderCommandReceipt:
@@ -157,22 +200,39 @@ class BulkOrderCommandReceipt:
     delivery_certainty: DeliveryCertainty
     error: str | None = None
 
+    @property
+    def accepted(self) -> bool:
+        return self.status in {SubmissionStatus.ACCEPTED, SubmissionStatus.DUPLICATE}
+
+    @property
+    def may_have_been_sent(self) -> bool:
+        return self.delivery_certainty is not DeliveryCertainty.NOT_SENT
+
+    def require_accepted(self) -> BulkOrderCommandReceipt:
+        if not self.accepted:
+            raise RuntimeError(
+                self.error or f"Execution request {self.request_id} was rejected"
+            )
+        return self
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionIntent:
     id: IntentId
+    strategy_id: str
     instrument: InstrumentRef
     account_ids: tuple[AccountId, ...]
     target_quantity: Decimal | None
     status: IntentStatus
     reason: str
     order_ids: tuple[OrderId, ...]
-    event_sequence: int
+    source_event_sequence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Order:
     id: OrderId
+    strategy_id: str
     intent_id: IntentId | None
     instrument: InstrumentRef
     account_id: AccountId
@@ -182,7 +242,6 @@ class Order:
     limit_price: Decimal | None
     status: OrderStatus
     updated_at: datetime | None
-    event_sequence: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,3 +252,8 @@ class Fill:
     quantity: Decimal
     price: Decimal
     occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionBacktestResult:
+    fills: tuple[Fill, ...]

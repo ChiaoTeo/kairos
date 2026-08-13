@@ -1,5 +1,11 @@
 # Strategy Application 构建设计
 
+> **状态说明（2026-08-14）**：本文保留最初的 composition 迁移背景，但其中以
+> `StrategyHost`、`StrategyApplications`、`StrategyRuntimeDependencies`、`BacktestRuntime` 或
+> `StrategyProcessApplication` 为目标的代码和阶段已经被后续实现取代。当前权威 runtime/事件流边界见
+> [`strategy-application-and-event-flow-refactor-design.md`](./strategy-application-and-event-flow-refactor-design.md)。
+> 不得按本文历史片段重新引入这些已删除抽象。
+
 ## 1. 文档目的
 
 本文定义 Python Strategy runtime 如何获得 Reference、Market、Account、Risk 和 Execution
@@ -13,6 +19,24 @@ Application。
 本文只处理当前 Strategy instance 的 Application 构建问题。Research 的数据研究、多策略运行和
 批量回测接口尚未定型，不在本次设计范围内。本次实现不得因此提前增加
 `ResearchApplications`、通用 Application registry 或跨场景 factory framework。
+
+### 1.1 实施状态
+
+最初的业务 Application composition 目标已落地，随后又于 2026-08-14 完成 runtime 收口：
+
+- Reference、Market、Account、Risk 和 Execution 均在自己的 `composition.py` 提供
+  `build_strategy_access()`；
+- Launch composition 构造五个具体业务 Application，并将其直接交给单一 `StrategyApplication`；
+- Launch 通过 `StrategyLaunchConfig` 和 `InstanceEndpoints` 提供类型化期望状态与运行事实；
+- Market 拥有 subscription status、owner release 和自己的 typed Aeron event source；mmap snapshot 不存在
+  event join point；
+- 具体 `StrategyBacktestDriver` 与进程死亡后的 Market owner cleanup 归 Launch composition；
+- 旧 `StrategyClientBundle`、`compose_strategy_applications()`、`StrategyApplications`、
+  `StrategyRuntimeDependencies`、`StrategyHost` 和散落 backtest callback 已删除；
+- `tests/test_strategy_composition_architecture.py` 固化静态边界。
+
+本文第 2 节以后出现的旧类名只用于解释当时的问题和迁移过程，不再表示当前 API。后续 Research 工作
+仍遵循本文非目标，不反向扩张本次接口。
 
 ## 2. 当前问题
 
@@ -136,6 +160,15 @@ execution_composition.build_disabled(...)
 - 所有字段均为 optional 的通用 `Applications`。
 
 各模块的构建入口可以有不同签名，因为它们解决的问题本来不同。不为形式统一而增加无意义参数。
+
+同样不得为了给 Application 构造参数补类型而复制 concrete dependency 的方法集合，例如
+`_MarketCommands`、`_MarketSnapshots`、`_ExecutionCommands` 或 `_AccountProjection`。这类私有
+`Protocol` 既不是业务能力边界，也没有第二个真实实现；它只是把 infrastructure 接口在
+Application 中再抄一遍，使模块同时维护两套事实来源。
+
+当前 Python 实现可以在私有构造缝隙使用宽类型；如果以后确实需要强化类型，应优先把稳定能力
+收归模块已有的 Application、service 或 domain owner。只有出现真实替代实现且能力具有独立业务
+语义时，才允许引入最小 Protocol，不得以“方便依赖注入”或“消除 Any”为理由增加接口。
 
 ## 5. Application 与 composition 的边界
 
@@ -422,7 +455,6 @@ Market 需要同时返回 Strategy 使用的 Application 和 Strategy event loop
 @dataclass(frozen=True, slots=True)
 class StrategyMarketAccess:
     application: MarketApplication
-    events: EventStream
 
 
 def build_strategy_access(
@@ -443,8 +475,10 @@ Market 构建实现负责：
 - snapshot reader；
 - event stream；
 - subscription owner identity；
-- snapshot/event join point；
 -底层 command result 到 Market-owned result 的映射。
+
+snapshot reader 只实现一次性状态查询；event stream 只由
+`MarketApplication.events()` 消费。二者不存在 join point、共享 cursor 或 gap recovery 关系。
 
 Strategy 不接收 `MarketCommandClient` 或 `MmapMarketSnapshotReader`。
 
@@ -807,7 +841,7 @@ Research 当前尚未完善，本次不设计其接入方式。
 - Risk/Execution disabled；
 - config enabled 但 endpoint 缺失；
 - AccountId 使用正确 projection；
-- Market snapshot/event join；
+- Market snapshot 查询与 event 消费相互独立；
 - subscription pending、ready 和 owner release；
 - live Execution safety；
 - Strategy 正常停止、异常退出和 orphan cleanup；

@@ -1,0 +1,13 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v2;
+
+table OrderLifecycleChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  order:OrderState (required);
+  previous_lifecycle:OrderLifecycle = UNSPECIFIED;
+}
+
+root_type OrderLifecycleChanged;
+file_identifier "EOV2";

@@ -16,6 +16,20 @@ Execution fills/order observations --------^
 Account does not own provider authentication, order planning, transfer/Earn
 operations, or workspace process leases.
 
+## Runtime and projection identity
+
+One logical configured Account (`account_id`) owns one Account process, one
+Actor and one current mmap projection. The Actor owns one Account domain state
+per configured `segment_key`; the mmap therefore contains multiple rows with
+the same `account_id` and distinct segment keys. It never merges spot, margin,
+futures or options balances, positions or equity.
+
+A Strategy launch may enable multiple logical Accounts. Its Python
+`AccountApplication` aggregates one projection reader per Account; it does not
+route multiple Account IDs through one shared mmap. Account server socket,
+health, state, lock and snapshot resources use the same account-specific
+component name so concurrent Accounts cannot overwrite each other.
+
 ## Delivered Account API
 
 - Account identity and configured segments.

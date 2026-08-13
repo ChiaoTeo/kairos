@@ -115,6 +115,13 @@ collaboration belongs in application orchestration or composition.
   are selected in composition or test fixtures.
 - Application APIs use business request/result types and do not expose vendor
   payloads or persistence records.
+- Cross-process business event and snapshot publishers must map application or
+  domain models directly into contract-owned types and encode those types with
+  the declared wire format (normally FlatBuffers). Do not use
+  `serde_json::to_value`/`from_value`, `serde_json::Value`, or an equivalent
+  serialize/deserialize round trip as a typed model adapter. JSON remains
+  acceptable only at an explicit configuration, control, persistence, or
+  diagnostic boundary whose contract is intentionally JSON.
 - Do not add a manager, coordinator, processor, callback layer, registry, or
   compatibility facade before checking whether an existing Domain,
   Application, Actor, Monitor, or composition boundary already owns it.
@@ -199,6 +206,10 @@ git diff --check
 Also run static searches for cross-module imports from `services/` or private
 files, vendor payloads crossing application boundaries, duplicate state
 owners, unnecessary protocol mirrors, and generic orchestration layers.
+Search active business publisher composition for JSON model adapters (for
+example, `serde_json::to_value` or `serde_json::from_value`) and either remove
+every match from event/snapshot publication paths or document why the matched
+boundary is intentionally JSON.
 
 If an unrelated pre-existing failure blocks a full-repository check, report
 the exact failure and still run the narrowest meaningful checks.

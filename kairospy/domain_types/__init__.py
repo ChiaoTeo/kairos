@@ -10,6 +10,7 @@ from .identity import (
     ListingId,
     MarketId,
     OrderId,
+    SegmentKey,
 )
 from .time import datetime_from_unix_nanos, unix_nanos_from_datetime
 
@@ -24,6 +25,7 @@ __all__ = [
     "ListingId",
     "MarketId",
     "OrderId",
+    "SegmentKey",
     "datetime_from_unix_nanos",
     "unix_nanos_from_datetime",
 ]

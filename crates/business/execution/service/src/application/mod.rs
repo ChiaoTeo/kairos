@@ -5,12 +5,14 @@ mod service;
 
 pub use preflight::ExecutionPreflight;
 pub use process::{
-    ExecutionAsyncRoute, ExecutionProcess, ExecutionSnapshotPublisher, IntentSnapshotPublisher,
+    ExecutionAsyncRoute, ExecutionEventPublisher, ExecutionProcess, ExecutionSnapshotPublisher,
+    IntentSnapshotPublisher,
 };
 pub(crate) use service::remote_status;
 pub use service::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent, ExecutionApplication,
-    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionError, ExecutionEvent, ExecutionFillReport,
+    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionBusinessChange, ExecutionBusinessEvent,
+    ExecutionCurrentView, ExecutionError, ExecutionEvent, ExecutionFillReport,
     ExecutionOrderOptions, ExecutionSnapshot, ExpireIntent, HedgeRequirement, IntentEvent,
     IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
     RemoteOrderQuery, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,

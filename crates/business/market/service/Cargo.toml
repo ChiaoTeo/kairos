@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt
 criterion = { workspace = true }
 proptest = { workspace = true }
 rusqlite.workspace = true
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 tempfile = "3"
 
 [[bench]]
@@ -46,3 +47,7 @@ path = "src/bin/kairos-market-server.rs"
 [[bin]]
 name = "kairos-market-cli"
 path = "src/bin/kairos-market-cli.rs"
+
+[[bin]]
+name = "kairos-market-event-bridge"
+path = "src/bin/kairos-market-event-bridge.rs"

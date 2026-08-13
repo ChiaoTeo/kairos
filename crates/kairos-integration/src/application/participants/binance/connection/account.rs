@@ -69,6 +69,24 @@ pub struct BinanceOptionsCredentialInspection {
     pub(super) client: BinanceOptionsAccountClient,
 }
 
+impl BinanceFundingAccountRead {
+    pub fn descriptor(&self) -> &ConnectionDescriptor {
+        &self.descriptor
+    }
+}
+
+impl BinanceSpotCredentialInspection {
+    pub fn descriptor(&self) -> &ConnectionDescriptor {
+        &self.descriptor
+    }
+}
+
+impl BinanceFundingCredentialInspection {
+    pub fn descriptor(&self) -> &ConnectionDescriptor {
+        &self.descriptor
+    }
+}
+
 impl BinanceFuturesPrincipalConnection {
     pub fn account_events(
         &self,

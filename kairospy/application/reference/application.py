@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from decimal import Decimal
-from typing import overload
+from typing import Any, overload
 
 from kairospy.domain_types import ExchangeId, InstrumentId, ListingId, MarketId
-from kairospy.infrastructure.contracts.reference_client import ReferenceClient
 
 from .models import InstrumentRef, Market, MarketStatus, TradingRules
 
@@ -21,7 +20,7 @@ class AmbiguousReferenceError(LookupError):
 class ReferenceApplication:
     """Read-only strategy-safe facade over Reference's current projection."""
 
-    def __init__(self, client: ReferenceClient | None = None) -> None:
+    def __init__(self, client: Any | None = None) -> None:
         self._client = client
 
     def find_markets(

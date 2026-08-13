@@ -98,9 +98,12 @@ def test_reference_application_has_no_callable_or_compatibility_facade() -> None
     application = (root / "kairospy/application/reference/application.py").read_text(
         encoding="utf-8"
     )
-    strategy_applications = (
-        root / "kairospy/application/strategy/services/applications.py"
-    ).read_text(encoding="utf-8")
+    strategy_services = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(
+            (root / "kairospy/application/strategy/services").glob("*.py")
+        )
+    )
     public_api = (root / "kairospy/application/reference/__init__.py").read_text(
         encoding="utf-8"
     )
@@ -109,7 +112,7 @@ def test_reference_application_has_no_callable_or_compatibility_facade() -> None
     assert "Protocol" not in (
         root / "kairospy/application/reference/validation.py"
     ).read_text(encoding="utf-8")
-    assert "reference.markets" not in strategy_applications
+    assert "reference.markets" not in strategy_services
     assert "ReferenceClient" not in public_api
     assert not (root / "kairospy/application/reference/client.py").exists()
     assert not (root / "kairospy/infrastructure/contracts/reference.py").exists()

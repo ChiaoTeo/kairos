@@ -5,22 +5,57 @@ from typing import Literal, TypeAlias
 
 from kairospy.domain_types import DataEvent
 
-from .models import AccountSnapshot, Balance, Position
+from .models import AccountStatusChange, Balance, EquityChange, Position
 
 
 @dataclass(frozen=True, slots=True)
-class AccountSnapshotEvent(DataEvent[AccountSnapshot]):
-    kind: Literal["snapshot"] = field(init=False, default="snapshot")
+class AccountChangeRecord:
+    kind: str
+    segment_key: str
+    payload: object
 
 
 @dataclass(frozen=True, slots=True)
-class BalanceEvent(DataEvent[Balance]):
-    kind: Literal["balance"] = field(init=False, default="balance")
+class AccountEventRecord:
+    stream_id: str
+    sequence: int
+    producer: str
+    account_id: str
+    changes: tuple[AccountChangeRecord, ...]
+    occurred_at_unix_nanos: int
+    launch_id: str | None = None
+    instance_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.stream_id.strip() or self.sequence <= 0:
+            raise ValueError("Account event stream and positive sequence are required")
+        if not self.account_id.strip():
+            raise ValueError("Account event account_id is required")
 
 
 @dataclass(frozen=True, slots=True)
-class PositionEvent(DataEvent[Position]):
-    kind: Literal["position"] = field(init=False, default="position")
+class BalanceChangedEvent(DataEvent[Balance]):
+    kind: Literal["balance_changed"] = field(init=False, default="balance_changed")
 
 
-AccountEvent: TypeAlias = AccountSnapshotEvent | BalanceEvent | PositionEvent
+@dataclass(frozen=True, slots=True)
+class PositionChangedEvent(DataEvent[Position]):
+    kind: Literal["position_changed"] = field(init=False, default="position_changed")
+
+
+@dataclass(frozen=True, slots=True)
+class EquityChangedEvent(DataEvent[EquityChange]):
+    kind: Literal["equity_changed"] = field(init=False, default="equity_changed")
+
+
+@dataclass(frozen=True, slots=True)
+class AccountStatusChangedEvent(DataEvent[AccountStatusChange]):
+    kind: Literal["status_changed"] = field(init=False, default="status_changed")
+
+
+AccountEvent: TypeAlias = (
+    BalanceChangedEvent
+    | PositionChangedEvent
+    | EquityChangedEvent
+    | AccountStatusChangedEvent
+)

@@ -1,0 +1,18 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.account.v2;
+
+table SegmentObservedOrders {
+  segment_key:string (required);
+  orders:[ObservedOrder] (required);
+}
+
+table ObservedOrdersCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  account_id:string (required);
+  segments:[SegmentObservedOrders] (required);
+}
+
+root_type ObservedOrdersCurrentView;
+file_identifier "AOV2";

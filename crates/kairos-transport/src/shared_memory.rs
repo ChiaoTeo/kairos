@@ -168,7 +168,10 @@ fn invalid_data(message: &str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{SharedSnapshotReader, SharedSnapshotWriter};
+    use super::{
+        read_u32, read_u64, SharedSnapshotReader, SharedSnapshotWriter, ACTIVE_OFFSET, HEADER_SIZE,
+        SLOT_GENERATION_OFFSET, SLOT_LENGTH_OFFSET,
+    };
 
     #[test]
     fn reads_arbitrary_payloads_without_knowing_the_protocol() {
@@ -181,5 +184,32 @@ mod tests {
         let payload = reader.read_payload().unwrap();
         assert_eq!(payload.generation, 7);
         assert_eq!(payload.payload, b"protocol-payload");
+    }
+
+    #[test]
+    fn publishes_to_the_inactive_slot_and_repeated_reads_are_stable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot.bin");
+        let mut writer = SharedSnapshotWriter::create(&path, 128).unwrap();
+
+        writer.publish(7, b"first").unwrap();
+        assert_eq!(writer.mmap[ACTIVE_OFFSET], 1);
+        writer.publish(8, b"second").unwrap();
+        assert_eq!(writer.mmap[ACTIVE_OFFSET], 0);
+
+        assert_eq!(read_u32(&writer.mmap, SLOT_LENGTH_OFFSET).unwrap(), 6);
+        assert_eq!(read_u64(&writer.mmap, SLOT_GENERATION_OFFSET).unwrap(), 8);
+        assert_eq!(&writer.mmap[HEADER_SIZE..HEADER_SIZE + 6], b"second");
+        assert_eq!(
+            &writer.mmap[HEADER_SIZE + 128..HEADER_SIZE + 128 + 5],
+            b"first"
+        );
+
+        let reader = SharedSnapshotReader::open(&path).unwrap();
+        let first_read = reader.read_payload().unwrap();
+        let second_read = reader.read_payload().unwrap();
+        assert_eq!(first_read, second_read);
+        assert_eq!(second_read.generation, 8);
+        assert_eq!(second_read.payload, b"second");
     }
 }

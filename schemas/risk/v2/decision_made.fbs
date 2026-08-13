@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v2;
+
+table RiskDecisionMade {
+  metadata:kairos.common.v2.EventMetadata (required);
+  decision:RiskDecision (required);
+}
+
+root_type RiskDecisionMade;
+file_identifier "RDV2";

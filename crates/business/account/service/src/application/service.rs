@@ -58,6 +58,14 @@ impl AccountApplication {
         self.runtime.event_sequence()
     }
 
+    pub(crate) fn pending_business_event(&self) -> Option<&super::AccountBusinessEvent> {
+        self.runtime.pending_business_event()
+    }
+
+    pub(crate) fn acknowledge_business_event(&mut self) {
+        self.runtime.acknowledge_business_event();
+    }
+
     pub fn actor_id(&self) -> &str {
         self.runtime.actor_id()
     }
@@ -330,7 +338,6 @@ impl AccountApplication {
         AccountsSnapshot {
             actor_id: source.actor_id.clone(),
             generation: source.generation,
-            event_sequence: source.event_sequence,
             accounts,
         }
     }

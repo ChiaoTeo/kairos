@@ -174,10 +174,7 @@ impl RiskActor {
         Ok(())
     }
 
-    pub(crate) fn pre_trade_check(
-        &self,
-        request: AuthorizeRequest,
-    ) -> Result<RiskDecision, ActorError> {
+    fn evaluate_pre_trade(&self, request: AuthorizeRequest) -> Result<RiskDecision, ActorError> {
         request.validate().map_err(ActorError::Invalid)?;
         let mut reasons = Vec::new();
         let mut violations = Vec::new();
@@ -267,11 +264,20 @@ impl RiskActor {
         Ok(self.decision(&request, reasons, violations))
     }
 
-    pub(crate) fn post_trade_check(
-        &self,
+    pub(crate) fn pre_trade_check(
+        &mut self,
         request: AuthorizeRequest,
     ) -> Result<RiskDecision, ActorError> {
-        self.pre_trade_check(request)
+        let decision = self.evaluate_pre_trade(request.clone())?;
+        self.commit_decision(&request, decision)
+    }
+
+    pub(crate) fn post_trade_check(
+        &mut self,
+        request: AuthorizeRequest,
+    ) -> Result<RiskDecision, ActorError> {
+        let decision = self.evaluate_pre_trade(request.clone())?;
+        self.commit_decision(&request, decision)
     }
 
     pub(crate) fn open_circuit(
@@ -297,6 +303,10 @@ impl RiskActor {
         self.advance_watermarks();
         self.circuits.retain(|value| value.scope != circuit.scope);
         self.circuits.push(circuit.clone());
+        self.pending_events.push(RiskEvent::CircuitChanged {
+            circuit: circuit.clone(),
+            event_sequence: self.event_sequence,
+        });
         self.checkpoint();
         Ok(circuit)
     }
@@ -322,6 +332,10 @@ impl RiskActor {
         self.advance_watermarks();
         self.circuits.retain(|value| value.scope != circuit.scope);
         self.circuits.push(circuit.clone());
+        self.pending_events.push(RiskEvent::CircuitChanged {
+            circuit: circuit.clone(),
+            event_sequence: self.event_sequence,
+        });
         self.checkpoint();
         Ok(circuit)
     }
@@ -334,16 +348,16 @@ impl RiskActor {
         &mut self,
         request: AuthorizeRequest,
     ) -> Result<RiskDecision, ActorError> {
-        let admission = self.pre_trade_check(request.clone())?;
+        let admission = self.evaluate_pre_trade(request.clone())?;
         if !admission.allowed {
-            return Ok(admission);
+            return self.commit_decision(&request, admission);
         }
         if let Some(existing_id) = self.idempotency.get(&request.idempotency_key) {
             let existing = self
                 .reservations
                 .get(existing_id)
                 .ok_or_else(|| ActorError::State("idempotency index is corrupt".into()))?;
-            return Ok(RiskDecision {
+            let decision = RiskDecision {
                 decision_id: decision_id(&request.request_id),
                 request_id: request.request_id.clone(),
                 allowed: existing.status == ReservationStatus::Reserved,
@@ -356,13 +370,14 @@ impl RiskActor {
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
-            });
+            };
+            return self.commit_decision(&request, decision);
         }
 
         if request.dependency_generation > self.watermarks.generation
             || request.dependency_event_sequence > self.watermarks.event_sequence
         {
-            return Ok(RiskDecision {
+            let decision = RiskDecision {
                 decision_id: decision_id(&request.request_id),
                 request_id: request.request_id.clone(),
                 allowed: false,
@@ -375,7 +390,8 @@ impl RiskActor {
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
-            });
+            };
+            return self.commit_decision(&request, decision);
         }
 
         let mut allocations = Vec::new();
@@ -435,7 +451,7 @@ impl RiskActor {
             violations.push(format!("no active policy for {}", request.metric.as_str()));
         }
         if !violations.is_empty() {
-            return Ok(RiskDecision {
+            let decision = RiskDecision {
                 decision_id: decision_id(&request.request_id),
                 request_id: request.request_id.clone(),
                 allowed: false,
@@ -448,12 +464,15 @@ impl RiskActor {
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
-            });
+            };
+            return self.commit_decision(&request, decision);
         }
 
         let reservation = Reservation {
-            reservation_id: request.reservation_id,
+            reservation_id: request.reservation_id.clone(),
             request_id: request.request_id.clone(),
+            account_id: Some(request.account_id.clone()),
+            strategy_id: Some(request.strategy_id.clone()),
             idempotency_key: request.idempotency_key.clone(),
             allocations,
             status: ReservationStatus::Reserved,
@@ -486,7 +505,7 @@ impl RiskActor {
             event_sequence: next_sequence,
         });
         self.checkpoint();
-        Ok(RiskDecision {
+        let decision = RiskDecision {
             decision_id: decision_id(&reservation.request_id),
             request_id: reservation.request_id.clone(),
             allowed: true,
@@ -499,7 +518,33 @@ impl RiskActor {
             dependency_watermarks: self.watermarks.clone(),
             context: request.context.clone(),
             evaluated_at_unix_nanos: request.at_unix_nanos,
-        })
+        };
+        self.commit_decision(&request, decision)
+    }
+
+    fn commit_decision(
+        &mut self,
+        request: &AuthorizeRequest,
+        decision: RiskDecision,
+    ) -> Result<RiskDecision, ActorError> {
+        let next_sequence = self.event_sequence + 1;
+        self.persist(PersistedEvent::DecisionEvaluated {
+            sequence: next_sequence.into(),
+            decision: decision.clone(),
+            account_id: request.account_id.clone(),
+            strategy_id: request.strategy_id.clone(),
+        })?;
+        self.event_sequence = next_sequence;
+        self.generation += 1;
+        self.advance_watermarks();
+        self.pending_events.push(RiskEvent::DecisionEvaluated {
+            decision: decision.clone(),
+            account_id: request.account_id.clone(),
+            strategy_id: request.strategy_id.clone(),
+            event_sequence: next_sequence,
+        });
+        self.checkpoint();
+        Ok(decision)
     }
 
     pub(crate) fn transition(
@@ -623,7 +668,7 @@ impl RiskActor {
         Ok(count)
     }
 
-    pub(crate) fn snapshot(&self) -> RiskSnapshot {
+    pub(crate) fn current_view(&self) -> crate::RiskCurrentView {
         let mut limits: Vec<_> = self
             .limits
             .values()
@@ -637,20 +682,38 @@ impl RiskActor {
         limits.sort_by(|a, b| a.policy.policy_id.cmp(&b.policy.policy_id));
         let mut reservations: Vec<_> = self.reservations.values().cloned().collect();
         reservations.sort_by(|a, b| a.reservation_id.cmp(&b.reservation_id));
-        RiskSnapshot {
+        crate::RiskCurrentView {
             actor_id: self.actor_id.clone(),
             generation: self.generation,
-            event_sequence: self.event_sequence,
             policy_version: self.policy_version,
             limits,
             reservations,
-            watermarks: self.watermarks.clone(),
             circuits: self.circuits.clone(),
         }
     }
 
-    pub(crate) fn drain_events(&mut self) -> Vec<RiskEvent> {
-        std::mem::take(&mut self.pending_events)
+    pub(crate) fn snapshot(&self) -> RiskSnapshot {
+        let view = self.current_view();
+        RiskSnapshot {
+            actor_id: view.actor_id,
+            generation: view.generation,
+            event_sequence: self.event_sequence,
+            policy_version: view.policy_version,
+            limits: view.limits,
+            reservations: view.reservations,
+            watermarks: self.watermarks.clone(),
+            circuits: view.circuits,
+        }
+    }
+
+    pub(crate) fn pending_event(&self) -> Option<&RiskEvent> {
+        self.pending_events.first()
+    }
+
+    pub(crate) fn acknowledge_event(&mut self) {
+        if !self.pending_events.is_empty() {
+            self.pending_events.remove(0);
+        }
     }
 
     fn insert_policy(&mut self, policy: RiskPolicy) -> Result<(), String> {
@@ -752,6 +815,7 @@ impl RiskActor {
                 self.circuits.retain(|value| value.scope != circuit.scope);
                 self.circuits.push(circuit);
             }
+            PersistedEvent::DecisionEvaluated { .. } => {}
         }
         self.event_sequence = sequence.into();
         self.generation = self.generation.max(sequence.into());

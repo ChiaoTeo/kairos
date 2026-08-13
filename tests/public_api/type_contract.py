@@ -4,6 +4,11 @@ from decimal import Decimal
 from typing import assert_type
 
 from kairospy.strategy import (
+    AccountExecution,
+    SPOT,
+    AccountSegmentSnapshot,
+    AccountSnapshot,
+    Balance,
     Bar,
     BarEvent,
     MarketEvent,
@@ -16,6 +21,15 @@ from kairospy.strategy import (
 
 class TypeContractStrategy(Strategy):
     strategy_id = "type-contract"
+
+    def on_start(self, ctx: StrategyContext) -> None:
+        assert_type(ctx.account.accounts, tuple[AccountSnapshot, ...])
+        spot = ctx.account.account("main").segment(SPOT)
+        assert_type(spot, AccountSegmentSnapshot)
+        assert_type(spot.balance("USDT"), Balance | None)
+        assert_type(spot.require_balance("USDT"), Balance)
+        execution = ctx.execution.for_account("main", segment=SPOT)
+        assert_type(execution, AccountExecution)
 
     def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
         if event.kind == "bar":

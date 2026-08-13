@@ -17,7 +17,6 @@ pub struct AccountProjection {
     pub stale: bool,
     pub observed_at_unix_nanos: UnixNanos,
     pub generation: Generation,
-    pub event_sequence: Sequence,
     pub equity: Option<Money>,
     pub initial_equity: Option<Money>,
     pub net_profit: Option<Money>,
@@ -44,7 +43,6 @@ impl AccountProjection {
             stale: state.stale(),
             observed_at_unix_nanos: state.observed_at_unix_nanos(),
             generation: state.generation(),
-            event_sequence: state.event_sequence(),
             equity: state.equity(),
             initial_equity: state.initial_equity(),
             net_profit: state.net_profit(),
@@ -87,8 +85,39 @@ pub struct AccountRefreshReport {
 pub struct AccountsSnapshot {
     pub actor_id: ActorId,
     pub generation: Generation,
-    pub event_sequence: Sequence,
     pub accounts: Vec<AccountProjection>,
+}
+
+/// A Strategy-visible Account fact emitted by the Account Actor at the same
+/// transition that changed its owned state. This is not a snapshot and is
+/// never reconstructed by a snapshot publisher.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountBusinessEvent {
+    pub sequence: Sequence,
+    pub account_id: AccountId,
+    pub occurred_at_unix_nanos: UnixNanos,
+    pub changes: Vec<AccountBusinessChange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AccountBusinessChange {
+    Balance {
+        segment_key: SegmentKey,
+        value: Balance,
+    },
+    Position {
+        segment_key: SegmentKey,
+        value: Position,
+    },
+    Equity {
+        segment_key: SegmentKey,
+        value: Option<Money>,
+    },
+    Status {
+        segment_key: SegmentKey,
+        status: AccountStatus,
+        stale: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]

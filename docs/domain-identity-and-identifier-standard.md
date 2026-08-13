@@ -1,5 +1,12 @@
 # 领域身份与标识符规范
 
+> **语义更新：** Instrument、Listing、Market、MarketDataAccess、ExecutionAccess 的最新关系、
+> Exchange/Broker/Provider 角色和跨模块使用规则以
+> [`instrument-listing-market-access-design.md`](./instrument-listing-market-access-design.md)
+> 为准。本文中 `Listing 1:1 Market`、Market 与 Listing 必须属于同一 exchange、Market 保存
+> provider/source symbol，以及 ExecutionAccess 必须预先绑定 Market 的旧假设已被替代；本文其余 ID
+> 编码、强类型边界和显式迁移规则继续适用。
+
 ## 1. 文档目的
 
 当前系统在多个边界使用 `market_id`、`instrument_id`、交易所 symbol 和 provider symbol。它们目前大多以 `String` 传递，且部分 Integration 代码通过拼接字符串或 `strip_prefix` 推断身份。
@@ -37,11 +44,10 @@
 ## 3. 领域对象模型
 
 ```text
-Asset
-  └── Instrument
-        └── Listing
-              └── Market
-                    └── ExecutionAccess
+Asset ── economic terms ── Instrument
+                              ├── Listing
+                              ├── Market ── MarketDataAccess
+                              └── ExecutionAccess(direct or smart)
 ```
 
 ### 3.1 Asset
@@ -59,13 +65,15 @@ asset:USDT
 
 Instrument 是稳定的、可被业务引用的金融工具本体。它表达交易对象及其经济属性，不表达某个 provider 的连接方式。
 
-在本系统中，现货 Instrument 表示标的资产，不表示某一个 quote pair。BTC/USDT 可以表达为：
+目标模型中，现货 Instrument 表示 base/quote 确定的可交易产品；基础持有物由 Asset 表达。
+BTC/USDT 表达为：
 
 ```text
-instrument:spot:BTC
+instrument:spot:BTC-USDT
 ```
 
-`USDT` 是具体 Market 的 quote asset。同一个 `instrument:spot:BTC` 可以同时存在 BTC/USDT、BTC/USDC 等多个 Market。
+同一个 `instrument:spot:BTC-USDT` 可以在 Binance、OKX 等 Exchange 有多个 Listing 和 Market。
+`instrument:spot:BTC` 是迁移前身份，不能静默重写，具体迁移规则见统一 Access 设计。
 
 永续合约和期权应携带足以区分经济条款的规范属性，例如：
 
@@ -89,7 +97,9 @@ Listing 表示 Instrument 在 Exchange 的某个产品/结算上下文中的挂�
 listing:binance:spot:BTC:USDT
 ```
 
-Listing 持有交易所的外部挂牌代码，例如 Binance 的 `BTCUSDT`，但该代码不是 Instrument 的 canonical identity。若系统确认 Listing 与 Market 永远一一对应，则可以删除独立 Listing 层；不能保留一个语义不清且无法唯一定位的中间对象。
+Listing 持有挂牌场所的外部挂牌代码，例如 NASDAQ 的 `AAPL`，但该代码不是 Instrument 的
+canonical identity。Listing 具有独立的挂牌和退市生命周期，不能因为早期实现恰好为一个 Listing
+只建立一个 Market 就删除该概念。
 
 ### 3.4 Market
 
@@ -102,8 +112,8 @@ market:binance:spot:BTCUSDT
 Market 可以包含：
 
 - `instrument_id`；
-- `listing_id`；
-- `exchange_id`；
+- 可选的 `reference_listing_id`；
+- `trading_exchange_id`；
 - `market_type`；
 - base/quote asset；
 - price tick、quantity tick、precision；
@@ -126,24 +136,28 @@ Instrument(AAPL common stock)
               └── TradingSession(after-hours)
 ```
 
-因此默认关系基数为：
+旧设计曾采用以下默认关系基数：
 
 ```text
 Instrument 1 ── N Listing 1 ── 1 Market 1 ── N TradingSession
                                       └────── N ExecutionAccess
 ```
 
-当前领域模型固定 `Listing 1:1 Market`。`TradingSession` 负责交易日历、开始/结束时间和 session 状态；`MarketPhase` 负责集合竞价、连续竞价、收盘竞价等阶段。不能为了表达盘前盘后、夜盘或不同上市板块而复制 Market。
+该 `Listing 1:1 Market` 假设已被统一 Access 设计替代。目标模型允许一个 Instrument 有多个
+Listing 和多个 Market；Market 只可选引用 `reference_listing_id`，且 trading Exchange 不必等于
+listing Exchange。`TradingSession` 继续负责交易日历、开始/结束时间和 session 状态；`MarketPhase`
+继续负责集合竞价、连续竞价、收盘竞价等阶段。不能为了表达盘前盘后或夜盘而复制 Market。
 
-如果未来发现同一挂牌关系下确实存在两个独立 order book，并且它们需要独立订阅、下单、规则和生命周期，再基于真实业务证据引入新的市场分组关系。当前不预先建模这种关系。
+只有真正独立的 order book、流动性、订阅、交易规则或生命周期才建立不同 Market。盘前盘后、
+集合竞价或夜盘继续由 TradingSession/MarketPhase 表达。
 
 ### 3.6 Listing 与 Market 不合并
 
-虽然当前默认基数是一对一，Listing 和 Market 仍然保留为两个领域概念：
+Listing 和 Market 是 Instrument 下两类独立事实：
 
 ```text
-Listing = 证券/标的被交易所挂牌的关系
-Market  = 该挂牌关系对应的可交易市场和交易规则
+Listing = 证券/标的与挂牌场所之间的挂牌关系
+Market  = Instrument 在实际交易场所中的流动性、订单簿和交易规则
 ```
 
 两者的生命周期也可能不同。例如股票暂时停牌时：
@@ -161,7 +175,7 @@ Market.status  = halted
 pub struct Listing {
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
-    pub exchange_id: ExchangeId,
+    pub listing_exchange_id: ExchangeId,
     pub ticker: ProviderSymbol,
     pub currency_asset_id: AssetId,
     pub status: ListingStatus,
@@ -171,7 +185,9 @@ pub struct Listing {
 
 pub struct Market {
     pub market_id: MarketId,
-    pub listing_id: ListingId,
+    pub instrument_id: InstrumentId,
+    pub trading_exchange_id: ExchangeId,
+    pub reference_listing_id: Option<ListingId>,
     pub market_type: MarketType,
     pub base_asset_id: Option<AssetId>,
     pub quote_asset_id: Option<AssetId>,
@@ -182,11 +198,13 @@ pub struct Market {
 
 其中：
 
-- Listing 拥有 Instrument、Exchange、ticker 和挂牌生命周期；
+- Listing 拥有 Instrument、listing Exchange、ticker 和挂牌生命周期；
 - Market 拥有交易规则、交易状态、交易日历和可交易属性；
-- ExecutionAccess 拥有 provider symbol 和执行路由；
+  - ExecutionAccess 拥有 provider symbol 和执行路由；
 - Market 不重复保存 Listing 的 ticker、exchange symbol 或挂牌状态；
-- ExecutionAccess 不通过 InstrumentId 猜测 provider symbol，而是引用 MarketId。
+- Market 可以可选引用 Listing，但二者只要求 Instrument 相同，不要求 Exchange 相同；
+- ExecutionAccess 不通过 InstrumentId 或 MarketId 猜测 provider symbol；direct access 引用 Market，
+  smart/SOR access 可以只引用 Instrument 和可选 Listing。
 
 物理存储可以在一个事务中保存，甚至在早期实现中使用同一张记录，但应用 API 和 domain 类型必须保留清晰边界。
 
@@ -214,24 +232,32 @@ pub struct MarketPhase {
 
 ### 3.7 ExecutionAccess
 
-ExecutionAccess 表示通过某个 provider 或 broker 执行某个 Market 的具体路径。它允许“行情来源”和“执行来源”不是同一个系统，也允许同一个 Market 通过多个 broker 或账户执行。
+ExecutionAccess 表示通过某个 provider 或 broker 执行 Instrument 的具体路径。direct access 可以
+绑定 Market；SMART/SOR access 可以只绑定 Instrument 和可选 Listing，并在成交后确定实际 Exchange。
+它允许“行情来源”和“执行来源”不是同一个系统。
 
 ```text
 execution-access:binance:spot:BTCUSDT
 ```
 
-ExecutionAccess 负责保存 `market_id`、provider symbol、连接能力、结算资产和执行状态；它不能被当成 Instrument 或 Market 传给其他业务模块。
+ExecutionAccess 负责保存 Instrument、direct/smart target、provider address、执行能力、结算资产和
+执行状态；运行时账户/principal/connection binding 由 Execution composition 拥有。ExecutionAccess
+不能被当成 Instrument 或 Market 传给其他业务模块。
 
 ## 4. 标识符分类
 
 | 类型 | 所有者 | 语义 | 是否允许 provider scope | 示例 |
 |---|---|---|---:|---|
 | `AssetId` | Reference | 资产本体 | 否 | `asset:BTC` |
-| `InstrumentId` | Reference | 金融工具/标的本体 | 否 | `instrument:spot:BTC` |
+| `InstrumentId` | Reference | 金融产品/合约本体 | 否 | `instrument:spot:BTC-USDT` |
 | `ListingId` | Reference | Instrument 在 Exchange、产品和结算上下文中的挂牌关系 | 是，必须是 exchange，不是任意 provider | `listing:binance:spot:BTC:USDT` |
-| `MarketId` | Reference/Market | 具体行情和交易规则市场 | 是 | `market:binance:spot:BTCUSDT` |
-| `ExecutionAccessId` | Integration/Reference | 具体执行访问路径 | 是 | `execution-access:binance:spot:BTCUSDT` |
+| `MarketId` | Reference | 具体行情和交易规则市场 | 是 | `market:binance:spot:BTCUSDT` |
+| `ExecutionAccessId` | Reference | 具体执行访问路径 | 是 | `execution-access:binance:spot:BTCUSDT` |
 | `ExchangeId` | Reference | 交易所或交易场所 | 否 | `exchange:binance` |
+| `BrokerId` | Reference | 接受账户订单并负责执行或路由的中介 | 否 | `broker:ibkr` |
+| `ProviderId` | Reference | 提供 API、连接、行情或外部事实的技术参与方 | 否 | `provider:massive` |
+| `ProviderInstrumentAddress` | Reference | Access 保存的最小 provider 地址映射 | 是 | `AAPL` + provider scope |
+| `ProviderInstrumentRef` | Integration | provider-native 请求地址 | 是 | IBKR contract ref |
 | `ProviderSymbol` | Integration | 外部接口使用的代码 | 是 | `BTCUSDT` |
 | `SourceId` | Market | 行情来源实例或连接 | 是 | `source:binance:spot` |
 
@@ -430,7 +456,8 @@ ReferenceMarket.instrument_id     -> InstrumentId
 - Market 引用的 Instrument、Listing、Exchange、Asset 必须存在；
 - Listing 引用的 Instrument 和 Exchange 必须存在；
 - `resolve_market` 的零条、多条结果必须返回明确错误；
-- 同一 canonical Instrument 可以通过多个 Listing 关联多个 Market；每个 Listing 对应一个 Market；
+- 同一 canonical Instrument 可以有多个 Listing 和多个 Market；Market 可以可选引用同 Instrument
+  的 Listing，listing Exchange 与 trading Exchange 可以不同；
 - refresh 不得因为 provider symbol 变化而创建新的 Instrument。
 
 ### 阶段 D：迁移 Market、Execution、Account 和 Risk
@@ -511,7 +538,9 @@ Python facade 的 request model 可以继续以 `str` 作为序列化输入，�
 
 ### 10.1 不做静默重写
 
-旧值如 `instrument:binance:BTCUSDT` 不能直接静默转换为新的 `instrument:spot:BTC`。这两个值可能代表不同语义，必须通过 Reference migration 映射并记录结果；同时必须从旧 Market 或 provider metadata 中确认 quote asset，不能仅凭 `BTCUSDT` 字符串猜测。
+旧值如 `instrument:binance:BTCUSDT` 或 `instrument:spot:BTC` 不能直接静默转换为新的
+`instrument:spot:BTC-USDT`。这些值可能代表不同语义，必须通过 Reference migration 映射并记录
+结果；同时必须从 Reference/provider metadata 中确认 quote asset，不能仅凭 symbol 字符串猜测。
 
 ### 10.2 显式迁移表
 
@@ -535,7 +564,7 @@ provider_symbol      -> listing_id / execution_access_id
 
 - Instrument 不包含 provider scope；
 - Market 明确绑定 Exchange、Listing 和 Instrument；
-- 一个 Instrument 可以有多个 Listing 和 Market；每个 Listing 对应一个 Market；
+- 一个 Instrument 可以有多个 Listing 和 Market，二者不形成强制一对一父子关系；
 - provider symbol 不作为跨模块身份；
 - 失效 Listing/Market 保留历史关系。
 
@@ -587,8 +616,8 @@ Reference Instrument/Market
 
 这个切片需要证明：
 
-1. `instrument:spot:BTC` 可以独立于 Binance 存在；
-2. `market:binance:spot:BTCUSDT` 能解析到唯一 Market，并引用 `asset:BTC`、`asset:USDT` 和 `instrument:spot:BTC`；
+1. `instrument:spot:BTC-USDT` 可以独立于 Binance 存在；
+2. `market:binance:spot:BTCUSDT` 能解析到唯一 Market，并引用 `asset:BTC`、`asset:USDT` 和 `instrument:spot:BTC-USDT`；
 3. Binance adapter 从 Reference 获得 `BTCUSDT`，而不是从 InstrumentId 猜出来；
 4. Quote、order intent 和 preflight 使用强类型 ID；
 5. contract 只在边界把强类型 ID 编码为 string；
@@ -617,7 +646,8 @@ Market     = 该挂牌对应的具体交易市场或订单簿
 ExecutionAccess = 通过哪个 broker/provider/账户执行
 ```
 
-如果某个产品的 Listing 与 Market 永远一一对应，且没有独立的挂牌生命周期，可以在该产品切片中省略 Listing；但证券主数据不能因为某个 provider 的简单模型而删除 Listing 能力。
+即使早期产品切片中的 Listing 与 Market 恰好一一对应，也不能把该实现偶然性提升为领域约束；
+证券主数据必须保留独立 Listing 生命周期。
 
 ### 13.2 股票的推荐关系
 
@@ -712,9 +742,9 @@ pub struct Listing {
 
 ### 13.5 股票 Market 与 ExecutionAccess
 
-Market 保存实际交易所需的市场事实：
+Market 保存实际交易场所的市场事实：
 
-- listing；
+- Instrument、trading Exchange 和可选 reference Listing；
 - order book 或交易场所；
 - trading currency；
 - tick size、lot size、minimum quantity；
@@ -722,21 +752,26 @@ Market 保存实际交易所需的市场事实：
 - market status；
 - short sale、fractional、auction 等市场能力。
 
-ExecutionAccess 必须引用 Market，而不能只引用 Instrument：
+Direct ExecutionAccess 引用 Market；SMART/SOR ExecutionAccess 可以只引用 Instrument 和可选
+Listing：
 
 ```rust
 pub struct ExecutionAccess {
     pub access_id: ExecutionAccessId,
-    pub market_id: MarketId,
+    pub instrument_id: InstrumentId,
+    pub destination_market_id: Option<MarketId>,
+    pub reference_listing_id: Option<ListingId>,
+    pub routing_mode: ExecutionRoutingMode,
     pub provider_id: ProviderId,
-    pub exchange_id: Option<ExchangeId>,
     pub provider_symbol: ProviderSymbol,
     pub settlement_asset_id: Option<AssetId>,
     pub status: AccessStatus,
 }
 ```
 
-下单时应使用 `MarketId` 或 `ExecutionAccessId`。provider adapter 必须从 Reference/ExecutionAccess 获取 provider symbol，不能通过以下逻辑猜测：
+direct 下单使用 `ExecutionAccessId` 或显式 Market constraint；SMART/SOR 下单使用 Instrument 和
+routing constraint 解析唯一 ExecutionAccess。provider adapter 必须从 Reference/ExecutionAccess 获取
+provider address，不能通过以下逻辑猜测：
 
 ```rust
 request.instrument_id.strip_prefix("instrument:equity:")
@@ -760,30 +795,34 @@ request.instrument_id.strip_prefix("instrument:equity:")
 ```text
 Asset(BTC)
 Asset(USDT)
-  └── Instrument(spot BTC)
-        └── Listing(Binance BTC/USDT)
-              └── Market(Binance BTCUSDT)
-                    └── ExecutionAccess(Binance BTCUSDT)
+Instrument(spot BTC/USDT)
+  ├── Listing(Binance BTC/USDT)
+  ├── Market(Binance BTCUSDT)
+  ├── MarketDataAccess(Binance BTCUSDT feed)
+  └── ExecutionAccess(Binance BTCUSDT direct)
 ```
 
-同一个 `instrument:spot:BTC` 可以对应：
+同一个 `instrument:spot:BTC-USDT` 可以对应多个 Exchange Market；不同 quote asset 是不同现货
+Instrument，例如 `instrument:spot:BTC-USDC`。
 
 ```text
 market:binance:spot:BTCUSDT
-market:binance:spot:BTCUSDC
 market:coinbase:spot:BTC-USD
 ```
+
+`market:binance:spot:BTCUSDC` 则引用 `instrument:spot:BTC-USDC`。
 
 ### 14.2 股票
 
 ```text
 Instrument(Apple common stock)
   ├── Listing(NASDAQ AAPL/USD)
-  │     └── Market(NASDAQ AAPL)
-  │           └── ExecutionAccess(IBKR NASDAQ AAPL)
-  └── Listing(Xetra APC/EUR)
-        └── Market(Xetra APC)
-              └── ExecutionAccess(IBKR Xetra APC)
+  ├── Listing(Xetra APC/EUR)
+  ├── Market(NASDAQ AAPL)
+  ├── Market(IEX AAPL, reference NASDAQ listing)
+  ├── Market(Xetra APC)
+  ├── ExecutionAccess(IBKR SMART)
+  └── ExecutionAccess(IBKR Xetra direct)
 ```
 
 ### 14.3 期权
@@ -791,9 +830,9 @@ Instrument(Apple common stock)
 ```text
 Instrument(Apple common stock)
   └── Instrument(Apple 2026-12-18 200 Call)
-        └── Listing(CBOE)
-              └── Market(CBOE option order book)
-                    └── ExecutionAccess(broker option route)
+        ├── Listing(CBOE)
+        ├── Market(CBOE option order book)
+        └── ExecutionAccess(broker option route)
 ```
 
 期权 Instrument 必须保存 underlying、expiry、strike、option right、multiplier 和 settlement style，不能只依赖 provider option symbol。
@@ -806,7 +845,8 @@ Instrument(Apple common stock)
 2. 将股票 ticker 从 Instrument 身份中移出，放入 Listing/provider mapping；
 3. 为股票 Instrument 增加 issuer、share class 和外部证券标识；
 4. 为 Listing 增加 ticker、currency、primary、segment 和生命周期字段；
-5. 让 ExecutionAccess 引用 `market_id`，而不只是 `instrument_id`；
+5. 让 direct ExecutionAccess 引用 `destination_market_id`，同时允许 smart/SOR access 只引用
+   `instrument_id` 和可选 Listing；
 6. 删除 `strip_prefix("instrument:equity:")` 等 symbol 推断逻辑；
 7. 分开 quote/trading currency、settlement asset 和 account debit asset；
 8. 增加跨 provider 的同一证券归并测试。
@@ -819,6 +859,7 @@ IBKR AAPL
 Binance AAPL
 ```
 
-在有足够证券主数据证据时，可以归并到同一个 `Instrument`；不同交易所和 provider 只产生不同的 Listing、Market 或 ExecutionAccess，而不是复制 Instrument。
+在有足够证券主数据证据时，可以归并到同一个 `Instrument`；不同 Exchange 和 provider 只产生不同
+的 Listing、Market 或 ExecutionAccess，而不是复制 Instrument。
 
 该切片完成后，再按同样模式迁移期货、永续、期权和其他 provider。这样可以用真实跨模块调用验证模型，而不是只完成孤立的类型替换。

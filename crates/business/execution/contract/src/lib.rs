@@ -6,10 +6,11 @@ pub mod model;
 pub mod plan;
 pub mod query;
 pub mod snapshot;
+pub mod strategy_event;
 pub mod transport;
 
 pub use event::{EventEnvelope, ExecutionEventEnvelope};
-pub use model::{DependencyWatermarks, ExecutionSnapshot, SnapshotWatermark};
+pub use model::{DependencyWatermarks, ExecutionCurrentView, SnapshotWatermark};
 pub use plan::{
     CompletionPolicy, ExecutionIntentLeg, ExecutionLeg, ExecutionOrderOptions, ExecutionPlan,
     FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy,

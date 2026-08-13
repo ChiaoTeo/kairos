@@ -26,7 +26,7 @@ from kairospy.application.system import (
     SystemRuntimeSupervisor,
 )
 from kairospy.application.account import AccountAdminApplication
-from kairospy.application.strategy import StrategyProcessApplication
+from kairospy.application.launch import StrategyProcessController
 from kairospy.surface.cli.options import OutputFormat, render
 
 
@@ -175,7 +175,7 @@ def test_generated_backtest_start_assembles_only_offline_runtime_components(
         },
     )
     monkeypatch.setattr(
-        StrategyProcessApplication,
+        StrategyProcessController,
         "ensure_running",
         lambda _self, *_args, **_kwargs: object(),
     )
@@ -415,10 +415,10 @@ def test_cli_registers_legacy_product_groups() -> None:
         "account",
         "integration",
         "market",
-            "reference",
-            "order",
-            "system",
-        ):
+        "reference",
+        "order",
+        "system",
+    ):
         assert command in text
     assert "catalog" not in text
     assert not any("│ shell " in line for line in text.splitlines())
@@ -459,8 +459,8 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["market", "--help"], ("validate", "once", "replay")),
         (["launch", "--help"], ("targets", "diagnose", "replay", "instance")),
         (
-                ["reference", "--help"],
-                ("health", "views", "catalog", "assets", "listings", "markets"),
+            ["reference", "--help"],
+            ("health", "views", "catalog", "assets", "listings", "markets"),
         ),
         (["system", "--help"], ("account", "restart", "list")),
     ):
@@ -927,15 +927,12 @@ def test_launch_instance_timeline_application_reads_and_exports(tmp_path) -> Non
     instance = workspace.instance("backtest", "btc", "run-1")
     timeline = instance.root / "lifecycle.jsonl"
     timeline.write_text(
-        '{"sequence": 1, "kind": "started"}\n'
-        '{"sequence": 2, "kind": "stopped"}\n',
+        '{"sequence": 1, "kind": "started"}\n{"sequence": 2, "kind": "stopped"}\n',
         encoding="utf-8",
     )
 
     application = LaunchInstanceTimelineApplication(instance)
-    assert application.list(limit=1) == [
-        {"sequence": 2, "kind": "stopped"}
-    ]
+    assert application.list(limit=1) == [{"sequence": 2, "kind": "stopped"}]
     destination = tmp_path / "export.jsonl"
     assert application.export(destination) == destination
     assert destination.read_text(encoding="utf-8").count("sequence") == 2

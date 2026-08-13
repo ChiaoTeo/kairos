@@ -634,6 +634,7 @@ Strategy 对 Account 只读。
 @dataclass(frozen=True, slots=True)
 class Balance:
     account_id: AccountId
+    segment_key: SegmentKey
     asset: str
     total: Decimal
     available: Decimal
@@ -643,6 +644,7 @@ class Balance:
 @dataclass(frozen=True, slots=True)
 class Position:
     account_id: AccountId
+    segment_key: SegmentKey
     instrument: InstrumentRef
     quantity: Decimal
     average_price: Decimal | None
@@ -651,36 +653,71 @@ class Position:
 
 
 @dataclass(frozen=True, slots=True)
-class AccountSnapshot:
+class AccountSegmentSnapshot:
     account_id: AccountId
+    segment_key: SegmentKey
+    broker: str
+    environment: str
+    account_model: str | None
     equity: Decimal | None
     balances: tuple[Balance, ...]
     positions: tuple[Position, ...]
     freshness: DataFreshness
     generation: int
-    event_sequence: int
+
+    def balance(self, asset: str) -> Balance | None: ...
+    def require_balance(self, asset: str) -> Balance: ...
+    def position(self, instrument: InstrumentRef | InstrumentId) -> Position | None: ...
+    def require_position(self, instrument: InstrumentRef | InstrumentId) -> Position: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AccountSnapshot:
+    account_id: AccountId
+    segments: tuple[AccountSegmentSnapshot, ...]
+    generation: int
+
+    def segment(self, segment: SegmentKey | str) -> AccountSegmentSnapshot: ...
+    def find_segment(self, segment: SegmentKey | str) -> AccountSegmentSnapshot | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AccountsSnapshot:
+    accounts: tuple[AccountSnapshot, ...]
+
+    def account(self, account: AccountId | str) -> AccountSnapshot: ...
+    def find_account(self, account: AccountId | str) -> AccountSnapshot | None: ...
 ```
 
 Account Application：
 
 ```python
 class AccountApplication:
-    def snapshot(self, account: AccountId | str) -> AccountSnapshot: ...
+    @property
+    def accounts(self) -> tuple[AccountSnapshot, ...]: ...
 
-    def balance(
-        self,
-        asset: str,
-        *,
-        account: AccountId | str,
-    ) -> Balance | None: ...
+    def snapshot(self) -> AccountsSnapshot: ...
 
-    def position(
-        self,
-        instrument: InstrumentRef | InstrumentId,
-        *,
-        account: AccountId | str,
-    ) -> Position | None: ...
+    def account(self, account: AccountId | str) -> AccountSnapshot: ...
 ```
+
+一个逻辑 Account 由一个 Account Actor/进程和一个 mmap projection 承担；该 mmap 包含这个
+`account_id` 的全部 segment。`AccountApplication` 只在 Strategy launch 范围聚合多个独立 Account
+projection。每个 `AccountSnapshot` 内的 segment 共享同一 generation，不同 Account 的 generation
+彼此独立。
+
+标准用户写法为：
+
+```python
+spot = ctx.account.account("main").segment(SPOT)
+usdt = spot.require_balance("USDT")
+
+# 单账户快捷写法；accounts 属性读取每个启用 Account mmap 一次。
+spot = ctx.account.accounts[0].segment(SPOT)
+```
+
+不把不同 segment 的 balance、position 或 equity 合并为账户级字段。`Balance`、`Position` 和
+Account 事件 payload 必须同时携带 `account_id` 与 `segment_key`，脱离父快照后仍保持完整身份。
 
 不提供 `account.submit_order`、`account.cancel_order` 或修改 balance/position 的入口。
 `accounts` 与 `portfolio` 兼容别名在迁移结束后删除，标准入口仅为 `ctx.account`。
@@ -775,6 +812,43 @@ class ExecutionApplication:
 
 `close_position` 是 `target_position(quantity=Decimal("0"))` 的明确便利入口，不建立新的业务语义。
 
+Execution 的根入口始终代表当前 Strategy launch 获得授权的完整账户集合，不绑定单一账户。
+单账户高频调用可以使用无状态、不可变的参数绑定器：
+
+```python
+spot = ctx.execution.for_account("main", segment=SPOT)
+spot.target_position(btc, Decimal("2"))
+spot.limit_order(
+    btc,
+    Decimal("0.1"),
+    Decimal("65000"),
+    side=OrderSide.BUY,
+    post_only=True,
+)
+```
+
+`for_account()` 只是构造 typed request 的语法糖，不是新的 Execution 实例或状态 owner。
+跨账户 intent 必须从根入口一次性提交，并由每个 leg/target 显式携带账户，不能依赖父
+request 的隐式 `main` 默认值：
+
+```python
+receipt = ctx.execution.execute(
+    PairArbitrageRequest(
+        ArbitrageLegRequest(
+            "BTCUSDT", "Buy", Decimal("1"), "binance-main", segment_key="spot"
+        ),
+        ArbitrageLegRequest(
+            "BTC-PERP", "Sell", Decimal("1"), "okx-hedge", segment_key="perp"
+        ),
+    )
+)
+receipt.require_accepted()
+```
+
+Application 在调用 transport 前校验请求涉及的完整账户集合都是 launch 已授权账户。任一
+leg 越界时拒绝整个 intent，并返回 `REJECTED + NOT_SENT`；事件与 snapshot query 使用相同
+的完整集合和 `strategy_id` 隔离规则。
+
 PairArbitrage、PortfolioRebalance 和 QuoteProvisioning 使用各自的类型化 request，按现有真实
 use case 逐项迁移。不要把它们压入 `dict[str, object]`，也不要创建拥有大量 optional 字段的
 万能 intent request。
@@ -792,6 +866,29 @@ use case 逐项迁移。不要把它们压入 `dict[str, object]`，也不要创
 
 ```python
 class ExecutionApplication:
+    def market_order(
+        self,
+        instrument: InstrumentRef | InstrumentId,
+        quantity: Decimal,
+        *,
+        account: AccountId | str,
+        side: OrderSide,
+        segment: SegmentKey | str = "spot",
+        ...,
+    ) -> OrderCommandReceipt: ...
+
+    def limit_order(
+        self,
+        instrument: InstrumentRef | InstrumentId,
+        quantity: Decimal,
+        price: Decimal,
+        *,
+        account: AccountId | str,
+        side: OrderSide,
+        segment: SegmentKey | str = "spot",
+        ...,
+    ) -> OrderCommandReceipt: ...
+
     def submit_order(self, request: OrderRequest) -> OrderCommandReceipt: ...
 
     def cancel_order(
@@ -1155,8 +1252,9 @@ Strategy application 内部应有一个明确、固定的 event ingress/multiple
 5. 为实际交付顺序分配 instance-local `dispatch_sequence` 并写入 Strategy journal；
 6. 保留 producer `stream_id/sequence` 和 `causation_id`，不把 dispatch sequence 伪装成模块 sequence。
 
-这只是现有 StrategyHost 的显式多源 ingress，不是全局 event bus、动态 type registry 或新的业务状态
-owner。它不合并模块业务状态，只负责 Strategy callback 的确定性串行调度。
+这由当前 `StrategyApplication` 私有的 `StrategyEventIngress` 实现，不是全局 event bus、动态 type
+registry 或新的业务状态 owner。它不合并模块业务状态，只负责 Strategy callback 的确定性串行调度；
+单模块 schema、sequence、scope 和 mapping 已归还各业务 Application。
 
 live 模式记录实际已观察的 dispatch order；backtest/replay 按
 `docs/time-driven-runtime-and-backtest-design.md` 固定同一业务时间点的领域优先级。存在因果关系时，
@@ -1244,7 +1342,7 @@ Strategy 回调是确定性事件循环的一部分。Context 中看似读取的
 
 - `ctx.reference.*`、`ctx.account.*`、`ctx.risk.*`、`ctx.execution.*` 查询默认同步读取各业务模块
   已发布的 immutable mmap projection；Market 的 `latest_*` 使用同一规则；
-- 查询返回 snapshot generation 和 event sequence，必要时暴露 freshness；
+- 查询返回 snapshot generation，必要时暴露 freshness；snapshot 不携带 event sequence；
 - 标准同步回调内不执行隐藏的网络、socket 或 Aeron request/response 阻塞；
 - 不定义跨业务 `SnapshotEnvelope`，也不由 Strategy Context 缓存 `payload: object`；每个业务模块的
   projection reader 直接返回本模块 application model；
@@ -1532,7 +1630,9 @@ Account 纵向切片已经完成内部删层：`AccountApplication` 直接持有
 `Mapping[AccountId, AccountMmapProjection]`，并负责 launch scope 内的账户选择和拒绝。
 Strategy composition 中的 snapshot closure、`Mapping[str, object]` 以及
 `getattr/callable/isinstance` 动态适配已删除。多账户映射被保留，因为它表达真实的 launch
-账户隔离语义；`ctx.account`、Account Rust 状态所有权和 mmap projection 语义保持不变。
+账户隔离语义。每个 mapping value 指向该 Account 自己的 mmap，mmap 内按 `segment_key` 保留全部
+segment；公共 API 使用 `ctx.account.account(id).segment(key)` 的类型化导航，不新增 Account
+Protocol 或 Capability 镜像。`ctx.account`、Account Rust 状态所有权和 mmap projection 语义保持不变。
 Risk 和 Reference 继续按独立纵向切片迁移。
 
 ### Risk 收敛状态（2026-08-13）

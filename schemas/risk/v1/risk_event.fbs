@@ -1,0 +1,24 @@
+include "../../common/v1/header.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v1;
+
+table RiskEventMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  kind:string (required);
+  account_id:string;
+  strategy_id:string;
+  decision_id:string;
+  request_id:string;
+  allowed:bool;
+  degraded:bool;
+  reason_codes:[string];
+  violations:[string];
+  reservation_id:string;
+  reservation_status:string;
+  circuit:CircuitState;
+  occurred_at_unix_nanos:ulong;
+}
+
+root_type RiskEventMessage;
+file_identifier "RKE1";

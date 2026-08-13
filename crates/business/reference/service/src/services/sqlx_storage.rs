@@ -81,6 +81,11 @@ fn provider_records(
         &catalog.execution_accesses,
         |value: &ExecutionAccess| value.access_id.to_string()
     );
+    push_records!(
+        "market_data_access",
+        &catalog.market_data_accesses,
+        |value: &crate::domain::MarketDataAccess| value.access_id.clone()
+    );
     Ok(records)
 }
 
@@ -97,6 +102,7 @@ fn push_provider_record(
         "market" => catalog.markets.push(decode(payload)?),
         "financial_product" => catalog.financial_products.push(decode(payload)?),
         "execution_access" => catalog.execution_accesses.push(decode(payload)?),
+        "market_data_access" => catalog.market_data_accesses.push(decode(payload)?),
         other => return Err(persistence(format!("unknown provider record kind {other}"))),
     }
     Ok(())
@@ -501,7 +507,7 @@ mod tests {
         assert_eq!(events.len(), 4);
         assert!(events.iter().all(|event| {
             event.operation.as_deref() == Some("upsert")
-                && event.generation == 1
+                && event.generation.get() == 1
                 && event.record_payload_json.is_some()
         }));
 
@@ -1123,6 +1129,11 @@ impl CatalogStore for SqlxCatalogStore {
                     access_id,
                     ExecutionAccess
                 ),
+                market_data_accesses: records!(
+                    "reference_market_data_accesses_current",
+                    access_id,
+                    crate::domain::MarketDataAccess
+                ),
                 generation: (meta.try_get::<i64, _>("generation")? as u64).into(),
                 event_sequence: (meta.try_get::<i64, _>("event_sequence")? as u64).into(),
                 lifecycle_events: Vec::new(),
@@ -1290,6 +1301,7 @@ async fn reconcile_normalized_provider_facts(
         "INSERT INTO reference_current_records SELECT 'market',market_id,payload FROM reference_markets_current",
         "INSERT INTO reference_current_records SELECT 'financial_product',product_id,payload FROM reference_financial_products_current",
         "INSERT INTO reference_current_records SELECT 'execution_access',access_id,payload FROM reference_execution_accesses_current",
+        "INSERT INTO reference_current_records SELECT 'market_data_access',access_id,payload FROM reference_market_data_accesses_current",
     ] {
         sqlx::query(statement).execute(&mut *tx).await?;
     }
@@ -1397,12 +1409,11 @@ async fn reconcile_normalized_provider_facts(
           UNION ALL SELECT 'instrument missing underlying: '||record_id FROM reference_canonical_candidate c WHERE record_kind='instrument' AND json_extract(c.payload,'$.underlying_instrument_id') IS NOT NULL AND (json_extract(c.payload,'$.underlying_instrument_id')=record_id OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.underlying_instrument_id'))) \
           UNION ALL SELECT 'option instrument incomplete: '||record_id FROM reference_canonical_candidate c WHERE record_kind='instrument' AND lower(json_extract(c.payload,'$.instrument_type')) IN ('option','options') AND (json_extract(c.payload,'$.expiry_unix_nanos') IS NULL OR json_extract(c.payload,'$.strike') IS NULL OR lower(json_extract(c.payload,'$.option_right')) NOT IN ('call','put','c','p')) \
           UNION ALL SELECT 'market missing instrument/listing/exchange: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND (NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.instrument_id')) OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate l WHERE l.record_kind='listing' AND l.record_id=json_extract(c.payload,'$.listing_id')) OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate e WHERE e.record_kind='entity' AND e.record_id=json_extract(c.payload,'$.exchange_id'))) \
-          UNION ALL SELECT 'market disagrees with listing: '||c.record_id FROM reference_canonical_candidate c JOIN reference_canonical_candidate l ON l.record_kind='listing' AND l.record_id=json_extract(c.payload,'$.listing_id') WHERE c.record_kind='market' AND (json_extract(c.payload,'$.instrument_id')<>json_extract(l.payload,'$.instrument_id') OR json_extract(c.payload,'$.exchange_id')<>json_extract(l.payload,'$.exchange_id')) \
+          UNION ALL SELECT 'market disagrees with listing: '||c.record_id FROM reference_canonical_candidate c JOIN reference_canonical_candidate l ON l.record_kind='listing' AND l.record_id=json_extract(c.payload,'$.listing_id') WHERE c.record_kind='market' AND json_extract(c.payload,'$.instrument_id')<>json_extract(l.payload,'$.instrument_id') \
           UNION ALL SELECT 'market missing underlying: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.underlying_instrument_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.underlying_instrument_id')) \
           UNION ALL SELECT 'market missing base asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.base_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.base_asset_id')) \
           UNION ALL SELECT 'market missing quote asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.quote_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.quote_asset_id')) \
           UNION ALL SELECT 'market invalid interval: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.effective_to_unix_nanos') IS NOT NULL AND json_extract(c.payload,'$.effective_to_unix_nanos')<=json_extract(c.payload,'$.effective_from_unix_nanos') \
-          UNION ALL SELECT 'listing associated with multiple markets: '||json_extract(payload,'$.listing_id') FROM reference_canonical_candidate WHERE record_kind='market' GROUP BY json_extract(payload,'$.listing_id') HAVING COUNT(*)>1 \
           UNION ALL SELECT 'financial product missing asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.asset_id')) \
           UNION ALL SELECT 'financial product missing currency asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND json_extract(c.payload,'$.currency_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.currency_asset_id')) \
           UNION ALL SELECT 'execution access missing market: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate m WHERE m.record_kind='market' AND m.record_id=json_extract(c.payload,'$.market_id')) \
@@ -1473,12 +1484,14 @@ async fn reconcile_normalized_provider_facts(
         "INSERT INTO reference_markets_current(market_id,source_id,market_key,instrument_id,listing_id,exchange_id,market_type,asset_type,underlying_instrument_id,source_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.source_id'),json_extract(payload,'$.market_key'),json_extract(payload,'$.instrument_id'),json_extract(payload,'$.listing_id'),json_extract(payload,'$.exchange_id'),json_extract(payload,'$.market_type'),json_extract(payload,'$.asset_type'),json_extract(payload,'$.underlying_instrument_id'),json_extract(payload,'$.source_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='market' ON CONFLICT(market_id) DO UPDATE SET source_id=excluded.source_id,market_key=excluded.market_key,instrument_id=excluded.instrument_id,listing_id=excluded.listing_id,exchange_id=excluded.exchange_id,market_type=excluded.market_type,asset_type=excluded.asset_type,underlying_instrument_id=excluded.underlying_instrument_id,source_symbol=excluded.source_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
         "INSERT INTO reference_financial_products_current(product_id,provider_id,provider_product_id,asset_id,product_type,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.provider_id'),json_extract(payload,'$.provider_product_id'),json_extract(payload,'$.asset_id'),json_extract(payload,'$.product_type'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='financial_product' ON CONFLICT(product_id) DO UPDATE SET provider_id=excluded.provider_id,provider_product_id=excluded.provider_product_id,asset_id=excluded.asset_id,product_type=excluded.product_type,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
         "INSERT INTO reference_execution_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.market_id'),json_extract(payload,'$.provider_id'),json_extract(payload,'$.product_family'),json_extract(payload,'$.provider_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='execution_access' ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
+        "INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.market_id'),json_extract(payload,'$.provider_id'),json_extract(payload,'$.product_family'),json_extract(payload,'$.provider_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='market_data_access' ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
         "DELETE FROM reference_entities_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='entity' AND record_id=entity_id)",
         "DELETE FROM reference_assets_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='asset' AND record_id=asset_id)",
         "DELETE FROM reference_instruments_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='instrument' AND record_id=instrument_id)",
         "DELETE FROM reference_listings_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='listing' AND record_id=listing_id)",
         "DELETE FROM reference_financial_products_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='financial_product' AND record_id=product_id)",
         "DELETE FROM reference_execution_accesses_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='execution_access' AND record_id=access_id)",
+        "DELETE FROM reference_market_data_accesses_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='market_data_access' AND record_id=access_id)",
     ] {
         sqlx::query(statement).execute(&mut *tx).await?;
     }
@@ -1615,6 +1628,20 @@ async fn replace_current_state(
             .execute(&mut **tx)
             .await?;
     }
+    for access in catalog.market_data_accesses.values() {
+        track!("market_data_access", access.access_id.as_str());
+        sqlx::query("INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_market_data_accesses_current.payload<>excluded.payload")
+            .bind(access.access_id.as_str())
+            .bind(access.market_id.as_str())
+            .bind(&access.provider_id)
+            .bind(&access.product_family)
+            .bind(access.provider_symbol.as_str())
+            .bind(access.status.as_str())
+            .bind(access.effective_to_unix_nanos.map(|value| value.get() as i64))
+            .bind(serde_json::to_string(access).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
+            .execute(&mut **tx)
+            .await?;
+    }
     for statement in [
         "DELETE FROM reference_entities_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='entity' AND k.record_id=reference_entities_current.entity_id)",
         "DELETE FROM reference_assets_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='asset' AND k.record_id=reference_assets_current.asset_id)",
@@ -1623,6 +1650,7 @@ async fn replace_current_state(
         "DELETE FROM reference_markets_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market' AND k.record_id=reference_markets_current.market_id)",
         "DELETE FROM reference_financial_products_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='financial_product' AND k.record_id=reference_financial_products_current.product_id)",
         "DELETE FROM reference_execution_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='execution_access' AND k.record_id=reference_execution_accesses_current.access_id)",
+        "DELETE FROM reference_market_data_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market_data_access' AND k.record_id=reference_market_data_accesses_current.access_id)",
     ] {
         sqlx::query(statement).execute(&mut **tx).await?;
     }

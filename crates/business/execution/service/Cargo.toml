@@ -15,6 +15,7 @@ axum = "0.8"
 kairos-domain-types = { path = "../../../kairos-domain-types" }
 kairos-integration = { path = "../../../kairos-integration" }
 kairos-protocol = { path = "../../../kairos-protocol" }
+kairos-transport = { path = "../../../kairos-transport" }
 kairos-execution-contract = { path = "../contract" }
 kairos-account-contract = { path = "../../account/contract" }
 kairos-market-contract = { path = "../../market/contract" }
@@ -35,6 +36,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt
 
 [dev-dependencies]
 rusqlite.workspace = true
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 tempfile = "3"
 
 [[bin]]
@@ -44,3 +46,7 @@ path = "src/bin/kairos-execution-server.rs"
 [[bin]]
 name = "kairos-execution-cli"
 path = "src/bin/kairos-execution-cli.rs"
+
+[[bin]]
+name = "kairos-execution-event-bridge"
+path = "src/bin/kairos-execution-event-bridge.rs"

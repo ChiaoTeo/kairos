@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use kairos_domain_types::{Generation, Sequence};
 
-use crate::application::{AccountProjection, AccountsSnapshot};
+use crate::application::{
+    AccountBusinessChange, AccountBusinessEvent, AccountProjection, AccountsSnapshot,
+};
 use crate::domain::{
     Account, AccountEvent, AccountSegment, AccountSnapshot, AccountState, ApplyOutcome, Balance,
     SegmentKey, SignedQuantity, SnapshotKind,
@@ -30,7 +32,18 @@ impl AccountActor {
         event_sequence: Sequence,
     ) -> Result<Self, String> {
         let mut accounts: BTreeMap<SegmentKey, Account> = BTreeMap::new();
+        let mut owner_account_id = None;
         for segment in segments {
+            match &owner_account_id {
+                Some(account_id) if account_id != &segment.identity.account_id => {
+                    return Err(format!(
+                        "one Account Actor cannot own multiple account ids: {account_id} and {}",
+                        segment.identity.account_id
+                    ));
+                }
+                None => owner_account_id = Some(segment.identity.account_id.clone()),
+                _ => {}
+            }
             let key = segment.segment_key.clone();
             if accounts.contains_key(&key) {
                 return Err(format!("duplicate account segment: {key}"));
@@ -272,13 +285,165 @@ impl AccountActor {
         AccountsSnapshot {
             actor_id: kairos_domain_types::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
-            event_sequence: self.event_sequence,
             accounts: self
                 .accounts
                 .values()
                 .map(AccountProjection::from_account)
                 .collect(),
         }
+    }
+
+    /// Derive the explicit business facts produced by a completed Actor
+    /// transition. The caller invokes this before publication and after
+    /// persistence succeeds; no mmap payload participates in this operation.
+    pub(crate) fn business_events_since(&self, previous: &Self) -> Vec<AccountBusinessEvent> {
+        let first_sequence = previous.event_sequence.get().saturating_add(1);
+        let last_sequence = self.event_sequence.get();
+        if first_sequence > last_sequence {
+            return Vec::new();
+        }
+
+        let account_ids = self
+            .accounts
+            .values()
+            .map(|account| account.segment().identity.account_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut final_changes = BTreeMap::<_, Vec<AccountBusinessChange>>::new();
+        let mut occurred_at = BTreeMap::new();
+        for (key, current) in &self.accounts {
+            let current = AccountProjection::from_account(current);
+            let old = previous
+                .accounts
+                .get(key)
+                .map(AccountProjection::from_account);
+            let changes = final_changes.entry(current.account_id.clone()).or_default();
+            collect_business_changes(old.as_ref(), &current, changes);
+            occurred_at
+                .entry(current.account_id.clone())
+                .and_modify(|value: &mut kairos_domain_types::UnixNanos| {
+                    *value = (*value).max(current.observed_at_unix_nanos)
+                })
+                .or_insert(current.observed_at_unix_nanos);
+        }
+
+        let mut events = Vec::new();
+        for sequence in first_sequence..=last_sequence {
+            for account_id in &account_ids {
+                events.push(AccountBusinessEvent {
+                    sequence: Sequence::new(sequence),
+                    account_id: account_id.clone(),
+                    occurred_at_unix_nanos: occurred_at
+                        .get(account_id)
+                        .copied()
+                        .unwrap_or_default(),
+                    changes: if sequence == last_sequence {
+                        final_changes.remove(account_id).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                });
+            }
+        }
+        events
+    }
+}
+
+fn collect_business_changes(
+    old: Option<&AccountProjection>,
+    current: &AccountProjection,
+    out: &mut Vec<AccountBusinessChange>,
+) {
+    let old_balances = old
+        .map(|value| {
+            value
+                .balances
+                .iter()
+                .map(|balance| (balance.asset_id.clone(), balance))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_balances = current
+        .balances
+        .iter()
+        .map(|balance| (balance.asset_id.clone(), balance))
+        .collect::<BTreeMap<_, _>>();
+    for balance in current_balances.values() {
+        if old_balances.get(&balance.asset_id).copied() != Some(*balance) {
+            out.push(AccountBusinessChange::Balance {
+                segment_key: current.segment_key.clone(),
+                value: (*balance).clone(),
+            });
+        }
+    }
+    for (asset_id, removed) in &old_balances {
+        if !current_balances.contains_key(asset_id) {
+            out.push(AccountBusinessChange::Balance {
+                segment_key: current.segment_key.clone(),
+                value: Balance {
+                    asset_id: removed.asset_id.clone(),
+                    asset_code: removed.asset_code.clone(),
+                    total: SignedQuantity::ZERO,
+                    available: Some(SignedQuantity::ZERO),
+                    locked: Some(SignedQuantity::ZERO),
+                    borrowed: None,
+                    interest: None,
+                },
+            });
+        }
+    }
+
+    let old_positions = old
+        .map(|value| {
+            value
+                .positions
+                .iter()
+                .map(|position| (position.instrument_id.clone(), position))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_positions = current
+        .positions
+        .iter()
+        .map(|position| (position.instrument_id.clone(), position))
+        .collect::<BTreeMap<_, _>>();
+    for position in current_positions.values() {
+        if old_positions.get(&position.instrument_id).copied() != Some(*position) {
+            out.push(AccountBusinessChange::Position {
+                segment_key: current.segment_key.clone(),
+                value: (*position).clone(),
+            });
+        }
+    }
+    for (instrument_id, removed) in &old_positions {
+        if !current_positions.contains_key(instrument_id) {
+            out.push(AccountBusinessChange::Position {
+                segment_key: current.segment_key.clone(),
+                value: crate::domain::Position {
+                    instrument_id: removed.instrument_id.clone(),
+                    market_id: removed.market_id.clone(),
+                    quantity: SignedQuantity::ZERO,
+                    average_price: removed.average_price,
+                    mark_price: removed.mark_price,
+                    unrealized_pnl: Some(crate::domain::Money::ZERO),
+                    realized_pnl: removed.realized_pnl,
+                    updated_at_unix_nanos: current.observed_at_unix_nanos,
+                },
+            });
+        }
+    }
+
+    if old.is_none_or(|value| value.equity != current.equity) {
+        out.push(AccountBusinessChange::Equity {
+            segment_key: current.segment_key.clone(),
+            value: current.equity,
+        });
+    }
+    if old.is_none_or(|value| value.status != current.status || value.stale != current.stale) {
+        out.push(AccountBusinessChange::Status {
+            segment_key: current.segment_key.clone(),
+            status: current.status,
+            stale: current.stale,
+        });
     }
 }
 

@@ -11,7 +11,7 @@ import time
 from decimal import Decimal
 from typing import Any, Mapping
 
-from kairospy.application.strategy.services.composition import compose_strategy_process
+from kairospy.application.strategy.composition import compose_strategy_process
 from kairospy.application.observability import configure_from_environment, record_gauge
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.strategy import StrategyOutput
@@ -45,10 +45,12 @@ def _params(value: str) -> dict[str, object]:
 
 
 def _write_backtest_report(composition, workspace) -> None:
-    # The process mode is not part of StrategyHost's business state; this
+    # The process mode is not part of StrategyApplication's business state; this
     # helper is called only for a backtest process.
     instance = workspace.instance(
-        "backtest", composition.host.launch_id, composition.host.instance_id
+        "backtest",
+        composition.application.launch_id,
+        composition.application.instance_id,
     )
     dataset = _replay_dataset_identity(instance.state("market", "replay.jsonl"))
     config = _file_identity(instance.root / "normalized-config.json")
@@ -56,36 +58,36 @@ def _write_backtest_report(composition, workspace) -> None:
         instance.root / "normalized-config.json"
     )
     final_account = None
-    account_ids = composition.host.context.account.account_ids
+    account_ids = composition.application.context.account.account_ids
     if account_ids:
         final_account = asdict(
-            composition.host.context.account.snapshot(account_ids[0])
+            composition.application.context.account.account(account_ids[0])
         )
     report = {
         "schema_version": 1,
-        "launch_id": composition.host.launch_id,
-        "instance_id": composition.host.instance_id,
-        "strategy_id": composition.host.strategy.strategy_id,
+        "launch_id": composition.application.launch_id,
+        "instance_id": composition.application.instance_id,
+        "strategy_id": composition.application.strategy.strategy_id,
         "completed_at_unix_nanos": time.time_ns(),
-        "status": composition.host.status.state.value,
-        "event_count": composition.host.status.event_count,
+        "status": composition.application.status.state.value,
+        "event_count": composition.application.status.event_count,
         "dataset": dataset,
         "config": config,
-        "clock_events": list(composition.host.clock_events),
-        "event_trace": list(composition.host.event_trace),
-        "fills": list(composition.host.backtest_fills),
+        "clock_events": list(composition.application.clock_events),
+        "event_trace": list(composition.application.event_trace),
+        "fills": list(composition.application.backtest_fills),
         "metrics": _backtest_metrics(
-            composition.host.backtest_fills, composition.host.equity_curve
+            composition.application.backtest_fills, composition.application.equity_curve
         ),
-        "equity_curve": list(composition.host.equity_curve),
+        "equity_curve": list(composition.application.equity_curve),
         # The final quote can settle an order after the last pre-strategy
         # mark.  Read Account once more at report time so this field is the
         # authoritative terminal state, not merely the last curve sample.
         "final_account": final_account
         if final_account is not None
         else (
-            composition.host.equity_curve[-1]["snapshot"]
-            if composition.host.equity_curve
+            composition.application.equity_curve[-1]["snapshot"]
+            if composition.application.equity_curve
             else None
         ),
     }
@@ -312,8 +314,8 @@ async def _run(args: argparse.Namespace) -> None:
             mode=args.mode,
             params=_params(args.params),
         )
-        sys.stdout = StrategyOutput(composition.host.logger, source="stdout")
-        sys.stderr = StrategyOutput(composition.host.logger, source="stderr")
+        sys.stdout = StrategyOutput(composition.application.logger, source="stdout")
+        sys.stderr = StrategyOutput(composition.application.logger, source="stderr")
         await composition.control.start()
         record_gauge("kairos.process.ready", 1)
         await composition.control.serve_until_stopped()

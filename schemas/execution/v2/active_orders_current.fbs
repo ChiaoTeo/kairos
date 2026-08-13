@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v2;
+
+table ActiveOrdersCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  orders:[OrderState] (required);
+}
+
+root_type ActiveOrdersCurrentView;
+file_identifier "ECO2";

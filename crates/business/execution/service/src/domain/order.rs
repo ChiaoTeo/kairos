@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub use kairos_domain_types::IntentId;
 pub use kairos_domain_types::{
-    AccountId, FillId, InstrumentId, LegId, MarketId, Money, OrderId, OrderSide, PlanId, Price,
+    AccountId, ExecutionAccessId, FillId, InstrumentId, LegId, MarketId, Money, OrderId, OrderSide, PlanId, Price,
     Quantity, RemoteOrderId, SegmentKey, UnixNanos,
 };
 
@@ -61,10 +61,14 @@ pub struct ExecutionOrder {
     #[serde(default)]
     pub leg_id: Option<LegId>,
     pub intent_id: Option<IntentId>,
+    #[serde(default)]
+    pub strategy_id: Option<kairos_domain_types::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
+    #[serde(default)]
+    pub execution_access_id: Option<ExecutionAccessId>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Quantity,
@@ -94,11 +98,13 @@ impl ExecutionOrder {
             plan_id: None,
             leg_id: None,
             intent_id: None,
+            strategy_id: None,
             account_id: AccountId::new(account_id).map_err(|error| error.to_string())?,
             segment_key: SegmentKey::new(segment_key.into()).map_err(|error| error.to_string())?,
             instrument_id: InstrumentId::new(instrument_id.into())
                 .map_err(|error| error.to_string())?,
             market_id: None,
+            execution_access_id: None,
             side,
             order_type,
             quantity,
@@ -127,6 +133,11 @@ pub struct ExecutionFill {
     pub leg_id: Option<LegId>,
     pub intent_id: Option<IntentId>,
     pub instrument_id: InstrumentId,
+    /// The canonical Market where this fill actually occurred. For smart/SOR
+    /// routes this may differ between fills of one order and is intentionally
+    /// distinct from the order's requested/pricing market.
+    #[serde(default)]
+    pub execution_market_id: Option<MarketId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub price: Price,

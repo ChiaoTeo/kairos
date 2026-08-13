@@ -2,6 +2,8 @@
 
 本文定义 Reference 的最终职责、边界和验收条件。数据平面的具体实现以
 [`reference-sqlite-read-model-design.md`](./reference-sqlite-read-model-design.md) 为准。
+Instrument、Listing、Market、MarketDataAccess、ExecutionAccess 的业务语义和关系以
+[`instrument-listing-market-access-design.md`](./instrument-listing-market-access-design.md) 为准。
 
 Reference 的定位是：
 
@@ -11,23 +13,24 @@ Reference 的定位是：
 
 Reference 必须维护并交付：
 
-1. Entity / Exchange 身份和生命周期；
+1. Entity / Exchange / Broker / Provider 身份、角色和生命周期；
 2. Asset 身份、分类和状态；
 3. Instrument 标准身份和金融属性；
 4. Listing 挂牌关系和有效区间；
-5. Market 静态定义、provider symbol 和交易规则；
+5. Market 静态定义、trading Exchange 和交易规则；
 6. FinancialProduct 目录；
-7. ExecutionAccess 可执行路径；
-8. generation、event sequence 和生命周期历史；
-9. provider health、last-known-good、分页进度和 coverage；
-10. read-only SQLite contract、变更流、控制面和诊断能力。
+7. MarketDataAccess 行情访问映射；
+8. ExecutionAccess direct/smart 可执行路径；
+9. generation、event sequence 和生命周期历史；
+10. provider health、last-known-good、分页进度和 coverage；
+11. read-only SQLite contract、变更流、控制面和诊断能力。
 
 Reference 不拥有实时行情、订单簿、订单、成交、余额、持仓、风险预算或策略 universe。
 
 ## 2. 模块边界
 
-- Integration 负责 provider 连接、鉴权、协议和外部事实标准化。
-- Reference 负责 canonical identity、目录冲突校验和生命周期。
+- Integration 负责 provider-native participant、连接、鉴权、协议和外部事实标准化。
+- Reference 负责 Exchange/Broker/Provider 在内的 canonical identity、目录冲突校验和生命周期。
 - Market 负责行情、订阅和自己的 Reference projection。
 - Execution 负责订单生命周期，并按需读取 Reference 规则。
 - Account 负责账户事实，并按 binding 缓存 provider instrument 到 canonical identity 的映射。
@@ -49,7 +52,9 @@ Reference 不拥有实时行情、订单簿、订单、成交、余额、持仓�
 - 来源顺序不能成为隐藏 winner；
 - provider provenance 保留在具体 listing、market 或 access facts 上。
 
-Spot Instrument 表达基础资产身份，quote、provider symbol 和 listing 有效期留在 Listing/Market。衍生品身份必须包含足以区分合约的 canonical 属性。
+Instrument 必须表达决定经济同一性的产品/合约属性；provider symbol 和 listing 有效期留在
+Listing/Access。现货 Instrument 从旧的“基础资产身份”迁移为 base/quote 产品身份前必须执行显式
+ID/data migration，不能静默重写。衍生品身份必须包含足以区分合约的 canonical 属性。
 
 ## 4. Provider 和 coverage 验收
 

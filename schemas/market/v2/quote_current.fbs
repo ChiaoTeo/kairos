@@ -1,0 +1,14 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.market.v2;
+
+table QuoteCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  shard_id:uint;
+  shard_count:uint;
+  quotes:[CurrentQuote] (required);
+}
+
+root_type QuoteCurrentView;
+file_identifier "MCQ2";

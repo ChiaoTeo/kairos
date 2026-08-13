@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -371,6 +371,17 @@ impl WorkspaceProcessLock {
     }
 }
 
+#[cfg(unix)]
+impl Drop for WorkspaceProcessLock {
+    fn drop(&mut self) {
+        // Make release deterministic after a failed non-blocking re-entry.
+        // Relying only on descriptor close is observably racy on macOS.
+        unsafe {
+            libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InstanceWorkspace {
     workspace: Workspace,
@@ -483,7 +494,7 @@ impl InstanceWorkspace {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
@@ -504,7 +515,8 @@ impl InstanceWorkspace {
                 return Err(error);
             }
         }
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        file.set_len(0)?;
+        file.write_all(std::process::id().to_string().as_bytes())?;
         Ok(WorkspaceProcessLock { _file: file, path })
     }
 
@@ -780,7 +792,7 @@ impl Workspace {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
@@ -812,7 +824,8 @@ impl Workspace {
             ));
         }
 
-        let _ = std::fs::write(&path, std::process::id().to_string());
+        file.set_len(0)?;
+        file.write_all(std::process::id().to_string().as_bytes())?;
         Ok(WorkspaceProcessLock { _file: file, path })
     }
 

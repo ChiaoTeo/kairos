@@ -1,0 +1,14 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.market.v2;
+
+table BarCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  shard_id:uint;
+  shard_count:uint;
+  bars:[CurrentBar] (required);
+}
+
+root_type BarCurrentView;
+file_identifier "MCB2";

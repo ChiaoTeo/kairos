@@ -46,77 +46,63 @@ class SnapshotHeader(object):
         return None
 
     # SnapshotHeader
-    def EventStreamId(self):
+    def WorkspaceId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # SnapshotHeader
-    def WorkspaceId(self):
+    def LaunchId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # SnapshotHeader
-    def LaunchId(self):
+    def InstanceId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # SnapshotHeader
-    def InstanceId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # SnapshotHeader
-    def EventSequence(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return 0
-
-    # SnapshotHeader
     def Version(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # SnapshotHeader
     def Generation(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # SnapshotHeader
     def GeneratedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # SnapshotHeader
     def AsOfUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # SnapshotHeader
     def Complete(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
         return True
 
 def SnapshotHeaderStart(builder):
-    builder.StartObject(13)
+    builder.StartObject(11)
 
 def Start(builder):
     SnapshotHeaderStart(builder)
@@ -139,62 +125,50 @@ def SnapshotHeaderAddOwnerActorId(builder, ownerActorId):
 def AddOwnerActorId(builder, ownerActorId):
     SnapshotHeaderAddOwnerActorId(builder, ownerActorId)
 
-def SnapshotHeaderAddEventStreamId(builder, eventStreamId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(eventStreamId), 0)
-
-def AddEventStreamId(builder, eventStreamId):
-    SnapshotHeaderAddEventStreamId(builder, eventStreamId)
-
 def SnapshotHeaderAddWorkspaceId(builder, workspaceId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(workspaceId), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(workspaceId), 0)
 
 def AddWorkspaceId(builder, workspaceId):
     SnapshotHeaderAddWorkspaceId(builder, workspaceId)
 
 def SnapshotHeaderAddLaunchId(builder, launchId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(launchId), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(launchId), 0)
 
 def AddLaunchId(builder, launchId):
     SnapshotHeaderAddLaunchId(builder, launchId)
 
 def SnapshotHeaderAddInstanceId(builder, instanceId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(instanceId), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(instanceId), 0)
 
 def AddInstanceId(builder, instanceId):
     SnapshotHeaderAddInstanceId(builder, instanceId)
 
-def SnapshotHeaderAddEventSequence(builder, eventSequence):
-    builder.PrependUint64Slot(7, eventSequence, 0)
-
-def AddEventSequence(builder, eventSequence):
-    SnapshotHeaderAddEventSequence(builder, eventSequence)
-
 def SnapshotHeaderAddVersion(builder, version):
-    builder.PrependUint64Slot(8, version, 0)
+    builder.PrependUint64Slot(6, version, 0)
 
 def AddVersion(builder, version):
     SnapshotHeaderAddVersion(builder, version)
 
 def SnapshotHeaderAddGeneration(builder, generation):
-    builder.PrependUint64Slot(9, generation, 0)
+    builder.PrependUint64Slot(7, generation, 0)
 
 def AddGeneration(builder, generation):
     SnapshotHeaderAddGeneration(builder, generation)
 
 def SnapshotHeaderAddGeneratedAtUnixNanos(builder, generatedAtUnixNanos):
-    builder.PrependUint64Slot(10, generatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(8, generatedAtUnixNanos, 0)
 
 def AddGeneratedAtUnixNanos(builder, generatedAtUnixNanos):
     SnapshotHeaderAddGeneratedAtUnixNanos(builder, generatedAtUnixNanos)
 
 def SnapshotHeaderAddAsOfUnixNanos(builder, asOfUnixNanos):
-    builder.PrependUint64Slot(11, asOfUnixNanos, 0)
+    builder.PrependUint64Slot(9, asOfUnixNanos, 0)
 
 def AddAsOfUnixNanos(builder, asOfUnixNanos):
     SnapshotHeaderAddAsOfUnixNanos(builder, asOfUnixNanos)
 
 def SnapshotHeaderAddComplete(builder, complete):
-    builder.PrependBoolSlot(12, complete, 1)
+    builder.PrependBoolSlot(10, complete, 1)
 
 def AddComplete(builder, complete):
     SnapshotHeaderAddComplete(builder, complete)

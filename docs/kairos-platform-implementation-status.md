@@ -5,7 +5,7 @@ This file is the evidence index for implementing
 current state, not intended state. A row is complete only when its evidence
 proves the corresponding architecture requirement.
 
-Last updated: 2026-08-13.
+Last updated: 2026-08-14.
 
 ## Status meanings
 
@@ -30,6 +30,20 @@ the same identity, facts, lineage and audit contract.
 | CLI and Python share one Data Application | complete | Root `kairos data list/inspect/plan/execute/execution/set/gate` is an adapter over the same `Kairos.open(Project).data` applications used by Research. Execution accepts the reviewed `--expected-plan-hash` and rejects changed requirements, while journal lookup is independently available. Capability-level lazy dispatch lets `kairos data` run without importing Launch or Strategy runtime; a subprocess test proves this isolation even while the Strategy package is mid-refactor. Focused tests prove plan/execute, named sets and persisted Gate evidence share the Catalog and journal; old Market commands remain owner/integration capabilities rather than a second unified Catalog |
 | CLI and Python share one Research Application | complete | `ResearchSpec.from_dict()` reconstructs the same hash-stable public plan contract persisted by Python. `kairos research plan lock/show` and `research gate publish/show` are thin adapters over `Kairos.open(Project).research`; capability-level lazy dispatch and subprocess coverage prove this path does not import Launch or the Strategy runtime. No second Research runner or evidence store exists |
 | Backtest, Paper and Live differ only at Composition | partial | All modes now share `LaunchRuntimeApplication`; remaining work is to finish the documented option-specific Risk/Execution/Account behavior and prove mode-parity gates |
+
+## Business transport Gate 0
+
+The evidence and remaining work are tracked in
+[`business-transport-contract-audit.md`](./business-transport-contract-audit.md).
+
+| Requirement | Status | Evidence / remaining work |
+|---|---|---|
+| Workspace-isolated Aeron runtime | complete | System, business publishers and Strategy bridge sources resolve the same `.kairos/run/aeron/media`; focused process/composition tests prove the binding |
+| Aeron and mmap business payloads use FlatBuffers | complete | All 21 active Account, Execution, Market and Risk roots have validated identifiers and shared Rust/Python compatibility fixtures |
+| Strategy Market contract matches current need | complete | Quote, Bar, Trade and Greeks are typed public events; other observations only advance continuity. Live dispatch filters by the Strategy instance's requested market, selector and Bar timeframe |
+| Direct service-to-contract mapping | complete | Account, Market, Risk and Execution explicitly map application/domain models into contract-owned types; an architecture test rejects JSON model adapters in active publisher composition |
+| Event gap and resume contract | complete for Gate 0 | All four application streams detect gaps, never infer recovery from mmap, and drive Strategy to `FAILED`; durable retention/resync is explicitly outside the first fail-closed contract |
+| Snapshot metadata semantics | complete | All active roots use schema version 1, separate state generation, publication time and business-derived as-of time; zero as-of means an empty/unknown image. Production encoder tests decode and assert these fields for Account, Execution, Market and Risk |
 
 ## Unified data architecture
 
@@ -155,11 +169,12 @@ not become a Data or runtime owner.
   storage-independent lineage and quality description entry.
 - Ruff and Pyright pass for the new Python data/launch surfaces.
 - `cargo fmt --all -- --check` passes after formatting.
-- The last completed full Python run has 233 passed, 8 skipped and 1 failure. The sole
-  failure is `test_generated_market_data_replays_through_canonical_market_cli`:
-  the current Rust CLI expects a string where the canonical fixture supplies a
-  numeric map. This belongs to the active lower-boundary mantissa/scale migration
-  and is recorded here without changing that boundary.
+- The current full Python run passes with 335 tests passed and 8 skipped.
+- `cargo test --workspace` passes, including doctests, when run with an isolated
+  Cargo target directory. The isolation avoids artifact races with concurrent
+  local Cargo processes. Workspace process locks now write ownership through the
+  already-locked descriptor and explicitly release `flock` on drop, so same-process
+  rejection/reacquisition and cross-process exclusion are deterministic on macOS.
 - Component startup now checks child termination before transport readiness and
   only probes health after the Unix socket exists. The full suite proves the
   early-exit diagnostic remains below its two-second contract under load.
@@ -178,7 +193,8 @@ not become a Data or runtime owner.
   was re-evaluated under the cross-member PIT identity rule: 1,874/1,874 option
   Quote facts matched one of 687 Reference instruments available at observation
   time, with 100% identity/time completeness. Data/Launch/report focused
-  verification passes 48 tests. No Strategy runtime file was changed.
+  verification passes 48 tests. The current Strategy runtime worktree changes were
+  preserved during baseline recovery.
 
 This objective is not complete while any required row remains `partial` or
 `missing`.

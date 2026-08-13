@@ -1095,6 +1095,7 @@ fn merge_provider_catalog_views<'a>(
         markets: markets.into_values().collect(),
         financial_products: financial_products.into_values().collect(),
         execution_accesses: execution_accesses.into_values().collect(),
+        market_data_accesses: Vec::new(),
     })
 }
 
@@ -2473,7 +2474,12 @@ fn binance_equity_provider_catalog(
             access_id: kairos_domain_types::ExecutionAccessId::new(format!(
                 "execution-access:binance:equity:{symbol}"
             ))?,
+            routing_mode: "direct".into(),
+            instrument_id: Some(instrument_id.clone()),
+            listing_id: Some(listing_id.clone()),
             market_id,
+            destination_market_id: None,
+            broker_id: None,
             provider_id: "binance".into(),
             product_family: "equity".into(),
             provider_symbol: value.source_symbol,
@@ -3060,6 +3066,11 @@ fn merge_provider_catalog(
         execution_accesses: merge_records(
             previous.execution_accesses,
             incoming.execution_accesses,
+            |value| value.access_id.clone(),
+        ),
+        market_data_accesses: merge_records(
+            previous.market_data_accesses,
+            incoming.market_data_accesses,
             |value| value.access_id.clone(),
         ),
     }

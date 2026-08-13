@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.market.v2;
+
+table QuoteObserved {
+  metadata:kairos.common.v2.EventMetadata (required);
+  quote:QuoteObservation (required);
+}
+
+root_type QuoteObserved;
+file_identifier "MQV2";

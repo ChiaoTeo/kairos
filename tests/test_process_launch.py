@@ -18,7 +18,11 @@ from kairospy.application.workspace import WorkspaceApplication
 
 def test_component_process_application_starts_bin_and_waits_for_health(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        ComponentProcessApplication, "_ensure_aeron_driver", lambda _self: None
+    )
     short_root = Path("/tmp/kairos-process-launch-test")
     if short_root.exists():
         import shutil
@@ -90,7 +94,12 @@ def test_component_process_application_starts_bin_and_waits_for_health(
     shutil.rmtree(short_root, ignore_errors=True)
 
 
-def test_component_start_reports_early_exit_and_log_detail(tmp_path: Path) -> None:
+def test_component_start_reports_early_exit_and_log_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        ComponentProcessApplication, "_ensure_aeron_driver", lambda _self: None
+    )
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="failed-start"
     )
@@ -335,7 +344,7 @@ def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> 
         tmp_path / "workspace", workspace_id="instance"
     )
     instance = workspace.instance("backtest", "btc-sma", "run-001")
-    command, _ = ComponentProcessApplication(
+    command, environment = ComponentProcessApplication(
         workspace, binaries={"market": "market-bin"}
     )._command("market", account_id=None, instance_workspace=instance)
 
@@ -347,6 +356,7 @@ def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> 
         "--instance-id",
         "run-001",
     ]
+    assert environment["AERON_DIR"] == str(workspace.paths.aeron_dir())
 
 
 def test_market_command_passes_only_runtime_profile_selection(tmp_path: Path) -> None:

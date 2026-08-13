@@ -141,7 +141,12 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     port = ExecutionCommandClient(client)
 
     handle = port.target_position(
-        TargetPositionRequest("BTCUSDT", Decimal("1.250"), account_id="main"),
+        TargetPositionRequest(
+            "BTCUSDT",
+            Decimal("1.250"),
+            account_id="main",
+            segment_key="usd_m_futures",
+        ),
         strategy_id="sma",
         instance_id="instance-1",
         request_id="request-2",
@@ -153,6 +158,7 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     assert body["operation"] == "execution.submit_intent"
     assert body["payload"]["intent"]["target_quantity"] == "1.250"
     assert body["payload"]["intent"]["strategy_id"] == "sma"
+    assert body["payload"]["intent"]["segment_key"] == "usd_m_futures"
 
 
 def test_execution_client_applies_launch_live_safety_before_owner_command() -> None:
@@ -187,6 +193,7 @@ def test_execution_client_submits_typed_direct_order_without_exposing_connection
             Decimal("100.01"),
             time_in_force=TimeInForce.DAY,
             post_only=True,
+            segment="equity",
         ),
         strategy_id="s",
         instance_id="i",
@@ -198,6 +205,7 @@ def test_execution_client_submits_typed_direct_order_without_exposing_connection
     assert body["instrument_id"] == "instrument:test:SPY"
     assert body["quantity"] == "2"
     assert body["limit_price"] == "100.01"
+    assert body["segment_key"] == "equity"
     assert body["options"]["post_only"] is True
 
 
@@ -236,8 +244,12 @@ def test_execution_client_encodes_pair_arbitrage_as_two_execution_legs() -> None
     port = ExecutionCommandClient(client)
     handle = port.pair_arbitrage(
         PairArbitrageRequest(
-            ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), segment_key="spot"),
-            ArbitrageLegRequest("BTC-PERP", "Sell", Decimal("1"), segment_key="perp"),
+            ArbitrageLegRequest(
+                "BTCUSDT", "Buy", Decimal("1"), "binance-main", segment_key="spot"
+            ),
+            ArbitrageLegRequest(
+                "BTC-PERP", "Sell", Decimal("1"), "okx-hedge", segment_key="perp"
+            ),
         ),
         strategy_id="arb",
         instance_id="instance-1",
@@ -258,12 +270,13 @@ def test_pair_request_exposes_split_maker_and_hedge_controls() -> None:
                 "USDCUSDT",
                 "Buy",
                 Decimal("100"),
+                "maker-main",
                 split=SplitOrderPolicy(child_count=4, interval_millis=50),
                 maker=MakerExecutionPolicy(
                     min_interval_millis=25, max_inventory_abs=Decimal("200")
                 ),
             ),
-            ArbitrageLegRequest("USDCUSDT-PERP", "Sell", Decimal("100")),
+            ArbitrageLegRequest("USDCUSDT-PERP", "Sell", Decimal("100"), "maker-hedge"),
             hedge_policy=HedgePolicy(
                 "leg-0", "leg-1", max_unhedged_quantity=Decimal("1")
             ),
@@ -288,6 +301,7 @@ def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
             Decimal("100"),
             Decimal("1.0002"),
             Decimal("100"),
+            account_id="main",
             maker=MakerExecutionPolicy(min_interval_millis=100),
         ),
         strategy_id="maker",
@@ -326,8 +340,8 @@ def test_execution_client_encodes_portfolio_targets_as_target_position_legs() ->
     handle = port.portfolio_rebalance(
         PortfolioRebalanceRequest(
             (
-                PortfolioRebalanceTarget("BTCUSDT", Decimal("2")),
-                PortfolioRebalanceTarget("ETHUSDT", Decimal("5")),
+                PortfolioRebalanceTarget("BTCUSDT", Decimal("2"), "main"),
+                PortfolioRebalanceTarget("ETHUSDT", Decimal("5"), "secondary"),
             ),
         ),
         strategy_id="portfolio",
@@ -338,6 +352,7 @@ def test_execution_client_encodes_portfolio_targets_as_target_position_legs() ->
     intent = client.calls[0][2]["payload"]["intent"]
     assert intent["intent_type"] == "PortfolioRebalance"
     assert all(leg["target_position"] for leg in intent["legs"])
+    assert intent["account_ids"] == ["main", "secondary"]
 
 
 def test_market_and_execution_clients_are_constructed_directly(tmp_path) -> None:

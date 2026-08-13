@@ -1,7 +1,7 @@
 //! Market process runtime and strategy command boundary.
 
 use crate::application::MarketApplication;
-use crate::domain::snapshot::MarketSnapshot;
+use crate::domain::snapshot::MarketCurrentView;
 use crate::services::control::{
     spawn_server as spawn_control_server, EngineCommand, MarketHttpResponse,
 };
@@ -95,6 +95,7 @@ pub struct MarketProcess {
     reference_poll_interval: Duration,
     publication_queue_capacity: usize,
     lifecycle_guard: Option<Box<dyn Send>>,
+    event_publisher: Option<kairos_transport::AeronBytePublisher>,
 }
 
 pub(crate) struct MarketProcessSettings {
@@ -109,7 +110,7 @@ pub(crate) struct MarketProcessSettings {
 /// Application-owned publication capability. Concrete storage and wire
 /// encoding are selected by composition and never cross this boundary.
 pub trait MarketSnapshotPublisher: Send {
-    fn publish(&mut self, snapshot: &MarketSnapshot) -> Result<(), String>;
+    fn publish(&mut self, snapshot: &MarketCurrentView) -> Result<(), String>;
 }
 
 enum MarketHistoryRecorder {
@@ -276,11 +277,20 @@ impl MarketProcess {
             reference_poll_interval: settings.reference_recovery_interval,
             publication_queue_capacity: settings.publication_queue_capacity,
             lifecycle_guard: None,
+            event_publisher: None,
         })
     }
 
     pub(crate) fn with_lifecycle_guard<T: Send + 'static>(mut self, guard: T) -> Self {
         self.lifecycle_guard = Some(Box::new(guard));
+        self
+    }
+
+    pub fn with_aeron_event_publisher(
+        mut self,
+        publisher: kairos_transport::AeronBytePublisher,
+    ) -> Self {
+        self.event_publisher = Some(publisher);
         self
     }
 
@@ -313,6 +323,7 @@ impl MarketProcess {
             reference_poll_interval,
             publication_queue_capacity,
             lifecycle_guard,
+            event_publisher,
         } = self;
         let _lifecycle_guard = lifecycle_guard;
         remove_socket(&socket_path)?;
@@ -349,6 +360,7 @@ impl MarketProcess {
         );
         info!(event = "process_ready", component = "market", socket = %socket_path.display(), "market control socket ready");
         let mut event_fanout = EventFanout::new(publication_queue_capacity);
+        let event_publisher = event_publisher;
         let mut pending_reference_command = None;
         let mut reference_ticks = time::interval(reference_poll_interval);
         reference_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -359,6 +371,9 @@ impl MarketProcess {
                     event_fanout.add_client(stream);
                 }
                 Some(payload) = event_receiver.recv() => {
+                    if let Some(publisher) = event_publisher.as_ref() {
+                        publisher.publish(&payload)?;
+                    }
                     event_fanout.publish(payload);
                 }
                 _ = reference_ticks.tick(), if reference_events.is_some() => {
@@ -378,6 +393,9 @@ impl MarketProcess {
             }
         };
         while let Ok(payload) = event_receiver.try_recv() {
+            if let Some(publisher) = event_publisher.as_ref() {
+                publisher.publish(&payload)?;
+            }
             event_fanout.publish(payload);
         }
         event_fanout.shutdown(publication_shutdown_timeout).await;
@@ -570,7 +588,7 @@ impl MarketActorTask {
     }
 
     fn publish_snapshot(&mut self) -> Result<(), String> {
-        let snapshot = self.application.snapshot();
+        let snapshot = self.application.current_view();
         kairos_workspace::logging::record_gauge(
             "kairos.snapshot.generation",
             snapshot.generation.get(),
@@ -1143,7 +1161,7 @@ mod tests {
     impl MarketSnapshotPublisher for NullPublisher {
         fn publish(
             &mut self,
-            _snapshot: &crate::domain::snapshot::MarketSnapshot,
+            _snapshot: &crate::domain::snapshot::MarketCurrentView,
         ) -> Result<(), String> {
             Ok(())
         }

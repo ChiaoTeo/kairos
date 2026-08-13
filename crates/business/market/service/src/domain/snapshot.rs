@@ -48,6 +48,34 @@ pub struct MarketSnapshot {
     pub feed_status: FeedStatus,
 }
 
+/// Freshness shown in the mmap current view. Event positions belong only to
+/// the Aeron stream and are deliberately absent here.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketCurrentFreshness {
+    pub source_id: String,
+    pub market_id: kairos_domain_types::MarketId,
+    pub data_kind: String,
+    pub last_event_time_unix_nanos: kairos_domain_types::UnixNanos,
+    pub last_received_time_unix_nanos: kairos_domain_types::UnixNanos,
+    pub status: super::freshness::DataFreshnessStatus,
+}
+
+/// Pure current-state view published through mmap. It cannot contain events,
+/// event sequences, cursors, or replay positions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketCurrentView {
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub latest: BTreeMap<String, MarketObservation>,
+    pub views: BTreeMap<String, MarketObservation>,
+    pub order_books: BTreeMap<String, OrderBook>,
+    pub freshness: BTreeMap<String, MarketCurrentFreshness>,
+    pub subscriptions: Vec<SubscriptionState>,
+    pub sources: BTreeMap<SourceId, SourceState>,
+    pub readiness: MarketReadiness,
+    pub feed_status: FeedStatus,
+}
+
 impl Default for MarketSnapshot {
     fn default() -> Self {
         Self {

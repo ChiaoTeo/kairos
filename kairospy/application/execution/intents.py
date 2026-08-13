@@ -13,6 +13,7 @@ class TargetPositionRequest:
     quantity: Decimal
     account_id: str | None = None
     account_ids: tuple[str, ...] = ()
+    segment_key: str = "spot"
     limit_price: Decimal | None = None
     reason: str = ""
     intent_id: str | None = None
@@ -33,6 +34,8 @@ class TargetPositionRequest:
         ):
             raise ValueError("account_ids must contain non-empty strings")
         object.__setattr__(self, "account_ids", tuple(self.account_ids))
+        if not self.segment_key.strip():
+            raise ValueError("segment_key is required")
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
         if self.source_snapshot_id is not None and not self.source_snapshot_id.strip():
@@ -49,14 +52,18 @@ class ArbitrageLegRequest:
     instrument_id: str
     side: str
     quantity: Decimal
-    account_id: str | None = None
+    account_id: str
     segment_key: str = "spot"
     limit_price: Decimal | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip() or not self.segment_key.strip():
+        if (
+            not self.instrument_id.strip()
+            or not self.account_id.strip()
+            or not self.segment_key.strip()
+        ):
             raise ValueError("arbitrage leg identity is required")
         if self.side not in {"Buy", "Sell", "buy", "sell"}:
             raise ValueError("arbitrage leg side must be Buy or Sell")
@@ -68,7 +75,6 @@ class ArbitrageLegRequest:
 class PairArbitrageRequest:
     first: ArbitrageLegRequest
     second: ArbitrageLegRequest
-    account_id: str = "main"
     reason: str = ""
     intent_id: str | None = None
     completion_policy: str = "AllLegsSatisfied"
@@ -239,7 +245,7 @@ class QuoteProvisioningRequest:
     bid_quantity: Decimal
     ask_price: Decimal
     ask_quantity: Decimal
-    account_id: str = "main"
+    account_id: str = ""
     segment_key: str = "spot"
     market_id: str | None = None
     maker: MakerExecutionPolicy | None = None
@@ -293,21 +299,24 @@ class QuoteRefreshRequest:
 class PortfolioRebalanceTarget:
     instrument_id: str
     quantity: Decimal
-    account_id: str | None = None
+    account_id: str
     segment_key: str = "spot"
     limit_price: Decimal | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip() or not self.segment_key.strip():
+        if (
+            not self.instrument_id.strip()
+            or not self.account_id.strip()
+            or not self.segment_key.strip()
+        ):
             raise ValueError("portfolio target identity is required")
 
 
 @dataclass(frozen=True, slots=True)
 class PortfolioRebalanceRequest:
     targets: tuple[PortfolioRebalanceTarget, ...]
-    account_id: str = "main"
     reason: str = ""
     intent_id: str | None = None
     completion_policy: str = "BestEffort"

@@ -9,9 +9,21 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 
-from .application import MarketApplication, Subscription
-from .events import BarEvent, MarketEvent, QuoteEvent, TradeEvent
-from .models import AggressorSide, Bar, MarketSnapshot, Quote, Trade
+from .application import (
+    MarketApplication,
+    Subscription,
+    SubscriptionReleaseResult,
+    SubscriptionStatus,
+)
+from .events import (
+    BarEvent,
+    EventStreamGap,
+    GreeksEvent,
+    MarketEvent,
+    QuoteEvent,
+    TradeEvent,
+)
+from .models import AggressorSide, Bar, MarketSnapshot, OptionGreeks, Quote, Trade
 from .requests import SubscriptionRequest
 
 
@@ -315,6 +327,8 @@ __all__ = [
     "AggressorSide",
     "Bar",
     "BarEvent",
+    "EventStreamGap",
+    "GreeksEvent",
     "MarketApplication",
     "MarketEvent",
     "MarketAnalyticalApplication",
@@ -322,10 +336,13 @@ __all__ = [
     "MarketDataApplication",
     "OptionGreeksProjectionRequest",
     "OptionGreeksProjectionResult",
+    "OptionGreeks",
     "Quote",
     "QuoteEvent",
     "Subscription",
+    "SubscriptionReleaseResult",
     "SubscriptionRequest",
+    "SubscriptionStatus",
     "Trade",
     "TradeEvent",
     "materialize_replay_file",

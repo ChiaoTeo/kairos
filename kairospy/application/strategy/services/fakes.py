@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import AsyncIterator, Mapping
 
 from kairospy.application.market import MarketSnapshot, SubscriptionRequest
+from kairospy.application.account import AccountApplication
+from kairospy.application.execution import ExecutionApplication
+from kairospy.application.market import MarketApplication
+from kairospy.application.reference import ReferenceApplication
+from kairospy.application.risk import RiskApplication
 from ..domain.lifecycle import StrategyLifecycle
-from ..domain.messages import (
-    CommandHandle,
-    RawEventEnvelope,
-    LifecycleRecord,
-)
+from ..domain.messages import CommandHandle, LifecycleRecord
+from .journal import StrategyLifecycleJournal
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,18 +175,15 @@ class InMemoryMarketSnapshotReader:
         return self.snapshots[view_key]
 
 
-class InMemoryEventStream:
-    def __init__(self, stream_id: str, *, first_sequence: int = 1) -> None:
+class InMemoryMarketEventSource:
+    def __init__(self, stream_id: str) -> None:
         self.stream_id = stream_id
-        self.first_sequence = first_sequence
-        self._events: deque[RawEventEnvelope] = deque()
+        self._events: deque[object] = deque()
         self._waiters: list[asyncio.Future[None]] = []
 
-    def can_join(self, event_sequence: int) -> bool:
-        return event_sequence >= self.first_sequence - 1
-
-    def append(self, event: RawEventEnvelope) -> None:
-        if event.stream_id != self.stream_id:
+    def append(self, event: object) -> None:
+        metadata = getattr(event, "metadata")
+        if metadata.stream_id != self.stream_id:
             raise ValueError("event belongs to a different stream")
         self._events.append(event)
         for waiter in self._waiters:
@@ -192,12 +191,18 @@ class InMemoryEventStream:
                 waiter.set_result(None)
         self._waiters.clear()
 
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[RawEventEnvelope]:
+    async def events(self, after_sequence: int = 0) -> AsyncIterator[object]:
         next_sequence = after_sequence + 1
         while True:
-            while self._events and self._events[0].sequence < next_sequence:
+            while (
+                self._events
+                and getattr(self._events[0], "metadata").sequence < next_sequence
+            ):
                 self._events.popleft()
-            if self._events and self._events[0].sequence == next_sequence:
+            if (
+                self._events
+                and getattr(self._events[0], "metadata").sequence == next_sequence
+            ):
                 event = self._events.popleft()
                 next_sequence += 1
                 yield event
@@ -207,9 +212,45 @@ class InMemoryEventStream:
             await waiter
 
 
-class InMemoryLifecycleJournal:
+class InMemoryLifecycleJournal(StrategyLifecycleJournal):
     def __init__(self) -> None:
         self.records: list[LifecycleRecord] = []
 
     def append(self, record: LifecycleRecord) -> None:
         self.records.append(record)
+
+
+def build_in_memory_strategy_applications(
+    commands: InMemoryApplicationPorts,
+    snapshots: InMemoryMarketSnapshotReader,
+    event_source: InMemoryMarketEventSource,
+    *,
+    strategy_id: str,
+    instance_id: str,
+) -> tuple[
+    ReferenceApplication,
+    MarketApplication,
+    AccountApplication,
+    RiskApplication,
+    ExecutionApplication,
+]:
+    """Build deterministic module Applications for Strategy runtime tests."""
+
+    return (
+        ReferenceApplication(),
+        MarketApplication(
+            commands,
+            snapshots,
+            event_source,
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+        ),
+        AccountApplication({}),
+        RiskApplication(None),
+        ExecutionApplication(
+            commands,
+            None,
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+        ),
+    )

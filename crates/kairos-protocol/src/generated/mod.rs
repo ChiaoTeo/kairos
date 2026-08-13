@@ -124,6 +124,10 @@ pub mod kairos {
         pub mod v_1 {
             mod account_generated;
             pub use account_generated::*;
+            mod account_change_generated;
+            pub use account_change_generated::*;
+            mod account_event_generated;
+            pub use account_event_generated::*;
             mod balance_generated;
             pub use balance_generated::*;
             mod position_generated;
@@ -145,7 +149,12 @@ pub mod kairos {
 
     pub mod execution {
         pub use super::common;
+        pub use super::intent;
         pub mod v_1 {
+            mod execution_change_generated;
+            pub use execution_change_generated::*;
+            mod execution_event_message_generated;
+            pub use execution_event_message_generated::*;
             mod fill_generated;
             pub use fill_generated::*;
             mod order_generated;
@@ -204,6 +213,8 @@ pub mod kairos {
             pub use risk_context_generated::*;
             mod reservation_event_generated;
             pub use reservation_event_generated::*;
+            mod risk_event_message_generated;
+            pub use risk_event_message_generated::*;
             mod reservation_generated;
             pub use reservation_generated::*;
             mod reserve_risk_request_generated;

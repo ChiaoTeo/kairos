@@ -1,4 +1,11 @@
-from .application import ExecutionApplication
+from .application import AccountExecution, ExecutionApplication
+from .config import ExecutionPolicy
+from .errors import (
+    ExecutionAccountNotEnabledError,
+    ExecutionLookupError,
+    IntentNotFoundError,
+    OrderNotFoundError,
+)
 from .events import (
     ExecutionEvent,
     FillEvent,
@@ -6,6 +13,7 @@ from .events import (
     OrderUpdateEvent,
 )
 from .models import (
+    ExecutionBacktestResult,
     BulkOrderCommandReceipt,
     DeliveryCertainty,
     ExecutionIntent,
@@ -41,16 +49,22 @@ from .intents import (
 )
 
 __all__ = [
+    "AccountExecution",
     "BulkOrderCommandReceipt",
     "ArbitrageLegRequest",
     "DeliveryCertainty",
     "ExecutionApplication",
+    "ExecutionAccountNotEnabledError",
+    "ExecutionBacktestResult",
+    "ExecutionPolicy",
     "ExecutionEvent",
     "ExecutionIntent",
+    "ExecutionLookupError",
     "Fill",
     "FillEvent",
     "IntentId",
     "IntentReceipt",
+    "IntentNotFoundError",
     "IntentStatus",
     "IntentUpdateEvent",
     "HedgePolicy",
@@ -60,6 +74,7 @@ __all__ = [
     "OptionSpreadLegRequest",
     "OptionSpreadRequest",
     "Order",
+    "OrderNotFoundError",
     "OrderCommandReceipt",
     "OrderId",
     "OrderRequest",

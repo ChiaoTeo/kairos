@@ -15,10 +15,11 @@ from typing import Any, Mapping
 from ...account import AccountAdminApplication, TradeLeaseApplication
 from ...data import DatasetCatalogApplication, DatasetReaderApplication
 from ...market import materialize_replay_file, validate_replay_window
-from ...strategy import StrategyProcessApplication
+from .strategy_process import StrategyProcessController
 from ...system import ComponentProcessApplication, ReferenceProcessConfig
 from ...workspace import Workspace
 from ..domain.identity import new_instance_id
+from ..composition import release_strategy_market_owner
 from .configuration import (
     LaunchConfig,
     LaunchConfigError,
@@ -165,7 +166,7 @@ def cleanup_instance_components(
     stopped: dict[str, dict[str, Any]] = {}
     if stop_strategy:
         try:
-            stopped["strategy"] = StrategyProcessApplication(owner).stop(
+            stopped["strategy"] = StrategyProcessController(owner).stop(
                 instance_workspace.launch_id,
                 instance_workspace.instance_id,
                 instance_workspace.mode,
@@ -176,6 +177,9 @@ def cleanup_instance_components(
                 "status": "stop_failed",
                 "error": str(error),
             }
+        subscription_cleanup = release_strategy_market_owner(owner, instance_workspace)
+        if subscription_cleanup is not None:
+            stopped["market_subscriptions"] = subscription_cleanup
     try:
         manifest = json.loads(
             instance_workspace.component_manifest().read_text(encoding="utf-8")
@@ -466,6 +470,11 @@ class LaunchRuntimeApplication:
                     "socket": str(instance_workspace.socket(socket_name)),
                     "health": str(instance_workspace.health(socket_name)),
                     "socket_name": socket_name,
+                    "snapshot": str(
+                        instance_workspace.snapshot(
+                            socket_name, f"{socket_name}.snapshot"
+                        )
+                    ),
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
             component_endpoints: dict[str, dict[str, Any]] = {
@@ -519,7 +528,7 @@ class LaunchRuntimeApplication:
                 components=component_endpoints,
             )
             params = {**dict(plan.strategy_params), **dict(strategy_params or {})}
-            StrategyProcessApplication(self.workspace).ensure_running(
+            StrategyProcessController(self.workspace).ensure_running(
                 strategy,
                 launch_id=launch_id,
                 instance_id=instance,

@@ -17,9 +17,9 @@ reference business types from the owning namespace. A small read-specific
 type is justified only when the shape is genuinely different or has an
 independent compatibility boundary.
 
-Consumers are readers, not owners. A newly started strategy obtains the latest
-snapshot from the Actor and then follows the `event_stream_id` from the
-snapshot's `event_sequence`. `generation` identifies publication order;
-`event_sequence` identifies the event-tail watermark. A strategy may maintain
-private indicators or model state, but it must not reconstruct shared
-Actor-owned state by itself.
+Consumers are readers, not owners. A snapshot is a one-shot current-state read;
+it has no event stream identity, event sequence, cursor, join point, or replay
+position. `generation` identifies only snapshot publication order. Event
+continuity and recovery belong exclusively to the owning module's event
+contract. A strategy may maintain private indicators or model state, but it
+must not reconstruct shared Actor-owned state by itself.

@@ -7,6 +7,8 @@ table ReservationEvent {
   header:kairos.common.v1.MessageHeader (required);
   reservation_id:string (required);
   request_id:string (required);
+  account_id:string (required);
+  strategy_id:string (required);
   status:string (required);
   allocations:[Allocation];
   occurred_at_unix_nanos:ulong;

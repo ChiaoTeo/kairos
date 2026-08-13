@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_domain_types::{
     AccountId, ActorId, ClientOrderId, Currency, DurationNanos, FillId, Generation, InstrumentId,
-    IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity, RemoteOrderId, SegmentKey,
-    Sequence, Symbol, UnixNanos,
+    ExecutionAccessId, IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity, RemoteOrderId, SegmentKey,
+    Sequence, StrategyId, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,10 @@ use crate::domain::{
 
 fn typed_intent_id(value: impl Into<String>) -> IntentId {
     IntentId::new(value).expect("validated intent ID")
+}
+
+fn typed_strategy_id(value: impl Into<String>) -> StrategyId {
+    StrategyId::new(value).expect("validated strategy ID")
 }
 
 fn completed_quantity(intent: &ExecuteStrategyIntent, mantissa: i64) -> Quantity {
@@ -39,10 +43,16 @@ use tracing::{debug, info, warn};
 pub struct SubmitOrder {
     pub order_id: OrderId,
     pub intent_id: Option<IntentId>,
+    #[serde(default)]
+    pub strategy_id: Option<kairos_domain_types::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
+    /// Explicit Reference ExecutionAccess selected by planning or the caller.
+    /// Execution never derives provider identity from a MarketId or symbol.
+    #[serde(default)]
+    pub execution_access_id: Option<ExecutionAccessId>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Quantity,
@@ -124,6 +134,8 @@ pub struct ExecutionFillReport {
     pub price: Price,
     pub fee: Money,
     pub occurred_at_unix_nanos: Option<UnixNanos>,
+    #[serde(default)]
+    pub execution_market_id: Option<MarketId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -143,6 +155,31 @@ pub struct ExecutionEvent {
     pub fill_id: Option<FillId>,
     #[serde(default)]
     pub filled_quantity: Option<Quantity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionBusinessEvent {
+    pub sequence: Sequence,
+    pub occurred_at_unix_nanos: UnixNanos,
+    pub changes: Vec<ExecutionBusinessChange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExecutionBusinessChange {
+    Intent(IntentState),
+    Order {
+        strategy_id: String,
+        order: ExecutionOrder,
+    },
+    Fill {
+        strategy_id: String,
+        account_id: String,
+        intent_id: Option<String>,
+        market_id: Option<String>,
+        remote_order_id: Option<String>,
+        side: OrderSide,
+        fill: ExecutionFill,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -165,6 +202,13 @@ pub struct ExecutionSnapshot {
     pub unknown_remote_orders: Vec<UnknownRemoteOrder>,
     #[serde(default)]
     pub exchange_event_watermark_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ExecutionCurrentView {
+    pub generation: Generation,
+    pub orders: Vec<ExecutionOrder>,
+    pub intents: Vec<IntentState>,
 }
 
 /// A exchange order observed through a private stream or remote query that could
@@ -387,6 +431,10 @@ pub struct ExecuteStrategyIntent {
     /// advisory input used by preflight to reject an edge that is only
     /// positive before fees.
     pub estimated_fee_bps: Option<u32>,
+    #[serde(default)]
+    pub minimum_net_credit: Option<Money>,
+    #[serde(default)]
+    pub maximum_loss: Option<Money>,
     pub hedge_policy: Option<HedgePolicy>,
     pub order_options: ExecutionOrderOptions,
 }
@@ -417,6 +465,8 @@ impl Default for ExecuteStrategyIntent {
             min_edge_bps: None,
             max_slippage_bps: None,
             estimated_fee_bps: None,
+            minimum_net_credit: None,
+            maximum_loss: None,
             hedge_policy: None,
             order_options: ExecutionOrderOptions::default(),
         }
@@ -530,8 +580,10 @@ pub struct ExecutionApplication {
     intents: BTreeMap<String, IntentState>,
     intent_events: Vec<IntentEvent>,
     pending_intent_events: Vec<IntentEvent>,
+    pending_business_events: std::collections::VecDeque<ExecutionBusinessEvent>,
     intent_idempotency: BTreeMap<String, String>,
     unknown_remote_orders: BTreeMap<String, UnknownRemoteOrder>,
+    execution_accesses: BTreeMap<ExecutionAccessId, kairos_integration::application::ProviderInstrumentRef>,
     exchange_event_watermark_unix_nanos: u64,
     order_entry: Option<Box<dyn OrderEntryConnection>>,
     order_query: Option<Box<dyn OrderQueryConnection>>,
@@ -599,8 +651,10 @@ impl ExecutionApplication {
             intents: BTreeMap::new(),
             intent_events: Vec::new(),
             pending_intent_events: Vec::new(),
+            pending_business_events: std::collections::VecDeque::new(),
             intent_idempotency: BTreeMap::new(),
             unknown_remote_orders: BTreeMap::new(),
+            execution_accesses: BTreeMap::new(),
             exchange_event_watermark_unix_nanos: 0,
             order_entry,
             order_query,
@@ -650,6 +704,17 @@ impl ExecutionApplication {
             }
         }
         Ok(application)
+    }
+
+    /// Install Reference-owned provider addresses for explicit execution
+    /// access IDs. The application never reconstructs these addresses from a
+    /// canonical MarketId or provider symbol.
+    pub fn configure_execution_access(
+        &mut self,
+        access_id: ExecutionAccessId,
+        provider_instrument: kairos_integration::application::ProviderInstrumentRef,
+    ) {
+        self.execution_accesses.insert(access_id, provider_instrument);
     }
 
     pub fn remote_open_orders(
@@ -1026,6 +1091,18 @@ impl ExecutionApplication {
         }
     }
 
+    pub fn current_view(&self) -> ExecutionCurrentView {
+        ExecutionCurrentView {
+            generation: self.generation.into(),
+            orders: self.orders.values().cloned().collect(),
+            intents: self.intents.values().cloned().collect(),
+        }
+    }
+
+    pub fn event_sequence(&self) -> u64 {
+        self.event_sequence
+    }
+
     pub fn unknown_remote_orders(&self) -> Vec<UnknownRemoteOrder> {
         self.unknown_remote_orders.values().cloned().collect()
     }
@@ -1114,6 +1191,14 @@ impl ExecutionApplication {
 
     pub fn drain_events(&mut self) -> Vec<ExecutionEvent> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    pub(crate) fn pending_business_event(&self) -> Option<&ExecutionBusinessEvent> {
+        self.pending_business_events.front()
+    }
+
+    pub(crate) fn acknowledge_business_event(&mut self) {
+        self.pending_business_events.pop_front();
     }
 
     pub fn intents(&self) -> Vec<IntentState> {
@@ -1324,6 +1409,7 @@ impl ExecutionApplication {
         let request = SubmitOrder {
             order_id: OrderId::new(order_id).expect("validated compensating order ID"),
             intent_id: Some(IntentId::new(intent_id).expect("validated intent ID")),
+            strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
             account_id: template.account_id.clone(),
             segment_key: template.segment_key.clone(),
             instrument_id: template.instrument_id.clone(),
@@ -1463,6 +1549,44 @@ impl ExecutionApplication {
                         "hedge policy references a leg outside the pair plan".into(),
                     ));
                 }
+            }
+        }
+        if intent.intent_type == IntentType::OptionSpread {
+            if intent.legs.len() != 2 {
+                return Err(ExecutionError::Invalid(
+                    "option spread requires exactly two legs".into(),
+                ));
+            }
+            if intent.completion_policy != CompletionPolicy::AllOrNothing
+                || intent.failure_policy != FailurePolicy::CancelRemaining
+            {
+                return Err(ExecutionError::Invalid(
+                    "option spread requires all-or-nothing and cancel-remaining policies".into(),
+                ));
+            }
+            let short = intent.legs.iter().find(|leg| leg.side == OrderSide::Sell);
+            let long = intent.legs.iter().find(|leg| leg.side == OrderSide::Buy);
+            let (Some(short), Some(long)) = (short, long) else {
+                return Err(ExecutionError::Invalid(
+                    "option spread requires one sell leg and one buy leg".into(),
+                ));
+            };
+            if short.instrument_id == long.instrument_id {
+                return Err(ExecutionError::Invalid(
+                    "option spread legs must use different instruments".into(),
+                ));
+            }
+            if short.quantity != long.quantity {
+                return Err(ExecutionError::Invalid(
+                    "option spread legs must have equal quantity".into(),
+                ));
+            }
+            if intent.minimum_net_credit.is_none_or(Money::is_negative)
+                || intent.maximum_loss.is_none_or(|value| value.is_zero() || value.is_negative())
+            {
+                return Err(ExecutionError::Invalid(
+                    "option spread requires non-negative minimum credit and positive maximum loss".into(),
+                ));
             }
         }
         for leg in &intent.legs {
@@ -1934,7 +2058,7 @@ impl ExecutionApplication {
         self.event_sequence += 1;
         event.event_sequence = self.event_sequence.into();
         self.intent_events.push(event.clone());
-        self.pending_intent_events.push(event);
+        self.pending_intent_events.push(event.clone());
         self.generation += 1;
         let snapshot = self.snapshot();
         if let Some(store) = self.store.as_mut() {
@@ -1942,6 +2066,17 @@ impl ExecutionApplication {
                 .commit_intent_event(&self.intent_events[self.intent_events.len() - 1], &snapshot)
                 .map_err(ExecutionError::Persistence)?;
         }
+        let state = self
+            .intents
+            .get(event.intent_id.as_str())
+            .cloned()
+            .expect("intent state exists after commit");
+        self.pending_business_events
+            .push_back(ExecutionBusinessEvent {
+                sequence: event.event_sequence,
+                occurred_at_unix_nanos: event.occurred_at_unix_nanos,
+                changes: vec![ExecutionBusinessChange::Intent(state)],
+            });
         Ok(())
     }
 
@@ -2241,6 +2376,7 @@ impl ExecutionApplication {
         )
         .map_err(ExecutionError::Invalid)?;
         order.intent_id = request.intent_id.clone();
+        order.strategy_id = request.strategy_id.clone();
         order.market_id = request.market_id.clone();
         order.limit_price = request.limit_price;
         order.reason = "dry-run preview".into();
@@ -2388,6 +2524,10 @@ impl ExecutionApplication {
             leg_id: next.leg_id.clone(),
             intent_id: next.intent_id.clone(),
             instrument_id: next.instrument_id.clone(),
+            execution_market_id: request
+                .execution_market_id
+                .clone()
+                .or_else(|| next.market_id.clone()),
             side: next.side,
             quantity: crate::domain::Quantity::new(
                 request.quantity.mantissa(),
@@ -2487,10 +2627,17 @@ impl ExecutionApplication {
         )
         .map_err(ExecutionError::Invalid)?;
         order.intent_id = request.intent_id.clone();
+        order.strategy_id = request.strategy_id.clone();
         order.market_id = request.market_id.clone();
+        order.execution_access_id = request.execution_access_id.clone();
         order.limit_price = request.limit_price;
         order.status = ExecutionOrderStatus::Submitting;
-        let connection_request = to_connection_request(&order, &request.segment_key, &options)
+        let connection_request = to_connection_request(
+            &order,
+            &request.segment_key,
+            &options,
+            &self.execution_accesses,
+        )
             .map_err(ExecutionError::Invalid)?;
         self.orders.insert(order.order_id.clone(), order.clone());
         self.commit(ExecutionEvent {
@@ -2688,6 +2835,7 @@ impl ExecutionApplication {
             &order,
             &order.segment_key,
             &ExecutionOrderOptions::default(),
+            &self.execution_accesses,
         )
         .map_err(ExecutionError::Invalid)?;
         let outcome = self
@@ -2903,6 +3051,7 @@ impl ExecutionApplication {
                 ))
                 .expect("validated quote order ID"),
                 intent_id: Some(request.intent_id.clone()),
+                strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
                 account_id: template.account_id.clone(),
                 segment_key: template.segment_key.clone(),
                 instrument_id: template.instrument_id.clone(),
@@ -3089,13 +3238,55 @@ impl ExecutionApplication {
         self.event_sequence += 1;
         self.generation += 1;
         self.events.push(event.clone());
-        self.pending_events.push(event);
+        self.pending_events.push(event.clone());
         let snapshot = self.snapshot();
         if let Some(store) = self.store.as_mut() {
             store
                 .commit_event(&self.events[self.events.len() - 1], &snapshot)
                 .map_err(ExecutionError::Persistence)?;
         }
+        let mut changes = Vec::new();
+        if let Some(order) = self.orders.get(&event.order_id).cloned() {
+            let strategy_id = order
+                .strategy_id
+                .as_ref()
+                .map(ToString::to_string)
+                .or_else(|| {
+                    order.intent_id.as_ref().and_then(|intent_id| {
+                        self.intents
+                            .get(intent_id.as_str())
+                            .map(|state| state.intent.strategy_id.clone())
+                    })
+                });
+            if let Some(strategy_id) = strategy_id {
+                changes.push(ExecutionBusinessChange::Order {
+                    strategy_id: strategy_id.clone(),
+                    order: order.clone(),
+                });
+                if let Some(fill_id) = event.fill_id.as_ref() {
+                    if let Some(fill) = self.fills.iter().find(|fill| &fill.fill_id == fill_id) {
+                        changes.push(ExecutionBusinessChange::Fill {
+                            strategy_id,
+                            account_id: order.account_id.to_string(),
+                            intent_id: order.intent_id.as_ref().map(ToString::to_string),
+                            market_id: order.market_id.as_ref().map(ToString::to_string),
+                            remote_order_id: order
+                                .remote_order_id
+                                .as_ref()
+                                .map(ToString::to_string),
+                            side: order.side,
+                            fill: fill.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        self.pending_business_events
+            .push_back(ExecutionBusinessEvent {
+                sequence: self.event_sequence.into(),
+                occurred_at_unix_nanos: event.occurred_at_unix_nanos,
+                changes,
+            });
         Ok(())
     }
 
@@ -3140,28 +3331,19 @@ fn to_connection_request(
     order: &ExecutionOrder,
     segment_key: &str,
     options: &ExecutionOrderOptions,
+    execution_accesses: &BTreeMap<
+        ExecutionAccessId,
+        kairos_integration::application::ProviderInstrumentRef,
+    >,
 ) -> Result<OrderEntryRequest, String> {
-    let market_id = order.market_id.as_deref();
-    // Transitional projection: Phase 3 replaces this legacy MarketId parsing
-    // with the selected Execution route's Reference-owned provider mapping.
-    // The provider adapter already receives an explicit ProviderInstrumentRef
-    // and no longer reverse-engineers canonical identity strings.
-    let participant_id = market_id
-        .and_then(|value| value.split(':').nth(1))
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("unresolved");
-    let source_symbol = market_id
-        .and_then(|value| value.rsplit(':').next())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(order.instrument_id.as_str());
-    let provider_instrument = kairos_integration::application::ProviderInstrumentRef::new(
-        kairos_integration::application::ParticipantRef::new(
-            kairos_integration::application::ParticipantKind::Exchange,
-            participant_id,
-        )?,
-        None,
-        source_symbol,
-    )?;
+    let access_id = order
+        .execution_access_id
+        .as_ref()
+        .ok_or_else(|| "execution_access_id is required; provider identity is not inferred".to_string())?;
+    let provider_instrument = execution_accesses
+        .get(access_id)
+        .cloned()
+        .ok_or_else(|| format!("execution access is not configured: {access_id}"))?;
     Ok(OrderEntryRequest {
         order_id: order.order_id.clone(),
         intent_id: order.intent_id.clone(),

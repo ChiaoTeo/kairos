@@ -44,9 +44,11 @@ flatc -I "$schema_root" --python -o "$python_stage" \
   "$schema_root/market/v1/instrument_status_message.fbs" \
   "$schema_root/market/v1/orderbook_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
+  "$schema_root/account/v1/account_event.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \
   "$schema_root/execution/v1/order_filled.fbs" \
+  "$schema_root/execution/v1/execution_event.fbs" \
   "$schema_root/risk/v1/types.fbs" \
   "$schema_root/risk/v1/authorize.fbs" \
   "$schema_root/risk/v1/decision.fbs" \
@@ -56,6 +58,7 @@ flatc -I "$schema_root" --python -o "$python_stage" \
   "$schema_root/risk/v1/consume.fbs" \
   "$schema_root/risk/v1/assessment_result.fbs" \
   "$schema_root/risk/v1/reservation_event.fbs" \
+  "$schema_root/risk/v1/risk_event.fbs" \
   "$schema_root/intent/v1/types.fbs" \
   "$schema_root/system/v1/types.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \
@@ -94,9 +97,11 @@ for schema in \
   "$schema_root/market/v1/instrument_status_message.fbs" \
   "$schema_root/market/v1/orderbook_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
+  "$schema_root/account/v1/account_event.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \
   "$schema_root/execution/v1/order_filled.fbs" \
+  "$schema_root/execution/v1/execution_event.fbs" \
   "$schema_root/risk/v1/types.fbs" \
   "$schema_root/risk/v1/authorize.fbs" \
   "$schema_root/risk/v1/decision.fbs" \
@@ -106,6 +111,7 @@ for schema in \
   "$schema_root/risk/v1/consume.fbs" \
   "$schema_root/risk/v1/assessment_result.fbs" \
   "$schema_root/risk/v1/reservation_event.fbs" \
+  "$schema_root/risk/v1/risk_event.fbs" \
   "$schema_root/intent/v1/types.fbs" \
   "$schema_root/system/v1/types.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \

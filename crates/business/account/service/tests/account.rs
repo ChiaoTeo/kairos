@@ -55,6 +55,21 @@ fn segment(key: &str) -> AccountSegment {
     }
 }
 
+#[test]
+fn one_account_actor_rejects_segments_from_different_account_ids() {
+    let mut secondary = segment("margin");
+    secondary.identity = ExternalAccountIdentity::new("binance", "secondary").unwrap();
+    let error = compose_in_memory_account_application(
+        vec![segment("spot"), secondary],
+        BTreeMap::new(),
+        None,
+    )
+    .err()
+    .expect("mixed account ids must be rejected");
+
+    assert!(error.contains("cannot own multiple account ids"));
+}
+
 fn signed(mantissa: i64, scale: u8) -> SignedQuantity {
     SignedQuantity::new(mantissa, scale).unwrap()
 }

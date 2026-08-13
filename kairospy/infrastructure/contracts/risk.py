@@ -122,7 +122,6 @@ class RiskMmapProjection:
             utilization=None if limit == 0 else (limit - available) / limit,
             violations=violations,
             generation=contract.metadata.generation,
-            event_sequence=contract.metadata.event_sequence,
         )
 
 

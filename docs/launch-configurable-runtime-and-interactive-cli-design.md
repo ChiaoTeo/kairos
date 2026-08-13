@@ -264,7 +264,7 @@ namespace 以及如何校验输入，都由策略自己负责。
 {
     "strategy": strategy,
     "context": context,
-    "accounts": context.accounts,
+    "account": context.account,
     "execution": context.execution,
     "market": context.market,
     "launch": context.launch,
@@ -276,9 +276,8 @@ namespace 以及如何校验输入，都由策略自己负责。
 只能选择当前 launch manifest 中启用的账户：
 
 ```python
-context.accounts.current(account="main")
-context.accounts.balance("USDT", account="main")
-context.accounts.position("BTCUSDT", account="secondary")
+context.account.account("main").segment(SPOT).balance("USDT")
+context.account.account("secondary").segment(USD_M_FUTURES).position("BTCUSDT")
 ```
 
 用户代码通过 Context 操作账户和执行能力；目标仓位继续使用现有 intent command
@@ -413,7 +412,7 @@ Interactive command 进入 queue 后与 Strategy callback 串行调度，避免�
 ### 阶段二：可选 Strategy capabilities
 
 - 将 Account contract 接入 `StrategyClientBundle`。
-- 增加 `context.accounts`。
+- 增加标准入口 `context.account`，不保留 `context.accounts` 别名。
 - 让 Strategy composition 支持缺失 Account、Execution 和 CLI strategy 的
   无 Market 启动。
 - 增加 capability-disabled 错误。

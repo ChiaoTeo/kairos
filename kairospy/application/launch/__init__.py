@@ -11,6 +11,7 @@ _APPLICATION_EXPORTS = {
     "LaunchInstanceApplication",
     "LaunchInstanceTimelineApplication",
     "LaunchRegistryApplication",
+    "StrategyProcessController",
 }
 _DOMAIN_EXPORTS = {"InstanceState", "LaunchIdentity", "LaunchInstance"}
 

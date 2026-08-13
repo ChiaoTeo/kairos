@@ -1,7 +1,7 @@
 //! Reference domain entities and provider snapshots.
 
 use kairos_domain_types::{
-    AssetId, Exchange, ExecutionAccessId, InstrumentId, IssuerId, ListingId, MarketId,
+    AssetId, Exchange, ExecutionAccessId, Generation, InstrumentId, IssuerId, ListingId, MarketId,
     ProviderSymbol, Rate, ReferenceStatus, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
@@ -124,7 +124,7 @@ pub struct LifecycleEvent {
     #[serde(default)]
     pub operation: Option<String>,
     #[serde(default)]
-    pub generation: u64,
+    pub generation: Generation,
     #[serde(default)]
     pub record_payload_json: Option<String>,
 }
@@ -161,7 +161,18 @@ pub struct ExecutionAccess {
     #[serde(default)]
     pub source_id: Option<String>,
     pub access_id: ExecutionAccessId,
+    /// `direct` targets one Market; `smart` selects a route for an Instrument.
+    #[serde(default = "default_execution_routing_mode")]
+    pub routing_mode: String,
+    #[serde(default)]
+    pub instrument_id: Option<InstrumentId>,
+    #[serde(default)]
+    pub listing_id: Option<ListingId>,
     pub market_id: MarketId,
+    #[serde(default)]
+    pub destination_market_id: Option<MarketId>,
+    #[serde(default)]
+    pub broker_id: Option<String>,
     pub provider_id: String,
     pub product_family: String,
     pub provider_symbol: ProviderSymbol,
@@ -171,12 +182,56 @@ pub struct ExecutionAccess {
     pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
+fn default_execution_routing_mode() -> String {
+    "direct".into()
+}
+
+/// Provider-specific market-data address for a canonical Market.
+///
+/// This is deliberately separate from ExecutionAccess: the provider and
+/// symbol used for observations do not imply the provider and symbol used for
+/// order entry.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketDataAccess {
+    #[serde(default)]
+    pub source_id: Option<String>,
+    pub access_id: String,
+    pub market_id: MarketId,
+    pub provider_id: String,
+    pub product_family: String,
+    pub provider_symbol: ProviderSymbol,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
+}
+
+impl Default for MarketDataAccess {
+    fn default() -> Self {
+        Self {
+            source_id: None,
+            access_id: "market-data-access:default".into(),
+            market_id: MarketId::new("market:default").expect("valid market ID"),
+            provider_id: String::new(),
+            product_family: String::new(),
+            provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
+            status: ReferenceStatus::Unknown,
+            effective_from_unix_nanos: UnixNanos::default(),
+            effective_to_unix_nanos: None,
+        }
+    }
+}
+
 impl Default for ExecutionAccess {
     fn default() -> Self {
         Self {
             source_id: None,
             access_id: ExecutionAccessId::new("access:default").expect("valid access ID"),
+            routing_mode: default_execution_routing_mode(),
+            instrument_id: None,
+            listing_id: None,
             market_id: MarketId::new("market:default").expect("valid market ID"),
+            destination_market_id: None,
+            broker_id: None,
             provider_id: String::new(),
             product_family: String::new(),
             provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
@@ -197,6 +252,8 @@ pub struct ProviderCatalog {
     pub markets: Vec<Market>,
     pub financial_products: Vec<FinancialProduct>,
     pub execution_accesses: Vec<ExecutionAccess>,
+    #[serde(default)]
+    pub market_data_accesses: Vec<MarketDataAccess>,
 }
 
 impl ProviderCatalog {
@@ -263,6 +320,9 @@ impl ProviderCatalog {
             &value.product_id
         })?;
         unique(&self.execution_accesses, "execution access", |value| {
+            &value.access_id
+        })?;
+        unique(&self.market_data_accesses, "market data access", |value| {
             &value.access_id
         })?;
 
@@ -369,7 +429,6 @@ impl ProviderCatalog {
             .iter()
             .map(|value| value.market_id.as_str())
             .collect();
-        let mut market_by_listing = std::collections::BTreeSet::new();
         for listing in &self.listings {
             required(
                 listing.exchange_symbol.as_str(),
@@ -476,18 +535,6 @@ impl ProviderCatalog {
                     listing.instrument_id
                 )));
             }
-            if listing.exchange_id != market.exchange_id {
-                return Err(ReferenceError::Invalid(format!(
-                    "market {} exchange {} disagrees with listing {} exchange {}",
-                    market.market_id, market.exchange_id, market.listing_id, listing.exchange_id
-                )));
-            }
-            if !market_by_listing.insert(market.listing_id.as_str()) {
-                return Err(ReferenceError::Invalid(format!(
-                    "listing {} is associated with more than one market",
-                    market.listing_id
-                )));
-            }
             if !entity_ids.contains(market.exchange_id.as_str()) {
                 return Err(ReferenceError::Invalid(format!(
                     "market {} references missing exchange {}",
@@ -556,6 +603,39 @@ impl ProviderCatalog {
             {
                 return Err(ReferenceError::Invalid(format!(
                     "execution access {} has an invalid effective interval",
+                    access.access_id
+                )));
+            }
+        }
+        for access in &self.market_data_accesses {
+            required(
+                &access.provider_id,
+                &format!("market data access {} provider", access.access_id),
+            )?;
+            required(
+                &access.product_family,
+                &format!("market data access {} product family", access.access_id),
+            )?;
+            required(
+                &access.provider_symbol,
+                &format!("market data access {} provider symbol", access.access_id),
+            )?;
+            required(
+                access.status.as_str(),
+                &format!("market data access {} status", access.access_id),
+            )?;
+            if !market_ids.contains(access.market_id.as_str()) {
+                return Err(ReferenceError::Invalid(format!(
+                    "market data access {} references missing market {}",
+                    access.access_id, access.market_id
+                )));
+            }
+            if access
+                .effective_to_unix_nanos
+                .is_some_and(|end| end <= access.effective_from_unix_nanos)
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "market data access {} has an invalid effective interval",
                     access.access_id
                 )));
             }

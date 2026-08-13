@@ -22,6 +22,12 @@ pub(crate) enum PersistedEvent {
         sequence: u64,
         circuit: crate::domain::CircuitState,
     },
+    DecisionEvaluated {
+        sequence: u64,
+        decision: crate::application::RiskDecision,
+        account_id: kairos_domain_types::AccountId,
+        strategy_id: kairos_domain_types::StrategyId,
+    },
 }
 
 impl PersistedEvent {
@@ -29,7 +35,8 @@ impl PersistedEvent {
         match self {
             Self::PolicyActivated { sequence, .. }
             | Self::ReservationChanged { sequence, .. }
-            | Self::CircuitChanged { sequence, .. } => *sequence,
+            | Self::CircuitChanged { sequence, .. }
+            | Self::DecisionEvaluated { sequence, .. } => *sequence,
         }
     }
 }

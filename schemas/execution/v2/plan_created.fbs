@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v2;
+
+table PlanCreated {
+  metadata:kairos.common.v2.EventMetadata (required);
+  plan:ExecutionPlan (required);
+}
+
+root_type PlanCreated;
+file_identifier "EPV2";

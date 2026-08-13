@@ -5,17 +5,19 @@ import os
 import shutil
 import json
 from pathlib import Path
+import pytest
 
-from kairospy.application.strategy import StrategyProcessApplication
-from kairospy.application.strategy.services.composition import compose_strategy_process
+from kairospy.application.launch import StrategyProcessController
+from kairospy.application.strategy.composition import compose_strategy_process
 from kairospy.application.launch import LaunchControlApplication
+from kairospy.application.launch.composition import release_strategy_market_owner
 from kairospy.application.system import UnixRestClient
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.strategy import StrategyCommand
 from kairospy.strategy import CommandResult
 
 
-def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_snapshot(
+def test_strategy_process_starts_without_snapshot_event_join(
     tmp_path: Path,
 ) -> None:
     root = Path(f"/tmp/ksp-{os.getpid()}")
@@ -30,11 +32,10 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
     instance = workspace.instance("paper", "l", "i")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}'
-        % instance.socket("execution"),
+        '{"schema_version":1,"components":{},"accounts":{}}',
         encoding="utf-8",
     )
-    process = StrategyProcessApplication(workspace, ready_timeout=5)
+    process = StrategyProcessController(workspace, ready_timeout=5)
     socket = process.ensure_running(
         "user_strategy:UserStrategy",
         launch_id="l",
@@ -46,8 +47,8 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
     ).exists()
     try:
         started = asyncio.run(UnixRestClient(socket).request("POST", "/v1/start"))
-        assert started["status"] == "waiting_for_dependencies"
-        assert "snapshot pending" in started["reason"]
+        assert started["status"] == "ready"
+        assert started["reason"] is None
     finally:
         process.stop("l", "i")
         shutil.rmtree(root, ignore_errors=True)
@@ -65,7 +66,7 @@ def test_launch_status_and_stop_are_safe_when_instance_is_not_running(
     assert application.stop(target)["status"] == "not_running"
 
 
-def test_external_stop_releases_subscriptions_for_dead_strategy_process(
+def test_launch_cleanup_releases_subscriptions_for_dead_strategy_process(
     tmp_path: Path, monkeypatch
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -102,12 +103,10 @@ def test_external_stop_releases_subscriptions_for_dead_strategy_process(
             )
 
     monkeypatch.setattr(
-        "kairospy.infrastructure.transport.commands.MarketCommandClient",
+        "kairospy.application.market.composition.MarketCommandClient",
         lambda client, launch_id=None: Port(),
     )
-    result = StrategyProcessApplication(workspace)._release_orphaned_subscriptions(
-        "launch", "instance", "paper"
-    )
+    result = release_strategy_market_owner(workspace, instance)
 
     assert result is not None and result["status"] == "accepted"
     assert calls == [
@@ -164,14 +163,14 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
         instance_id="run-1",
         mode="backtest",
     )
-    assert composition.host.stream.socket_path == workspace.paths.instance_socket(
-        "backtest", "launch", "run-1", "market-events"
-    )
-    assert composition.host._snapshots.path == workspace.paths.instance_snapshot(
-        "backtest", "launch", "run-1", "market", "market.snapshot"
+    assert (
+        composition.application.context.market._snapshots.path
+        == workspace.paths.instance_snapshot(
+            "backtest", "launch", "run-1", "market", "market.snapshot"
+        )
     )
     assert (
-        composition.host.clients.execution_commands.client.socket_path
+        composition.application.context.execution._commands.client.socket_path
         == workspace.paths.instance_socket("backtest", "launch", "run-1", "execution")
     )
 
@@ -197,10 +196,13 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     )
 
     assert composition.entrypoint.strategy.strategy_id == "builtin-interactive"
-    assert composition.host.context.account is not None
-    composition.host.start()
+    assert composition.application.context.account is not None
+    assert composition.application.context.market._event_source.aeron_dir == str(
+        workspace.paths.aeron_dir()
+    )
+    composition.application.start()
     result = asyncio.run(
-        composition.host.command(
+        composition.application.command(
             StrategyCommand("command-1", "interactive.python", "1 + 1")
         )
     )
@@ -209,8 +211,81 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     from decimal import Decimal
     from kairospy.strategy import InstrumentId
 
-    disabled = composition.host.context.execution.target_position(
+    disabled = composition.application.context.execution.target_position(
         InstrumentId("instrument:test:BTCUSDT"), Decimal("1"), account="main"
     )
     assert disabled.status == "rejected"
     assert disabled.error == "execution is disabled for this launch"
+
+
+def test_authoritative_config_requires_enabled_execution_endpoint(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-required-execution"
+    )
+    instance = workspace.instance("paper", "launch", "run-1")
+    instance.prepare()
+    (instance.root / "normalized-config.json").write_text(
+        json.dumps(
+            {
+                "launch": {"id": "launch", "mode": "paper"},
+                "execution": {"enabled": True},
+                "market_scope": "instance",
+            }
+        ),
+        encoding="utf-8",
+    )
+    instance.component_manifest().write_text(
+        json.dumps({"schema_version": 1, "components": {}, "accounts": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="Execution is enabled"):
+        compose_strategy_process(
+            workspace,
+            strategy_ref="builtin:interactive",
+            launch_id="launch",
+            instance_id="run-1",
+        )
+
+
+def test_disabled_execution_ignores_a_residual_manifest_endpoint(
+    tmp_path: Path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="sp-disabled-execution"
+    )
+    instance = workspace.instance("paper", "launch", "run-1")
+    instance.prepare()
+    (instance.root / "normalized-config.json").write_text(
+        json.dumps(
+            {
+                "launch": {"id": "launch", "mode": "paper"},
+                "execution": {"enabled": False},
+                "market_scope": "instance",
+            }
+        ),
+        encoding="utf-8",
+    )
+    instance.component_manifest().write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": {
+                    "execution": {"socket": str(instance.socket("execution"))}
+                },
+                "accounts": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    composition = compose_strategy_process(
+        workspace,
+        strategy_ref="builtin:interactive",
+        launch_id="launch",
+        instance_id="run-1",
+    )
+
+    assert composition.application.context.execution._commands is None

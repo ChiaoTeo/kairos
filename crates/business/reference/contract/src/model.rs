@@ -97,11 +97,33 @@ pub struct FinancialProduct {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAccess {
     pub access_id: String,
+    #[serde(default)]
+    pub routing_mode: String,
+    #[serde(default)]
+    pub instrument_id: Option<String>,
+    #[serde(default)]
+    pub listing_id: Option<String>,
     pub market_id: String,
+    #[serde(default)]
+    pub destination_market_id: Option<String>,
+    #[serde(default)]
+    pub broker_id: Option<String>,
     pub provider_id: String,
     pub product_family: String,
     pub provider_symbol: String,
     pub settlement_asset_id: Option<String>,
+    pub status: String,
+    pub effective_from_unix_nanos: u64,
+    pub effective_to_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketDataAccess {
+    pub access_id: String,
+    pub market_id: String,
+    pub provider_id: String,
+    pub product_family: String,
+    pub provider_symbol: String,
     pub status: String,
     pub effective_from_unix_nanos: u64,
     pub effective_to_unix_nanos: Option<u64>,
@@ -142,6 +164,8 @@ pub struct ReferenceCatalog {
     pub markets: BTreeMap<String, Market>,
     pub financial_products: BTreeMap<String, FinancialProduct>,
     pub execution_accesses: BTreeMap<String, ExecutionAccess>,
+    #[serde(default)]
+    pub market_data_accesses: BTreeMap<String, MarketDataAccess>,
     pub lifecycle_events: Vec<LifecycleEvent>,
     pub generation: u64,
     pub event_sequence: u64,

@@ -52,6 +52,116 @@ pub struct MmapAccountPublisher {
     inner: kairos_account_contract::encoding::MmapAccountPublisher,
 }
 
+pub struct AeronAccountEventPublisher {
+    inner: kairos_account_contract::account_event::AeronAccountEventPublisher,
+}
+
+impl AeronAccountEventPublisher {
+    pub fn connect(
+        aeron_dir: Option<&str>,
+        channel: &str,
+        stream_id: i32,
+        owner_actor_id: impl Into<String>,
+        identity: kairos_protocol::InstanceIdentity,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            inner: kairos_account_contract::account_event::AeronAccountEventPublisher::connect(
+                aeron_dir,
+                channel,
+                stream_id,
+                owner_actor_id,
+                identity,
+            )?,
+        })
+    }
+}
+
+impl crate::application::AccountEventPublisher for AeronAccountEventPublisher {
+    fn publish(&mut self, event: &crate::application::AccountBusinessEvent) -> Result<(), String> {
+        self.inner.publish(&to_contract_event(event))
+    }
+}
+
+fn to_contract_event(
+    event: &crate::application::AccountBusinessEvent,
+) -> kairos_account_contract::account_event::AccountStrategyEvent {
+    use crate::application::AccountBusinessChange;
+    use kairos_account_contract::account_event::AccountStrategyChange;
+
+    kairos_account_contract::account_event::AccountStrategyEvent {
+        sequence: event.sequence.get(),
+        account_id: event.account_id.to_string(),
+        occurred_at_unix_nanos: event.occurred_at_unix_nanos.get(),
+        changes: event
+            .changes
+            .iter()
+            .map(|change| match change {
+                AccountBusinessChange::Balance { segment_key, value } => {
+                    AccountStrategyChange::Balance {
+                        segment_key: segment_key.to_string(),
+                        value: contract::Balance {
+                            asset_id: value.asset_id.to_string(),
+                            asset_code: value.asset_code.to_string(),
+                            total: decimal_parts(value.total.mantissa(), value.total.scale()),
+                            available: value
+                                .available
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            locked: value.locked.map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            borrowed: value
+                                .borrowed
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            interest: value
+                                .interest
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                        },
+                    }
+                }
+                AccountBusinessChange::Position { segment_key, value } => {
+                    AccountStrategyChange::Position {
+                        segment_key: segment_key.to_string(),
+                        value: contract::Position {
+                            instrument_id: value.instrument_id.to_string(),
+                            market_id: value.market_id.as_ref().map(ToString::to_string),
+                            quantity: decimal_parts(
+                                value.quantity.mantissa(),
+                                value.quantity.scale(),
+                            ),
+                            average_price: value
+                                .average_price
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            mark_price: value
+                                .mark_price
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            unrealized_pnl: value
+                                .unrealized_pnl
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            realized_pnl: value
+                                .realized_pnl
+                                .map(|v| decimal_parts(v.mantissa(), v.scale())),
+                            updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
+                        },
+                    }
+                }
+                AccountBusinessChange::Equity { segment_key, value } => {
+                    AccountStrategyChange::Equity {
+                        segment_key: segment_key.to_string(),
+                        value: value.map(|v| decimal_parts(v.mantissa(), v.scale())),
+                    }
+                }
+                AccountBusinessChange::Status {
+                    segment_key,
+                    status,
+                    stale,
+                } => AccountStrategyChange::Status {
+                    segment_key: segment_key.to_string(),
+                    status: account_status(*status),
+                    stale: *stale,
+                },
+            })
+            .collect(),
+    }
+}
+
 impl crate::application::AccountSnapshotPublisher for MmapAccountPublisher {
     fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
         MmapAccountPublisher::publish(self, snapshot)
@@ -90,7 +200,6 @@ fn to_contract_snapshot(snapshot: &AccountsSnapshot) -> contract::AccountsSnapsh
     contract::AccountsSnapshot {
         actor_id: snapshot.actor_id.to_string(),
         generation: snapshot.generation.get(),
-        event_sequence: snapshot.event_sequence.get(),
         accounts: snapshot
             .accounts
             .iter()
@@ -105,7 +214,6 @@ fn to_contract_snapshot(snapshot: &AccountsSnapshot) -> contract::AccountsSnapsh
                 stale: account.stale,
                 observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
                 generation: account.generation.get(),
-                event_sequence: account.event_sequence.get(),
                 equity: account
                     .equity
                     .map(|value| decimal_parts(value.mantissa(), value.scale())),
@@ -212,19 +320,28 @@ fn open_order(value: &crate::domain::OpenOrder) -> contract::OpenOrder {
         order_id: value.order_id.to_string(),
         remote_order_id: value.remote_order_id.as_ref().map(ToString::to_string),
         instrument_id: value.instrument_id.to_string(),
-        side: serde_json::to_string(&value.side)
-            .expect("canonical order side serializes")
-            .trim_matches('"')
-            .to_owned(),
+        side: match value.side {
+            kairos_domain_types::OrderSide::Buy => "buy",
+            kairos_domain_types::OrderSide::Sell => "sell",
+        }
+        .into(),
         quantity: decimal_parts(value.quantity.mantissa(), value.quantity.scale()),
         filled_quantity: decimal_parts(
             value.filled_quantity.mantissa(),
             value.filled_quantity.scale(),
         ),
-        status: serde_json::to_string(&value.status)
-            .expect("canonical order status serializes")
-            .trim_matches('"')
-            .to_owned(),
+        status: match value.status {
+            kairos_domain_types::OrderStatus::Pending => "pending",
+            kairos_domain_types::OrderStatus::Acknowledged => "acknowledged",
+            kairos_domain_types::OrderStatus::Accepted => "accepted",
+            kairos_domain_types::OrderStatus::PartiallyFilled => "partially_filled",
+            kairos_domain_types::OrderStatus::Filled => "filled",
+            kairos_domain_types::OrderStatus::Canceled => "canceled",
+            kairos_domain_types::OrderStatus::Rejected => "rejected",
+            kairos_domain_types::OrderStatus::Expired => "expired",
+            kairos_domain_types::OrderStatus::Unknown => "unknown",
+        }
+        .into(),
     }
 }
 

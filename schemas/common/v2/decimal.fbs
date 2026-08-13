@@ -1,0 +1,8 @@
+namespace kairos.common.v2;
+
+/// Checked fixed decimal. Value = mantissa * 10^-scale.
+/// Contract adapters reject scale > 18 and field-specific overflow/sign errors.
+struct Decimal64 {
+  mantissa:long;
+  scale:ubyte;
+}

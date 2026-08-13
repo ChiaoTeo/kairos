@@ -155,7 +155,7 @@ class ComponentProcessApplication:
         # a provider/reference Aeron source.  Keeping the driver out of this
         # path makes offline backtests independent from a live workspace
         # driver (and allows multiple replay instances to run safely).
-        if component == "reference" or (
+        if component in {"reference", "account", "risk", "execution"} or (
             component == "market" and market_runtime_profile != "replay"
         ):
             self._ensure_aeron_driver()
@@ -265,12 +265,20 @@ class ComponentProcessApplication:
             health_file.unlink(missing_ok=True)
 
         binary = self.binaries.get("aeron") or resolve_binary("kairos-aeron-driver")
+        aeron_dir = self.workspace.paths.aeron_dir()
+        aeron_dir.mkdir(parents=True, exist_ok=True)
         log_dir = self.workspace.paths.logs / "processes"
         log_dir.mkdir(parents=True, exist_ok=True)
         log = (log_dir / "aeron.log").open("ab")
         try:
             subprocess.Popen(
-                [binary, "--health-file", str(health_file)],
+                [
+                    binary,
+                    "--aeron-dir",
+                    str(aeron_dir),
+                    "--health-file",
+                    str(health_file),
+                ],
                 cwd=str(self.workspace.paths.root),
                 env=os.environ.copy(),
                 stdout=log,
@@ -591,6 +599,8 @@ class ComponentProcessApplication:
     ) -> tuple[list[str], Mapping[str, str]]:
         if component == "reference":
             config = reference_config or ReferenceProcessConfig(self.workspace)
+            if config.aeron_dir is None:
+                config = replace(config, aeron_dir=self.workspace.paths.aeron_dir())
             configured = self.binaries.get("reference")
             if configured is not None or config.binary == "kairos-reference-server":
                 config = replace(
@@ -635,6 +645,7 @@ class ComponentProcessApplication:
             )
         child_environment: dict[str, str] = {
             "KAIROS_WORKSPACE_ID": self.workspace.workspace_id,
+            "AERON_DIR": str(self.workspace.paths.aeron_dir()),
         }
         if instance_workspace is not None:
             child_environment.update(

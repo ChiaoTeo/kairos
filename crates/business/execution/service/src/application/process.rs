@@ -1,8 +1,8 @@
 use crate::application::{
     BacktestApplication, BacktestRequest, CancelIntent, CancelOrder, ExecuteStrategyIntent,
     ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
-    ExecutionFillReport, ExecutionSnapshot, ExpireIntent, RefreshQuoteIntent, RemoteOrderQuery,
-    ReplaceOrder, SubmitOrder,
+    ExecutionBusinessEvent, ExecutionCurrentView, ExecutionFillReport, ExpireIntent,
+    RefreshQuoteIntent, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
 };
 use crate::services::actor::RemoteOrderEvent;
 use crate::services::gateway::{
@@ -63,6 +63,7 @@ pub struct ExecutionProcess<
     last_published_generation: Option<u64>,
     snapshot_publisher: Option<Box<dyn ExecutionSnapshotPublisher>>,
     intent_snapshot_publisher: Option<Box<dyn IntentSnapshotPublisher>>,
+    event_publisher: Option<Box<dyn ExecutionEventPublisher>>,
     seen_exchange_events: std::collections::HashSet<String>,
     exchange_event_order: std::collections::VecDeque<String>,
     metrics: std::sync::Arc<RuntimeMetrics>,
@@ -292,11 +293,15 @@ impl AsyncOrderEventSource for NoAsyncOrderEventSource {
 /// Application-owned publication capabilities. Concrete transport publishers
 /// are selected by composition and injected into the process facade.
 pub trait ExecutionSnapshotPublisher: Send {
-    fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String>;
+    fn publish(&mut self, snapshot: &ExecutionCurrentView) -> Result<(), String>;
 }
 
 pub trait IntentSnapshotPublisher: Send {
-    fn publish(&mut self, snapshot: &ExecutionSnapshot) -> Result<(), String>;
+    fn publish(&mut self, snapshot: &ExecutionCurrentView) -> Result<(), String>;
+}
+
+pub trait ExecutionEventPublisher: Send {
+    fn publish(&mut self, event: &ExecutionBusinessEvent) -> Result<(), String>;
 }
 
 struct ExecutionHttpRequest {
@@ -364,6 +369,7 @@ impl
             last_published_generation: None,
             snapshot_publisher: None,
             intent_snapshot_publisher: None,
+            event_publisher: None,
             seen_exchange_events: std::collections::HashSet::new(),
             exchange_event_order: std::collections::VecDeque::new(),
             metrics: std::sync::Arc::new(RuntimeMetrics::default()),
@@ -389,6 +395,7 @@ impl
             last_published_generation: None,
             snapshot_publisher: None,
             intent_snapshot_publisher: None,
+            event_publisher: None,
             seen_exchange_events: std::collections::HashSet::new(),
             exchange_event_order: std::collections::VecDeque::new(),
             metrics: std::sync::Arc::new(RuntimeMetrics::default()),
@@ -412,6 +419,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             last_published_generation: self.last_published_generation,
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
+            event_publisher: self.event_publisher,
             seen_exchange_events: self.seen_exchange_events,
             exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
@@ -433,6 +441,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             last_published_generation: self.last_published_generation,
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
+            event_publisher: self.event_publisher,
             seen_exchange_events: self.seen_exchange_events,
             exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
@@ -482,6 +491,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             last_published_generation: self.last_published_generation,
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
+            event_publisher: self.event_publisher,
             seen_exchange_events: self.seen_exchange_events,
             exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
@@ -511,6 +521,14 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         publisher: impl IntentSnapshotPublisher + 'static,
     ) -> Self {
         self.intent_snapshot_publisher = Some(Box::new(publisher));
+        self
+    }
+
+    pub fn with_event_publisher(
+        mut self,
+        publisher: impl ExecutionEventPublisher + 'static,
+    ) -> Self {
+        self.event_publisher = Some(Box::new(publisher));
         self
     }
 
@@ -638,7 +656,13 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
     }
 
     fn publish_snapshots(&mut self) -> Result<(), String> {
-        let snapshot = self.application.snapshot();
+        while let Some(event) = self.application.pending_business_event().cloned() {
+            if let Some(publisher) = self.event_publisher.as_mut() {
+                publisher.publish(&event)?;
+            }
+            self.application.acknowledge_business_event();
+        }
+        let snapshot = self.application.current_view();
         if self.last_published_generation == Some(snapshot.generation.get()) {
             return Ok(());
         }
@@ -652,7 +676,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             event = "execution_snapshots_published",
             component = "execution",
             generation = snapshot.generation.get(),
-            event_sequence = snapshot.event_sequence.get(),
+            event_sequence = self.application.event_sequence(),
             order_count = snapshot.orders.len(),
             intent_count = snapshot.intents.len(),
             "execution snapshots published"
@@ -1930,8 +1954,12 @@ fn now_unix_nanos() -> u64 {
 mod tests {
     use super::{
         process_readiness, request_class, resync_targets, set_route_readiness,
-        ExecutionApplication, ExecutionAsyncRoute, ExecutionProcess, RequestClass,
+        ExecutionApplication, ExecutionAsyncRoute, ExecutionEventPublisher, ExecutionProcess,
+        RequestClass,
     };
+    use crate::application::{ExecutionBusinessEvent, ExecutionOrderOptions, SubmitOrder};
+    use crate::domain::{OrderSide as DomainOrderSide, OrderType};
+    use kairos_domain_types::{AccountId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId};
     use kairos_integration::application::{
         AsyncOrderEventSource, ExternalEventEnvelope, ExternalExecutionEvent, IntegrationError,
     };
@@ -1942,7 +1970,17 @@ mod tests {
     use kairos_integration::blocking::OrderEventSource;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct CapturingEventPublisher(Arc<Mutex<Vec<ExecutionBusinessEvent>>>);
+
+    impl ExecutionEventPublisher for CapturingEventPublisher {
+        fn publish(&mut self, event: &ExecutionBusinessEvent) -> Result<(), String> {
+            self.0.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
 
     #[test]
     fn mutation_and_query_ingress_are_classified_separately() {
@@ -1964,6 +2002,58 @@ mod tests {
         assert!(process.accept_exchange_event("fill-1"));
         assert!(!process.accept_exchange_event("fill-1"));
         assert!(process.accept_exchange_event("fill-2"));
+    }
+
+    #[test]
+    fn initial_execution_snapshot_never_synthesizes_events() {
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let capture = CapturingEventPublisher::default();
+        let observed = capture.0.clone();
+        let mut process =
+            ExecutionProcess::new(application, PathBuf::from("/tmp/execution-event-test.sock"))
+                .with_event_publisher(capture);
+
+        process.publish_snapshots().unwrap();
+
+        assert!(observed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn execution_commit_publishes_its_direct_business_event() {
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let capture = CapturingEventPublisher::default();
+        let observed = capture.0.clone();
+        let mut process =
+            ExecutionProcess::new(application, PathBuf::from("/tmp/execution-event-test.sock"))
+                .with_event_publisher(capture);
+        process.publish_snapshots().unwrap();
+
+        process
+            .application
+            .prepare_submission(SubmitOrder {
+                order_id: OrderId::new("order-1").unwrap(),
+                intent_id: None,
+                strategy_id: Some(StrategyId::new("strategy-1").unwrap()),
+                account_id: AccountId::new("account-1").unwrap(),
+                segment_key: SegmentKey::new("spot").unwrap(),
+                instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
+                market_id: None,
+                side: DomainOrderSide::Buy,
+                order_type: OrderType::Market,
+                quantity: Quantity::new(1, 0).unwrap(),
+                limit_price: None,
+                options: ExecutionOrderOptions::default(),
+                submitted_at_unix_nanos: Some(1.into()),
+            })
+            .unwrap();
+        process.publish_snapshots().unwrap();
+
+        let events = observed.lock().unwrap();
+        assert!(!events.is_empty());
+        assert_eq!(events[0].sequence.get(), 1);
+        assert!(!events[0].changes.is_empty());
     }
 
     #[test]

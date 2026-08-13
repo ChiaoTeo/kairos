@@ -63,6 +63,7 @@ fn submit_order(
     SubmitOrder {
         order_id: OrderId::new(order_id).unwrap(),
         intent_id: intent_id.map(|value| IntentId::new(value).unwrap()),
+        strategy_id: Some(kairos_domain_types::StrategyId::new("strategy").unwrap()),
         account_id: AccountId::new(account_id).unwrap(),
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
@@ -310,6 +311,9 @@ impl ExecutionPreflight for TestPreflight {
                     order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
                         .unwrap(),
                     intent_id: Some(intent.intent_id.clone()),
+                    strategy_id: Some(
+                        kairos_domain_types::StrategyId::new(intent.strategy_id.clone()).unwrap(),
+                    ),
                     account_id: leg.account_id.clone(),
                     segment_key: leg.segment_key.clone(),
                     instrument_id: leg.instrument_id.clone(),
@@ -334,6 +338,9 @@ impl ExecutionPreflight for TestPreflight {
             .map(|(index, account_id)| SubmitOrder {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index)).unwrap(),
                 intent_id: Some(intent.intent_id.clone()),
+                strategy_id: Some(
+                    kairos_domain_types::StrategyId::new(intent.strategy_id.clone()).unwrap(),
+                ),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),

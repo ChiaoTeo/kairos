@@ -241,14 +241,10 @@ impl MmapMarketSnapshotPublisher {
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
             inner: kairos_market_contract::encoding::MmapMarketSnapshotPublisher::create(
-                path,
-                slot_size,
-                actor_id,
-                event_stream_id,
+                path, slot_size, actor_id,
             )
             .map_err(|error| error.to_string())?,
         })
@@ -258,17 +254,12 @@ impl MmapMarketSnapshotPublisher {
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
         identity: kairos_protocol::InstanceIdentity,
     ) -> Result<Self, String> {
         Ok(Self {
             inner:
                 kairos_market_contract::encoding::MmapMarketSnapshotPublisher::create_with_identity(
-                    path,
-                    slot_size,
-                    actor_id,
-                    event_stream_id,
-                    identity,
+                    path, slot_size, actor_id, identity,
                 )
                 .map_err(|error| error.to_string())?,
         })
@@ -276,192 +267,307 @@ impl MmapMarketSnapshotPublisher {
 
     pub fn publish(
         &mut self,
-        snapshot: &crate::domain::snapshot::MarketSnapshot,
+        snapshot: &crate::domain::snapshot::MarketCurrentView,
     ) -> Result<(), String> {
-        let mut value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
-        normalize_orderbook_decimals(&mut value)?;
-        normalize_observation_decimals(&mut value)?;
-        let contract: kairos_market_contract::MarketSnapshot =
-            serde_json::from_value(value).map_err(|error| error.to_string())?;
-        self.inner.publish(&contract)
+        self.inner.publish(&market_contract_snapshot(snapshot))
     }
 }
 
-/// Convert domain fixed-decimal value objects to the decimal strings used by
-/// the cross-process Market contract. This belongs at the composition
-/// boundary; the domain keeps its typed Price and Quantity invariants while
-/// the wire contract remains stable and provider-neutral.
-fn normalize_orderbook_decimals(value: &mut serde_json::Value) -> Result<(), String> {
-    let order_books = value
-        .get_mut("order_books")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| "market snapshot is missing order_books".to_string())?;
+fn market_contract_snapshot(
+    snapshot: &crate::domain::snapshot::MarketCurrentView,
+) -> kairos_market_contract::MarketCurrentView {
+    use kairos_market_contract::model as contract;
 
-    for book in order_books.values_mut() {
-        let book = book
-            .as_object_mut()
-            .ok_or_else(|| "market order book must be an object".to_string())?;
-        for side in ["bids", "asks"] {
-            let levels = book
-                .get_mut(side)
-                .and_then(serde_json::Value::as_array_mut)
-                .ok_or_else(|| format!("market order book is missing {side}"))?;
-            for level in levels {
-                let level = level
-                    .as_object_mut()
-                    .ok_or_else(|| "market price level must be an object".to_string())?;
-                for field in ["price", "quantity"] {
-                    let decimal = level
-                        .get(field)
-                        .ok_or_else(|| format!("market price level is missing {field}"))?;
-                    level.insert(field.to_string(), fixed_decimal_string(decimal)?);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn normalize_observation_decimals(value: &mut serde_json::Value) -> Result<(), String> {
-    for field in ["latest", "views"] {
-        let Some(values) = value
-            .get_mut(field)
-            .and_then(serde_json::Value::as_object_mut)
-        else {
-            continue;
-        };
-        for observation in values.values_mut() {
-            normalize_observation_value(observation)?;
-        }
-    }
-    Ok(())
-}
-
-fn normalize_observation_value(value: &mut serde_json::Value) -> Result<(), String> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| "market observation must be an object".to_string())?;
-    for kind in ["Quote", "Trade", "Bar"] {
-        if let Some(payload) = object
-            .get_mut(kind)
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            let fields = match kind {
-                "Quote" => ["bid_price", "bid_quantity", "ask_price", "ask_quantity"].as_slice(),
-                "Trade" => ["price", "quantity", "cost"].as_slice(),
-                _ => ["open", "high", "low", "close", "volume"].as_slice(),
-            };
-            for field in fields {
-                if let Some(decimal) = payload.get_mut(*field) {
-                    if !decimal.is_null() {
-                        *decimal = fixed_decimal_string(decimal)?;
-                    }
-                }
-            }
-        }
-    }
-    for kind in ["TradeBar", "QuoteBar"] {
-        if let Some(payload) = object
-            .get_mut(kind)
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            if let Some(bar) = payload.get_mut("bar") {
-                if let Some(bar) = bar.as_object_mut() {
-                    for field in ["open", "high", "low", "close", "volume"] {
-                        if let Some(decimal) = bar.get_mut(field) {
-                            if !decimal.is_null() {
-                                *decimal = fixed_decimal_string(decimal)?;
+    contract::MarketCurrentView {
+        actor_id: snapshot.actor_id.to_string(),
+        generation: snapshot.generation.get(),
+        latest: snapshot
+            .latest
+            .iter()
+            .map(|(key, value)| (key.clone(), market_contract_observation(value)))
+            .collect(),
+        views: snapshot
+            .views
+            .iter()
+            .map(|(key, value)| (key.clone(), market_contract_observation(value)))
+            .collect(),
+        order_books: snapshot
+            .order_books
+            .iter()
+            .map(|(key, value)| (key.clone(), market_contract_orderbook(value)))
+            .collect(),
+        freshness: snapshot
+            .freshness
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    contract::MarketFreshness {
+                        source_id: value.source_id.clone(),
+                        market_id: value.market_id.to_string(),
+                        data_kind: value.data_kind.clone(),
+                        last_event_time_unix_nanos: value.last_event_time_unix_nanos.get(),
+                        last_received_time_unix_nanos: value.last_received_time_unix_nanos.get(),
+                        status: match value.status {
+                            crate::DataFreshnessStatus::Unknown => {
+                                contract::DataFreshnessStatus::Unknown
                             }
-                        }
-                    }
+                            crate::DataFreshnessStatus::Current => {
+                                contract::DataFreshnessStatus::Current
+                            }
+                            crate::DataFreshnessStatus::Stale => {
+                                contract::DataFreshnessStatus::Stale
+                            }
+                        },
+                    },
+                )
+            })
+            .collect(),
+        subscriptions: snapshot
+            .subscriptions
+            .iter()
+            .map(|value| contract::SubscriptionState {
+                id: value.id.0.clone(),
+                owner_id: value.owner_id.clone(),
+                mode: match value.mode {
+                    crate::SubscriptionMode::Static => "static",
+                    crate::SubscriptionMode::Dynamic => "dynamic",
                 }
-            }
-        }
+                .into(),
+                selectors: value.selectors.clone(),
+                members: value
+                    .members
+                    .iter()
+                    .map(|(key, member)| {
+                        (
+                            key.clone(),
+                            contract::MarketDescriptor {
+                                market_id: member.market_id.to_string(),
+                                instrument_id: member.instrument_id.to_string(),
+                                exchange_id: member.exchange_id.to_string(),
+                                market_type: member.market_type.clone(),
+                                asset_type: member.asset_type.clone(),
+                                underlying_instrument_id: member.underlying_instrument_id.clone(),
+                                source_symbol: member.source_symbol.to_string(),
+                                status: member.status.as_str().into(),
+                            },
+                        )
+                    })
+                    .collect(),
+            })
+            .collect(),
+        feed_status: match snapshot.feed_status {
+            crate::FeedStatus::Disconnected => contract::FeedStatus::Disconnected,
+            crate::FeedStatus::Ready => contract::FeedStatus::Ready,
+            crate::FeedStatus::Reconnecting => contract::FeedStatus::Reconnecting,
+            crate::FeedStatus::WarmingUp => contract::FeedStatus::WarmingUp,
+            crate::FeedStatus::Degraded => contract::FeedStatus::Degraded,
+        },
     }
-    let decimal_fields: &[(&str, &[&str])] = &[
-        (
-            "OptionGreeks",
-            &[
-                "strike",
-                "delta",
-                "gamma",
-                "vega",
-                "theta",
-                "implied_volatility",
-            ],
-        ),
-        ("Rate", &["value", "mark_price"]),
-        (
-            "Ticker24h",
-            &[
-                "last_price",
-                "bid_price",
-                "bid_quantity",
-                "ask_price",
-                "ask_quantity",
-                "open_price",
-                "high_price",
-                "low_price",
-                "volume_base",
-                "volume_quote",
-                "price_change_abs",
-                "price_change_pct",
-                "vwap",
-                "mark_price",
-            ],
-        ),
-        (
-            "MarkPrice",
-            &[
-                "mark_price",
-                "index_price",
-                "estimated_settlement_price",
-                "funding_rate",
-            ],
-        ),
-        (
-            "IndexPrice",
-            &[
-                "spot_index_price",
-                "contract_index_price",
-                "index_price",
-                "funding_rate",
-            ],
-        ),
-        ("FundingRate", &["funding_rate"]),
-        (
-            "OpenInterest",
-            &["contracts", "quote_value", "change_24h", "change_pct_24h"],
-        ),
-    ];
-    for (kind, fields) in decimal_fields {
-        if let Some(payload) = object
-            .get_mut(*kind)
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            for field in *fields {
-                if let Some(decimal) = payload.get_mut(*field) {
-                    if !decimal.is_null() {
-                        *decimal = fixed_decimal_string(decimal)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
-fn fixed_decimal_string(value: &serde_json::Value) -> Result<serde_json::Value, String> {
-    value
-        .as_str()
-        .map(|_| value.clone())
-        .ok_or_else(|| "market observation decimal must be a string".to_string())
+fn market_contract_observation(
+    value: &crate::MarketObservation,
+) -> kairos_market_contract::model::MarketObservation {
+    use crate::MarketObservation as Domain;
+    use kairos_market_contract::model as contract;
+
+    fn bar(value: &crate::Bar) -> contract::Bar {
+        contract::Bar {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            timeframe: value.timeframe.clone(),
+            open: value.open.to_string(),
+            high: value.high.to_string(),
+            low: value.low.to_string(),
+            close: value.close.to_string(),
+            volume: value.volume.map(|value| value.to_string()),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+            derivation: value.derivation.clone(),
+        }
+    }
+
+    match value {
+        Domain::Quote(value) => contract::MarketObservation::Quote(contract::Quote {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            bid_price: value.bid_price.map(|value| value.to_string()),
+            bid_quantity: value.bid_quantity.map(|value| value.to_string()),
+            ask_price: value.ask_price.map(|value| value.to_string()),
+            ask_quantity: value.ask_quantity.map(|value| value.to_string()),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+        }),
+        Domain::Trade(value) => contract::MarketObservation::Trade(contract::Trade {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            trade_id: value.trade_id.clone(),
+            price: value.price.to_string(),
+            quantity: value.quantity.to_string(),
+            cost: value.cost.map(|value| value.to_string()),
+            aggressor_side: value.aggressor_side.clone(),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+        }),
+        Domain::Bar(value) => contract::MarketObservation::Bar(bar(value)),
+        Domain::TradeBar(value) => contract::MarketObservation::TradeBar(contract::TradeBar {
+            bar: bar(&value.bar),
+        }),
+        Domain::QuoteBar(value) => contract::MarketObservation::QuoteBar(contract::QuoteBar {
+            bar: bar(&value.bar),
+        }),
+        Domain::OptionGreeks(value) => {
+            contract::MarketObservation::OptionGreeks(contract::OptionGreeks {
+                market_id: value.market_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                expiry_unix_nanos: value.expiry_unix_nanos.map(|value| value.get()),
+                strike: value.strike.map(|value| value.to_string()),
+                delta: value.delta.map(|value| value.to_string()),
+                gamma: value.gamma.map(|value| value.to_string()),
+                vega: value.vega.map(|value| value.to_string()),
+                theta: value.theta.map(|value| value.to_string()),
+                implied_volatility: value.implied_volatility.map(|value| value.to_string()),
+                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+                source_id: value.source_id.clone(),
+                derivation: value.derivation.clone(),
+            })
+        }
+        Domain::Rate(value) => contract::MarketObservation::Rate(contract::Rate {
+            rate_id: value.rate_id.clone(),
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            basis: value.basis.clone(),
+            value: value.value.to_string(),
+            mark_price: value.mark_price.map(|value| value.to_string()),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+        }),
+        Domain::Ticker24h(value) => contract::MarketObservation::Ticker24h(contract::Ticker24h {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            last_price: value.last_price.map(|value| value.to_string()),
+            bid_price: value.bid_price.map(|value| value.to_string()),
+            bid_quantity: value.bid_quantity.map(|value| value.to_string()),
+            ask_price: value.ask_price.map(|value| value.to_string()),
+            ask_quantity: value.ask_quantity.map(|value| value.to_string()),
+            open_price: value.open_price.map(|value| value.to_string()),
+            high_price: value.high_price.map(|value| value.to_string()),
+            low_price: value.low_price.map(|value| value.to_string()),
+            volume_base: value.volume_base.map(|value| value.to_string()),
+            volume_quote: value.volume_quote.map(|value| value.to_string()),
+            price_change_abs: value.price_change_abs.map(|value| value.to_string()),
+            price_change_pct: value.price_change_pct.map(|value| value.to_string()),
+            vwap: value.vwap.map(|value| value.to_string()),
+            mark_price: value.mark_price.map(|value| value.to_string()),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+        }),
+        Domain::MarkPrice(value) => contract::MarketObservation::MarkPrice(contract::MarkPrice {
+            market_id: value.market_id.to_string(),
+            instrument_id: value.instrument_id.to_string(),
+            mark_price: value.mark_price.to_string(),
+            index_price: value.index_price.map(|value| value.to_string()),
+            estimated_settlement_price: value
+                .estimated_settlement_price
+                .map(|value| value.to_string()),
+            funding_rate: value.funding_rate.map(|value| value.to_string()),
+            next_funding_time_unix_nanos: value
+                .next_funding_time_unix_nanos
+                .map(|value| value.get()),
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+            source_id: value.source_id.clone(),
+        }),
+        Domain::IndexPrice(value) => {
+            contract::MarketObservation::IndexPrice(contract::IndexPrice {
+                market_id: value.market_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                spot_index_price: value.spot_index_price.map(|value| value.to_string()),
+                contract_index_price: value.contract_index_price.map(|value| value.to_string()),
+                index_price: value.index_price.map(|value| value.to_string()),
+                funding_rate: value.funding_rate.map(|value| value.to_string()),
+                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+                source_id: value.source_id.clone(),
+            })
+        }
+        Domain::FundingRate(value) => {
+            contract::MarketObservation::FundingRate(contract::FundingRate {
+                market_id: value.market_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                funding_rate: value.funding_rate.to_string(),
+                funding_period_seconds: value.funding_period_seconds,
+                next_funding_time_unix_nanos: value
+                    .next_funding_time_unix_nanos
+                    .map(|value| value.get()),
+                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+                source_id: value.source_id.clone(),
+            })
+        }
+        Domain::OpenInterest(value) => {
+            contract::MarketObservation::OpenInterest(contract::OpenInterest {
+                market_id: value.market_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                contracts: value.contracts.to_string(),
+                quote_value: value.quote_value.map(|value| value.to_string()),
+                change_24h: value.change_24h.map(|value| value.to_string()),
+                change_pct_24h: value.change_pct_24h.map(|value| value.to_string()),
+                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+                source_id: value.source_id.clone(),
+            })
+        }
+        Domain::InstrumentStatus(value) => {
+            contract::MarketObservation::InstrumentStatus(contract::InstrumentStatus {
+                market_id: value.market_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                status: value.status.as_str().into(),
+                reason: value.reason.clone(),
+                effective_at_unix_nanos: value.effective_at_unix_nanos.map(|value| value.get()),
+                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+                source_id: value.source_id.clone(),
+            })
+        }
+    }
+}
+
+fn market_contract_orderbook(value: &crate::OrderBook) -> kairos_market_contract::model::OrderBook {
+    use kairos_market_contract::model as contract;
+    let levels = |values: &[crate::PriceLevel]| {
+        values
+            .iter()
+            .map(|value| contract::PriceLevel {
+                price: value.price.to_string(),
+                quantity: value.quantity.to_string(),
+            })
+            .collect()
+    };
+    contract::OrderBook {
+        source_id: value.source_id.clone(),
+        market_id: value.market_id.to_string(),
+        instrument_id: value.instrument_id.to_string(),
+        sequence: value.sequence.get(),
+        event_time_unix_nanos: value.event_time_unix_nanos.get(),
+        bids: levels(&value.bids),
+        asks: levels(&value.asks),
+        synchronized: value.synchronized,
+        depth_policy: match value.depth_policy {
+            crate::domain::orderbook::DepthPolicy::Full => contract::DepthPolicy::Full,
+            crate::domain::orderbook::DepthPolicy::TopN(value) => {
+                contract::DepthPolicy::TopN(value)
+            }
+        },
+        cursor: contract::DepthCursor {
+            first_sequence: value.cursor.first_sequence.get(),
+            last_sequence: value.cursor.last_sequence.get(),
+            checksum: value.cursor.checksum.clone(),
+        },
+        checksum: value.checksum.clone(),
+    }
 }
 
 impl MarketSnapshotPublisher for MmapMarketSnapshotPublisher {
     fn publish(
         &mut self,
-        snapshot: &crate::domain::snapshot::MarketSnapshot,
+        snapshot: &crate::domain::snapshot::MarketCurrentView,
     ) -> Result<(), String> {
         Self::publish(self, snapshot)
     }

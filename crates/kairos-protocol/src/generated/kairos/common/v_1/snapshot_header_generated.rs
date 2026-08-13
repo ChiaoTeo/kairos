@@ -23,16 +23,14 @@ impl<'a> SnapshotHeader<'a> {
     pub const VT_SNAPSHOT_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_VIEW_KEY: ::flatbuffers::VOffsetT = 6;
     pub const VT_OWNER_ACTOR_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_EVENT_STREAM_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_WORKSPACE_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_LAUNCH_ID: ::flatbuffers::VOffsetT = 14;
-    pub const VT_INSTANCE_ID: ::flatbuffers::VOffsetT = 16;
-    pub const VT_EVENT_SEQUENCE: ::flatbuffers::VOffsetT = 18;
-    pub const VT_VERSION: ::flatbuffers::VOffsetT = 20;
-    pub const VT_GENERATION: ::flatbuffers::VOffsetT = 22;
-    pub const VT_GENERATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
-    pub const VT_AS_OF_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
-    pub const VT_COMPLETE: ::flatbuffers::VOffsetT = 28;
+    pub const VT_WORKSPACE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_LAUNCH_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_INSTANCE_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_VERSION: ::flatbuffers::VOffsetT = 16;
+    pub const VT_GENERATION: ::flatbuffers::VOffsetT = 18;
+    pub const VT_GENERATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_AS_OF_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_COMPLETE: ::flatbuffers::VOffsetT = 24;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -53,7 +51,6 @@ impl<'a> SnapshotHeader<'a> {
         builder.add_generated_at_unix_nanos(args.generated_at_unix_nanos);
         builder.add_generation(args.generation);
         builder.add_version(args.version);
-        builder.add_event_sequence(args.event_sequence);
         if let Some(x) = args.instance_id {
             builder.add_instance_id(x);
         }
@@ -62,9 +59,6 @@ impl<'a> SnapshotHeader<'a> {
         }
         if let Some(x) = args.workspace_id {
             builder.add_workspace_id(x);
-        }
-        if let Some(x) = args.event_stream_id {
-            builder.add_event_stream_id(x);
         }
         if let Some(x) = args.owner_actor_id {
             builder.add_owner_actor_id(x);
@@ -116,20 +110,6 @@ impl<'a> SnapshotHeader<'a> {
         }
     }
     #[inline]
-    pub fn event_stream_id(&self) -> &'a str {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    SnapshotHeader::VT_EVENT_STREAM_ID,
-                    None,
-                )
-                .unwrap()
-        }
-    }
-    #[inline]
     pub fn workspace_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
@@ -157,17 +137,6 @@ impl<'a> SnapshotHeader<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(SnapshotHeader::VT_INSTANCE_ID, None)
-        }
-    }
-    #[inline]
-    pub fn event_sequence(&self) -> u64 {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u64>(SnapshotHeader::VT_EVENT_SEQUENCE, Some(0))
-                .unwrap()
         }
     }
     #[inline]
@@ -250,11 +219,6 @@ impl ::flatbuffers::Verifiable for SnapshotHeader<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "event_stream_id",
-                Self::VT_EVENT_STREAM_ID,
-                true,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "workspace_id",
                 Self::VT_WORKSPACE_ID,
                 false,
@@ -269,7 +233,6 @@ impl ::flatbuffers::Verifiable for SnapshotHeader<'_> {
                 Self::VT_INSTANCE_ID,
                 false,
             )?
-            .visit_field::<u64>("event_sequence", Self::VT_EVENT_SEQUENCE, false)?
             .visit_field::<u64>("version", Self::VT_VERSION, false)?
             .visit_field::<u64>("generation", Self::VT_GENERATION, false)?
             .visit_field::<u64>(
@@ -287,11 +250,9 @@ pub struct SnapshotHeaderArgs<'a> {
     pub snapshot_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub view_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub owner_actor_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub event_stream_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub workspace_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub launch_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instance_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub event_sequence: u64,
     pub version: u64,
     pub generation: u64,
     pub generated_at_unix_nanos: u64,
@@ -302,14 +263,12 @@ impl<'a> Default for SnapshotHeaderArgs<'a> {
     #[inline]
     fn default() -> Self {
         SnapshotHeaderArgs {
-            snapshot_id: None,     // required field
-            view_key: None,        // required field
-            owner_actor_id: None,  // required field
-            event_stream_id: None, // required field
+            snapshot_id: None,    // required field
+            view_key: None,       // required field
+            owner_actor_id: None, // required field
             workspace_id: None,
             launch_id: None,
             instance_id: None,
-            event_sequence: 0,
             version: 0,
             generation: 0,
             generated_at_unix_nanos: 0,
@@ -344,13 +303,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SnapshotHeaderBuilder<'a, 'b,
         );
     }
     #[inline]
-    pub fn add_event_stream_id(&mut self, event_stream_id: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            SnapshotHeader::VT_EVENT_STREAM_ID,
-            event_stream_id,
-        );
-    }
-    #[inline]
     pub fn add_workspace_id(&mut self, workspace_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             SnapshotHeader::VT_WORKSPACE_ID,
@@ -370,11 +322,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SnapshotHeaderBuilder<'a, 'b,
             SnapshotHeader::VT_INSTANCE_ID,
             instance_id,
         );
-    }
-    #[inline]
-    pub fn add_event_sequence(&mut self, event_sequence: u64) {
-        self.fbb_
-            .push_slot::<u64>(SnapshotHeader::VT_EVENT_SEQUENCE, event_sequence, 0);
     }
     #[inline]
     pub fn add_version(&mut self, version: u64) {
@@ -423,8 +370,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> SnapshotHeaderBuilder<'a, 'b,
             .required(o, SnapshotHeader::VT_VIEW_KEY, "view_key");
         self.fbb_
             .required(o, SnapshotHeader::VT_OWNER_ACTOR_ID, "owner_actor_id");
-        self.fbb_
-            .required(o, SnapshotHeader::VT_EVENT_STREAM_ID, "event_stream_id");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -435,11 +380,9 @@ impl ::core::fmt::Debug for SnapshotHeader<'_> {
         ds.field("snapshot_id", &self.snapshot_id());
         ds.field("view_key", &self.view_key());
         ds.field("owner_actor_id", &self.owner_actor_id());
-        ds.field("event_stream_id", &self.event_stream_id());
         ds.field("workspace_id", &self.workspace_id());
         ds.field("launch_id", &self.launch_id());
         ds.field("instance_id", &self.instance_id());
-        ds.field("event_sequence", &self.event_sequence());
         ds.field("version", &self.version());
         ds.field("generation", &self.generation());
         ds.field("generated_at_unix_nanos", &self.generated_at_unix_nanos());

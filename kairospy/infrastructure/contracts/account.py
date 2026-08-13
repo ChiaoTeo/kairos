@@ -8,13 +8,14 @@ from decimal import Decimal
 import sys
 
 from kairospy.application.account import (
+    AccountSegmentSnapshot,
     AccountSnapshot,
     Balance,
     DataFreshness,
     Position,
 )
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, InstrumentId
+from kairospy.domain_types import AccountId, InstrumentId, SegmentKey
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from .base import CommandEnvelope, MmapSnapshotReader, QueryEnvelope
 from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
@@ -102,49 +103,77 @@ class AccountMmapProjection:
         payload = cast(Any, root.Payload())
         if payload is None:
             raise ValueError("Account snapshot payload is missing")
-        account = next(
-            (
-                cast(Any, payload.Accounts(index))
-                for index in range(payload.AccountsLength())
-                if _text(cast(Any, payload.Accounts(index)).AccountId())
-                == str(account_id)
-            ),
-            None,
+        account_rows = tuple(
+            cast(Any, payload.Accounts(index))
+            for index in range(payload.AccountsLength())
+            if _text(cast(Any, payload.Accounts(index)).AccountId()) == str(account_id)
         )
-        if account is None:
+        if not account_rows:
             raise ValueError(
                 f"account {account_id!s} is not present in Account projection"
             )
-        balances = tuple(
-            Balance(
-                account_id=account_id,
-                asset=_text(value.AssetCode()) or _text(value.AssetId()) or "",
-                total=_decimal64(value.Total()) or Decimal("0"),
-                available=_decimal64(value.Available()) or Decimal("0"),
-                reserved=_decimal64(value.Locked()) or Decimal("0"),
-            )
-            for value in _table_items(account, "Balances")
-        )
-        positions = tuple(
-            Position(
-                account_id=account_id,
-                instrument=_instrument(_text(value.InstrumentId()) or ""),
-                quantity=_decimal64(value.Quantity()) or Decimal("0"),
-                average_price=_decimal64(value.AveragePrice()),
-                market_value=_market_value(value),
-                unrealized_pnl=_decimal64(value.UnrealizedPnl()),
-            )
-            for value in _table_items(account, "Positions")
-        )
+        generation = contract.metadata.generation
         return AccountSnapshot(
             account_id=account_id,
-            equity=_decimal64(account.Equity()),
-            balances=balances,
-            positions=positions,
-            freshness=DataFreshness.STALE if account.Stale() else DataFreshness.FRESH,
-            generation=contract.metadata.generation,
-            event_sequence=contract.metadata.event_sequence,
+            segments=tuple(
+                _segment_snapshot(account, account_id, generation)
+                for account in account_rows
+            ),
+            generation=generation,
         )
+
+
+def _segment_snapshot(
+    account: Any, account_id: AccountId, generation: int
+) -> AccountSegmentSnapshot:
+    segment_key = SegmentKey(_text(account.SegmentKey()) or "")
+    balances = tuple(
+        Balance(
+            account_id=account_id,
+            segment_key=segment_key,
+            asset=_text(value.AssetCode()) or _text(value.AssetId()) or "",
+            total=_decimal64(value.Total()) or Decimal("0"),
+            available=_decimal64(value.Available()) or Decimal("0"),
+            reserved=_decimal64(value.Locked()) or Decimal("0"),
+        )
+        for value in _table_items(account, "Balances")
+    )
+    positions = tuple(
+        Position(
+            account_id=account_id,
+            segment_key=segment_key,
+            instrument=_instrument(_text(value.InstrumentId()) or ""),
+            quantity=_decimal64(value.Quantity()) or Decimal("0"),
+            average_price=_decimal64(value.AveragePrice()),
+            market_value=_market_value(value),
+            unrealized_pnl=_decimal64(value.UnrealizedPnl()),
+        )
+        for value in _table_items(account, "Positions")
+    )
+    status = (_text(account.Status()) or "unknown").lower()
+    freshness = (
+        DataFreshness.STALE
+        if account.Stale()
+        else DataFreshness.RESYNCING
+        if status == "reconciling"
+        else DataFreshness.UNAVAILABLE
+        if status in {"unavailable", "suspended"}
+        else DataFreshness.FRESH
+        if status == "ready"
+        else DataFreshness.UNKNOWN
+    )
+    return AccountSegmentSnapshot(
+        account_id=account_id,
+        segment_key=segment_key,
+        broker=_text(account.Broker()) or "",
+        environment=_text(account.Environment()) or "",
+        account_model=_text(account.AccountModel()),
+        equity=_decimal64(account.Equity()),
+        balances=balances,
+        positions=positions,
+        freshness=freshness,
+        generation=generation,
+    )
 
 
 def _text(value: bytes | None) -> str | None:
@@ -187,25 +216,25 @@ def backtest_mark_to_market(
     quote_asset: str = "USDT",
 ) -> Mapping[str, Any] | None:
     """Apply the latest strategy-visible quote to Account during replay."""
-    from kairospy.infrastructure.transport.market import BarView, QuoteView
+    from kairospy.application.market import BarEvent, QuoteEvent
 
-    if event.kind == "bar" and isinstance(event.payload, BarView):
-        quote = event.payload
-        mark = Decimal(quote.close.value)
-        instrument_id = quote.instrument_id
-        event_time = quote.event_time_unix_nanos
-    elif event.kind == "quote" and isinstance(event.payload, QuoteView):
-        quote = event.payload
+    if isinstance(event, BarEvent):
+        observation = event.data
+        mark = observation.close
+        instrument_id = str(observation.instrument.id)
+        event_time = observation.occurred_at_unix_nanos
+    elif isinstance(event, QuoteEvent):
+        observation = event.data
         prices = [
-            value.value
-            for value in (quote.bid_price, quote.ask_price)
+            value
+            for value in (observation.bid_price, observation.ask_price)
             if value is not None
         ]
         if not prices:
             return None
-        mark = sum((Decimal(value) for value in prices), Decimal("0")) / len(prices)
-        instrument_id = quote.instrument_id
-        event_time = quote.event_time_unix_nanos
+        mark = sum(prices, Decimal("0")) / len(prices)
+        instrument_id = str(observation.instrument.id)
+        event_time = observation.occurred_at_unix_nanos
     else:
         return None
     client = AccountContractClient(path)
@@ -218,7 +247,11 @@ def backtest_mark_to_market(
             "observed_at_unix_nanos": event_time,
         }
     )
-    return {"result": result, "snapshot": client.snapshot()}
+    return {
+        "result": result,
+        "snapshot": client.snapshot(),
+        "segment_key": segment_key,
+    }
 
 
 def _decimal_wire(value) -> str:

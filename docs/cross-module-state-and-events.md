@@ -318,14 +318,17 @@ service runtime contract:
 snapshot_id
 view_key
 producer_id
-event_stream_id
 generation
-event_sequence
+schema_version
+as_of_unix_nanos
 published_at_unix_nanos
 ```
 
-`generation` identifies the state image. `event_sequence` is the event
-watermark represented by that image. They are not interchangeable.
+`generation` identifies the state image. It is not an event cursor and cannot
+select, resume, validate, or repair an event subscription. If an owner exposes
+an incorporated-event watermark for audit, that is a separate contract field
+and does not become a resumable cursor without matching event retention or a
+dedicated resync operation.
 
 There is no distributed transaction across independent module snapshots. A
 consumer reads a stable snapshot from each module and records the individual
@@ -333,10 +336,10 @@ watermarks. Execution must retain these dependency watermarks in its intent,
 order, or audit record:
 
 ```text
-account:   generation/event_sequence
-market:    generation/event_sequence
-reference: generation/event_sequence
-risk:      generation/event_sequence
+    account:   generation/as_of
+    market:    generation/as_of
+    reference: generation/event_sequence
+    risk:      generation/as_of
 ```
 
 Consumers apply freshness policy per dependency. A stale snapshot may be
@@ -370,10 +373,14 @@ event_time_unix_nanos
 payload
 ```
 
-Event consumers must be idempotent by `(stream_id, sequence)`. A consumer
-starts from a snapshot watermark, applies later events, and re-reads the
-snapshot if it sees a gap, an older watermark, or an invalid event. The event
-stream is therefore a change/fact plane, not durable current-state storage.
+Event consumers must be idempotent by `(stream_id, sequence)`. An event
+consumer starts and resumes only from a cursor defined by the event contract.
+It may perform an independent one-shot state query for a current view, but a
+mmap snapshot has no event watermark, event sequence, cursor, or join point.
+An event gap is recovered through event-log retention or a dedicated event
+resync contract, or it fails explicitly; re-reading or diffing a mmap snapshot
+cannot repair the gap. The event stream is therefore a change/fact plane, not
+durable current-state storage.
 
 Event streams are optional for a module. A module only publishes a stream when
 another component has a real consumer. Internal actor pending-event queues are
@@ -477,7 +484,7 @@ a cross-process contract.
 Each contract crate must test:
 
 - stable reads from both mmap slots;
-- generation and event-sequence validation;
+- generation, schema-version, and as-of validation;
 - schema/file-identifier rejection;
 - Python/Rust decoding of the same fixture;
 - event idempotency and gap recovery.

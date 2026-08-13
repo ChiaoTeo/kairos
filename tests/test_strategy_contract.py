@@ -8,8 +8,11 @@ import pytest
 
 from kairospy.application.account import (
     AccountApplication,
+    AccountNotEnabledError,
+    AccountSegmentSnapshot,
     AccountSnapshot,
     DataFreshness,
+    SPOT,
 )
 from kairospy.application.execution import ExecutionApplication
 from kairospy.application.market import Bar as ApplicationBar
@@ -38,23 +41,17 @@ def test_market_application_has_no_internal_port_or_contract_facade() -> None:
     root = Path(__file__).parents[1]
     assert not (root / "kairospy/application/market/ports.py").exists()
     assert not (root / "kairospy/infrastructure/contracts/market.py").exists()
-    strategy_applications = (
+    assert not (
         root / "kairospy/application/strategy/services/applications.py"
-    ).read_text(encoding="utf-8")
-    assert "BoundMarketCommands" not in strategy_applications
-    assert "MarketSnapshotQueries" not in strategy_applications
+    ).exists()
 
 
 def test_execution_application_has_no_internal_port_or_bound_adapter() -> None:
     root = Path(__file__).parents[1]
     assert not (root / "kairospy/application/execution/ports.py").exists()
-    strategy_applications = (
+    assert not (
         root / "kairospy/application/strategy/services/applications.py"
-    ).read_text(encoding="utf-8")
-    assert "BoundExecutionCommands" not in strategy_applications
-    assert "ExecutionQueries" not in strategy_applications
-    assert "StrategyCommandScope" not in strategy_applications
-    assert "StrategyApplicationRuntime" not in strategy_applications
+    ).exists()
 
 
 def test_disabled_execution_returns_a_typed_rejected_receipt() -> None:
@@ -87,11 +84,20 @@ def test_account_application_owns_concrete_multi_account_projection_selection() 
         def snapshot(self, account_id: AccountId) -> AccountSnapshot:
             return AccountSnapshot(
                 account_id,
-                self.equity,
-                (),
-                (),
-                DataFreshness.FRESH,
-                1,
+                (
+                    AccountSegmentSnapshot(
+                        account_id,
+                        SPOT,
+                        "paper",
+                        "paper",
+                        "no_margin",
+                        self.equity,
+                        (),
+                        (),
+                        DataFreshness.FRESH,
+                        1,
+                    ),
+                ),
                 1,
             )
 
@@ -103,10 +109,11 @@ def test_account_application_owns_concrete_multi_account_projection_selection() 
     )
 
     assert account.account_ids == (main_id, secondary_id)
-    assert account.snapshot(main_id).equity == Decimal("100")
-    assert account.snapshot("secondary").equity == Decimal("200")
-    with pytest.raises(ValueError, match="not enabled"):
-        account.snapshot("outside")
+    assert account.accounts[0].segment(SPOT).equity == Decimal("100")
+    assert account.account("secondary").segment(SPOT).equity == Decimal("200")
+    assert [value.generation for value in account.snapshot().accounts] == [1, 1]
+    with pytest.raises(AccountNotEnabledError, match="not enabled"):
+        account.account("outside")
 
 
 def test_account_application_has_no_callable_or_object_adapter() -> None:
@@ -114,12 +121,10 @@ def test_account_application_has_no_callable_or_object_adapter() -> None:
     application = (root / "kairospy/application/account/application.py").read_text(
         encoding="utf-8"
     )
-    strategy_applications = (
-        root / "kairospy/application/strategy/services/applications.py"
-    ).read_text(encoding="utf-8")
     assert "Callable" not in application
-    assert "def account_snapshot" not in strategy_applications
-    assert "accounts: Mapping[str, object]" not in strategy_applications
+    assert not (
+        root / "kairospy/application/strategy/services/applications.py"
+    ).exists()
 
 
 def test_risk_application_owns_concrete_projection_query() -> None:
@@ -133,7 +138,6 @@ def test_risk_application_owns_concrete_projection_query() -> None:
                 Decimal("0"),
                 (),
                 1,
-                2,
             )
 
     risk = RiskApplication(Projection())
@@ -154,12 +158,10 @@ def test_risk_application_has_no_callable_or_object_adapter() -> None:
     application = (root / "kairospy/application/risk/application.py").read_text(
         encoding="utf-8"
     )
-    strategy_applications = (
-        root / "kairospy/application/strategy/services/applications.py"
-    ).read_text(encoding="utf-8")
     assert "Callable" not in application
-    assert "def risk_status" not in strategy_applications
-    assert "risk: object" not in strategy_applications
+    assert not (
+        root / "kairospy/application/strategy/services/applications.py"
+    ).exists()
 
 
 def test_strategy_validation_requires_the_typed_lifecycle() -> None:
@@ -190,7 +192,7 @@ def test_bar_event_has_typed_data_and_delivery_metadata() -> None:
         occurred_at,
         1_704_067_200_000_000_000,
     )
-    event = BarEvent(bar, EventMetadata("market.events", 1, 1))
+    event = BarEvent(bar, EventMetadata("market.events", 1))
     assert event.data.close == Decimal("1.5")
     assert event.metadata.sequence == 1
 

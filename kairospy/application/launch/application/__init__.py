@@ -27,6 +27,7 @@ _EXPORT_MODULE = {
     "BacktestCorrelationTrace": "reporting",
     "BacktestReportContext": "reporting",
     "CanonicalBacktestReportApplication": "reporting",
+    "StrategyProcessController": "strategy_process",
 }
 
 

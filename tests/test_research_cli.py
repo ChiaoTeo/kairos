@@ -120,53 +120,62 @@ def test_research_cli_and_python_share_plan_and_gate_applications(
     project, kairos, spec, plan_path, evidence_path = _project(tmp_path)
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "research",
-            "plan",
-            "lock",
-            str(plan_path),
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "research",
+                "plan",
+                "lock",
+                str(plan_path),
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     locked = json.loads(output.getvalue())
     assert locked == kairos.research.plan(spec.plan_hash)
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "research",
-            "gate",
-            "publish",
-            str(plan_path),
-            str(evidence_path),
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "research",
+                "gate",
+                "publish",
+                str(plan_path),
+                str(evidence_path),
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     report = json.loads(output.getvalue())
 
     output = StringIO()
-    assert execute_argv(
-        [
-            "research",
-            "gate",
-            "show",
-            spec.plan_hash,
-            "--workspace",
-            str(project),
-            "--output",
-            "json",
-        ],
-        output,
-    ) == 0
+    assert (
+        execute_argv(
+            [
+                "research",
+                "gate",
+                "show",
+                spec.plan_hash,
+                "--workspace",
+                str(project),
+                "--output",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
     assert json.loads(output.getvalue()) == report
     assert report == kairos.research.gate_report(spec.plan_hash)
 

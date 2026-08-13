@@ -43,6 +43,11 @@ class AccountId(_Id):
 
 
 @dataclass(frozen=True, slots=True)
+class SegmentKey(_Id):
+    """Stable Account segment identity shared across application boundaries."""
+
+
+@dataclass(frozen=True, slots=True)
 class IntentId(_Id):
     pass
 

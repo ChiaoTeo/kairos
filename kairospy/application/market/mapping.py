@@ -6,7 +6,9 @@ from typing import Any, cast
 from . import (
     Bar,
     BarEvent,
+    GreeksEvent,
     MarketEvent,
+    OptionGreeks,
     Quote,
     QuoteEvent,
     Trade,
@@ -21,11 +23,10 @@ from kairospy.domain_types import (
 )
 
 
-def map_market_event(raw, *, dispatch_sequence: int) -> MarketEvent:
+def map_market_event(raw) -> MarketEvent:
     metadata = EventMetadata(
         stream_id=raw.stream_id,
         sequence=raw.sequence,
-        dispatch_sequence=dispatch_sequence,
         schema_version=getattr(raw, "schema_version", 1),
         producer=getattr(raw, "producer", "market"),
         occurred_at=raw.occurred_at,
@@ -45,13 +46,17 @@ def map_market_event(raw, *, dispatch_sequence: int) -> MarketEvent:
         return QuoteEvent(value, metadata)
     if raw.kind == "trade" and isinstance(value, Trade):
         return TradeEvent(value, metadata)
+    if raw.kind == "greeks" and isinstance(value, OptionGreeks):
+        return GreeksEvent(value, metadata)
     raise ValueError(
         f"Market event discriminator {raw.kind!r} does not match {type(raw.payload).__name__}"
     )
 
 
-def map_market_view(value: object, *, kind: str | None = None) -> Bar | Quote | Trade:
-    if isinstance(value, (Bar, Quote, Trade)):
+def map_market_view(
+    value: object, *, kind: str | None = None
+) -> Bar | Quote | Trade | OptionGreeks:
+    if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
         if kind is not None and kind != _public_kind(value):
             raise ValueError(
                 f"Market event discriminator {kind!r} does not match {type(value).__name__}"
@@ -127,19 +132,51 @@ def map_market_view(value: object, *, kind: str | None = None) -> Bar | Quote | 
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
             source_id=raw.source_id,
         )
+    if kind == "greeks" or (kind is None and hasattr(value, "implied_volatility")):
+        _require_attributes(
+            value,
+            "instrument_id",
+            "market_id",
+            "expiry_unix_nanos",
+            "strike",
+            "delta",
+            "gamma",
+            "vega",
+            "theta",
+            "implied_volatility",
+            "event_time_unix_nanos",
+        )
+        occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
+        return OptionGreeks(
+            market_id=MarketId(_required(raw.market_id, "greeks market_id")),
+            instrument=_instrument(raw.instrument_id),
+            expiry_unix_nanos=raw.expiry_unix_nanos,
+            strike=_decimal(raw.strike),
+            delta=_decimal(raw.delta),
+            gamma=_decimal(raw.gamma),
+            vega=_decimal(raw.vega),
+            theta=_decimal(raw.theta),
+            implied_volatility=_decimal(raw.implied_volatility),
+            occurred_at=occurred_at,
+            occurred_at_unix_nanos=raw.event_time_unix_nanos,
+            source_id=raw.source_id,
+            derivation=raw.derivation,
+        )
     raise TypeError(f"unsupported Market payload: {type(value).__name__}")
 
 
-def _public_kind(value: Bar | Quote | Trade) -> str:
+def _public_kind(value: Bar | Quote | Trade | OptionGreeks) -> str:
     if isinstance(value, Bar):
         return "bar"
     if isinstance(value, Quote):
         return "quote"
-    return "trade"
+    if isinstance(value, Trade):
+        return "trade"
+    return "greeks"
 
 
 def _payload_kind(value: object) -> str | None:
-    if isinstance(value, (Bar, Quote, Trade)):
+    if isinstance(value, (Bar, Quote, Trade, OptionGreeks)):
         return _public_kind(value)
     if hasattr(value, "timeframe"):
         return "bar"
@@ -147,6 +184,8 @@ def _payload_kind(value: object) -> str | None:
         return "quote"
     if hasattr(value, "trade_id"):
         return "trade"
+    if hasattr(value, "implied_volatility"):
+        return "greeks"
     return None
 
 

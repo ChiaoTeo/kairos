@@ -3,51 +3,53 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ..domain.identity import InstanceState, LaunchInstance
-from ...strategy.application import StrategyHost, StrategyHostStatus
+from ...strategy.application import StrategyApplication, StrategyStatus
 
 
 class LaunchInstanceApplication:
-    """Launch-owned lifecycle facade for one instance-owned StrategyHost."""
+    """Launch-owned lifecycle facade for one instance-owned StrategyApplication."""
 
-    def __init__(self, instance: LaunchInstance, strategy_host: StrategyHost) -> None:
+    def __init__(
+        self, instance: LaunchInstance, strategy_application: StrategyApplication
+    ) -> None:
         if (
-            strategy_host.launch_id != instance.identity.launch_id
-            or strategy_host.instance_id != instance.instance_id
+            strategy_application.launch_id != instance.identity.launch_id
+            or strategy_application.instance_id != instance.instance_id
         ):
-            raise ValueError("strategy host does not belong to launch instance")
+            raise ValueError("strategy application does not belong to launch instance")
         self.instance = instance
-        self.strategy_host = strategy_host
+        self.strategy_application = strategy_application
 
-    def start(self) -> StrategyHostStatus:
+    def start(self) -> StrategyStatus:
         self.instance = replace(self.instance, state=InstanceState.STARTING)
         try:
-            status = self.strategy_host.start()
+            status = self.strategy_application.start()
         except Exception:
             self.instance = replace(self.instance, state=InstanceState.FAILED)
             raise
         self.instance = replace(self.instance, state=InstanceState.RUNNING)
         return status
 
-    def enable(self) -> StrategyHostStatus:
-        return self.strategy_host.enable()
+    def enable(self) -> StrategyStatus:
+        return self.strategy_application.enable()
 
-    def pause(self, reason: str = "paused by cli") -> StrategyHostStatus:
-        return self.strategy_host.pause(reason)
+    def pause(self, reason: str = "paused by cli") -> StrategyStatus:
+        return self.strategy_application.pause(reason)
 
-    def resume(self) -> StrategyHostStatus:
-        return self.strategy_host.resume()
+    def resume(self) -> StrategyStatus:
+        return self.strategy_application.resume()
 
-    def refresh(self) -> StrategyHostStatus:
-        return self.strategy_host.refresh()
+    def refresh(self) -> StrategyStatus:
+        return self.strategy_application.refresh()
 
-    def stop(self) -> StrategyHostStatus:
+    def stop(self) -> StrategyStatus:
         self.instance = replace(self.instance, state=InstanceState.STOPPING)
-        status = self.strategy_host.stop()
+        status = self.strategy_application.stop()
         self.instance = replace(self.instance, state=InstanceState.STOPPED)
         return status
 
     def status(self) -> dict[str, object]:
-        value = self.strategy_host.status
+        value = self.strategy_application.status
         return {
             "launch_id": self.instance.identity.launch_id,
             "instance_id": self.instance.instance_id,
@@ -56,7 +58,7 @@ class LaunchInstanceApplication:
             "strategy_id": value.strategy_id,
             "strategy_state": value.state.value,
             "reason": value.reason,
-            "event_sequence": value.event_sequence,
+            "dispatch_sequence": value.dispatch_sequence,
             "control_socket": str(self.instance.control_socket),
             "readiness": value.readiness.value,
             "data_health": value.data_health.value,

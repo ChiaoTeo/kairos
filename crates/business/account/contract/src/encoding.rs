@@ -47,9 +47,7 @@ impl MmapAccountPublisher {
         self.publisher.publish(&SnapshotEnvelope {
             view_key: "account.current".into(),
             producer_id: self.encoder.owner_actor_id.clone(),
-            event_stream_id: "account.events".into(),
             generation: snapshot.generation,
-            event_sequence: snapshot.event_sequence,
             published_at_unix_nanos: 0,
             payload: self.encoder.last_payload.clone().unwrap_or_default(),
         })
@@ -242,10 +240,9 @@ impl FlatbuffersAccountPublisher {
                 accounts: Some(accounts),
             },
         );
-        let snapshot_id = builder.create_string(&format!("account-{}", snapshot.event_sequence));
+        let snapshot_id = builder.create_string(&format!("account-{}", snapshot.generation));
         let view_key = builder.create_string("account.current");
         let owner = builder.create_string(&self.owner_actor_id);
-        let stream = builder.create_string("account.events");
         let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
         let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
         let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
@@ -255,15 +252,13 @@ impl FlatbuffersAccountPublisher {
                 snapshot_id: Some(snapshot_id),
                 view_key: Some(view_key),
                 owner_actor_id: Some(owner),
-                event_stream_id: Some(stream),
                 workspace_id,
                 launch_id,
                 instance_id,
-                event_sequence: snapshot.event_sequence,
                 version: 1,
                 generation: snapshot.generation,
-                generated_at_unix_nanos: 0,
-                as_of_unix_nanos: 0,
+                generated_at_unix_nanos: now_unix_nanos(),
+                as_of_unix_nanos: account_snapshot_as_of(snapshot),
                 complete: true,
             },
         );
@@ -280,6 +275,24 @@ impl FlatbuffersAccountPublisher {
     }
 }
 
+fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn account_snapshot_as_of(snapshot: &AccountsSnapshot) -> u64 {
+    snapshot
+        .accounts
+        .iter()
+        .map(|account| account.observed_at_unix_nanos)
+        .max()
+        .unwrap_or_default()
+}
+
 fn decimal(value: Decimal) -> Decimal64 {
     Decimal64::new(value.mantissa, value.scale)
 }
@@ -289,4 +302,51 @@ fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
     value: &str,
 ) -> Option<flatbuffers::WIPOffset<&'a str>> {
     (!value.is_empty()).then(|| builder.create_string(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AccountProjection, AccountStatus};
+
+    #[test]
+    fn snapshot_header_carries_generation_and_business_as_of_time() {
+        let snapshot = AccountsSnapshot {
+            actor_id: "account:test".into(),
+            generation: 7,
+            accounts: vec![AccountProjection {
+                account_id: "paper".into(),
+                segment_key: "spot".into(),
+                environment: "paper".into(),
+                broker: "test".into(),
+                configured_account_model: None,
+                observed_account_model: None,
+                status: AccountStatus::Ready,
+                stale: false,
+                observed_at_unix_nanos: 123,
+                generation: 7,
+                equity: None,
+                initial_equity: None,
+                net_profit: None,
+                margin_mode: None,
+                position_mode: None,
+                balances: vec![],
+                collateral: vec![],
+                positions: vec![],
+                open_orders: vec![],
+            }],
+        };
+        let mut publisher = FlatbuffersAccountPublisher::new("account:test");
+
+        publisher.publish(&snapshot).unwrap();
+        let root =
+            account_fb::root_as_accounts_snapshot(publisher.last_payload.as_deref().unwrap())
+                .unwrap();
+        let header = root.header();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.generation(), 7);
+        assert_eq!(header.as_of_unix_nanos(), 123);
+        assert!(header.generated_at_unix_nanos() > 0);
+        assert!(header.complete());
+    }
 }

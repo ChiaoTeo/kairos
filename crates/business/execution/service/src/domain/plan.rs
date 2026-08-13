@@ -198,6 +198,7 @@ pub enum IntentType {
     #[default]
     TargetPosition,
     PairArbitrage,
+    OptionSpread,
     PortfolioRebalance,
     QuoteProvisioning,
     Hedge,

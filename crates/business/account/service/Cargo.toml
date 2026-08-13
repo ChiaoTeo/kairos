@@ -19,6 +19,7 @@ futures-util = { version = "0.3", features = ["alloc"] }
 kairos-integration = { path = "../../../kairos-integration" }
 kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
 kairos-protocol = { path = "../../../kairos-protocol" }
+kairos-transport = { path = "../../../kairos-transport" }
 kairos-account-contract = { path = "../contract" }
 kairos-reference-contract = { path = "../../reference/contract" }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +31,7 @@ tracing = "0.1"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 
 [dev-dependencies]
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 tempfile = "3"
 
 [[bin]]
@@ -39,3 +41,7 @@ path = "src/bin/kairos-account-server.rs"
 [[bin]]
 name = "kairos-account-cli"
 path = "src/bin/kairos-account-cli.rs"
+
+[[bin]]
+name = "kairos-account-event-bridge"
+path = "src/bin/kairos-account-event-bridge.rs"

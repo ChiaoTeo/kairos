@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, LifecycleEvent, Listing, Market,
-    ProviderCatalog,
+    MarketDataAccess, ProviderCatalog,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -24,6 +24,8 @@ pub struct ReferenceCatalog {
     pub financial_products: BTreeMap<String, FinancialProduct>,
     #[serde(default)]
     pub execution_accesses: BTreeMap<ExecutionAccessId, ExecutionAccess>,
+    #[serde(default)]
+    pub market_data_accesses: BTreeMap<String, MarketDataAccess>,
     pub lifecycle_events: Vec<LifecycleEvent>,
     pub generation: Generation,
     pub event_sequence: Sequence,
@@ -38,6 +40,7 @@ impl ReferenceCatalog {
         let previous_markets = std::mem::take(&mut self.markets);
         let previous_financial_products = std::mem::take(&mut self.financial_products);
         let previous_execution_accesses = std::mem::take(&mut self.execution_accesses);
+        let previous_market_data_accesses = std::mem::take(&mut self.market_data_accesses);
         self.entities = incoming
             .entities
             .into_iter()
@@ -65,6 +68,11 @@ impl ReferenceCatalog {
             .collect();
         self.execution_accesses = incoming
             .execution_accesses
+            .into_iter()
+            .map(|v| (v.access_id.clone(), v))
+            .collect();
+        self.market_data_accesses = incoming
+            .market_data_accesses
             .into_iter()
             .map(|v| (v.access_id.clone(), v))
             .collect();
@@ -121,6 +129,11 @@ impl ReferenceCatalog {
             "execution_access",
             previous_execution_accesses,
             self.execution_accesses
+        );
+        diff_records!(
+            "market_data_access",
+            previous_market_data_accesses,
+            self.market_data_accesses
         );
 
         for (id, next) in &next_markets {
@@ -220,7 +233,7 @@ impl ReferenceCatalog {
                 }
                 .into(),
             );
-            event.generation = self.generation.get();
+            event.generation = self.generation;
             event.record_payload_json = event
                 .record_kind
                 .as_deref()
@@ -253,6 +266,7 @@ fn record_payload(catalog: &ReferenceCatalog, kind: &str, id: &str) -> Option<St
         "market" => serde_json::to_value(catalog.markets.get(id)?).ok()?,
         "financial_product" => serde_json::to_value(catalog.financial_products.get(id)?).ok()?,
         "execution_access" => serde_json::to_value(catalog.execution_accesses.get(id)?).ok()?,
+        "market_data_access" => serde_json::to_value(catalog.market_data_accesses.get(id)?).ok()?,
         _ => return None,
     };
     serde_json::to_string(&value).ok()

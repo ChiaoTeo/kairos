@@ -768,8 +768,7 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
     ]
     assert all(item.subject.startswith("SPY-options/O:SPY") for item in requirements)
     assert all(
-        item.parameters["credential_id"] == "massive-readonly"
-        for item in requirements
+        item.parameters["credential_id"] == "massive-readonly" for item in requirements
     )
     assert len({item.subject for item in requirements}) == 2
 

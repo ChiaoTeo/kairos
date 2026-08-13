@@ -1,6 +1,6 @@
 use kairos_protocol::generated::kairos::risk::v_1::{
-    reservation_event_buffer_has_identifier, risk_snapshot_buffer_has_identifier,
-    root_as_reservation_event, root_as_risk_snapshot,
+    risk_event_message_buffer_has_identifier, risk_snapshot_buffer_has_identifier,
+    root_as_risk_event_message, root_as_risk_snapshot,
 };
 use kairos_risk::composition::{
     compose_risk_application, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
@@ -158,10 +158,10 @@ fn ttl_expiration_releases_capacity() {
 }
 
 #[test]
-fn publisher_emits_new_snapshot_and_reservation_event() {
+fn current_view_and_reservation_event_use_independent_writers() {
     let mut app = application(100);
     app.authorize_and_reserve(request("order", 40)).unwrap();
-    let snapshot = app.snapshot();
+    let snapshot = app.current_view();
     let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
     writer.publish(&snapshot).unwrap();
     let payload = writer.last_payload.unwrap();
@@ -176,21 +176,45 @@ fn publisher_emits_new_snapshot_and_reservation_event() {
         1
     );
 
-    let event = app
-        .drain_events()
-        .into_iter()
-        .find(|event| matches!(event, kairos_risk::RiskEvent::ReservationChanged { .. }))
-        .unwrap();
+    while !matches!(
+        app.pending_event(),
+        Some(kairos_risk::RiskEvent::ReservationChanged { .. })
+    ) {
+        app.acknowledge_event();
+    }
+    let event = app.pending_event().cloned().unwrap();
     let mut event_writer = FlatbuffersRiskEventWriter::new("risk");
     event_writer.publish(&event).unwrap();
     let payload = event_writer.last_payload.unwrap();
-    assert!(reservation_event_buffer_has_identifier(&payload));
+    assert!(risk_event_message_buffer_has_identifier(&payload));
     assert_eq!(
-        root_as_reservation_event(&payload)
+        root_as_risk_event_message(&payload)
             .unwrap()
             .reservation_id(),
-        "reservation:order"
+        Some("reservation:order")
     );
+}
+
+#[test]
+fn risk_event_preserves_launch_instance_identity() {
+    let mut app = application(100);
+    app.authorize_and_reserve(request("identity", 40)).unwrap();
+    while !matches!(
+        app.pending_event(),
+        Some(kairos_risk::RiskEvent::ReservationChanged { .. })
+    ) {
+        app.acknowledge_event();
+    }
+    let mut writer = FlatbuffersRiskEventWriter::new_with_identity(
+        "risk",
+        kairos_protocol::InstanceIdentity::new("workspace", "launch", "instance"),
+    );
+    writer.publish(app.pending_event().unwrap()).unwrap();
+    let payload = writer.last_payload.unwrap();
+    let header = root_as_risk_event_message(&payload).unwrap().header();
+    assert_eq!(header.workspace_id(), Some("workspace"));
+    assert_eq!(header.launch_id(), Some("launch"));
+    assert_eq!(header.instance_id(), Some("instance"));
 }
 
 #[test]
@@ -344,7 +368,7 @@ fn circuit_state_is_recovered_from_the_journal() {
 }
 
 #[test]
-fn circuit_state_is_published_in_the_risk_snapshot() {
+fn circuit_state_is_published_in_the_risk_current_view() {
     let mut app = application(100);
     app.open_circuit(OpenCircuit {
         scope: CircuitScope {
@@ -357,7 +381,7 @@ fn circuit_state_is_published_in_the_risk_snapshot() {
         reason: "risk halt".into(),
     })
     .unwrap();
-    let snapshot = app.snapshot();
+    let snapshot = app.current_view();
     let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
     writer.publish(&snapshot).unwrap();
     let payload = writer.last_payload.unwrap();

@@ -209,8 +209,7 @@ pub async fn build_market_process(
             }
             let subscription_id = SubscriptionId::new(format!("collection:{name}"))
                 .map_err(MarketStartupError::new)?;
-            let owner_id = serde_json::to_string(&serde_json::json!(["collection", name]))
-                .map_err(MarketStartupError::new)?;
+            let owner_id = format!("collection:{name}");
             application
                 .subscribe_static_with_selectors(
                     subscription_id,
@@ -248,7 +247,6 @@ pub async fn build_market_process(
         &snapshot_path,
         SNAPSHOT_SLOT_SIZE,
         format!("market:{}", profile.name),
-        "market.events",
         identity.clone(),
     )
     .map_err(MarketStartupError::new)?;
@@ -280,6 +278,16 @@ pub async fn build_market_process(
     // must remain independent of the live Reference/Aeron runtime.
     if profile.scope != MarketRuntimeScope::Replay {
         process = process.with_reference_database(reference_database);
+    }
+    if profile.scope != MarketRuntimeScope::Replay {
+        process = process.with_aeron_event_publisher(
+            kairos_transport::AeronBytePublisher::connect(
+                std::env::var("AERON_DIR").ok().as_deref(),
+                kairos_transport::DEFAULT_CHANNEL,
+                kairos_transport::stream_ids::MARKET_EVENTS,
+            )
+            .map_err(MarketStartupError::new)?,
+        );
     }
     Ok(process.with_lifecycle_guard(process_lock))
 }

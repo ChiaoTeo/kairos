@@ -9,7 +9,7 @@ use kairos_account::composition::account::{
     compose_local_account_application_for_segments, compose_okx_async_account_application,
     AccountOptions,
 };
-use kairos_account::composition::MmapAccountPublisher;
+use kairos_account::composition::{AeronAccountEventPublisher, MmapAccountPublisher};
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::account::{AccountBindingRecord, AccountRegistry, CredentialStore};
 use kairos_workspace::Workspace;
@@ -34,15 +34,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = Workspace::open(&args.workspace)?;
     let instance = workspace.instance(&args.launch_mode, &args.launch_id, &args.instance_id)?;
     instance.prepare()?;
-    let _process_lock = instance.process_lock("account")?;
+    let socket_name = args.socket_name.as_deref().unwrap_or("account");
+    let _process_lock = instance.process_lock(socket_name)?;
     let transport_identity =
         InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id());
-    let socket_name = args.socket_name.as_deref().unwrap_or("account");
     let socket = instance.socket(socket_name)?;
-    let health = instance.service_health("account")?;
+    let health = instance.service_health(socket_name)?;
     tracing::info!(event = "workspace_ready", component = "account", workspace = %workspace.root().display(), socket = %socket.display(), "workspace and instance resources resolved");
     let state = instance.state(&["account", &format!("{socket_name}-state.json")])?;
-    let snapshot = instance.service_snapshot("account")?;
+    let snapshot = instance.service_snapshot(socket_name)?;
     let registry = AccountRegistry::load(workspace.child(&["accounts", "accounts.toml"])?)
         .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     let credential_store =
@@ -200,18 +200,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ])
                 .expect("validated account lease path")
         });
-    let process = composition.into_process(
-        args.account_id,
-        socket.to_string_lossy().into_owned(),
-        Duration::from_millis(args.refresh_ms),
-        Some(health),
-        Some(Box::new(MmapAccountPublisher::create(
-            snapshot,
-            1024 * 1024,
+    let process = composition
+        .into_process(
+            args.account_id,
+            socket.to_string_lossy().into_owned(),
+            Duration::from_millis(args.refresh_ms),
+            Some(health),
+            Some(Box::new(MmapAccountPublisher::create(
+                snapshot,
+                1024 * 1024,
+                "account",
+                transport_identity.clone(),
+            )?)),
+        )?
+        .with_event_publisher(AeronAccountEventPublisher::connect(
+            args.aeron_dir.as_deref(),
+            &args.aeron_channel,
+            args.account_events_stream_id,
             "account",
             transport_identity,
-        )?)),
-    )?;
+        )?);
     let process = match lease_file {
         Some(path) => process.with_trade_lease(path, args.instance_id.clone()),
         None => process,
@@ -263,6 +271,16 @@ struct Args {
     egress_scope_id: String,
     #[arg(long, default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(1..))]
     refresh_ms: u64,
+    #[arg(long, env = "AERON_DIR")]
+    aeron_dir: Option<String>,
+    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    aeron_channel: String,
+    #[arg(
+        long,
+        default_value_t = kairos_transport::stream_ids::ACCOUNT_EVENTS,
+        value_parser = clap::value_parser!(i32).range(1..)
+    )]
+    account_events_stream_id: i32,
 }
 
 fn lease_component(value: &str) -> String {

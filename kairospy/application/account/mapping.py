@@ -1,61 +1,204 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 
 from kairospy.application.reference import InstrumentRef
-from kairospy.domain_types import AccountId, InstrumentId
+from kairospy.domain_types import AccountId, EventMetadata, InstrumentId, SegmentKey
 
-from .models import AccountSnapshot, Balance, DataFreshness, Position
+from .events import (
+    AccountEvent,
+    AccountEventRecord,
+    AccountStatusChangedEvent,
+    BalanceChangedEvent,
+    EquityChangedEvent,
+    PositionChangedEvent,
+)
+from .models import (
+    AccountSegmentSnapshot,
+    AccountSnapshot,
+    AccountsSnapshot,
+    AccountStatusChange,
+    Balance,
+    DataFreshness,
+    EquityChange,
+    Position,
+)
 
 
-def map_account_snapshot(value: object, *, account_id: AccountId) -> AccountSnapshot:
-    root = _mapping(value, "Account snapshot")
-    root = _mapping(root.get("snapshot", root), "Account snapshot payload")
+def map_account_event(record: AccountEventRecord) -> tuple[AccountEvent, ...]:
+    account_id = AccountId(record.account_id)
+    metadata = EventMetadata(
+        stream_id=record.stream_id,
+        sequence=record.sequence,
+        producer=record.producer,
+        occurred_at_unix_nanos=record.occurred_at_unix_nanos,
+    )
+    events: list[AccountEvent] = []
+    for change in record.changes:
+        segment_key = SegmentKey(change.segment_key)
+        if change.kind == "balance_changed":
+            events.append(
+                BalanceChangedEvent(
+                    map_balance(
+                        change.payload,
+                        account_id=account_id,
+                        segment_key=segment_key,
+                    ),
+                    metadata,
+                )
+            )
+        elif change.kind == "position_changed":
+            events.append(
+                PositionChangedEvent(
+                    map_position(
+                        change.payload,
+                        account_id=account_id,
+                        segment_key=segment_key,
+                    ),
+                    metadata,
+                )
+            )
+        elif change.kind == "equity_changed":
+            row = _mapping(change.payload, "equity change")
+            events.append(
+                EquityChangedEvent(
+                    EquityChange(account_id, segment_key, _decimal(row.get("equity"))),
+                    metadata,
+                )
+            )
+        elif change.kind == "status_changed":
+            row = _mapping(change.payload, "status change")
+            events.append(
+                AccountStatusChangedEvent(
+                    AccountStatusChange(
+                        account_id=account_id,
+                        segment_key=segment_key,
+                        freshness=_freshness(row),
+                        trading_enabled=bool(row.get("trading_enabled", False)),
+                        reason=(
+                            None
+                            if str(row.get("status", "")).lower() == "ready"
+                            else str(row.get("status", "unknown")).lower()
+                        ),
+                    ),
+                    metadata,
+                )
+            )
+        else:
+            raise ValueError(f"unsupported Account event kind: {change.kind}")
+    return tuple(events)
+
+
+def map_accounts_snapshot(
+    value: object,
+    *,
+    enabled_account_ids: Iterable[AccountId | str] = (),
+) -> AccountsSnapshot:
+    """Map every enabled (account, segment) row without collapsing segments."""
+
+    root = _mapping(value, "Accounts snapshot")
+    root = _mapping(root.get("snapshot", root), "Accounts snapshot payload")
+    generation = _integer(root.get("generation", 0), "generation")
+    rows = tuple(
+        _mapping(account, "account projection")
+        for account in _sequence(root.get("accounts", ()), "accounts")
+    )
+    enabled = tuple(
+        value if isinstance(value, AccountId) else AccountId(value)
+        for value in enabled_account_ids
+    )
+    ordered_ids = enabled or tuple(
+        dict.fromkeys(
+            AccountId(str(row.get("account_id", "")))
+            for row in rows
+            if str(row.get("account_id", "")).strip()
+        )
+    )
+    enabled_set = frozenset(ordered_ids)
+    grouped: dict[AccountId, list[AccountSegmentSnapshot]] = {
+        account_id: [] for account_id in ordered_ids
+    }
+    for row in rows:
+        account_id = AccountId(_required_text(row.get("account_id"), "account_id"))
+        if enabled_set and account_id not in enabled_set:
+            continue
+        grouped.setdefault(account_id, []).append(
+            map_account_segment_snapshot(
+                row, account_id=account_id, generation=generation
+            )
+        )
+    accounts = tuple(
+        AccountSnapshot(account_id, tuple(grouped.get(account_id, ())), generation)
+        for account_id in ordered_ids
+        if grouped.get(account_id)
+    )
+    return AccountsSnapshot(accounts)
+
+
+def map_account_segment_snapshot(
+    value: object,
+    *,
+    account_id: AccountId,
+    generation: int,
+) -> AccountSegmentSnapshot:
+    row = _mapping(value, "Account segment snapshot")
+    segment_key = SegmentKey(_required_text(row.get("segment_key"), "segment_key"))
     balances = tuple(
-        map_balance(item, account_id=account_id)
-        for item in _sequence(root.get("balances", ()), "balances")
+        map_balance(item, account_id=account_id, segment_key=segment_key)
+        for item in _sequence(row.get("balances", ()), "balances")
     )
     positions = tuple(
-        map_position(item, account_id=account_id)
-        for item in _sequence(root.get("positions", ()), "positions")
+        map_position(item, account_id=account_id, segment_key=segment_key)
+        for item in _sequence(row.get("positions", ()), "positions")
     )
-    raw_freshness = str(root.get("freshness", "unknown")).lower()
-    freshness = (
-        DataFreshness(raw_freshness)
-        if raw_freshness in DataFreshness._value2member_map_
-        else DataFreshness.UNKNOWN
-    )
-    return AccountSnapshot(
+    observed_model = row.get("observed_account_model")
+    configured_model = row.get("configured_account_model", row.get("account_model"))
+    return AccountSegmentSnapshot(
         account_id=account_id,
-        equity=_decimal(root.get("equity")),
+        segment_key=segment_key,
+        broker=str(row.get("broker", "")),
+        environment=str(row.get("environment", "")),
+        account_model=(
+            str(observed_model)
+            if observed_model is not None
+            else None
+            if configured_model is None
+            else str(configured_model)
+        ),
+        equity=_decimal(row.get("equity")),
         balances=balances,
         positions=positions,
-        freshness=freshness,
-        generation=_integer(root.get("generation", 0), "generation"),
-        event_sequence=_integer(root.get("event_sequence", 0), "event_sequence"),
+        freshness=_freshness(row),
+        generation=generation,
     )
 
 
-def map_balance(value: object, *, account_id: AccountId) -> Balance:
+def map_balance(
+    value: object, *, account_id: AccountId, segment_key: SegmentKey
+) -> Balance:
     row = _mapping(value, "balance")
     total = _decimal(row.get("total")) or Decimal("0")
     available = _decimal(row.get("available")) or Decimal("0")
-    reserved = _decimal(row.get("reserved"))
+    reserved = _decimal(row.get("reserved", row.get("locked")))
     return Balance(
         account_id,
-        str(row.get("asset", row.get("symbol", ""))),
+        segment_key,
+        str(row.get("asset", row.get("asset_code", row.get("symbol", "")))),
         total,
         available,
         total - available if reserved is None else reserved,
     )
 
 
-def map_position(value: object, *, account_id: AccountId) -> Position:
+def map_position(
+    value: object, *, account_id: AccountId, segment_key: SegmentKey
+) -> Position:
     row = _mapping(value, "position")
     instrument_id = str(row.get("instrument_id", row.get("symbol", "")))
     return Position(
         account_id=account_id,
+        segment_key=segment_key,
         instrument=InstrumentRef(
             InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
         ),
@@ -63,6 +206,23 @@ def map_position(value: object, *, account_id: AccountId) -> Position:
         average_price=_decimal(row.get("average_price")),
         market_value=_decimal(row.get("market_value")),
         unrealized_pnl=_decimal(row.get("unrealized_pnl")),
+    )
+
+
+def _freshness(row: Mapping[str, object]) -> DataFreshness:
+    raw = str(row.get("freshness", row.get("status", "unknown"))).lower()
+    if bool(row.get("stale", False)):
+        return DataFreshness.STALE
+    if raw == "reconciling":
+        return DataFreshness.RESYNCING
+    if raw in {"unavailable", "suspended"}:
+        return DataFreshness.UNAVAILABLE
+    if raw == "ready":
+        return DataFreshness.FRESH
+    return (
+        DataFreshness(raw)
+        if raw in DataFreshness._value2member_map_
+        else DataFreshness.UNKNOWN
     )
 
 
@@ -90,3 +250,10 @@ def _integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must be an integer")
     return value
+
+
+def _required_text(value: object, name: str) -> str:
+    result = value if isinstance(value, str) else ""
+    if not result.strip():
+        raise ValueError(f"Account snapshot {name} is required")
+    return result

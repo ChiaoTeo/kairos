@@ -1,0 +1,69 @@
+namespace kairos.system.v2;
+
+enum HealthStatus:ubyte {
+  UNSPECIFIED = 0,
+  HEALTHY = 1,
+  DEGRADED = 2,
+  UNHEALTHY = 3,
+  STOPPED = 4
+}
+
+enum ConnectionStatus:ubyte {
+  UNSPECIFIED = 0,
+  CONNECTING = 1,
+  AUTHENTICATING = 2,
+  READY = 3,
+  DEGRADED = 4,
+  DISCONNECTED = 5,
+  FAILED = 6
+}
+
+enum AlertSeverity:ubyte {
+  UNSPECIFIED = 0,
+  INFO = 1,
+  WARNING = 2,
+  ERROR = 3,
+  CRITICAL = 4
+}
+
+enum AlertStatus:ubyte {
+  UNSPECIFIED = 0,
+  ACTIVE = 1,
+  ACKNOWLEDGED = 2,
+  RESOLVED = 3
+}
+
+table ActorHealth {
+  actor_id:string (required);
+  status:HealthStatus = UNSPECIFIED;
+  processed_count:ulong;
+  error_count:ulong;
+  mailbox_depth:ulong;
+  last_processed_at_unix_nanos:ulong = null;
+  last_business_event_at_unix_nanos:ulong = null;
+  last_error:string;
+}
+
+table ConnectionHealth {
+  connection_id:string (required);
+  status:ConnectionStatus = UNSPECIFIED;
+  authenticated:bool;
+  reconnect_count:ulong;
+  last_message_at_unix_nanos:ulong = null;
+  last_error:string;
+}
+
+table Alert {
+  alert_id:string (required);
+  rule_id:string (required);
+  severity:AlertSeverity = UNSPECIFIED;
+  status:AlertStatus = UNSPECIFIED;
+  owner_id:string (required);
+  first_seen_unix_nanos:ulong;
+  last_seen_unix_nanos:ulong;
+  acknowledged_at_unix_nanos:ulong = null;
+  resolved_at_unix_nanos:ulong = null;
+  correlation_id:string;
+  summary:string (required);
+  diagnostic_id:string;
+}

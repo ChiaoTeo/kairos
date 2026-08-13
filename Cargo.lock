@@ -1601,7 +1601,9 @@ dependencies = [
  "kairos-integration",
  "kairos-protocol",
  "kairos-reference-contract",
+ "kairos-transport",
  "kairos-workspace",
+ "rusteron-media-driver",
  "secrecy",
  "serde",
  "serde_json",
@@ -1649,9 +1651,11 @@ dependencies = [
  "kairos-protocol",
  "kairos-reference-contract",
  "kairos-risk-contract",
+ "kairos-transport",
  "kairos-workspace",
  "rusqlite",
  "rust_decimal",
+ "rusteron-media-driver",
  "secrecy",
  "serde",
  "serde_json",
@@ -1702,6 +1706,8 @@ dependencies = [
  "kairos-reference-contract",
  "kairos-transport",
  "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1722,6 +1728,7 @@ dependencies = [
  "proptest",
  "rusqlite",
  "rust_decimal",
+ "rusteron-media-driver",
  "secrecy",
  "serde",
  "serde_json",
@@ -1743,6 +1750,7 @@ name = "kairos-protocol"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "serde_json",
 ]
 
 [[package]]
@@ -1806,8 +1814,10 @@ dependencies = [
  "kairos-domain-types",
  "kairos-protocol",
  "kairos-risk-contract",
+ "kairos-transport",
  "kairos-workspace",
  "rust_decimal",
+ "rusteron-media-driver",
  "serde",
  "serde_json",
  "tempfile",

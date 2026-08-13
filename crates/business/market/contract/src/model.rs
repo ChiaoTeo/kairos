@@ -319,15 +319,13 @@ pub struct MarketFreshness {
     pub data_kind: String,
     pub last_event_time_unix_nanos: u64,
     pub last_received_time_unix_nanos: u64,
-    pub event_sequence: u64,
     pub status: DataFreshnessStatus,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct MarketSnapshot {
+pub struct MarketCurrentView {
     pub actor_id: String,
     pub generation: u64,
-    pub event_sequence: u64,
     pub latest: BTreeMap<String, MarketObservation>,
     pub views: BTreeMap<String, MarketObservation>,
     pub order_books: BTreeMap<String, OrderBook>,

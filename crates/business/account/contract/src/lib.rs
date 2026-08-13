@@ -1,5 +1,6 @@
 //! Public cross-process contract for the Account module.
 
+pub mod account_event;
 pub mod client;
 pub mod encoding;
 pub mod event;

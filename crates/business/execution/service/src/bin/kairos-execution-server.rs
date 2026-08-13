@@ -1,9 +1,9 @@
 use clap::Parser;
 use kairos_execution::application::ExecutionApplication;
 use kairos_execution::composition::{
-    compose_execution_routes, ExecutionConnectionOptions, ExecutionSimulator,
-    QueuedExecutionPreflight, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
-    SimulationConfig, SocketExecutionPreflight, SqlxExecutionStore,
+    compose_execution_routes, AeronExecutionEventPublisher, ExecutionConnectionOptions,
+    ExecutionSimulator, QueuedExecutionPreflight, SharedExecutionSnapshotPublisher,
+    SharedIntentSnapshotPublisher, SimulationConfig, SocketExecutionPreflight, SqlxExecutionStore,
 };
 use kairos_execution::credentials::load_workspace_credential;
 use kairos_execution::{ExecutionProcess, SqlxExecutionAudit};
@@ -38,6 +38,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
     let execution_snapshot = instance.service_snapshot("execution")?;
     let intent_snapshot = instance.service_snapshot("intent")?;
+    let transport_identity = kairos_protocol::InstanceIdentity::new(
+        workspace.id(),
+        instance.launch_id(),
+        instance.instance_id(),
+    );
     if let Some(parent) = execution_snapshot.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -103,6 +108,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             execution_snapshot,
             1024 * 1024,
             format!("execution:{}", args.instance_id),
+        )?)
+        .with_event_publisher(AeronExecutionEventPublisher::connect(
+            args.aeron_dir.as_deref(),
+            &args.aeron_channel,
+            args.execution_events_stream_id,
+            format!("execution:{}", args.instance_id),
+            transport_identity,
         )?)
         .with_intent_snapshot_publisher(SharedIntentSnapshotPublisher::create(
             intent_snapshot,
@@ -210,6 +222,16 @@ struct Args {
     client_id: i32,
     #[arg(long)]
     confirm_live: bool,
+    #[arg(long, env = "AERON_DIR")]
+    aeron_dir: Option<String>,
+    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    aeron_channel: String,
+    #[arg(
+        long,
+        default_value_t = kairos_transport::stream_ids::EXECUTION_EVENTS,
+        value_parser = clap::value_parser!(i32).range(1..)
+    )]
+    execution_events_stream_id: i32,
 }
 
 #[derive(Debug, Deserialize)]

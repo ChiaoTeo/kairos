@@ -10,14 +10,16 @@ from aiohttp import web
 
 from ..domain.lifecycle import StrategyLifecycle
 from kairospy.strategy import StrategyCommand
-from .host import StrategyHost, StrategyHostStatus
+from ..application.runtime import StrategyApplication, StrategyStatus
 
 
 class StrategyControlServer:
     """Small HTTP/1.1 control plane over an instance-owned Unix socket."""
 
-    def __init__(self, host: StrategyHost, socket_path: str | Path) -> None:
-        self.host = host
+    def __init__(
+        self, application: StrategyApplication, socket_path: str | Path
+    ) -> None:
+        self.application = application
         self.socket_path = Path(socket_path)
         self._server: asyncio.AbstractServer | None = None
         self._runner: web.AppRunner | None = None
@@ -56,7 +58,7 @@ class StrategyControlServer:
             self._stopped.set()
 
     async def close(self) -> None:
-        self.host.close()
+        self.application.close()
         if self._event_task is not None and not self._event_task.done():
             self._event_task.cancel()
             try:
@@ -87,7 +89,7 @@ class StrategyControlServer:
 
     async def _dispatch(self, method: str, path: str, body: bytes) -> dict[str, Any]:
         if method == "GET" and path == "/v1/health":
-            status = self.host.status
+            status = self.application.status
             return self._status(status) | {
                 "status": "ready"
                 if status.state
@@ -95,7 +97,7 @@ class StrategyControlServer:
                 else "not_ready"
             }
         if method == "GET" and path == "/v1/status":
-            return self._status(self.host.status)
+            return self._status(self.application.status)
         if method == "POST" and path == "/v1/command":
             payload = json.loads(body or b"{}")
             if not isinstance(payload, dict):
@@ -110,7 +112,7 @@ class StrategyControlServer:
                     else {}
                 ),
             )
-            task = asyncio.create_task(self.host.command(command))
+            task = asyncio.create_task(self.application.command(command))
             self._command_tasks[command.request_id] = task
             try:
                 result = await task
@@ -137,20 +139,20 @@ class StrategyControlServer:
             task.cancel()
             return {"request_id": request_id, "status": "cancel_requested"}
         if method == "POST" and path == "/v1/start":
-            return self._status(self.host.start())
+            return self._status(self.application.start())
         if method == "POST" and path == "/v1/enable":
-            result = self.host.enable()
-            self._event_task = asyncio.create_task(self.host.run())
+            result = self.application.enable()
+            self._event_task = asyncio.create_task(self.application.run())
             self._event_task.add_done_callback(self._event_task_finished)
             return self._status(result)
         if method == "POST" and path == "/v1/pause":
-            return self._status(self.host.pause())
+            return self._status(self.application.pause())
         if method == "POST" and path == "/v1/resume":
-            return self._status(self.host.resume())
+            return self._status(self.application.resume())
         if method == "POST" and path == "/v1/refresh":
-            return self._status(self.host.refresh())
+            return self._status(self.application.refresh())
         if method == "POST" and path == "/v1/stop":
-            result = self.host.stop()
+            result = self.application.stop()
             if self._event_task is not None and not self._event_task.done():
                 self._event_task.cancel()
             self._stopped.set()
@@ -162,7 +164,7 @@ class StrategyControlServer:
         if not task.cancelled():
             self._stopped.set()
 
-    def _status(self, status: StrategyHostStatus) -> dict[str, Any]:
+    def _status(self, status: StrategyStatus) -> dict[str, Any]:
         last_event_time = (
             status.last_event_time.isoformat() if status.last_event_time else None
         )
@@ -183,7 +185,7 @@ class StrategyControlServer:
             "launch_id": status.launch_id,
             "instance_id": status.instance_id,
             "strategy_id": status.strategy_id,
-            "event_sequence": status.event_sequence,
+            "dispatch_sequence": status.dispatch_sequence,
             "reason": status.reason,
             "readiness": status.readiness.value,
             "data_health": status.data_health.value,
@@ -199,5 +201,5 @@ class StrategyControlServer:
             "subscriptions": [
                 dict(subscription) for subscription in status.subscriptions
             ],
-            "equity_curve": list(self.host.equity_curve),
+            "equity_curve": list(self.application.equity_curve),
         }

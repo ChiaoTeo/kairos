@@ -26,12 +26,17 @@ pub struct RiskProcess {
     replay_clock: bool,
     business_time_unix_nanos: Option<u64>,
     snapshot_publisher: Option<Box<dyn RiskSnapshotPublisher>>,
+    event_publisher: Option<Box<dyn RiskEventPublisher>>,
 }
 
 /// Application-owned publication capability. Concrete transport publishers
 /// are selected by composition and injected into the process facade.
 pub trait RiskSnapshotPublisher: Send {
-    fn publish(&mut self, snapshot: &crate::RiskSnapshot) -> Result<(), String>;
+    fn publish(&mut self, snapshot: &crate::RiskCurrentView) -> Result<(), String>;
+}
+
+pub trait RiskEventPublisher {
+    fn publish(&mut self, event: &crate::RiskEvent) -> Result<(), String>;
 }
 
 struct RiskHttpRequest {
@@ -60,6 +65,7 @@ impl RiskProcess {
             replay_clock: false,
             business_time_unix_nanos: None,
             snapshot_publisher: None,
+            event_publisher: None,
         })
     }
 
@@ -76,6 +82,14 @@ impl RiskProcess {
         P: RiskSnapshotPublisher + 'static,
     {
         self.snapshot_publisher = Some(Box::new(publisher));
+        self
+    }
+
+    pub fn with_event_publisher<P>(mut self, publisher: P) -> Self
+    where
+        P: RiskEventPublisher + 'static,
+    {
+        self.event_publisher = Some(Box::new(publisher));
         self
     }
     pub fn application(&self) -> &RiskApplication {
@@ -98,11 +112,14 @@ impl RiskProcess {
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let _ = self.write_health("ready").await;
         self.publish_snapshot();
+        self.publish_events();
         while !self.stop_requested {
             tokio::select! {
                 Some(request) = receiver.recv() => {
                     let _entered = request.span.enter();
                     let response = self.handle(&request.path, &String::from_utf8_lossy(&request.body));
+                    self.publish_events();
+                    self.publish_snapshot();
                     let _ = request.response.send(response);
                 }
                 _ = ticks.tick() => {
@@ -110,6 +127,7 @@ impl RiskProcess {
                         let _ = self.application.expire(crate::ExpireReservations { at_unix_nanos: unix_now_nanos().into() });
                     }
                     self.publish_snapshot();
+                    self.publish_events();
                     let _ = self.write_health("ready").await;
                 }
             }
@@ -126,7 +144,7 @@ impl RiskProcess {
     }
 
     fn publish_snapshot(&mut self) {
-        let snapshot = self.application.snapshot();
+        let snapshot = self.application.current_view();
         kairos_workspace::logging::record_gauge(
             "kairos.snapshot.generation",
             snapshot.generation.get(),
@@ -139,11 +157,24 @@ impl RiskProcess {
         }
     }
 
+    fn publish_events(&mut self) {
+        let Some(publisher) = self.event_publisher.as_mut() else {
+            return;
+        };
+        while let Some(event) = self.application.pending_event().cloned() {
+            if let Err(error) = publisher.publish(&event) {
+                tracing::error!(event = "event_publish_failed", component = "risk", error = %error, "risk event publication failed");
+                break;
+            }
+            self.application.acknowledge_event();
+        }
+    }
+
     fn handle(&mut self, path: &str, raw_body: &str) -> (StatusCode, Value) {
         info!(event = "control_request", component = "risk", path = %path, "risk control request received");
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_body()),
-            SNAPSHOT_PATH => match serde_json::to_value(self.application.snapshot()) {
+            SNAPSHOT_PATH => match serde_json::to_value(self.application.current_view()) {
                 Ok(value) => (200, value),
                 Err(error) => (500, serde_json::json!({"error": error.to_string()})),
             },

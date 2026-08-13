@@ -22,7 +22,7 @@ use kairos_protocol::generated::kairos::market::v_1::{
 use kairos_protocol::InstanceIdentity;
 use kairos_transport::{SharedSnapshotWriter, SharedSnapshotWriter as ViewSnapshotWriter};
 
-use crate::model::{MarketObservation, MarketSnapshot, MarketViewKey, OrderBook, PriceLevel};
+use crate::model::{MarketCurrentView, MarketObservation, MarketViewKey, OrderBook, PriceLevel};
 
 pub struct MmapMarketSnapshotPublisher {
     writer: SharedSnapshotWriter,
@@ -31,7 +31,6 @@ pub struct MmapMarketSnapshotPublisher {
     view_writers: std::collections::BTreeMap<String, ViewSnapshotWriter>,
     orderbook_publishers: std::collections::BTreeMap<String, MmapOrderBookSnapshotPublisher>,
     actor_id: String,
-    event_stream_id: String,
     identity: InstanceIdentity,
 }
 
@@ -40,22 +39,14 @@ impl MmapMarketSnapshotPublisher {
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
     ) -> std::io::Result<Self> {
-        Self::create_with_identity(
-            path,
-            slot_size,
-            actor_id,
-            event_stream_id,
-            InstanceIdentity::default(),
-        )
+        Self::create_with_identity(path, slot_size, actor_id, InstanceIdentity::default())
     }
 
     pub fn create_with_identity(
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
         identity: InstanceIdentity,
     ) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
@@ -70,12 +61,11 @@ impl MmapMarketSnapshotPublisher {
             view_writers: std::collections::BTreeMap::new(),
             orderbook_publishers: std::collections::BTreeMap::new(),
             actor_id: actor_id.into(),
-            event_stream_id: event_stream_id.into(),
             identity,
         })
     }
 
-    pub fn encode(&self, snapshot: &MarketSnapshot) -> Result<Vec<u8>, String> {
+    pub fn encode(&self, snapshot: &MarketCurrentView) -> Result<Vec<u8>, String> {
         self.encode_view(
             snapshot,
             "market.current",
@@ -85,7 +75,7 @@ impl MmapMarketSnapshotPublisher {
 
     fn encode_view(
         &self,
-        snapshot: &MarketSnapshot,
+        snapshot: &MarketCurrentView,
         view_key: &str,
         observations: Vec<&MarketObservation>,
     ) -> Result<Vec<u8>, String> {
@@ -119,7 +109,6 @@ impl MmapMarketSnapshotPublisher {
                     data_kind: Some(data_kind),
                     last_event_time_unix_nanos: value.last_event_time_unix_nanos,
                     last_received_time_unix_nanos: value.last_received_time_unix_nanos,
-                    event_sequence: value.event_sequence,
                     status: Some(status),
                 },
             ));
@@ -511,25 +500,23 @@ impl MmapMarketSnapshotPublisher {
         let snapshot_id = builder.create_string(&format!("{}:{}", view_key, snapshot.generation));
         let view_key = builder.create_string(view_key);
         let actor_id = builder.create_string(&self.actor_id);
-        let event_stream_id = builder.create_string(&self.event_stream_id);
         let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
         let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
         let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
+        let generated_at = now_unix_nanos();
         let header = SnapshotHeader::create(
             &mut builder,
             &SnapshotHeaderArgs {
                 snapshot_id: Some(snapshot_id),
                 view_key: Some(view_key),
                 owner_actor_id: Some(actor_id),
-                event_stream_id: Some(event_stream_id),
                 workspace_id,
                 launch_id,
                 instance_id,
-                event_sequence: snapshot.event_sequence,
-                version: snapshot.generation,
+                version: 1,
                 generation: snapshot.generation,
-                generated_at_unix_nanos: now_unix_nanos(),
-                as_of_unix_nanos: now_unix_nanos(),
+                generated_at_unix_nanos: generated_at,
+                as_of_unix_nanos: market_snapshot_as_of(snapshot),
                 complete: true,
             },
         );
@@ -546,7 +533,7 @@ impl MmapMarketSnapshotPublisher {
 }
 
 impl MmapMarketSnapshotPublisher {
-    pub fn publish(&mut self, snapshot: &MarketSnapshot) -> Result<(), String> {
+    pub fn publish(&mut self, snapshot: &MarketCurrentView) -> Result<(), String> {
         let payload = self.encode(snapshot)?;
         self.writer
             .publish(snapshot.generation, &payload)
@@ -595,7 +582,6 @@ impl MmapMarketSnapshotPublisher {
                             &path,
                             self.slot_size,
                             &snapshot.actor_id,
-                            "market.events",
                             self.identity.clone(),
                         )
                         .map_err(|error| error.to_string())?,
@@ -606,7 +592,6 @@ impl MmapMarketSnapshotPublisher {
             books.insert(book.market_id.clone(), book.clone());
             publisher.publish_books_with_view_key(
                 snapshot.generation,
-                snapshot.event_sequence,
                 &books,
                 &view.as_str(),
                 source_id,
@@ -640,7 +625,6 @@ fn safe_path_part(value: &str) -> Result<String, String> {
 pub struct MmapOrderBookSnapshotPublisher {
     writer: SharedSnapshotWriter,
     actor_id: String,
-    event_stream_id: String,
     identity: InstanceIdentity,
 }
 
@@ -649,28 +633,19 @@ impl MmapOrderBookSnapshotPublisher {
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
     ) -> std::io::Result<Self> {
-        Self::create_with_identity(
-            path,
-            slot_size,
-            actor_id,
-            event_stream_id,
-            InstanceIdentity::default(),
-        )
+        Self::create_with_identity(path, slot_size, actor_id, InstanceIdentity::default())
     }
 
     pub fn create_with_identity(
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
         actor_id: impl Into<String>,
-        event_stream_id: impl Into<String>,
         identity: InstanceIdentity,
     ) -> std::io::Result<Self> {
         Ok(Self {
             writer: SharedSnapshotWriter::create(path, slot_size)?,
             actor_id: actor_id.into(),
-            event_stream_id: event_stream_id.into(),
             identity,
         })
     }
@@ -678,22 +653,14 @@ impl MmapOrderBookSnapshotPublisher {
     pub fn publish_books(
         &mut self,
         generation: u64,
-        event_sequence: u64,
         books: &std::collections::BTreeMap<String, OrderBook>,
     ) -> Result<(), String> {
-        self.publish_books_with_view_key(
-            generation,
-            event_sequence,
-            books,
-            "market.orderbook",
-            "market",
-        )
+        self.publish_books_with_view_key(generation, books, "market.orderbook", "market")
     }
 
     pub fn publish_books_with_view_key(
         &mut self,
         generation: u64,
-        event_sequence: u64,
         books: &std::collections::BTreeMap<String, OrderBook>,
         view_key_value: &str,
         source_id_value: &str,
@@ -748,25 +715,27 @@ impl MmapOrderBookSnapshotPublisher {
         let snapshot_id = builder.create_string(&format!("{}:{generation}", view_key_value));
         let view_key = builder.create_string(view_key_value);
         let actor_id = builder.create_string(&self.actor_id);
-        let stream = builder.create_string(&self.event_stream_id);
         let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
         let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
         let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
+        let generated_at = now_unix_nanos();
         let header = SnapshotHeader::create(
             &mut builder,
             &SnapshotHeaderArgs {
                 snapshot_id: Some(snapshot_id),
                 view_key: Some(view_key),
                 owner_actor_id: Some(actor_id),
-                event_stream_id: Some(stream),
                 workspace_id,
                 launch_id,
                 instance_id,
-                event_sequence,
-                version: generation,
+                version: 1,
                 generation,
-                generated_at_unix_nanos: now_unix_nanos(),
-                as_of_unix_nanos: now_unix_nanos(),
+                generated_at_unix_nanos: generated_at,
+                as_of_unix_nanos: books
+                    .values()
+                    .map(|book| book.event_time_unix_nanos)
+                    .max()
+                    .unwrap_or_default(),
                 complete: true,
             },
         );
@@ -884,4 +853,85 @@ fn now_unix_nanos() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+fn market_snapshot_as_of(snapshot: &MarketCurrentView) -> u64 {
+    snapshot
+        .freshness
+        .values()
+        .map(|value| value.last_event_time_unix_nanos)
+        .chain(
+            snapshot
+                .order_books
+                .values()
+                .map(|value| value.event_time_unix_nanos),
+        )
+        .chain(snapshot.views.values().map(market_observation_time))
+        .chain(snapshot.latest.values().map(market_observation_time))
+        .max()
+        .unwrap_or_default()
+}
+
+fn market_observation_time(value: &MarketObservation) -> u64 {
+    match value {
+        MarketObservation::Quote(value) => value.observed_at_unix_nanos,
+        MarketObservation::Trade(value) => value.observed_at_unix_nanos,
+        MarketObservation::Bar(value) => value.observed_at_unix_nanos,
+        MarketObservation::TradeBar(value) => value.bar.observed_at_unix_nanos,
+        MarketObservation::QuoteBar(value) => value.bar.observed_at_unix_nanos,
+        MarketObservation::OptionGreeks(value) => value.observed_at_unix_nanos,
+        MarketObservation::Rate(value) => value.observed_at_unix_nanos,
+        MarketObservation::Ticker24h(value) => value.observed_at_unix_nanos,
+        MarketObservation::MarkPrice(value) => value.observed_at_unix_nanos,
+        MarketObservation::IndexPrice(value) => value.observed_at_unix_nanos,
+        MarketObservation::FundingRate(value) => value.observed_at_unix_nanos,
+        MarketObservation::OpenInterest(value) => value.observed_at_unix_nanos,
+        MarketObservation::InstrumentStatus(value) => value.observed_at_unix_nanos,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{DataFreshnessStatus, FeedStatus, MarketFreshness};
+
+    #[test]
+    fn snapshot_header_carries_generation_and_business_as_of_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let publisher = MmapMarketSnapshotPublisher::create(
+            directory.path().join("market.snapshot"),
+            1024 * 1024,
+            "market:test",
+        )
+        .unwrap();
+        let snapshot = MarketCurrentView {
+            actor_id: "market:test".into(),
+            generation: 13,
+            freshness: [(
+                "source:market:quote".into(),
+                MarketFreshness {
+                    source_id: "source".into(),
+                    market_id: "market".into(),
+                    data_kind: "quote".into(),
+                    last_event_time_unix_nanos: 987,
+                    last_received_time_unix_nanos: 999,
+                    status: DataFreshnessStatus::Current,
+                },
+            )]
+            .into(),
+            feed_status: FeedStatus::Ready,
+            ..Default::default()
+        };
+
+        let payload = publisher.encode(&snapshot).unwrap();
+        let root =
+            kairos_protocol::generated::kairos::market::v_1::root_as_market_data_snapshot(&payload)
+                .unwrap();
+        let header = root.header();
+        assert_eq!(header.version(), 1);
+        assert_eq!(header.generation(), 13);
+        assert_eq!(header.as_of_unix_nanos(), 987);
+        assert!(header.generated_at_unix_nanos() > 0);
+        assert!(header.complete());
+    }
 }

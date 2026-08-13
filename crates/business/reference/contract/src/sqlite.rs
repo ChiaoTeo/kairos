@@ -11,7 +11,7 @@ use std::time::Duration;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 
-use crate::model::Instrument;
+use crate::model::{ExecutionAccess, Instrument, MarketDataAccess};
 use crate::{ContractError, ContractResult, LifecycleEvent, ReferenceMarket};
 
 pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 1;
@@ -34,6 +34,7 @@ pub struct ReferenceCatalogStats {
     pub active_markets: u64,
     pub financial_products: u64,
     pub execution_accesses: u64,
+    pub market_data_accesses: u64,
     pub lifecycle_events: u64,
 }
 
@@ -46,6 +47,7 @@ pub enum ReferenceCollection {
     Markets,
     FinancialProducts,
     ExecutionAccesses,
+    MarketDataAccesses,
     LifecycleEvents,
 }
 
@@ -54,6 +56,7 @@ pub struct SqliteMarketQuery {
     pub source_id: Option<String>,
     pub source_symbol: Option<String>,
     pub instrument_id: Option<String>,
+    pub listing_id: Option<String>,
     pub underlying_instrument_id: Option<String>,
     pub exchange_id: Option<String>,
     pub market_type: Option<String>,
@@ -70,6 +73,24 @@ pub struct SqliteInstrumentQuery {
     pub underlying_instrument_id: Option<String>,
     pub statuses: Vec<String>,
     pub after_instrument_id: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SqliteExecutionAccessQuery {
+    pub market_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub statuses: Vec<String>,
+    pub after_access_id: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SqliteMarketDataAccessQuery {
+    pub market_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub statuses: Vec<String>,
+    pub after_access_id: Option<String>,
     pub limit: usize,
 }
 
@@ -117,7 +138,7 @@ impl ReferenceSqliteReader {
 
     pub fn stats(&self) -> ContractResult<ReferenceCatalogStats> {
         let connection = self.connection()?;
-        let values: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = connection
+        let values: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = connection
             .query_row(
                 "SELECT \
                  (SELECT COUNT(*) FROM reference_entities_current), \
@@ -128,6 +149,7 @@ impl ReferenceSqliteReader {
                  (SELECT COUNT(*) FROM reference_markets_current WHERE status = 'active'), \
                  (SELECT COUNT(*) FROM reference_financial_products_current), \
                  (SELECT COUNT(*) FROM reference_execution_accesses_current), \
+                 (SELECT COUNT(*) FROM reference_market_data_accesses_current), \
                  (SELECT COUNT(*) FROM reference_lifecycle)",
                 [],
                 |row| {
@@ -141,6 +163,7 @@ impl ReferenceSqliteReader {
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )
@@ -154,7 +177,8 @@ impl ReferenceSqliteReader {
             active_markets: non_negative(values.5, "active_markets")?,
             financial_products: non_negative(values.6, "financial_products")?,
             execution_accesses: non_negative(values.7, "execution_accesses")?,
-            lifecycle_events: non_negative(values.8, "lifecycle_events")?,
+            market_data_accesses: non_negative(values.8, "market_data_accesses")?,
+            lifecycle_events: non_negative(values.9, "lifecycle_events")?,
         })
     }
 
@@ -188,6 +212,7 @@ impl ReferenceSqliteReader {
             ReferenceCollection::Markets,
             ReferenceCollection::FinancialProducts,
             ReferenceCollection::ExecutionAccesses,
+            ReferenceCollection::MarketDataAccesses,
             ReferenceCollection::LifecycleEvents,
         ] {
             let (table, key) = collection_table(collection);
@@ -224,6 +249,73 @@ impl ReferenceSqliteReader {
             "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
             instrument_id,
         )
+    }
+
+    /// Read a bounded, typed set of execution paths. Execution consumers use
+    /// this before preflight; they must not inspect the generic JSON collection
+    /// or infer a provider address from a MarketId.
+    pub fn execution_accesses(
+        &self,
+        query: &SqliteExecutionAccessQuery,
+    ) -> ContractResult<Vec<ExecutionAccess>> {
+        let connection = self.connection()?;
+        let mut sql =
+            String::from("SELECT payload FROM reference_execution_accesses_current WHERE 1 = 1");
+        let mut values = Vec::<Value>::new();
+        push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
+        push_filter(
+            &mut sql,
+            &mut values,
+            "provider_id",
+            query.provider_id.as_ref(),
+        );
+        if !query.statuses.is_empty() {
+            sql.push_str(" AND status IN (");
+            for (index, status) in query.statuses.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push('?');
+                values.push(Value::Text(status.clone()));
+            }
+            sql.push(')');
+        }
+        push_filter(
+            &mut sql,
+            &mut values,
+            "access_id >",
+            query.after_access_id.as_ref(),
+        );
+        sql.push_str(" ORDER BY access_id LIMIT ?");
+        values.push(Value::Integer(bounded_limit(query.limit) as i64));
+        let mut statement = connection.prepare(&sql).map_err(transport)?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
+            .map_err(transport)?;
+        rows.map(|row| decode_payload(&row.map_err(transport)?))
+            .collect()
+    }
+
+    pub fn market_data_accesses(
+        &self,
+        query: &SqliteMarketDataAccessQuery,
+    ) -> ContractResult<Vec<MarketDataAccess>> {
+        let connection = self.connection()?;
+        let mut sql = String::from(
+            "SELECT payload FROM reference_market_data_accesses_current WHERE 1 = 1",
+        );
+        let mut values = Vec::<Value>::new();
+        push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
+        push_filter(&mut sql, &mut values, "provider_id", query.provider_id.as_ref());
+        push_filter(&mut sql, &mut values, "access_id >", query.after_access_id.as_ref());
+        sql.push_str(" ORDER BY access_id LIMIT ?");
+        values.push(Value::Integer(bounded_limit(query.limit) as i64));
+        let mut statement = connection.prepare(&sql).map_err(transport)?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
+            .map_err(transport)?;
+        rows.map(|row| decode_payload(&row.map_err(transport)?))
+            .collect()
     }
 
     pub fn markets(&self, query: &SqliteMarketQuery) -> ContractResult<Vec<ReferenceMarket>> {
@@ -361,6 +453,9 @@ fn collection_table(collection: ReferenceCollection) -> (&'static str, &'static 
         ReferenceCollection::ExecutionAccesses => {
             ("reference_execution_accesses_current", "access_id")
         }
+        ReferenceCollection::MarketDataAccesses => {
+            ("reference_market_data_accesses_current", "access_id")
+        }
         ReferenceCollection::LifecycleEvents => ("reference_lifecycle", "sequence"),
     }
 }
@@ -435,6 +530,7 @@ fn read_markets(
         "instrument_id",
         query.instrument_id.as_ref(),
     );
+    push_filter(&mut sql, &mut values, "listing_id", query.listing_id.as_ref());
     push_filter(
         &mut sql,
         &mut values,

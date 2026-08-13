@@ -7,7 +7,9 @@ pub mod wire {
     pub use kairos_market_contract::reference::{decode_reference_changed, ReferenceChangeNotice};
 }
 
-pub use crate::domain::snapshot::{MarketSnapshot, ReconcileResult, SubscriptionState};
+pub use crate::domain::snapshot::{
+    MarketCurrentFreshness, MarketCurrentView, MarketSnapshot, ReconcileResult, SubscriptionState,
+};
 pub(crate) use facade::source_accepts;
 pub use facade::MarketApplication;
 pub(crate) use process::MarketProcessSettings;

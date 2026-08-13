@@ -78,6 +78,16 @@ pub enum RiskEvent {
         reservation: Reservation,
         event_sequence: Sequence,
     },
+    DecisionEvaluated {
+        decision: RiskDecision,
+        account_id: kairos_domain_types::AccountId,
+        strategy_id: kairos_domain_types::StrategyId,
+        event_sequence: Sequence,
+    },
+    CircuitChanged {
+        circuit: CircuitState,
+        event_sequence: Sequence,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -97,6 +107,20 @@ pub struct RiskSnapshot {
     pub limits: Vec<LimitView>,
     pub reservations: Vec<Reservation>,
     pub watermarks: DependencyWatermarks,
+    pub circuits: Vec<CircuitState>,
+}
+
+/// Read-only state published through mmap.
+///
+/// This type deliberately has no event sequence, cursor, dependency
+/// watermark, or event collection. Event delivery is owned by Aeron.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RiskCurrentView {
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub policy_version: Generation,
+    pub limits: Vec<LimitView>,
+    pub reservations: Vec<Reservation>,
     pub circuits: Vec<CircuitState>,
 }
 
@@ -202,8 +226,16 @@ impl RiskApplication {
         self.actor.snapshot()
     }
 
-    pub fn drain_events(&mut self) -> Vec<RiskEvent> {
-        self.actor.drain_events()
+    pub fn current_view(&self) -> RiskCurrentView {
+        self.actor.current_view()
+    }
+
+    pub fn pending_event(&self) -> Option<&RiskEvent> {
+        self.actor.pending_event()
+    }
+
+    pub fn acknowledge_event(&mut self) {
+        self.actor.acknowledge_event();
     }
 }
 

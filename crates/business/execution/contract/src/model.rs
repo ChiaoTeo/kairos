@@ -114,6 +114,8 @@ pub struct ExecutionOrder {
     #[serde(default)]
     pub leg_id: Option<String>,
     pub intent_id: Option<String>,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
     pub account_id: String,
     pub segment_key: String,
     pub instrument_id: String,
@@ -140,6 +142,8 @@ pub struct ExecutionFill {
     pub leg_id: Option<String>,
     pub intent_id: Option<String>,
     pub instrument_id: String,
+    #[serde(default)]
+    pub execution_market_id: Option<String>,
     pub side: OrderSide,
     pub quantity: Decimal,
     pub price: Decimal,
@@ -196,6 +200,10 @@ pub struct ExecuteStrategyIntent {
     #[serde(default)]
     pub estimated_fee_bps: Option<u32>,
     #[serde(default)]
+    pub minimum_net_credit: Option<Decimal>,
+    #[serde(default)]
+    pub maximum_loss: Option<Decimal>,
+    #[serde(default)]
     pub hedge_policy: Option<crate::plan::HedgePolicy>,
     #[serde(default)]
     pub order_options: crate::plan::ExecutionOrderOptions,
@@ -251,17 +259,13 @@ pub struct IntentEvent {
     pub dependency_watermarks: DependencyWatermarks,
 }
 
+/// State-only input accepted by mmap projection publishers. Event journals
+/// and event cursors deliberately cannot be represented by this type.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ExecutionSnapshot {
-    pub actor_id: String,
+pub struct ExecutionCurrentView {
     pub generation: u64,
-    pub event_sequence: u64,
     pub orders: Vec<ExecutionOrder>,
-    pub events: Vec<ExecutionEvent>,
-    pub fills: Vec<ExecutionFill>,
     pub intents: Vec<IntentState>,
-    pub intent_events: Vec<IntentEvent>,
-    pub intent_idempotency: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

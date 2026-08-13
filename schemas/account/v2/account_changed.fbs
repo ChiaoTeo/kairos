@@ -1,0 +1,68 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.account.v2;
+
+table BalanceUpserted {
+  balance:Balance (required);
+}
+
+table BalanceRemoved {
+  asset_id:string (required);
+}
+
+table PositionUpserted {
+  position:Position (required);
+}
+
+table PositionRemoved {
+  instrument_id:string (required);
+  market_id:string (required);
+}
+
+table ValuationChanged {
+  valuation:AccountValuation (required);
+}
+
+table AccountStatusChanged {
+  status:AccountStatus = UNSPECIFIED;
+  freshness:FreshnessState = UNSPECIFIED;
+  reason:string;
+}
+
+table ObservedOrderUpserted {
+  order:ObservedOrder (required);
+}
+
+table ObservedOrderRemoved {
+  observation_id:string (required);
+  execution_order_id:string;
+  remote_order_id:string;
+}
+
+union AccountChangePayload {
+  BalanceUpserted,
+  BalanceRemoved,
+  PositionUpserted,
+  PositionRemoved,
+  ValuationChanged,
+  AccountStatusChanged,
+  ObservedOrderUpserted,
+  ObservedOrderRemoved
+}
+
+table AccountChange {
+  change_id:string (required);
+  payload:AccountChangePayload (required);
+}
+
+/// One atomic Account Actor transition for one account segment.
+table AccountChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  changes:[AccountChange] (required);
+}
+
+root_type AccountChanged;
+file_identifier "ACV2";

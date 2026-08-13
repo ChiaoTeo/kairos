@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import Any
 
 from kairospy.application.reference.models import Market
 from kairospy.domain_types import MarketId
 
-from .models import Bar, Quote, Trade
+from .events import BarEvent, MarketEvent
+from .models import Bar, OptionGreeks, Quote, Trade
 from .requests import SubscriptionRequest
-
-if TYPE_CHECKING:
-    from kairospy.infrastructure.transport.commands import MarketCommandClient
-    from kairospy.infrastructure.transport.market import MmapMarketSnapshotReader
-    from kairospy.strategy.results import CommandResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,15 +42,6 @@ class SubscriptionReleaseResult:
     error: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class MarketJoinPoint:
-    """Stable snapshot watermark used to join the Market event stream."""
-
-    snapshot_id: str
-    event_stream_id: str
-    event_sequence: int
-
-
 class MarketApplication:
     """Concrete strategy-facing Market use cases.
 
@@ -66,22 +53,99 @@ class MarketApplication:
 
     def __init__(
         self,
-        commands: MarketCommandClient,
-        snapshots: MmapMarketSnapshotReader,
+        commands: Any,
+        snapshots: Any,
+        event_source: Any | None = None,
         *,
         strategy_id: str,
         instance_id: str,
+        launch_id: str | None = None,
     ) -> None:
         if not strategy_id.strip() or not instance_id.strip():
             raise ValueError("strategy_id and instance_id are required")
         self._commands = commands
         self._snapshots = snapshots
+        self._event_source = event_source
+        self._event_cursor: int | None = None
         self._strategy_id = strategy_id
         self._instance_id = instance_id
+        self._launch_id = launch_id
         self._event_sequence: int | None = None
+        self._event_source_ready = event_source is None
         self._request_counter = 0
-        self._handles: dict[str, CommandResult] = {}
+        self._handles: dict[str, Any] = {}
         self._subscription_requests: dict[str, SubscriptionRequest] = {}
+        self._subscription_request_ids: dict[str, str] = {}
+
+    def check_event_source_ready(self) -> None:
+        """Validate the configured Market event source without reading mmap."""
+
+        if self._event_source_ready:
+            return
+        check_ready = getattr(self._event_source, "check_ready", None)
+        if callable(check_ready):
+            check_ready()
+        self._event_source_ready = True
+
+    async def events(self) -> AsyncIterator[MarketEvent]:
+        """Yield typed Market events from the configured incremental source."""
+
+        if self._event_source is None:
+            raise RuntimeError("Market event source is unavailable")
+        from .mapping import map_market_event
+        from .events import (
+            BarEvent,
+            EventStreamGap,
+            GreeksEvent,
+            QuoteEvent,
+            TradeEvent,
+        )
+
+        cursor = self._event_cursor or 0
+        async for record in self._event_source.events(after_sequence=cursor):
+            typed = isinstance(record, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent))
+            stream_id = record.metadata.stream_id if typed else record.stream_id
+            sequence = record.metadata.sequence if typed else record.sequence
+            if stream_id != "market.events":
+                raise RuntimeError(
+                    f"Market event stream identity is invalid: {stream_id}"
+                )
+            if not typed:
+                if self._launch_id is not None and record.launch_id != self._launch_id:
+                    raise RuntimeError("Market event belongs to another launch")
+                if (
+                    self._launch_id is not None
+                    and record.instance_id != self._instance_id
+                ):
+                    raise RuntimeError(
+                        "Market event belongs to another launch instance"
+                    )
+            if cursor == 0 and bool(
+                getattr(self._event_source, "join_from_latest", False)
+            ):
+                cursor = sequence - 1
+            if sequence <= cursor:
+                continue
+            expected = cursor + 1
+            if sequence != expected:
+                raise EventStreamGap(stream_id, expected, sequence)
+            cursor = sequence
+            self._event_cursor = cursor
+            if not typed and record.kind not in {"bar", "quote", "trade", "greeks"}:
+                continue
+            event = record if typed else map_market_event(record)
+            if self._matches_subscription(event):
+                yield event
+
+    @property
+    def events_replayable(self) -> bool:
+        return bool(getattr(self._event_source, "replayable", False))
+
+    @property
+    def events_enabled(self) -> bool:
+        """Whether this Strategy currently owns Market event demand."""
+
+        return self.events_replayable or bool(self._subscription_requests)
 
     def bind_event(self, sequence: int | None) -> None:
         """Bind command causation to the currently dispatched strategy event."""
@@ -118,6 +182,14 @@ class MarketApplication:
             )
         )
 
+    def subscribe_greeks(self, market: Market | MarketId) -> Subscription:
+        market_id = _market_id(market)
+        return self._subscribe(
+            SubscriptionRequest(
+                subject=str(market_id), selectors=("greeks",), identity=str(market_id)
+            )
+        )
+
     def unsubscribe(self, subscription: Subscription) -> None:
         request_id = self._request_id("market.unsubscribe")
         handle = self._commands.unsubscribe(
@@ -127,6 +199,11 @@ class MarketApplication:
             request_id=request_id,
         )
         self._handles[request_id] = handle
+        owner_request_id = self._subscription_request_ids.pop(
+            subscription.subscription_id, None
+        )
+        if owner_request_id is not None:
+            self._subscription_requests.pop(owner_request_id, None)
 
     def latest_bar(self, market: Market | MarketId, *, timeframe: str) -> Bar | None:
         return self._snapshot().latest_bar(_market_id(market), timeframe)
@@ -136,6 +213,9 @@ class MarketApplication:
 
     def latest_trade(self, market: Market | MarketId) -> Trade | None:
         return self._snapshot().latest_trade(_market_id(market))
+
+    def latest_greeks(self, market: Market | MarketId) -> OptionGreeks | None:
+        return self._snapshot().latest_greeks(_market_id(market))
 
     def _subscribe(self, request: SubscriptionRequest) -> Subscription:
         request_id = self._request_id("market.subscribe")
@@ -147,7 +227,9 @@ class MarketApplication:
         )
         self._handles[request_id] = handle
         self._subscription_requests[request_id] = request
-        return _subscription(handle)
+        subscription = _subscription(handle)
+        self._subscription_request_ids[subscription.subscription_id] = request_id
+        return subscription
 
     def _snapshot(self):
         return self._snapshots.read("market.current")
@@ -165,14 +247,14 @@ class MarketApplication:
         try:
             request = self._subscription_requests[request_id]
         except KeyError as error:
-            raise KeyError(f"unknown Market subscription request: {request_id}") from error
+            raise KeyError(
+                f"unknown Market subscription request: {request_id}"
+            ) from error
         handle = self._command_status(request_id)
         subscription_id = handle.result.get("subscription_id")
         return SubscriptionStatus(
             request_id=handle.request_id,
-            subscription_id=(
-                None if subscription_id is None else str(subscription_id)
-            ),
+            subscription_id=(None if subscription_id is None else str(subscription_id)),
             status=handle.status,
             request=request,
             result=dict(handle.result),
@@ -197,6 +279,8 @@ class MarketApplication:
             if isinstance(removed, (list, tuple, set))
             else ()
         )
+        self._subscription_requests.clear()
+        self._subscription_request_ids.clear()
         return SubscriptionReleaseResult(
             request_id=handle.request_id,
             status=handle.status,
@@ -204,21 +288,13 @@ class MarketApplication:
             error=handle.error,
         )
 
-    def join_point(self, view_key: str = "market.current") -> MarketJoinPoint:
-        snapshot = self._snapshots.read(view_key)
-        return MarketJoinPoint(
-            snapshot_id=snapshot.snapshot_id,
-            event_stream_id=snapshot.event_stream_id,
-            event_sequence=snapshot.event_sequence,
-        )
-
-    def _command_status(self, request_id: str) -> CommandResult:
+    def _command_status(self, request_id: str) -> Any:
         status = getattr(self._commands, "status", None)
         if callable(status):
-            return cast("CommandResult", status(request_id))
+            return status(request_id)
         return self._handles[request_id]
 
-    def _release_owner(self) -> CommandResult:
+    def _release_owner(self) -> Any:
         request_id = self._request_id("market.release_owner")
         handle = self._commands.release_owner(
             strategy_id=self._strategy_id,
@@ -228,12 +304,26 @@ class MarketApplication:
         self._handles[request_id] = handle
         return handle
 
+    def _matches_subscription(self, event: MarketEvent) -> bool:
+        """Apply this Strategy instance's requested Market demand."""
+
+        if self.events_replayable or not self._subscription_requests:
+            return True
+        market_id = str(event.data.market_id)
+        selector = (
+            f"bar:{event.data.timeframe}" if isinstance(event, BarEvent) else event.kind
+        )
+        return any(
+            request.subject == market_id and selector in request.selectors
+            for request in self._subscription_requests.values()
+        )
+
 
 def _market_id(value: Market | MarketId) -> MarketId:
     return value.id if isinstance(value, Market) else value
 
 
-def _subscription(value: CommandResult) -> Subscription:
+def _subscription(value: Any) -> Subscription:
     request_id = value.request_id
     subscription_id = value.result.get("subscription_id", request_id)
     return Subscription(

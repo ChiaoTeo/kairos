@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v2;
+
+table SubmitExecutionIntentCommand {
+  metadata:kairos.common.v2.CommandMetadata (required);
+  intent:ExecutionIntent (required);
+}
+
+root_type SubmitExecutionIntentCommand;
+file_identifier "EIV2";

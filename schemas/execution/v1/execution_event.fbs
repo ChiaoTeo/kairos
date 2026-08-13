@@ -1,0 +1,23 @@
+include "../../common/v1/header.fbs";
+include "../../intent/v1/types.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v1;
+
+table ExecutionChange {
+  kind:string (required);
+  strategy_id:string (required);
+  account_id:string;
+  intent:kairos.intent.v1.Intent;
+  order:Order;
+  fill:Fill;
+}
+
+table ExecutionEventMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  changes:[ExecutionChange];
+  occurred_at_unix_nanos:ulong;
+}
+
+root_type ExecutionEventMessage;
+file_identifier "EXE1";

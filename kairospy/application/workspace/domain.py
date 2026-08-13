@@ -65,6 +65,11 @@ class WorkspacePaths:
     def process_dir(self, name: str) -> Path:
         return self.child("run", name)
 
+    def aeron_dir(self) -> Path:
+        """Workspace-owned Aeron Media Driver directory."""
+
+        return self.child("run", "aeron", "media")
+
     def control_socket(self, name: str) -> Path:
         return self.process_socket(name)
 

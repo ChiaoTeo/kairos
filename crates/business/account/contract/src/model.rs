@@ -172,7 +172,6 @@ pub struct AccountProjection {
     pub stale: bool,
     pub observed_at_unix_nanos: u64,
     pub generation: u64,
-    pub event_sequence: u64,
     pub equity: Option<Decimal>,
     pub initial_equity: Option<Decimal>,
     pub net_profit: Option<Decimal>,
@@ -188,6 +187,5 @@ pub struct AccountProjection {
 pub struct AccountsSnapshot {
     pub actor_id: String,
     pub generation: u64,
-    pub event_sequence: u64,
     pub accounts: Vec<AccountProjection>,
 }

@@ -1,7 +1,9 @@
 use clap::Parser;
 use std::time::Duration;
 
-use kairos_risk::composition::{compose_risk_application, MmapRiskSnapshotPublisher};
+use kairos_risk::composition::{
+    compose_risk_application, AeronRiskEventPublisher, MmapRiskSnapshotPublisher,
+};
 use kairos_risk::RiskProcess;
 use kairos_risk::{Amount, EnforcementMode, Metric, PolicyScope, RiskPolicy};
 use kairos_workspace::workspace::Workspace;
@@ -26,6 +28,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = Workspace::open(args.workspace)?;
     let instance = workspace.instance(&args.launch_mode, &args.launch_id, &args.instance_id)?;
     instance.prepare()?;
+    let transport_identity = kairos_protocol::InstanceIdentity::new(
+        workspace.id(),
+        instance.launch_id(),
+        instance.instance_id(),
+    );
     let _process_lock = instance.process_lock("risk")?;
     let socket = instance.socket("risk")?;
     let health = instance.health("risk")?;
@@ -67,6 +74,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         1024 * 1024,
         format!("risk:{}", args.instance_id),
     )?)
+    .with_event_publisher(AeronRiskEventPublisher::connect(
+        args.aeron_dir.as_deref(),
+        &args.aeron_channel,
+        args.risk_events_stream_id,
+        format!("risk:{}", args.instance_id),
+        transport_identity,
+    )?)
     .run()
     .await
 }
@@ -88,4 +102,16 @@ struct Args {
 
     #[arg(long, default_value_t = 1_000, value_parser = clap::value_parser!(u64).range(1..))]
     interval_ms: u64,
+
+    #[arg(long, env = "AERON_DIR")]
+    aeron_dir: Option<String>,
+
+    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    aeron_channel: String,
+
+    #[arg(
+        long,
+        default_value_t = kairos_transport::stream_ids::RISK_EVENTS
+    )]
+    risk_events_stream_id: i32,
 }

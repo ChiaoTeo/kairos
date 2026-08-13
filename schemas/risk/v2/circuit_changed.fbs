@@ -1,0 +1,13 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v2;
+
+table CircuitChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  circuit:CircuitState (required);
+  previous_status:CircuitStatus = UNSPECIFIED;
+}
+
+root_type CircuitChanged;
+file_identifier "RKV2";

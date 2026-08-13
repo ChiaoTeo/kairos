@@ -2,9 +2,7 @@
 pub struct SnapshotEnvelope {
     pub view_key: String,
     pub producer_id: String,
-    pub event_stream_id: String,
     pub generation: u64,
-    pub event_sequence: u64,
     pub published_at_unix_nanos: u64,
     pub payload: Vec<u8>,
 }
@@ -16,7 +14,6 @@ use std::path::Path;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketSnapshotRead {
     pub generation: u64,
-    pub event_sequence: u64,
     pub quotes: Vec<crate::model::Quote>,
     pub trades: Vec<crate::model::Trade>,
     pub bars: Vec<crate::model::Bar>,
@@ -29,8 +26,18 @@ pub struct MarketSnapshotRead {
     pub index_prices: Vec<crate::model::IndexPrice>,
     pub funding_rates: Vec<crate::model::FundingRate>,
     pub open_interests: Vec<crate::model::OpenInterest>,
-    pub freshness: BTreeMap<String, crate::model::MarketFreshness>,
+    pub freshness: BTreeMap<String, MarketSnapshotFreshness>,
     pub instrument_statuses: Vec<crate::model::InstrumentStatus>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarketSnapshotFreshness {
+    pub source_id: String,
+    pub market_id: String,
+    pub data_kind: String,
+    pub last_event_time_unix_nanos: u64,
+    pub last_received_time_unix_nanos: u64,
+    pub status: crate::model::DataFreshnessStatus,
 }
 
 /// Read the latest quote view from the module-owned mmap snapshot.
@@ -38,7 +45,7 @@ pub struct MarketSnapshotRead {
 /// The FlatBuffers decode stays in the Market contract; consumers receive the
 /// public `Quote` model and never need to know the generated schema layout.
 pub fn read_latest_quotes(path: impl AsRef<Path>) -> ContractResult<Vec<crate::model::Quote>> {
-    Ok(read_latest_quotes_with_watermark(path)?.quotes)
+    Ok(read_latest_market_snapshot(path)?.quotes)
 }
 
 pub fn read_latest_trades(path: impl AsRef<Path>) -> ContractResult<Vec<crate::model::Trade>> {
@@ -116,36 +123,6 @@ pub fn read_orderbooks(path: impl AsRef<Path>) -> ContractResult<Vec<crate::mode
 /// Read the complete current Market data projection, including derivative
 /// views. The legacy quote-only helpers remain as compatibility conveniences.
 pub fn read_latest_market_snapshot(path: impl AsRef<Path>) -> ContractResult<MarketSnapshotRead> {
-    read_latest_quotes_with_watermark(path)
-}
-
-/// Read only the publication watermark without decoding the quote payload.
-/// Consumers can use this to avoid repeatedly rebuilding an unchanged
-/// projection from a high-frequency snapshot.
-pub fn read_latest_quotes_watermark(path: impl AsRef<Path>) -> ContractResult<(u64, u64)> {
-    use kairos_protocol::generated::kairos::market::v_1::{
-        market_data_snapshot_buffer_has_identifier, root_as_market_data_snapshot,
-    };
-    let reader = kairos_transport::SharedSnapshotReader::open(path)
-        .map_err(|error| ContractError::Transport(error.to_string()))?;
-    let payload = reader
-        .read_payload()
-        .map_err(ContractError::Transport)?
-        .payload;
-    if !market_data_snapshot_buffer_has_identifier(&payload) {
-        return Err(ContractError::Invalid(
-            "Market snapshot has an invalid file identifier".into(),
-        ));
-    }
-    let root = root_as_market_data_snapshot(&payload)
-        .map_err(|error| ContractError::Invalid(format!("decode Market snapshot: {error}")))?;
-    let header = root.header();
-    Ok((header.generation(), header.event_sequence()))
-}
-
-pub fn read_latest_quotes_with_watermark(
-    path: impl AsRef<Path>,
-) -> ContractResult<MarketSnapshotRead> {
     use kairos_protocol::generated::kairos::market::v_1::{
         market_data_snapshot_buffer_has_identifier, root_as_market_data_snapshot,
     };
@@ -391,13 +368,12 @@ pub fn read_latest_quotes_with_watermark(
                     };
                     (
                         key,
-                        crate::model::MarketFreshness {
+                        MarketSnapshotFreshness {
                             source_id: value.source_id().to_owned(),
                             market_id: value.market_id().to_owned(),
                             data_kind: value.data_kind().to_owned(),
                             last_event_time_unix_nanos: value.last_event_time_unix_nanos(),
                             last_received_time_unix_nanos: value.last_received_time_unix_nanos(),
-                            event_sequence: value.event_sequence(),
                             status,
                         },
                     )
@@ -424,7 +400,6 @@ pub fn read_latest_quotes_with_watermark(
         .unwrap_or_default();
     Ok(MarketSnapshotRead {
         generation: header.generation(),
-        event_sequence: header.event_sequence(),
         quotes,
         trades,
         bars,

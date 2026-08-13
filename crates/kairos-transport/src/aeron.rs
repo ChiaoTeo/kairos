@@ -24,6 +24,14 @@ use std::time::Duration;
 pub mod stream_ids {
     /// Reference lifecycle changes consumed by Market and other projections.
     pub const REFERENCE_CHANGES: i32 = 1201;
+    /// Market business observations consumed by Strategy applications.
+    pub const MARKET_EVENTS: i32 = 1301;
+    /// Account balance, position, equity, and status changes.
+    pub const ACCOUNT_EVENTS: i32 = 1401;
+    /// Execution intent, order, and fill lifecycle facts.
+    pub const EXECUTION_EVENTS: i32 = 1501;
+    /// Risk decision, reservation, and circuit changes.
+    pub const RISK_EVENTS: i32 = 1601;
 }
 
 /// Default local Aeron channel used by Workspace-managed services.
@@ -85,8 +93,9 @@ impl AeronBytePublisher {
         // Aeron publications are best-effort streams.  Having no subscriber
         // is a normal lifecycle state (for example while a consumer is
         // restarting), so there is nothing to offer and nothing to retry.
-        // Durable business facts must be recovered from their snapshot/store,
-        // not from an Aeron publisher backlog.
+        // Event recovery, when the owning contract supports it, is an
+        // event-log/retention concern. A state snapshot is never an event
+        // backlog and must not be used to repair an event-stream gap.
         if !self
             .publication
             .lock()

@@ -16,18 +16,12 @@ class SnapshotMetadata:
     snapshot_id: str | None
     view_key: str | None
     producer_id: str | None
-    event_stream_id: str | None
     generation: int
-    event_sequence: int
     published_at_unix_nanos: int
 
     def __post_init__(self) -> None:
-        if (
-            self.generation < 0
-            or self.event_sequence < 0
-            or self.published_at_unix_nanos < 0
-        ):
-            raise ValueError("snapshot watermark fields cannot be negative")
+        if self.generation < 0 or self.published_at_unix_nanos < 0:
+            raise ValueError("snapshot metadata fields cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,10 +34,6 @@ class ContractSnapshot:
     @property
     def generation(self) -> int:
         return self.metadata.generation
-
-    @property
-    def event_sequence(self) -> int:
-        return self.metadata.event_sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,9 +80,7 @@ class MmapSnapshotReader:
             snapshot_id=None,
             view_key=None,
             producer_id=None,
-            event_stream_id=None,
             generation=value.generation,
-            event_sequence=0,
             published_at_unix_nanos=0,
         )
         if self.root_type is not None:
@@ -108,9 +96,7 @@ class MmapSnapshotReader:
                 snapshot_id=text(header.SnapshotId()),
                 view_key=text(header.ViewKey()),
                 producer_id=text(header.OwnerActorId()),
-                event_stream_id=text(header.EventStreamId()),
                 generation=header.Generation() or value.generation,
-                event_sequence=header.EventSequence(),
                 published_at_unix_nanos=header.GeneratedAtUnixNanos(),
             )
         return ContractSnapshot(metadata=metadata, payload=value.payload)

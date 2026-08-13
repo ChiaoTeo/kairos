@@ -11,6 +11,7 @@ use crate::services::persistence::JsonAccountStore;
 use crate::services::persistence_worker::AccountPersistenceWorker;
 use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
 use kairos_domain_types::ActorId;
+use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use tracing::info;
@@ -24,6 +25,7 @@ pub(crate) struct AccountRuntime {
     pending_refresh: Option<(String, Receiver<Vec<RefreshFetch>>)>,
     persistence: Option<AccountPersistenceWorker>,
     journal_events_since_checkpoint: usize,
+    pending_business_events: VecDeque<crate::application::AccountBusinessEvent>,
 }
 
 impl AccountRuntime {
@@ -75,6 +77,7 @@ impl AccountRuntime {
             pending_refresh: None,
             persistence: store.map(AccountPersistenceWorker::new),
             journal_events_since_checkpoint,
+            pending_business_events: VecDeque::new(),
         })
     }
 
@@ -86,6 +89,7 @@ impl AccountRuntime {
         &mut self,
         fill: AccountFill,
     ) -> Result<ApplyOutcome, String> {
+        let actor_before = self.actor.clone();
         let projection = self
             .actor
             .projection(&fill.segment_key)
@@ -118,6 +122,8 @@ impl AccountRuntime {
             return Err(error);
         }
         self.cached_snapshot = Arc::new(self.actor.snapshot());
+        self.pending_business_events
+            .extend(self.actor.business_events_since(&actor_before));
         Ok(ApplyOutcome::Applied)
     }
 
@@ -173,6 +179,7 @@ impl AccountRuntime {
     }
 
     pub(crate) fn apply_event(&mut self, event: AccountEvent) -> Result<usize, String> {
+        let actor_before = self.actor.clone();
         let events = match event {
             AccountEvent::Batch(events) => events,
             event => vec![event],
@@ -197,6 +204,8 @@ impl AccountRuntime {
             return Err(error);
         }
         self.cached_snapshot = Arc::new(self.actor.snapshot());
+        self.pending_business_events
+            .extend(self.actor.business_events_since(&actor_before));
         Ok(applied)
     }
 
@@ -380,6 +389,16 @@ impl AccountRuntime {
         self.actor.persistence_metadata().0
     }
 
+    pub(crate) fn pending_business_event(
+        &self,
+    ) -> Option<&crate::application::AccountBusinessEvent> {
+        self.pending_business_events.front()
+    }
+
+    pub(crate) fn acknowledge_business_event(&mut self) {
+        self.pending_business_events.pop_front();
+    }
+
     fn persist_candidate(&self, candidate: &AccountActor) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
             let (actor_id, generation, event_sequence) = candidate.persistence_metadata();
@@ -395,9 +414,11 @@ impl AccountRuntime {
 
     fn commit_candidate(&mut self, candidate: AccountActor) -> Result<(), String> {
         self.persist_candidate(&candidate)?;
+        let business_events = candidate.business_events_since(&self.actor);
         self.journal_events_since_checkpoint = 0;
         self.cached_snapshot = Arc::new(candidate.snapshot());
         self.actor = candidate;
+        self.pending_business_events.extend(business_events);
         Ok(())
     }
 

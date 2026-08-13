@@ -4,6 +4,12 @@ This document is the authoritative target for the Reference data plane. Where
 older Reference snapshot documentation disagrees with this design, migrate the
 implementation and the older document to this design.
 
+The business meaning and cardinality of Instrument, Listing, Market,
+MarketDataAccess, and ExecutionAccess are defined by
+[`instrument-listing-market-access-design.md`](./instrument-listing-market-access-design.md).
+This document remains authoritative for storage ownership, transactions,
+publication, and consumer recovery.
+
 ## Decision
 
 Reference has one business mutation owner and one durable current-state store:
@@ -58,6 +64,7 @@ reference_assets_current
 reference_instruments_current
 reference_listings_current
 reference_markets_current
+reference_market_data_accesses_current
 reference_financial_products_current
 reference_execution_accesses_current
 reference_lifecycle

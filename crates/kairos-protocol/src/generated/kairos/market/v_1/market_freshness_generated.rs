@@ -25,8 +25,7 @@ impl<'a> MarketFreshness<'a> {
     pub const VT_DATA_KIND: ::flatbuffers::VOffsetT = 8;
     pub const VT_LAST_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 10;
     pub const VT_LAST_RECEIVED_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 12;
-    pub const VT_EVENT_SEQUENCE: ::flatbuffers::VOffsetT = 14;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 14;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -43,7 +42,6 @@ impl<'a> MarketFreshness<'a> {
         args: &'args MarketFreshnessArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<MarketFreshness<'bldr>> {
         let mut builder = MarketFreshnessBuilder::new(_fbb);
-        builder.add_event_sequence(args.event_sequence);
         builder.add_last_received_time_unix_nanos(args.last_received_time_unix_nanos);
         builder.add_last_event_time_unix_nanos(args.last_event_time_unix_nanos);
         if let Some(x) = args.status {
@@ -117,17 +115,6 @@ impl<'a> MarketFreshness<'a> {
         }
     }
     #[inline]
-    pub fn event_sequence(&self) -> u64 {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<u64>(MarketFreshness::VT_EVENT_SEQUENCE, Some(0))
-                .unwrap()
-        }
-    }
-    #[inline]
     pub fn status(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
@@ -172,7 +159,6 @@ impl ::flatbuffers::Verifiable for MarketFreshness<'_> {
                 Self::VT_LAST_RECEIVED_TIME_UNIX_NANOS,
                 false,
             )?
-            .visit_field::<u64>("event_sequence", Self::VT_EVENT_SEQUENCE, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
             .finish();
         Ok(())
@@ -184,7 +170,6 @@ pub struct MarketFreshnessArgs<'a> {
     pub data_kind: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub last_event_time_unix_nanos: u64,
     pub last_received_time_unix_nanos: u64,
-    pub event_sequence: u64,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for MarketFreshnessArgs<'a> {
@@ -196,7 +181,6 @@ impl<'a> Default for MarketFreshnessArgs<'a> {
             data_kind: None, // required field
             last_event_time_unix_nanos: 0,
             last_received_time_unix_nanos: 0,
-            event_sequence: 0,
             status: None, // required field
         }
     }
@@ -245,11 +229,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarketFreshnessBuilder<'a, 'b
         );
     }
     #[inline]
-    pub fn add_event_sequence(&mut self, event_sequence: u64) {
-        self.fbb_
-            .push_slot::<u64>(MarketFreshness::VT_EVENT_SEQUENCE, event_sequence, 0);
-    }
-    #[inline]
     pub fn add_status(&mut self, status: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(MarketFreshness::VT_STATUS, status);
@@ -292,7 +271,6 @@ impl ::core::fmt::Debug for MarketFreshness<'_> {
             "last_received_time_unix_nanos",
             &self.last_received_time_unix_nanos(),
         );
-        ds.field("event_sequence", &self.event_sequence());
         ds.field("status", &self.status());
         ds.finish()
     }

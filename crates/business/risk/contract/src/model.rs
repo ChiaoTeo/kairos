@@ -233,6 +233,10 @@ pub enum ReservationStatus {
 pub struct Reservation {
     pub reservation_id: String,
     pub request_id: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
     pub idempotency_key: String,
     pub allocations: Vec<Allocation>,
     pub status: ReservationStatus,
@@ -253,6 +257,11 @@ pub enum ReasonCode {
     ReservationNotActive,
     InvalidRequest,
     PersistenceFailure,
+    CircuitOpen,
+    StaleMarket,
+    InsufficientMargin,
+    LeverageExceeded,
+    LossLimitExceeded,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -280,15 +289,14 @@ pub struct RiskDecision {
     pub evaluated_at_unix_nanos: u64,
 }
 
+/// mmap current-state contract. It cannot carry event history or positions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RiskSnapshot {
+pub struct RiskCurrentView {
     pub actor_id: String,
     pub generation: u64,
-    pub event_sequence: u64,
     pub policy_version: u64,
     pub limits: Vec<LimitView>,
     pub reservations: Vec<Reservation>,
-    pub watermarks: DependencyWatermarks,
     #[serde(default)]
     pub circuits: Vec<CircuitState>,
 }
@@ -301,6 +309,16 @@ pub enum RiskEvent {
     },
     ReservationChanged {
         reservation: Reservation,
+        event_sequence: u64,
+    },
+    DecisionEvaluated {
+        decision: RiskDecision,
+        account_id: String,
+        strategy_id: String,
+        event_sequence: u64,
+    },
+    CircuitChanged {
+        circuit: CircuitState,
         event_sequence: u64,
     },
 }

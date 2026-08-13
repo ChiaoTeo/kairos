@@ -778,35 +778,5 @@ impl BinanceOptionsPrincipalConnection {
     }
 }
 
-impl BinanceFundingAccountRead {
-    pub fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.descriptor
-    }
-}
-
-impl BinanceSpotCredentialInspection {
-    pub fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.descriptor
-    }
-}
-
-impl BinanceFundingCredentialInspection {
-    pub fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.descriptor
-    }
-}
-
-impl BinanceSimpleEarn {
-    pub fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.descriptor
-    }
-}
-
-impl BinanceTransfer {
-    pub fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.descriptor
-    }
-}
-
 #[cfg(test)]
 mod tests;

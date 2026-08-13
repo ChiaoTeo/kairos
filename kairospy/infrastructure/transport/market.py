@@ -9,11 +9,19 @@ import struct
 import sys
 from typing import Any, AsyncIterator, cast
 
-from kairospy.application.market import Bar, MarketSnapshot, Quote, Trade
+from kairospy.application.market import (
+    Bar,
+    EventStreamGap,
+    MarketSnapshot,
+    OptionGreeks,
+    Quote,
+    Trade,
+)
+from kairospy.application.market.events import MarketEventRecord
 from kairospy.application.reference import InstrumentRef
-from kairospy.application.strategy.domain.messages import RawEventEnvelope
 from kairospy.domain_types import InstrumentId, MarketId, datetime_from_unix_nanos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
+from kairospy.infrastructure.transport.aeron_bridge import check_aeron_bridge
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
 # for sibling imports. Keep that generated namespace private to this adapter
@@ -128,18 +136,6 @@ class MarketDataView:
         )
 
 
-class EventStreamGap(RuntimeError):
-    """Raised when a live stream skips a sequence and needs snapshot recovery."""
-
-    def __init__(self, stream_id: str, expected: int, actual: int) -> None:
-        super().__init__(
-            f"event stream {stream_id} gap: expected sequence {expected}, received {actual}"
-        )
-        self.stream_id = stream_id
-        self.expected = expected
-        self.actual = actual
-
-
 class MmapMarketSnapshotReader:
     """Read a Market current view from the Rust double-slot snapshots.
 
@@ -196,12 +192,11 @@ class MmapMarketSnapshotReader:
             view_key=cast(bytes, header.ViewKey()).decode(),
             snapshot_id=cast(bytes, header.SnapshotId()).decode(),
             owner_actor_id=cast(bytes, header.OwnerActorId()).decode(),
-            event_stream_id=cast(bytes, header.EventStreamId()).decode(),
-            event_sequence=header.EventSequence(),
             generation=header.Generation(),
             quotes=tuple(_quote_model(value) for value in quotes),
             trades=tuple(_trade_model(value) for value in trades),
             bars=tuple(_bar_model(value) for value in bars),
+            greeks=tuple(_greeks_model(value) for value in greeks),
         )
 
 
@@ -262,6 +257,24 @@ def _bar_model(value: BarView) -> Bar:
         occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
         occurred_at_unix_nanos=value.event_time_unix_nanos,
         source_id=value.source_id,
+    )
+
+
+def _greeks_model(value: GreeksView) -> OptionGreeks:
+    return OptionGreeks(
+        market_id=_market_id(value.market_id, "greeks"),
+        instrument=_instrument(value.instrument_id),
+        expiry_unix_nanos=value.expiry_unix_nanos,
+        strike=_decimal(value.strike),
+        delta=_decimal(value.delta),
+        gamma=_decimal(value.gamma),
+        vega=_decimal(value.vega),
+        theta=_decimal(value.theta),
+        implied_volatility=_decimal(value.implied_volatility),
+        occurred_at=datetime_from_unix_nanos(value.event_time_unix_nanos),
+        occurred_at_unix_nanos=value.event_time_unix_nanos,
+        source_id=value.source_id,
+        derivation=value.derivation,
     )
 
 
@@ -368,11 +381,10 @@ def _decode_greeks(value: object) -> GreeksView:
 
 
 class UnixMarketEventStream:
-    """Consume live Market frames with reconnect and sequence validation.
+    """Consume the replay Market frame stream.
 
-    The current Unix socket is a live-only change plane.  It has no replay
-    handshake, so a disconnect or gap is surfaced to the host, which must
-    re-read the contract snapshot before resuming.
+    Production Market events use Aeron.  This adapter remains only for the
+    launch-owned replay process and never reads or recovers through mmap.
     """
 
     def __init__(
@@ -390,12 +402,7 @@ class UnixMarketEventStream:
             raise ValueError("reconnect_delay cannot be negative")
         self.reconnect_delay = reconnect_delay
 
-    def can_join(self, event_sequence: int) -> bool:
-        # Snapshot recovery establishes a new join point for the live-only
-        # stream.  ``replayable`` remains available for future transports.
-        return event_sequence >= 0 or self.replayable
-
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[RawEventEnvelope]:
+    async def events(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
         cursor = max(0, after_sequence)
         while True:
             try:
@@ -413,9 +420,6 @@ class UnixMarketEventStream:
                     event = _decode_market_event(payload)
                     if event.sequence <= cursor:
                         continue
-                    expected = cursor + 1
-                    if event.sequence != expected:
-                        raise EventStreamGap(self.stream_id, expected, event.sequence)
                     cursor = event.sequence
                     yield event
             except asyncio.IncompleteReadError:
@@ -430,19 +434,137 @@ class UnixMarketEventStream:
             await asyncio.sleep(self.reconnect_delay)
 
 
-def _decode_market_event(payload: bytes) -> RawEventEnvelope:
-    if payload[4:8] == b"MOB1":
+class AeronMarketEventSource:
+    """Market-owned adapter over the native Aeron subscription bridge."""
+
+    replayable = False
+    join_from_latest = True
+
+    def __init__(
+        self,
+        *,
+        aeron_dir: str | Path | None = None,
+        channel: str = "aeron:udp?endpoint=localhost:40123",
+        stream_id: int = 1301,
+        binary: str,
+    ) -> None:
+        self.aeron_dir = None if aeron_dir is None else str(aeron_dir)
+        self.channel = channel
+        self.stream_id = stream_id
+        self.binary = binary
+
+    def _command(self) -> list[str]:
+        command = [
+            self.binary,
+            "--aeron-channel",
+            self.channel,
+            "--stream-id",
+            str(self.stream_id),
+        ]
+        if self.aeron_dir is not None:
+            command.extend(("--aeron-dir", self.aeron_dir))
+        return command
+
+    def check_ready(self) -> None:
+        check_aeron_bridge(self._command(), domain="Market")
+
+    async def events(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
+        process = await asyncio.create_subprocess_exec(
+            *self._command(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        try:
+            while True:
+                try:
+                    size = struct.unpack(">I", await process.stdout.readexactly(4))[0]
+                    if size == 0 or size > 4 * 1024 * 1024:
+                        raise ValueError("invalid Market Aeron frame length")
+                    payload = await process.stdout.readexactly(size)
+                except asyncio.IncompleteReadError:
+                    break
+                record = decode_market_event(payload)
+                if record.sequence > after_sequence:
+                    yield record
+            status = await process.wait()
+            if status != 0:
+                assert process.stderr is not None
+                error = (await process.stderr.read()).decode(errors="replace").strip()
+                raise RuntimeError(error or f"Market Aeron bridge exited with {status}")
+            raise RuntimeError("Market Aeron bridge ended unexpectedly")
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                await process.wait()
+
+
+def decode_market_event(payload: bytes) -> MarketEventRecord:
+    identifier = payload[4:8]
+    if identifier == b"MOB1":
         return _decode_orderbook_event(payload)
-    if payload[4:8] == b"MTR1":
+    if identifier == b"MTR1":
         return _decode_trade_event(payload)
-    if payload[4:8] == b"MBA1":
+    if identifier == b"MBA1":
         return _decode_bar_event(payload)
-    if payload[4:8] == b"MGR1":
+    if identifier == b"MGR1":
         return _decode_greeks_event(payload)
-    return _decode_quote_event(payload)
+    if identifier == b"MQT1":
+        return _decode_quote_event(payload)
+    ignored = {
+        b"MRA1": ("RateMessage", "rate"),
+        b"MT24": ("Ticker24hMessage", "ticker_24h"),
+        b"MMP1": ("MarkPriceMessage", "mark_price"),
+        b"MIP1": ("IndexPriceMessage", "index_price"),
+        b"MFR1": ("FundingRateMessage", "funding_rate"),
+        b"MOI1": ("OpenInterestMessage", "open_interest"),
+        b"MIS1": ("InstrumentStatusMessage", "instrument_status"),
+    }.get(identifier)
+    if ignored is not None:
+        return _decode_non_strategy_event(payload, *ignored)
+    raise ValueError(f"unsupported Market event identifier: {identifier!r}")
 
 
-def _decode_orderbook_event(payload: bytes) -> RawEventEnvelope:
+_decode_market_event = decode_market_event
+
+
+def _decode_non_strategy_event(
+    payload: bytes, message_name: str, kind: str
+) -> MarketEventRecord:
+    module = __import__(
+        f"kairospy.infrastructure.transport.generated.kairos.market.v1.{message_name}",
+        fromlist=[message_name],
+    )
+    root = cast(Any, getattr(module, message_name).GetRootAs(payload, 0))
+    header = cast(Any, root.Header())
+    if header is None:
+        raise ValueError(f"{message_name} header is missing")
+    event_time = int(header.EventTimeUnixNanos())
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
+    return MarketEventRecord(
+        stream_id=_required_header_text(header.StreamId(), "stream_id"),
+        sequence=int(header.Sequence()),
+        kind=kind,
+        payload=None,
+        occurred_at=occurred_at,
+        producer=_required_header_text(header.ProducerId(), "producer_id"),
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
+    )
+
+
+def _required_header_text(value: bytes | None, name: str) -> str:
+    result = _header_text(value)
+    if result is None:
+        raise ValueError(f"Market event {name} is required")
+    return result
+
+
+def _decode_orderbook_event(payload: bytes) -> MarketEventRecord:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.OrderBookMessage import (
         OrderBookMessage,
     )
@@ -473,10 +595,9 @@ def _decode_orderbook_event(payload: bytes) -> RawEventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return RawEventEnvelope(
+    return MarketEventRecord(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
-        domain="data",
         kind="orderbook",
         payload=OrderBookView(
             market_id=text(book.MarketId()) or "",
@@ -493,10 +614,13 @@ def _decode_orderbook_event(payload: bytes) -> RawEventEnvelope:
             asks=tuple(level("Asks", index) for index in range(book.AsksLength())),
         ),
         occurred_at=occurred_at,
+        producer=_header_text(header.ProducerId()) or "market",
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
     )
 
 
-def _decode_quote_event(payload: bytes) -> RawEventEnvelope:
+def _decode_quote_event(payload: bytes) -> MarketEventRecord:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.QuoteMessage import (
         QuoteMessage,
     )
@@ -514,17 +638,19 @@ def _decode_quote_event(payload: bytes) -> RawEventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return RawEventEnvelope(
+    return MarketEventRecord(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
-        domain="data",
         kind="quote",
         payload=_decode_quote(quote),
         occurred_at=occurred_at,
+        producer=_header_text(header.ProducerId()) or "market",
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
     )
 
 
-def _decode_trade_event(payload: bytes) -> RawEventEnvelope:
+def _decode_trade_event(payload: bytes) -> MarketEventRecord:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.TradeMessage import (
         TradeMessage,
     )
@@ -549,10 +675,9 @@ def _decode_trade_event(payload: bytes) -> RawEventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return RawEventEnvelope(
+    return MarketEventRecord(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
-        domain="data",
         kind="trade",
         payload=TradeView(
             instrument_id=text("InstrumentId") or "",
@@ -564,10 +689,13 @@ def _decode_trade_event(payload: bytes) -> RawEventEnvelope:
             source_id=text("SourceId"),
         ),
         occurred_at=occurred_at,
+        producer=_header_text(header.ProducerId()) or "market",
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
     )
 
 
-def _decode_bar_event(payload: bytes) -> RawEventEnvelope:
+def _decode_bar_event(payload: bytes) -> MarketEventRecord:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.BarMessage import (
         BarMessage,
     )
@@ -583,17 +711,19 @@ def _decode_bar_event(payload: bytes) -> RawEventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return RawEventEnvelope(
+    return MarketEventRecord(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
-        domain="data",
         kind="bar",
         payload=_decode_bar(bar),
         occurred_at=occurred_at,
+        producer=_header_text(header.ProducerId()) or "market",
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
     )
 
 
-def _decode_greeks_event(payload: bytes) -> RawEventEnvelope:
+def _decode_greeks_event(payload: bytes) -> MarketEventRecord:
     from kairospy.infrastructure.transport.generated.kairos.market.v1.GreeksMessage import (
         GreeksMessage,
     )
@@ -609,11 +739,20 @@ def _decode_greeks_event(payload: bytes) -> RawEventEnvelope:
         if not event_time
         else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
     )
-    return RawEventEnvelope(
+    return MarketEventRecord(
         stream_id=header.StreamId().decode(),
         sequence=header.Sequence(),
-        domain="data",
         kind="greeks",
         payload=_decode_greeks(greeks),
         occurred_at=occurred_at,
+        producer=_header_text(header.ProducerId()) or "market",
+        launch_id=_header_text(header.LaunchId()),
+        instance_id=_header_text(header.InstanceId()),
     )
+
+
+def _header_text(value: bytes | None) -> str | None:
+    if value is None:
+        return None
+    result = value.decode()
+    return result if result.strip() else None

@@ -80,8 +80,7 @@ class ExecutionMmapProjection:
         if payload is None:
             raise ValueError("Execution orders snapshot payload is missing")
         return tuple(
-            _order(value, contract.metadata.event_sequence)
-            for value in _table_items(payload, "Orders", "Execution")
+            _order(value) for value in _table_items(payload, "Orders", "Execution")
         )
 
     def get_intent(self, intent_id: str) -> ExecutionIntent | None:
@@ -101,14 +100,15 @@ class ExecutionMmapProjection:
             ),
             None,
         )
-        return None if raw is None else _intent(raw, contract.metadata.event_sequence)
+        return None if raw is None else _intent(raw)
 
 
-def _order(value: Any, event_sequence: int) -> Order:
+def _order(value: Any) -> Order:
     instrument_id = _required_text(value.InstrumentId(), "order instrument_id")
     status = (_text(value.Status()) or "unknown").lower()
     return Order(
         id=OrderId(_required_text(value.OrderId(), "order_id")),
+        strategy_id=_required_text(value.StrategyId(), "order strategy_id"),
         intent_id=_optional_id(value.IntentId(), IntentId),
         instrument=_instrument(instrument_id),
         account_id=AccountId(_required_text(value.AccountId(), "order account_id")),
@@ -122,15 +122,15 @@ def _order(value: Any, event_sequence: int) -> Order:
         updated_at=None
         if int(value.UpdatedAtUnixNanos()) == 0
         else datetime_from_unix_nanos(int(value.UpdatedAtUnixNanos())),
-        event_sequence=event_sequence,
     )
 
 
-def _intent(value: Any, event_sequence: int) -> ExecutionIntent:
+def _intent(value: Any) -> ExecutionIntent:
     instrument_id = _required_text(value.InstrumentId(), "intent instrument_id")
     status = (_text(value.Status()) or "unknown").lower()
     return ExecutionIntent(
         id=IntentId(_required_text(value.IntentId(), "intent_id")),
+        strategy_id=_required_text(value.StrategyId(), "intent strategy_id"),
         instrument=_instrument(instrument_id),
         account_ids=tuple(
             AccountId(_required_text(value.AccountIds(index), "intent account_id"))
@@ -145,7 +145,6 @@ def _intent(value: Any, event_sequence: int) -> ExecutionIntent:
             OrderId(_required_text(value.OrderIds(index), "intent order_id"))
             for index in range(value.OrderIdsLength())
         ),
-        event_sequence=event_sequence,
     )
 
 
@@ -228,41 +227,45 @@ def backtest_market(path: str | Path, event) -> dict:
     deterministic bar-to-quote policy, so the Strategy adapter does not
     manufacture a fake Quote and lose the observation type.
     """
-    from kairospy.infrastructure.transport.market import BarView, QuoteView
+    from kairospy.application.market import BarEvent, QuoteEvent
 
-    if event.kind == "quote" and isinstance(event.payload, QuoteView):
-        quote = event.payload
+    if isinstance(event, QuoteEvent):
+        quote = event.data
         body = {
             "Quote": {
-                "market_id": quote.market_id or "",
-                "instrument_id": quote.instrument_id,
-                "bid_price": None if quote.bid_price is None else quote.bid_price.value,
+                "market_id": str(quote.market_id),
+                "instrument_id": str(quote.instrument.id),
+                "bid_price": None
+                if quote.bid_price is None
+                else format(quote.bid_price, "f"),
                 "bid_quantity": None
                 if quote.bid_quantity is None
-                else quote.bid_quantity.value,
-                "ask_price": None if quote.ask_price is None else quote.ask_price.value,
+                else format(quote.bid_quantity, "f"),
+                "ask_price": None
+                if quote.ask_price is None
+                else format(quote.ask_price, "f"),
                 "ask_quantity": None
                 if quote.ask_quantity is None
-                else quote.ask_quantity.value,
-                "observed_at_unix_nanos": quote.event_time_unix_nanos,
+                else format(quote.ask_quantity, "f"),
+                "observed_at_unix_nanos": quote.occurred_at_unix_nanos,
                 "source_id": quote.source_id or "strategy-market",
             }
         }
-    elif event.kind == "bar" and isinstance(event.payload, BarView):
-        bar = event.payload
+    elif isinstance(event, BarEvent):
+        bar = event.data
         body = {
             "Bar": {
-                "market_id": bar.market_id or "",
-                "instrument_id": bar.instrument_id,
+                "market_id": str(bar.market_id),
+                "instrument_id": str(bar.instrument.id),
                 "timeframe": bar.timeframe,
-                "open": bar.open.value,
-                "high": bar.high.value,
-                "low": bar.low.value,
-                "close": bar.close.value,
-                "volume": None if bar.volume is None else bar.volume.value,
-                "observed_at_unix_nanos": bar.event_time_unix_nanos,
+                "open": format(bar.open, "f"),
+                "high": format(bar.high, "f"),
+                "low": format(bar.low, "f"),
+                "close": format(bar.close, "f"),
+                "volume": None if bar.volume is None else format(bar.volume, "f"),
+                "observed_at_unix_nanos": bar.occurred_at_unix_nanos,
                 "source_id": bar.source_id or "strategy-market",
-                "derivation": bar.derivation or "provider",
+                "derivation": "provider",
             }
         }
     else:

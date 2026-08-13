@@ -21,8 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::application::{
-    AccountApplication, AccountDataQuery, AccountRefreshReport, AccountsSnapshot, MarkToMarket,
-    RefreshAccount,
+    AccountApplication, AccountBusinessEvent, AccountDataQuery, AccountRefreshReport,
+    AccountsSnapshot, MarkToMarket, RefreshAccount,
 };
 use crate::domain::{AccountFill, AccountOrderObservation};
 use crate::services::integration::{
@@ -41,6 +41,7 @@ pub struct AccountProcess {
     refresh_interval: Duration,
     health_file: Option<PathBuf>,
     publisher: Option<Box<dyn AccountSnapshotPublisher>>,
+    event_publisher: Option<Box<dyn AccountEventPublisher>>,
     stop_requested: bool,
     last_error: Option<String>,
     last_refresh: Option<AccountRefreshReport>,
@@ -69,6 +70,12 @@ pub struct AccountProcess {
 /// are selected by composition and injected into the process facade.
 pub trait AccountSnapshotPublisher: Send {
     fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String>;
+}
+
+/// Incremental Account business-event publication. The implementation is
+/// selected by composition and is independent from the mmap snapshot writer.
+pub trait AccountEventPublisher {
+    fn publish(&mut self, event: &AccountBusinessEvent) -> Result<(), String>;
 }
 
 struct AccountHttpRequest {
@@ -112,6 +119,7 @@ impl AccountProcess {
             refresh_interval,
             health_file,
             publisher,
+            event_publisher: None,
             stop_requested: false,
             last_error: None,
             last_refresh: None,
@@ -173,6 +181,14 @@ impl AccountProcess {
     ) -> Self {
         self.lease_file = Some(lease_file.into());
         self.lease_instance_id = Some(instance_id.into());
+        self
+    }
+
+    pub fn with_event_publisher<P: AccountEventPublisher + 'static>(
+        mut self,
+        publisher: P,
+    ) -> Self {
+        self.event_publisher = Some(Box::new(publisher));
         self
     }
 
@@ -956,22 +972,32 @@ impl AccountProcess {
         if !self.snapshot_dirty {
             return Ok(());
         }
-        let Some(publisher) = self.publisher.as_mut() else {
+        if self.publisher.is_none() && self.event_publisher.is_none() {
             return Ok(());
-        };
+        }
+        while let Some(event) = self.application.pending_business_event().cloned() {
+            if let Some(publisher) = self.event_publisher.as_mut() {
+                publisher.publish(&event)?;
+            }
+            self.application.acknowledge_business_event();
+        }
         let snapshot = self.application.snapshot_shared();
         kairos_workspace::logging::record_gauge(
             "kairos.snapshot.generation",
             snapshot.generation.get(),
         );
         let started = Instant::now();
-        let result = publisher.publish(&snapshot);
+        let result = if let Some(publisher) = self.publisher.as_mut() {
+            publisher.publish(&snapshot)
+        } else {
+            Ok(())
+        };
         if result.is_ok() {
             debug!(
                 event = "account_snapshot_published",
                 component = "account",
                 generation = snapshot.generation.get(),
-                event_sequence = snapshot.event_sequence.get(),
+                event_sequence = self.application.event_sequence(),
                 account_count = snapshot.accounts.len(),
                 duration_ms = started.elapsed().as_millis(),
                 "account snapshot published"
@@ -1216,6 +1242,17 @@ mod tests {
     use kairos_integration::application::{
         ExternalAccountEvent, ExternalAccountSnapshot, ExternalAccountStatus, ExternalEventEnvelope,
     };
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct CapturingEventPublisher(Arc<Mutex<Vec<AccountBusinessEvent>>>);
+
+    impl AccountEventPublisher for CapturingEventPublisher {
+        fn publish(&mut self, event: &AccountBusinessEvent) -> Result<(), String> {
+            self.0.lock().unwrap().push(event.clone());
+            Ok(())
+        }
+    }
 
     fn process() -> AccountProcess {
         let segment = AccountSegment {
@@ -1280,6 +1317,93 @@ mod tests {
         assert_eq!(process.business_status(), "starting");
         process.initial_refresh_complete = true;
         assert_eq!(process.business_status(), "ready");
+    }
+
+    #[test]
+    fn initial_snapshot_publication_never_synthesizes_account_events() {
+        let capture = CapturingEventPublisher::default();
+        let observed = capture.0.clone();
+        let mut process = process().with_event_publisher(capture);
+
+        process.publish_snapshot_if_dirty().unwrap();
+
+        assert!(observed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn actor_transition_publishes_the_direct_account_business_event() {
+        let capture = CapturingEventPublisher::default();
+        let observed = capture.0.clone();
+        let mut process = process().with_event_publisher(capture);
+        process.publish_snapshot_if_dirty().unwrap();
+
+        assert_eq!(process.apply_external_event(envelope(1, "one")).unwrap(), 1);
+        process.snapshot_dirty = true;
+        process.publish_snapshot_if_dirty().unwrap();
+
+        let events = observed.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence.get(), 1);
+        assert_eq!(events[0].account_id.as_str(), "main");
+        assert!(!events[0].changes.is_empty());
+    }
+
+    #[test]
+    fn actor_transition_emits_every_required_strategy_account_change() {
+        let capture = CapturingEventPublisher::default();
+        let observed = capture.0.clone();
+        let mut process = process().with_event_publisher(capture);
+        process.publish_snapshot_if_dirty().unwrap();
+
+        let mut snapshot = empty_snapshot("spot");
+        snapshot.balances = vec![crate::domain::Balance {
+            asset_id: crate::domain::AssetId::new("asset:test:USD").unwrap(),
+            asset_code: kairos_domain_types::Currency::new("USD").unwrap(),
+            total: crate::domain::SignedQuantity::new(10_000, 2).unwrap(),
+            available: Some(crate::domain::SignedQuantity::new(9_000, 2).unwrap()),
+            locked: Some(crate::domain::SignedQuantity::new(1_000, 2).unwrap()),
+            borrowed: None,
+            interest: None,
+        }];
+        snapshot.positions = vec![crate::domain::Position {
+            instrument_id: crate::domain::InstrumentId::new("instrument:test:BTCUSD").unwrap(),
+            market_id: Some(kairos_domain_types::MarketId::new("market:test:BTCUSD").unwrap()),
+            quantity: crate::domain::SignedQuantity::new(2, 0).unwrap(),
+            average_price: Some(crate::domain::Price::new(50_000, 2).unwrap()),
+            mark_price: Some(crate::domain::Price::new(51_000, 2).unwrap()),
+            unrealized_pnl: Some(crate::domain::Money::new(2_000, 2).unwrap()),
+            realized_pnl: None,
+            updated_at_unix_nanos: 1.into(),
+        }];
+        snapshot.equity = Some(crate::domain::Money::new(102_000, 2).unwrap());
+        snapshot.status = crate::domain::AccountStatus::Suspended;
+        snapshot.observed_at_unix_nanos = 1.into();
+
+        process
+            .application
+            .apply_event(crate::domain::AccountEvent::Snapshot(snapshot))
+            .unwrap();
+        process.snapshot_dirty = true;
+        process.publish_snapshot_if_dirty().unwrap();
+
+        let events = observed.lock().unwrap();
+        let changes = &events.last().unwrap().changes;
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            crate::application::AccountBusinessChange::Balance { .. }
+        )));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            crate::application::AccountBusinessChange::Position { .. }
+        )));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            crate::application::AccountBusinessChange::Equity { .. }
+        )));
+        assert!(changes.iter().any(|change| matches!(
+            change,
+            crate::application::AccountBusinessChange::Status { .. }
+        )));
     }
 
     #[test]

@@ -255,6 +255,9 @@ fn production_account_server_never_falls_back_to_blocking_provider_io() {
         );
     }
     assert!(server.contains("production Account requires a provider-native async source"));
+    assert!(server.contains("process_lock(socket_name)"));
+    assert!(server.contains("service_health(socket_name)"));
+    assert!(server.contains("service_snapshot(socket_name)"));
 
     let composition =
         fs::read_to_string(root.join("composition/account.rs")).expect("read account composition");

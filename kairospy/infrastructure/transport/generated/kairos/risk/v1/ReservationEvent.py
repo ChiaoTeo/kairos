@@ -54,15 +54,29 @@ class ReservationEvent(object):
         return None
 
     # ReservationEvent
-    def Status(self):
+    def AccountId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ReservationEvent
-    def Allocations(self, j):
+    def StrategyId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # ReservationEvent
+    def Status(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # ReservationEvent
+    def Allocations(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             x = self._tab.Vector(o)
             x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
@@ -75,25 +89,25 @@ class ReservationEvent(object):
 
     # ReservationEvent
     def AllocationsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # ReservationEvent
     def AllocationsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         return o == 0
 
     # ReservationEvent
     def OccurredAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def ReservationEventStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(8)
 
 def Start(builder):
     ReservationEventStart(builder)
@@ -116,14 +130,26 @@ def ReservationEventAddRequestId(builder, requestId):
 def AddRequestId(builder, requestId):
     ReservationEventAddRequestId(builder, requestId)
 
+def ReservationEventAddAccountId(builder, accountId):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(accountId), 0)
+
+def AddAccountId(builder, accountId):
+    ReservationEventAddAccountId(builder, accountId)
+
+def ReservationEventAddStrategyId(builder, strategyId):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(strategyId), 0)
+
+def AddStrategyId(builder, strategyId):
+    ReservationEventAddStrategyId(builder, strategyId)
+
 def ReservationEventAddStatus(builder, status):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
 
 def AddStatus(builder, status):
     ReservationEventAddStatus(builder, status)
 
 def ReservationEventAddAllocations(builder, allocations):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(allocations), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(allocations), 0)
 
 def AddAllocations(builder, allocations):
     ReservationEventAddAllocations(builder, allocations)
@@ -135,7 +161,7 @@ def StartAllocationsVector(builder, numElems):
     return ReservationEventStartAllocationsVector(builder, numElems)
 
 def ReservationEventAddOccurredAtUnixNanos(builder, occurredAtUnixNanos):
-    builder.PrependUint64Slot(5, occurredAtUnixNanos, 0)
+    builder.PrependUint64Slot(7, occurredAtUnixNanos, 0)
 
 def AddOccurredAtUnixNanos(builder, occurredAtUnixNanos):
     ReservationEventAddOccurredAtUnixNanos(builder, occurredAtUnixNanos)

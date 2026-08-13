@@ -18,8 +18,38 @@ from typing import Any
 
 from ..workspace import Workspace
 from .application import AccountApplication
-from .events import AccountEvent, AccountSnapshotEvent, BalanceEvent, PositionEvent
-from .models import AccountSnapshot, Balance, DataFreshness, Position
+from .errors import (
+    AccountLookupError,
+    AccountNotEnabledError,
+    AccountSegmentNotFoundError,
+    BalanceNotFoundError,
+    PositionNotFoundError,
+)
+from .events import (
+    AccountEvent,
+    AccountStatusChangedEvent,
+    BalanceChangedEvent,
+    EquityChangedEvent,
+    PositionChangedEvent,
+)
+from .models import (
+    COIN_M_FUTURES,
+    CROSS_MARGIN,
+    EQUITY,
+    FUNDING,
+    ISOLATED_MARGIN,
+    OPTIONS,
+    SPOT,
+    USD_M_FUTURES,
+    AccountSegmentSnapshot,
+    AccountSnapshot,
+    AccountsSnapshot,
+    AccountStatusChange,
+    Balance,
+    DataFreshness,
+    EquityChange,
+    Position,
+)
 
 
 def _text(value: str, name: str) -> str:
@@ -523,14 +553,32 @@ __all__ = [
     "AccountApplication",
     "AccountAdminApplication",
     "AccountEvent",
+    "AccountLookupError",
+    "AccountNotEnabledError",
+    "AccountSegmentNotFoundError",
+    "AccountSegmentSnapshot",
     "AccountSnapshot",
-    "AccountSnapshotEvent",
+    "AccountsSnapshot",
+    "AccountStatusChange",
+    "AccountStatusChangedEvent",
     "Balance",
-    "BalanceEvent",
+    "BalanceNotFoundError",
+    "BalanceChangedEvent",
     "AccountCliApplication",
     "CredentialApplication",
     "DataFreshness",
+    "EquityChange",
+    "EquityChangedEvent",
     "Position",
-    "PositionEvent",
+    "PositionNotFoundError",
+    "PositionChangedEvent",
     "TradeLeaseApplication",
+    "COIN_M_FUTURES",
+    "CROSS_MARGIN",
+    "EQUITY",
+    "FUNDING",
+    "ISOLATED_MARGIN",
+    "OPTIONS",
+    "SPOT",
+    "USD_M_FUTURES",
 ]

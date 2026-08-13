@@ -12,7 +12,6 @@ TData_co = TypeVar("TData_co", covariant=True)
 class EventMetadata:
     stream_id: str
     sequence: int
-    dispatch_sequence: int
     schema_version: int = 1
     producer: str = ""
     occurred_at: datetime | None = None
@@ -22,8 +21,8 @@ class EventMetadata:
     def __post_init__(self) -> None:
         if not self.stream_id.strip():
             raise ValueError("event stream_id is required")
-        if self.sequence <= 0 or self.dispatch_sequence <= 0:
-            raise ValueError("event sequences must be positive")
+        if self.sequence <= 0:
+            raise ValueError("event sequence must be positive")
         if self.schema_version <= 0:
             raise ValueError("event schema_version must be positive")
 

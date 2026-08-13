@@ -13,7 +13,7 @@ ReferenceActor owns versioned definitions of the trading world:
 | --- | --- |
 Reference current-state projections are owned by the versioned read-only
 SQLite contract; Reference FlatBuffer projections were retired.
-| `reference/v1/lifecycle.fbs` | Recent lifecycle facts plus a recovery watermark |
+| `reference/v1/lifecycle.fbs` | Recent lifecycle facts |
 
 Reference data is effective-dated. A consumer must use the snapshot's `as_of`
 and generation rather than assuming that the newest wall-clock record is valid
@@ -36,20 +36,12 @@ different update rates, sizes, and reader access patterns. Order books are
 separate because a full depth update must not force every quote reader to map
 or copy the book.
 
-## Startup contract
+## Snapshot and event independence
 
-A consumer that starts after the Actor has already processed events follows:
-
-```text
-1. Read the latest complete snapshot.
-2. Record its generation, event stream, and event sequence/watermark.
-3. Subscribe to the named owner event stream.
-4. Apply only events after the watermark.
-5. Enter ready state after continuity is verified.
-```
-
-If the watermark cannot be joined to the event stream, the consumer retries
-with a newer snapshot. It must not silently start from an empty local view.
+A snapshot is a one-shot current-state query. An event subscription starts
+from a cursor defined only by the event contract. Reading a snapshot cannot
+choose, advance, validate, or recover that cursor; an event gap must be handled
+by event retention/resync or reported as an error.
 
 ## Non-ownership
 

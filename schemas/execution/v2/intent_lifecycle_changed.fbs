@@ -1,0 +1,13 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.execution.v2;
+
+table IntentLifecycleChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  state:IntentState (required);
+  previous_lifecycle:IntentLifecycle = UNSPECIFIED;
+}
+
+root_type IntentLifecycleChanged;
+file_identifier "ELV2";

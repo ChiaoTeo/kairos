@@ -23,9 +23,11 @@ impl<'a> ReservationEvent<'a> {
     pub const VT_HEADER: ::flatbuffers::VOffsetT = 4;
     pub const VT_RESERVATION_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_REQUEST_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 10;
-    pub const VT_ALLOCATIONS: ::flatbuffers::VOffsetT = 12;
-    pub const VT_OCCURRED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_ACCOUNT_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_STRATEGY_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_ALLOCATIONS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_OCCURRED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 18;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -48,6 +50,12 @@ impl<'a> ReservationEvent<'a> {
         }
         if let Some(x) = args.status {
             builder.add_status(x);
+        }
+        if let Some(x) = args.strategy_id {
+            builder.add_strategy_id(x);
+        }
+        if let Some(x) = args.account_id {
+            builder.add_account_id(x);
         }
         if let Some(x) = args.request_id {
             builder.add_request_id(x);
@@ -101,6 +109,28 @@ impl<'a> ReservationEvent<'a> {
         }
     }
     #[inline]
+    pub fn account_id(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(ReservationEvent::VT_ACCOUNT_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn strategy_id(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(ReservationEvent::VT_STRATEGY_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn status(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
@@ -147,6 +177,8 @@ impl ::flatbuffers::Verifiable for ReservationEvent<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<super::super::common::v_1::MessageHeader>>("header", Self::VT_HEADER, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("reservation_id", Self::VT_RESERVATION_ID, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("request_id", Self::VT_REQUEST_ID, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("account_id", Self::VT_ACCOUNT_ID, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("strategy_id", Self::VT_STRATEGY_ID, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Allocation>>>>("allocations", Self::VT_ALLOCATIONS, false)?
      .visit_field::<u64>("occurred_at_unix_nanos", Self::VT_OCCURRED_AT_UNIX_NANOS, false)?
@@ -158,6 +190,8 @@ pub struct ReservationEventArgs<'a> {
     pub header: Option<::flatbuffers::WIPOffset<super::super::common::v_1::MessageHeader<'a>>>,
     pub reservation_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub request_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub account_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub strategy_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub allocations: Option<
         ::flatbuffers::WIPOffset<
@@ -173,6 +207,8 @@ impl<'a> Default for ReservationEventArgs<'a> {
             header: None,         // required field
             reservation_id: None, // required field
             request_id: None,     // required field
+            account_id: None,     // required field
+            strategy_id: None,    // required field
             status: None,         // required field
             allocations: None,
             occurred_at_unix_nanos: 0,
@@ -208,6 +244,20 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ReservationEventBuilder<'a, '
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             ReservationEvent::VT_REQUEST_ID,
             request_id,
+        );
+    }
+    #[inline]
+    pub fn add_account_id(&mut self, account_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ReservationEvent::VT_ACCOUNT_ID,
+            account_id,
+        );
+    }
+    #[inline]
+    pub fn add_strategy_id(&mut self, strategy_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ReservationEvent::VT_STRATEGY_ID,
+            strategy_id,
         );
     }
     #[inline]
@@ -253,6 +303,10 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ReservationEventBuilder<'a, '
             .required(o, ReservationEvent::VT_RESERVATION_ID, "reservation_id");
         self.fbb_
             .required(o, ReservationEvent::VT_REQUEST_ID, "request_id");
+        self.fbb_
+            .required(o, ReservationEvent::VT_ACCOUNT_ID, "account_id");
+        self.fbb_
+            .required(o, ReservationEvent::VT_STRATEGY_ID, "strategy_id");
         self.fbb_.required(o, ReservationEvent::VT_STATUS, "status");
         ::flatbuffers::WIPOffset::new(o.value())
     }
@@ -264,6 +318,8 @@ impl ::core::fmt::Debug for ReservationEvent<'_> {
         ds.field("header", &self.header());
         ds.field("reservation_id", &self.reservation_id());
         ds.field("request_id", &self.request_id());
+        ds.field("account_id", &self.account_id());
+        ds.field("strategy_id", &self.strategy_id());
         ds.field("status", &self.status());
         ds.field("allocations", &self.allocations());
         ds.field("occurred_at_unix_nanos", &self.occurred_at_unix_nanos());

@@ -10,7 +10,7 @@ use crate::application::{
 };
 use crate::domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
 use kairos_domain_types::{
-    InstrumentId, MarketId, Money, OrderId, Price, Quantity, SignedQuantity, UnixNanos,
+    InstrumentId, MarketId, Money, OrderId, Price, Quantity, SignedQuantity, StrategyId, UnixNanos,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -303,24 +303,18 @@ impl SocketExecutionPreflight {
             let projection = Arc::clone(&projection);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
-                let mut last_watermark = None;
+                let mut last_generation = None;
                 while !stop.load(Ordering::Acquire) {
-                    if let Ok(watermark) =
-                        kairos_market_contract::snapshot::read_latest_quotes_watermark(&path)
+                    if let Ok(snapshot) =
+                        kairos_market_contract::snapshot::read_latest_market_snapshot(&path)
                     {
-                        if last_watermark != Some(watermark) {
-                            if let Ok(snapshot) =
-                                kairos_market_contract::snapshot::read_latest_quotes_with_watermark(
-                                    &path,
-                                )
-                            {
-                                last_watermark = Some(watermark);
-                                if let Ok(mut state) = projection.write() {
-                                    state.market = Some(MarketProjection {
-                                        snapshot,
-                                        refreshed_at: Instant::now(),
-                                    });
-                                }
+                        if last_generation != Some(snapshot.generation) {
+                            last_generation = Some(snapshot.generation);
+                            if let Ok(mut state) = projection.write() {
+                                state.market = Some(MarketProjection {
+                                    snapshot,
+                                    refreshed_at: Instant::now(),
+                                });
                             }
                         } else if let Ok(mut state) = projection.write() {
                             if let Some(value) = state.market.as_mut() {
@@ -488,7 +482,7 @@ impl SocketExecutionPreflight {
             self.dependency_watermarks.market =
                 state.market.as_ref().map(|value| SnapshotWatermark {
                     generation: value.snapshot.generation.into(),
-                    event_sequence: value.snapshot.event_sequence.into(),
+                    event_sequence: 0.into(),
                 });
             self.dependency_watermarks.reference =
                 state.reference.as_ref().map(|value| SnapshotWatermark {
@@ -619,7 +613,7 @@ impl SocketExecutionPreflight {
                 });
                 (
                     market.snapshot.generation,
-                    market.snapshot.event_sequence,
+                    0,
                     has_quote
                         && market.snapshot.freshness.iter().all(|(_, value)| {
                             value.market_id
@@ -764,6 +758,10 @@ impl SocketExecutionPreflight {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
                     .map_err(|error| error.to_string())?,
                 intent_id: Some(intent.intent_id.clone()),
+                strategy_id: Some(
+                    StrategyId::new(intent.strategy_id.clone())
+                        .map_err(|error| error.to_string())?,
+                ),
                 account_id: leg.account_id.clone(),
                 segment_key: leg.segment_key.clone(),
                 instrument_id: leg.instrument_id.clone(),
@@ -1240,6 +1238,10 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index))
                     .map_err(|error| error.to_string())?,
                 intent_id: Some(intent.intent_id.clone()),
+                strategy_id: Some(
+                    StrategyId::new(intent.strategy_id.clone())
+                        .map_err(|error| error.to_string())?,
+                ),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),

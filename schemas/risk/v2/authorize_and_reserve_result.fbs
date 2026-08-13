@@ -1,0 +1,12 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v2;
+
+table AuthorizeAndReserveResult {
+  metadata:kairos.common.v2.CommandResultMetadata (required);
+  decision:RiskDecision (required);
+}
+
+root_type AuthorizeAndReserveResult;
+file_identifier "RSV2";

@@ -523,6 +523,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
     Ok(SubmitOrder {
         order_id: OrderId::new(args.order_id)?,
         intent_id: args.intent_id.map(IntentId::new).transpose()?,
+        strategy_id: None,
         account_id: AccountId::new(args.account_id)?,
         segment_key: SegmentKey::new(args.segment_key)?,
         instrument_id: InstrumentId::new(args.instrument_id)?,

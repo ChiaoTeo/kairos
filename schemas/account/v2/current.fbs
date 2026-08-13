@@ -1,0 +1,13 @@
+include "../../common/v2/metadata.fbs";
+include "types.fbs";
+
+namespace kairos.account.v2;
+
+table AccountCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  account_id:string (required);
+  segments:[AccountSegmentState] (required);
+}
+
+root_type AccountCurrentView;
+file_identifier "AAV2";

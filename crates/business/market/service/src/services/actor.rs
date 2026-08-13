@@ -792,6 +792,38 @@ impl MarketActor {
         }
     }
 
+    pub fn current_view(&self) -> crate::domain::snapshot::MarketCurrentView {
+        let snapshot = self.snapshot();
+        crate::domain::snapshot::MarketCurrentView {
+            actor_id: snapshot.actor_id,
+            generation: snapshot.generation,
+            latest: snapshot.latest,
+            views: snapshot.views,
+            order_books: snapshot.order_books,
+            freshness: snapshot
+                .freshness
+                .into_iter()
+                .map(|(key, value)| {
+                    (
+                        key,
+                        crate::domain::snapshot::MarketCurrentFreshness {
+                            source_id: value.source_id,
+                            market_id: value.market_id,
+                            data_kind: value.data_kind,
+                            last_event_time_unix_nanos: value.last_event_time_unix_nanos,
+                            last_received_time_unix_nanos: value.last_received_time_unix_nanos,
+                            status: value.status,
+                        },
+                    )
+                })
+                .collect(),
+            subscriptions: snapshot.subscriptions,
+            sources: snapshot.sources,
+            readiness: snapshot.readiness,
+            feed_status: snapshot.feed_status,
+        }
+    }
+
     fn with_subscription_status(&self, subscription: &SubscriptionState) -> SubscriptionState {
         let member_status = self.subscription_member_status(
             &subscription.id,

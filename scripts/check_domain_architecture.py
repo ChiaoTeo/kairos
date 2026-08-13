@@ -25,24 +25,22 @@ TYPED_FIELDS = {
         r"pub effective_from_unix_nanos: UnixNanos",
         r"pub event_time_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "kairos-integration" / "src" / "application" / "order_query.rs": [
+    ROOT / "crates" / "kairos-integration" / "src" / "application" / "capabilities" / "execution.rs": [
         r"pub symbol: Option<Symbol>",
         r"pub order_id: Option<OrderId>",
         r"pub since_unix_millis: Option<UnixNanos>",
         r"pub occurred_at_unix_millis: Option<UnixNanos>",
-    ],
-    ROOT / "crates" / "kairos-integration" / "src" / "application" / "execution_stream.rs": [
         r"pub order_id: OrderId",
         r"pub symbol: Symbol",
         r"pub execution_id: Option<FillId>",
         r"pub occurred_at_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "kairos-integration" / "src" / "application" / "historical.rs": [
+    ROOT / "crates" / "kairos-integration" / "src" / "application" / "capabilities" / "market.rs": [
         r"pub symbol: Symbol",
         r"pub start_time_unix_nanos: UnixNanos",
         r"pub end_time_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "kairos-integration" / "src" / "application" / "account.rs": [
+    ROOT / "crates" / "kairos-integration" / "src" / "application" / "capabilities" / "account.rs": [
         r"pub account_id: AccountId",
         r"pub segment_key: SegmentKey",
         r"pub market_id: MarketId",
@@ -140,25 +138,6 @@ TYPED_FIELDS = {
         r"pub leader_leg_id: LegId",
         r"pub hedge_leg_id: LegId",
     ],
-    ROOT / "crates" / "kairos-integration" / "src" / "domain" / "reference.rs": [
-        r"pub access_id: ExecutionAccessId",
-        r"pub market_id: MarketId",
-        r"pub settlement_asset_id: Option<AssetId>",
-        r"pub asset_id: AssetId",
-        r"pub instrument_id: InstrumentId",
-        r"pub symbol: Symbol",
-        r"pub listing_id: ListingId",
-        r"pub source_symbol: Symbol",
-        r"pub exchange_symbol: Symbol",
-        r"pub provider_symbol: ProviderSymbol",
-        r"pub issuer_id: Option<IssuerId>",
-        r"pub price_tick: Option<kairos_domain_types::Price>",
-        r"pub quantity_tick: Option<kairos_domain_types::Quantity>",
-        r"pub minimum_quantity: Option<kairos_domain_types::Quantity>",
-        r"pub minimum_notional: Option<kairos_domain_types::Money>",
-        r"pub contract_size: Option<kairos_domain_types::Quantity>",
-        r"pub effective_from_unix_nanos: UnixNanos",
-    ],
     ROOT / "crates" / "business" / "execution" / "service" / "src" / "services" / "simulator.rs": [
         r"pub order_id: OrderId",
         r"pub instrument_id: InstrumentId",
@@ -221,8 +200,11 @@ def main() -> int:
 
     for path in rust_sources():
         text = path.read_text()
-        legacy_exchange_term = "ven" + "ue"
-        if re.search(legacy_exchange_term, text, re.IGNORECASE):
+        # Provider-native `source_venue` is an allowed external fact until
+        # Reference maps it to canonical Exchange identity. Only canonical
+        # business identifiers/types using the retired term are forbidden.
+        legacy_exchange_identifier = r"\b(?:Venue|venue_id)\b"
+        if re.search(legacy_exchange_identifier, text):
             failures.append(f"forbidden legacy exchange terminology in Rust source: {path}")
         production = "#[cfg(test)]" not in text or path.parent.name != "tests"
         if production:

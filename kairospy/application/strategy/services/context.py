@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
 
 from kairospy.strategy import (
     StrategyContext as StrategyContextContract,
@@ -14,44 +12,11 @@ from kairospy.strategy import (
     StrategyState,
 )
 from kairospy.strategy.clock import StrategyClock
-from kairospy.domain_types import AccountId
-
-from ..domain.messages import RawEventEnvelope
-from ..protocol import EventStream
-from .applications import StrategyApplications
-
-if TYPE_CHECKING:
-    from kairospy.infrastructure.contracts.reference_client import ReferenceClient
-    from kairospy.infrastructure.contracts.execution import ExecutionMmapProjection
-    from kairospy.infrastructure.contracts.risk import RiskMmapProjection
-    from kairospy.infrastructure.contracts.account import AccountMmapProjection
-    from kairospy.infrastructure.transport.commands import (
-        ExecutionCommandClient,
-        MarketCommandClient,
-    )
-    from kairospy.infrastructure.transport.market import MmapMarketSnapshotReader
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyClientBundle:
-    """Private process dependencies assembled for one strategy instance."""
-
-    market_commands: MarketCommandClient
-    execution_commands: ExecutionCommandClient | None
-    market_snapshots: MmapMarketSnapshotReader
-    market_events: EventStream
-    application_events: tuple[EventStream, ...] = ()
-    reference_client: ReferenceClient | None = None
-    account_projections: Mapping[AccountId, AccountMmapProjection] = field(
-        default_factory=dict
-    )
-    execution_projection: ExecutionMmapProjection | None = None
-    risk_projection: RiskMmapProjection | None = None
-    history_root: Path | None = None
-    state_path: Path | None = None
-    backtest_market: Callable[[RawEventEnvelope], object] | None = None
-    backtest_account_mark: Callable[[RawEventEnvelope], object] | None = None
-    backtest_time_advance: Callable[[int], object] | None = None
+from kairospy.application.account import AccountApplication
+from kairospy.application.execution import ExecutionApplication
+from kairospy.application.market import MarketApplication
+from kairospy.application.reference import ReferenceApplication
+from kairospy.application.risk import RiskApplication
 
 
 class StrategyContext(StrategyContextContract):
@@ -61,7 +26,11 @@ class StrategyContext(StrategyContextContract):
         self,
         strategy_id: str,
         *,
-        applications: StrategyApplications,
+        reference: ReferenceApplication,
+        market: MarketApplication,
+        account: AccountApplication,
+        risk: RiskApplication,
+        execution: ExecutionApplication,
         launch_id: str = "",
         instance_id: str = "",
         params: Mapping[str, object] | None = None,
@@ -88,11 +57,11 @@ class StrategyContext(StrategyContextContract):
             fields={"strategy_id": strategy_id, "instance_id": instance_id}
         )
         self.clock = clock or StrategyClock(lambda *args: None, lambda *args: None)
-        self.reference = applications.reference
-        self.market = applications.market
-        self.account = applications.account
-        self.risk = applications.risk
-        self.execution = applications.execution
+        self.reference = reference
+        self.market = market
+        self.account = account
+        self.risk = risk
+        self.execution = execution
 
     def _bind(self, event: object | None) -> StrategyContext:
         self._event = event

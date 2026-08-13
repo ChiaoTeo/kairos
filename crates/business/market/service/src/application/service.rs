@@ -228,6 +228,10 @@ impl MarketApplication {
         self.actor.snapshot()
     }
 
+    pub fn current_view(&self) -> crate::domain::snapshot::MarketCurrentView {
+        self.actor.current_view()
+    }
+
     pub fn subscription_status(
         &self,
         id: &SubscriptionId,

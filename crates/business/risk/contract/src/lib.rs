@@ -9,7 +9,7 @@ pub mod snapshot;
 pub mod transport;
 
 pub use event::EventEnvelope;
-pub use model::{RiskEvent, RiskSnapshot};
+pub use model::*;
 pub use query::{CommandEnvelope, QueryEnvelope};
 pub use snapshot::SnapshotEnvelope;
 

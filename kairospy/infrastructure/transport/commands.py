@@ -10,6 +10,7 @@ from kairospy.strategy import CommandHandle, CommandEnvelope
 from kairospy.application.execution import (
     HedgePolicy,
     MakerExecutionPolicy,
+    OptionSpreadRequest,
     PairArbitrageRequest,
     PortfolioRebalanceRequest,
     QuoteProvisioningRequest,
@@ -193,7 +194,7 @@ class ExecutionCommandClient:
                     "launch_id": self.launch_id or "",
                     "instance_id": instance_id,
                     "account_ids": account_ids,
-                    "segment_key": self.default_segment,
+                    "segment_key": request.segment_key,
                     "instrument_id": request.instrument_id,
                     "intent_type": "TargetPosition",
                     "target_quantity": _decimal(request.quantity),
@@ -227,7 +228,12 @@ class ExecutionCommandClient:
                 "rejected",
                 error="launch live trading is disabled by safety policy",
             )
-        body = _direct_order_body(request, order_id=request.request_id or request_id)
+        body = _direct_order_body(
+            request,
+            order_id=request.request_id or request_id,
+            default_segment=self.default_segment,
+        )
+        body["strategy_id"] = strategy_id
         status, value = self.client.request("POST", "/v1/submit", body)
         return _handle(request_id, status, value)
 
@@ -310,6 +316,8 @@ class ExecutionCommandClient:
         for item in value.get("orders", ()):
             if not isinstance(item, Mapping):
                 continue
+            if item.get("strategy_id") != strategy_id:
+                continue
             if instrument_id is not None and item.get("instrument_id") != instrument_id:
                 continue
             order_id = item.get("order_id")
@@ -348,7 +356,7 @@ class ExecutionCommandClient:
         account_ids = []
         payload_legs = []
         for index, leg in enumerate(legs):
-            account_id = leg.account_id or request.account_id
+            account_id = leg.account_id
             if account_id not in account_ids:
                 account_ids.append(account_id)
             payload_legs.append(
@@ -406,6 +414,67 @@ class ExecutionCommandClient:
         )
         return _handle(request_id, status, value)
 
+    def option_spread(
+        self,
+        request: OptionSpreadRequest,
+        *,
+        strategy_id: str,
+        instance_id: str,
+        request_id: str,
+    ) -> CommandHandle:
+        if not instance_id.strip():
+            return CommandHandle(
+                request_id,
+                "rejected",
+                error="instance_id is required for execution intents",
+            )
+        if not self.allow_trading:
+            return CommandHandle(
+                request_id,
+                "rejected",
+                error="launch live trading is disabled by safety policy",
+            )
+        intent_id = request.intent_id or f"{strategy_id}:intent:{request_id}"
+        body = {
+            "intent_id": intent_id,
+            "strategy_id": strategy_id,
+            "launch_id": self.launch_id or "",
+            "instance_id": instance_id,
+            "instrument_id": request.short_leg.instrument_id,
+            "market_id": request.short_leg.market_id,
+            "account_ids": [request.account_id],
+            "segment_key": "options",
+            "target_quantity": "0",
+            "limit_price": None,
+            "source_snapshot_id": request.source_snapshot_id,
+            "source_event_sequence": request.source_event_sequence,
+            "source_event_time_unix_nanos": request.source_event_time_unix_nanos,
+            "reason": request.reason,
+            "intent_type": "OptionSpread",
+            "completion_policy": request.completion_policy,
+            "failure_policy": request.failure_policy,
+            "minimum_net_credit": _decimal(request.minimum_net_credit),
+            "maximum_loss": _decimal(request.maximum_loss),
+            "maximum_quote_age_nanos": request.maximum_quote_age_nanos,
+            "deadline_unix_nanos": request.deadline_unix_nanos,
+            "legs": [
+                _option_spread_leg(request.short_leg),
+                _option_spread_leg(request.long_leg),
+            ],
+        }
+        envelope = CommandEnvelope(
+            command_id=request_id,
+            operation="execution.submit_intent",
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            launch_id=self.launch_id,
+            payload={"intent": body},
+        )
+        status, value = self.client.request(
+            "POST", "/v1/intents/submit", envelope.as_dict()
+        )
+        return _handle(request_id, status, value)
+
     def portfolio_rebalance(
         self,
         request: PortfolioRebalanceRequest,
@@ -430,7 +499,7 @@ class ExecutionCommandClient:
         account_ids = []
         payload_legs = []
         for index, target in enumerate(request.targets):
-            account_id = target.account_id or request.account_id
+            account_id = target.account_id
             if account_id not in account_ids:
                 account_ids.append(account_id)
             payload_legs.append(
@@ -611,7 +680,9 @@ def _decimal(value: Decimal) -> str:
     return format(value, "f")
 
 
-def _direct_order_body(request: OrderRequest, *, order_id: str) -> dict[str, object]:
+def _direct_order_body(
+    request: OrderRequest, *, order_id: str, default_segment: str
+) -> dict[str, object]:
     instrument = (
         request.instrument.id
         if isinstance(request.instrument, InstrumentRef)
@@ -621,7 +692,7 @@ def _direct_order_body(request: OrderRequest, *, order_id: str) -> dict[str, obj
         "order_id": order_id,
         "intent_id": None,
         "account_id": str(request.account),
-        "segment_key": "spot",
+        "segment_key": str(request.segment or default_segment),
         "instrument_id": str(instrument),
         "market_id": None,
         "side": request.side.value.capitalize(),
@@ -638,6 +709,21 @@ def _direct_order_body(request: OrderRequest, *, order_id: str) -> dict[str, obj
             else False,
         },
         "submitted_at_unix_nanos": None,
+    }
+
+
+def _option_spread_leg(leg: Any) -> dict[str, object]:
+    return {
+        "leg_id": leg.leg_id,
+        "account_id": "",
+        "segment_key": "options",
+        "instrument_id": leg.instrument_id,
+        "market_id": leg.market_id,
+        "side": leg.side,
+        "quantity": _decimal(leg.quantity),
+        "limit_price": None if leg.limit_price is None else _decimal(leg.limit_price),
+        "target_position": False,
+        "options": {},
     }
 
 

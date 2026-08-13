@@ -64,21 +64,14 @@ class MarketFreshness(object):
         return 0
 
     # MarketFreshness
-    def EventSequence(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return 0
-
-    # MarketFreshness
     def Status(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def MarketFreshnessStart(builder):
-    builder.StartObject(7)
+    builder.StartObject(6)
 
 def Start(builder):
     MarketFreshnessStart(builder)
@@ -113,14 +106,8 @@ def MarketFreshnessAddLastReceivedTimeUnixNanos(builder, lastReceivedTimeUnixNan
 def AddLastReceivedTimeUnixNanos(builder, lastReceivedTimeUnixNanos):
     MarketFreshnessAddLastReceivedTimeUnixNanos(builder, lastReceivedTimeUnixNanos)
 
-def MarketFreshnessAddEventSequence(builder, eventSequence):
-    builder.PrependUint64Slot(5, eventSequence, 0)
-
-def AddEventSequence(builder, eventSequence):
-    MarketFreshnessAddEventSequence(builder, eventSequence)
-
 def MarketFreshnessAddStatus(builder, status):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
 
 def AddStatus(builder, status):
     MarketFreshnessAddStatus(builder, status)
