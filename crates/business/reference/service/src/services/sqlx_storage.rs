@@ -1416,7 +1416,8 @@ async fn reconcile_normalized_provider_facts(
           UNION ALL SELECT 'market invalid interval: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.effective_to_unix_nanos') IS NOT NULL AND json_extract(c.payload,'$.effective_to_unix_nanos')<=json_extract(c.payload,'$.effective_from_unix_nanos') \
           UNION ALL SELECT 'financial product missing asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.asset_id')) \
           UNION ALL SELECT 'financial product missing currency asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND json_extract(c.payload,'$.currency_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.currency_asset_id')) \
-          UNION ALL SELECT 'execution access missing market: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate m WHERE m.record_kind='market' AND m.record_id=json_extract(c.payload,'$.market_id')) \
+          UNION ALL SELECT 'direct execution access missing market: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND COALESCE(json_extract(c.payload,'$.routing_mode'),'direct')='direct' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate m WHERE m.record_kind='market' AND m.record_id=COALESCE(json_extract(c.payload,'$.destination_market_id'),json_extract(c.payload,'$.market_id'))) \
+          UNION ALL SELECT 'smart execution access missing instrument: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND json_extract(c.payload,'$.routing_mode')='smart' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.instrument_id')) \
           UNION ALL SELECT 'execution access missing settlement asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND json_extract(c.payload,'$.settlement_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.settlement_asset_id')) \
         ) LIMIT 1",
     )
@@ -1618,7 +1619,7 @@ async fn replace_current_state(
         track!("execution_access", access.access_id.as_str());
         sqlx::query("INSERT INTO reference_execution_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_execution_accesses_current.payload<>excluded.payload")
             .bind(access.access_id.as_str())
-            .bind(access.market_id.as_str())
+            .bind(access.market_id.as_ref().map(|value| value.as_str()))
             .bind(&access.provider_id)
             .bind(&access.product_family)
             .bind(access.provider_symbol.as_str())
@@ -1632,7 +1633,7 @@ async fn replace_current_state(
         track!("market_data_access", access.access_id.as_str());
         sqlx::query("INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_market_data_accesses_current.payload<>excluded.payload")
             .bind(access.access_id.as_str())
-            .bind(access.market_id.as_str())
+            .bind(access.market_id.as_ref().map(|value| value.as_str()))
             .bind(&access.provider_id)
             .bind(&access.product_family)
             .bind(access.provider_symbol.as_str())

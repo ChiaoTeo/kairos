@@ -1237,6 +1237,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     order.instrument_id.to_string(),
                 )
                 .map_err(|error| error.to_string())?,
+                market_id: order.market_id.clone(),
                 side: order.side,
                 order_type: order.order_type,
                 quantity: kairos_domain_types::Quantity::new(
@@ -1293,7 +1294,9 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     quantity: fill.quantity,
                     price: fill.price,
                     fee: fill.fee,
+                    fee_currency: fill.fee_currency.clone(),
                     occurred_at_unix_nanos: Some(fill.occurred_at_unix_nanos),
+                    execution_market_id: fill.execution_market_id.clone(),
                 })
                 .map_err(|error| error.to_string())?;
         }
@@ -2040,6 +2043,7 @@ mod tests {
                 segment_key: SegmentKey::new("spot").unwrap(),
                 instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
                 market_id: None,
+                execution_access_id: None,
                 side: DomainOrderSide::Buy,
                 order_type: OrderType::Market,
                 quantity: Quantity::new(1, 0).unwrap(),

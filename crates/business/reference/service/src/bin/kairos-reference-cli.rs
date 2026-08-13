@@ -185,6 +185,7 @@ fn read_query(
         ReferenceKind::Market => &[ReferenceCollection::Markets],
         ReferenceKind::FinancialProduct => &[ReferenceCollection::FinancialProducts],
         ReferenceKind::ExecutionAccess => &[ReferenceCollection::ExecutionAccesses],
+        ReferenceKind::MarketDataAccess => &[ReferenceCollection::MarketDataAccesses],
         ReferenceKind::Event => &[ReferenceCollection::LifecycleEvents],
         ReferenceKind::All => &[
             ReferenceCollection::Entities,
@@ -194,6 +195,7 @@ fn read_query(
             ReferenceCollection::Markets,
             ReferenceCollection::FinancialProducts,
             ReferenceCollection::ExecutionAccesses,
+            ReferenceCollection::MarketDataAccesses,
             ReferenceCollection::LifecycleEvents,
         ],
     };
@@ -909,6 +911,9 @@ impl QueryArgs {
             "market" => ReferenceKind::Market,
             "financial-product" | "financial_product" => ReferenceKind::FinancialProduct,
             "execution-access" | "execution_access" | "access" => ReferenceKind::ExecutionAccess,
+            "market-data-access" | "market_data_access" | "data-access" => {
+                ReferenceKind::MarketDataAccess
+            }
             "event" => ReferenceKind::Event,
             _ => ReferenceKind::All,
         }

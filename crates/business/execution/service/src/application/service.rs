@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_domain_types::{
-    AccountId, ActorId, ClientOrderId, Currency, DurationNanos, FillId, Generation, InstrumentId,
-    ExecutionAccessId, IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity, RemoteOrderId, SegmentKey,
-    Sequence, StrategyId, Symbol, UnixNanos,
+    AccountId, ActorId, ClientOrderId, Currency, DurationNanos, ExecutionAccessId, FillId,
+    Generation, InstrumentId, IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity,
+    RemoteOrderId, SegmentKey, Sequence, StrategyId, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +133,8 @@ pub struct ExecutionFillReport {
     pub quantity: Quantity,
     pub price: Price,
     pub fee: Money,
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
     pub occurred_at_unix_nanos: Option<UnixNanos>,
     #[serde(default)]
     pub execution_market_id: Option<MarketId>,
@@ -412,6 +414,8 @@ pub struct ExecuteStrategyIntent {
     pub instance_id: String,
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
+    #[serde(default)]
+    pub execution_access_id: Option<ExecutionAccessId>,
     pub account_ids: Vec<AccountId>,
     pub segment_key: SegmentKey,
     pub target_quantity: Quantity,
@@ -449,6 +453,7 @@ impl Default for ExecuteStrategyIntent {
             instrument_id: InstrumentId::new("instrument:default")
                 .expect("valid default instrument ID"),
             market_id: None,
+            execution_access_id: None,
             account_ids: Vec::new(),
             segment_key: SegmentKey::new("segment:default").expect("valid default segment key"),
             target_quantity: Quantity::new(0, 0).expect("valid default quantity"),
@@ -480,6 +485,8 @@ pub struct IntentLegRequest {
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
+    #[serde(default)]
+    pub execution_access_id: Option<ExecutionAccessId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub limit_price: Option<Price>,
@@ -583,7 +590,8 @@ pub struct ExecutionApplication {
     pending_business_events: std::collections::VecDeque<ExecutionBusinessEvent>,
     intent_idempotency: BTreeMap<String, String>,
     unknown_remote_orders: BTreeMap<String, UnknownRemoteOrder>,
-    execution_accesses: BTreeMap<ExecutionAccessId, kairos_integration::application::ProviderInstrumentRef>,
+    execution_accesses:
+        BTreeMap<ExecutionAccessId, kairos_integration::application::ProviderInstrumentRef>,
     exchange_event_watermark_unix_nanos: u64,
     order_entry: Option<Box<dyn OrderEntryConnection>>,
     order_query: Option<Box<dyn OrderQueryConnection>>,
@@ -714,7 +722,8 @@ impl ExecutionApplication {
         access_id: ExecutionAccessId,
         provider_instrument: kairos_integration::application::ProviderInstrumentRef,
     ) {
-        self.execution_accesses.insert(access_id, provider_instrument);
+        self.execution_accesses
+            .insert(access_id, provider_instrument);
     }
 
     pub fn remote_open_orders(
@@ -870,7 +879,9 @@ impl ExecutionApplication {
                             price: Price::new(price.0, price.1)
                                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                             fee: Money::ZERO,
+                            fee_currency: None,
                             occurred_at_unix_nanos: remote_order.occurred_at_unix_nanos,
+                            execution_market_id: local.market_id.clone(),
                         });
                         match fill_result {
                             Ok(_) => changed += 1,
@@ -1045,7 +1056,9 @@ impl ExecutionApplication {
                 price: Price::new(price.0, price.1)
                     .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                 fee,
+                fee_currency: event.fee_currency.clone(),
                 occurred_at_unix_nanos: Some(event.occurred_at_unix_nanos),
+                execution_market_id: local.market_id.clone(),
             })?;
             return Ok(fill);
         }
@@ -1182,7 +1195,12 @@ impl ExecutionApplication {
                 quantity,
                 price,
                 fee: unknown.fee_amount.unwrap_or(Money::ZERO),
+                fee_currency: unknown.fee_currency,
                 occurred_at_unix_nanos: Some(unknown.last_seen_at_unix_nanos),
+                execution_market_id: self
+                    .orders
+                    .get(local_order_id)
+                    .and_then(|order| order.market_id.clone()),
             });
         }
         self.persist_snapshot()?;
@@ -1414,6 +1432,7 @@ impl ExecutionApplication {
             segment_key: template.segment_key.clone(),
             instrument_id: template.instrument_id.clone(),
             market_id: template.market_id.clone(),
+            execution_access_id: template.execution_access_id.clone(),
             side: template.side,
             order_type: template.order_type,
             quantity: Quantity::new(missing, template.quantity.scale())
@@ -1582,10 +1601,13 @@ impl ExecutionApplication {
                 ));
             }
             if intent.minimum_net_credit.is_none_or(Money::is_negative)
-                || intent.maximum_loss.is_none_or(|value| value.is_zero() || value.is_negative())
+                || intent
+                    .maximum_loss
+                    .is_none_or(|value| value.is_zero() || value.is_negative())
             {
                 return Err(ExecutionError::Invalid(
-                    "option spread requires non-negative minimum credit and positive maximum loss".into(),
+                    "option spread requires non-negative minimum credit and positive maximum loss"
+                        .into(),
                 ));
             }
         }
@@ -2450,6 +2472,7 @@ impl ExecutionApplication {
                 && existing.quantity == request.quantity
                 && existing.price == request.price
                 && existing.fee == request.fee
+                && existing.fee_currency == request.fee_currency
                 && request
                     .occurred_at_unix_nanos
                     .is_none_or(|value| value.get() == existing.occurred_at_unix_nanos.get());
@@ -2538,6 +2561,7 @@ impl ExecutionApplication {
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
             fee: crate::domain::Money::new(request.fee.mantissa(), request.fee.scale())
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+            fee_currency: request.fee_currency.clone(),
             occurred_at_unix_nanos: crate::domain::UnixNanos::new(now.get()),
         };
         self.orders.insert(next.order_id.clone(), next.clone());
@@ -2638,7 +2662,7 @@ impl ExecutionApplication {
             &options,
             &self.execution_accesses,
         )
-            .map_err(ExecutionError::Invalid)?;
+        .map_err(ExecutionError::Invalid)?;
         self.orders.insert(order.order_id.clone(), order.clone());
         self.commit(ExecutionEvent {
             order_id: order.order_id.clone(),
@@ -3056,6 +3080,7 @@ impl ExecutionApplication {
                 segment_key: template.segment_key.clone(),
                 instrument_id: template.instrument_id.clone(),
                 market_id: template.market_id.clone(),
+                execution_access_id: template.execution_access_id.clone(),
                 side: template.side,
                 order_type: OrderType::Limit,
                 quantity: Quantity::new(
@@ -3336,10 +3361,9 @@ fn to_connection_request(
         kairos_integration::application::ProviderInstrumentRef,
     >,
 ) -> Result<OrderEntryRequest, String> {
-    let access_id = order
-        .execution_access_id
-        .as_ref()
-        .ok_or_else(|| "execution_access_id is required; provider identity is not inferred".to_string())?;
+    let access_id = order.execution_access_id.as_ref().ok_or_else(|| {
+        "execution_access_id is required; provider identity is not inferred".to_string()
+    })?;
     let provider_instrument = execution_accesses
         .get(access_id)
         .cloned()

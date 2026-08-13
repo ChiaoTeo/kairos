@@ -543,7 +543,7 @@ where
                                 .is_none_or(|provider| provider == value.provider_id)
                             && query.matches_text(&[
                                 &value.access_id,
-                                &value.market_id,
+                                value.market_id.as_deref().unwrap_or_default(),
                                 &value.provider_id,
                                 &value.product_family,
                                 &value.provider_symbol,
@@ -551,6 +551,26 @@ where
                     })
                     .cloned()
                     .map(ReferenceRecord::ExecutionAccess),
+            );
+        }
+        if include(ReferenceKind::MarketDataAccess) {
+            records.extend(
+                self.actor
+                    .catalog
+                    .market_data_accesses
+                    .values()
+                    .filter(|value| {
+                        query.matches_status(value.status.as_str())
+                            && query.matches_text(&[
+                                &value.access_id,
+                                &value.market_id,
+                                &value.provider_id,
+                                &value.product_family,
+                                &value.provider_symbol,
+                            ])
+                    })
+                    .cloned()
+                    .map(ReferenceRecord::MarketDataAccess),
             );
         }
         if include(ReferenceKind::Event) {

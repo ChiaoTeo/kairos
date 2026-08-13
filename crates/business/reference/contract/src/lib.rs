@@ -18,7 +18,6 @@ pub use model::{LifecycleEvent, ReferenceCatalog};
 pub use projection::{ReferenceHealth, ReferenceMarket};
 pub use sqlite::{
     ReferenceCatalogStats, ReferenceCollection, ReferenceMarketPage, ReferenceProjection,
-    ReferenceSqliteReader, ReferenceWatermark, SqliteExecutionAccessQuery,
-    SqliteInstrumentQuery, SqliteMarketDataAccessQuery, SqliteMarketQuery,
-    REFERENCE_SQLITE_SCHEMA_VERSION,
+    ReferenceSqliteReader, ReferenceWatermark, SqliteExecutionAccessQuery, SqliteInstrumentQuery,
+    SqliteMarketDataAccessQuery, SqliteMarketQuery, REFERENCE_SQLITE_SCHEMA_VERSION,
 };

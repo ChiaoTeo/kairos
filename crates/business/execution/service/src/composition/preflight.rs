@@ -766,6 +766,10 @@ impl SocketExecutionPreflight {
                 segment_key: leg.segment_key.clone(),
                 instrument_id: leg.instrument_id.clone(),
                 market_id: leg.market_id.clone(),
+                execution_access_id: leg
+                    .execution_access_id
+                    .clone()
+                    .or_else(|| intent.execution_access_id.clone()),
                 side,
                 order_type: if leg.limit_price.is_some() {
                     OrderType::Limit
@@ -1246,6 +1250,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
                 market_id: intent.market_id.clone(),
+                execution_access_id: intent.execution_access_id.clone(),
                 side: if delta > Decimal::ZERO {
                     OrderSide::Buy
                 } else {
@@ -1508,11 +1513,11 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                         mantissa: settlement_delta.mantissa,
                         scale: settlement_delta.scale,
                     },
-                    fee_asset: "USDT".into(),
-                    fee_amount: AccountDecimal {
+                    fee_asset: fill.fee_currency.as_ref().map(ToString::to_string),
+                    fee_amount: (fill.fee.mantissa() != 0).then_some(AccountDecimal {
                         mantissa: fill.fee.mantissa(),
                         scale: fill.fee.scale(),
-                    },
+                    }),
                     occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
                 })
                 .map_err(|error| error.to_string());
@@ -1533,6 +1538,11 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 },
                 side: side.into(),
                 occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
+                fee_asset: fill.fee_currency.as_ref().map(ToString::to_string),
+                fee_amount: Some(AccountDecimal {
+                    mantissa: fill.fee.mantissa(),
+                    scale: fill.fee.scale(),
+                }),
             })
             .map_err(|error| error.to_string())
     }

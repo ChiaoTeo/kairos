@@ -105,6 +105,10 @@ pub struct Fill {
     pub price: DecimalValue,
     pub side: String,
     pub occurred_at_unix_nanos: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_amount: Option<DecimalValue>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -118,8 +122,10 @@ pub struct SimulatedFill {
     pub side: String,
     pub settlement_asset: String,
     pub settlement_delta: DecimalValue,
-    pub fee_asset: String,
-    pub fee_amount: DecimalValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_amount: Option<DecimalValue>,
     pub occurred_at_unix_nanos: u64,
 }
 

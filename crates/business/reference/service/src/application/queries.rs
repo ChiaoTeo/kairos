@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::domain::{
     Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, LifecycleEvent, Listing, Market,
+    MarketDataAccess,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -20,6 +21,7 @@ pub enum ReferenceKind {
     Market,
     FinancialProduct,
     ExecutionAccess,
+    MarketDataAccess,
     Event,
     #[default]
     All,
@@ -92,6 +94,7 @@ pub enum ReferenceRecord {
     Market(Market),
     FinancialProduct(FinancialProduct),
     ExecutionAccess(ExecutionAccess),
+    MarketDataAccess(MarketDataAccess),
     Event(LifecycleEvent),
 }
 

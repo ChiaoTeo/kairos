@@ -1,8 +1,8 @@
-use kairos_domain_types::Price;
 use kairos_domain_types::{
-    AccountId, ClientOrderId, Currency, FillId, InstrumentId, IntentId, LegId, MarketId, OrderId,
-    Quantity, SegmentKey, Symbol, UnixNanos,
+    AccountId, ClientOrderId, Currency, ExecutionAccessId, FillId, InstrumentId, IntentId, LegId,
+    MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
 };
+use kairos_domain_types::{Money, Price};
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
     ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RefreshQuoteIntent,
@@ -24,7 +24,8 @@ use kairos_integration::application::{
 };
 use kairos_integration::application::{
     ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState, OrderEntryEvent,
-    OrderEntryRequest, ParticipantKind, ParticipantRef,
+    OrderEntryRequest, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
+    ProviderInstrumentRef,
 };
 use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use kairos_market_contract::model::{MarketObservation, Quote};
@@ -44,7 +45,9 @@ fn fill_report(
         quantity: kairos_domain_types::Quantity::new(quantity, 0).unwrap(),
         price: Price::new(price, 0).unwrap(),
         fee: kairos_domain_types::Money::new(fee, 0).unwrap(),
+        fee_currency: None,
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
+        execution_market_id: None,
     }
 }
 
@@ -68,6 +71,7 @@ fn submit_order(
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: market_id.map(|value| MarketId::new(value).unwrap()),
+        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
         side,
         order_type,
         quantity: Quantity::new(quantity, 0).unwrap(),
@@ -89,6 +93,7 @@ fn strategy_intent(
         instance_id: "instance".into(),
         instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
         market_id: None,
+        execution_access_id: None,
         account_ids: vec![AccountId::new("main").unwrap()],
         segment_key: SegmentKey::new("spot").unwrap(),
         target_quantity: Quantity::new(quantity, 0).unwrap(),
@@ -105,6 +110,8 @@ fn strategy_intent(
         min_edge_bps: None,
         max_slippage_bps: None,
         estimated_fee_bps: None,
+        minimum_net_credit: None,
+        maximum_loss: None,
         hedge_policy: None,
         order_options: Default::default(),
     }
@@ -225,6 +232,15 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         Some(Box::new(FileExecutionStore::new(path))),
     )
     .unwrap();
+    application.configure_execution_access(
+        ExecutionAccessId::new("execution-access:test").unwrap(),
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap(),
+    );
     application.attach_preflight(Box::new(TestPreflight));
     application
 }
@@ -318,6 +334,7 @@ impl ExecutionPreflight for TestPreflight {
                     segment_key: leg.segment_key.clone(),
                     instrument_id: leg.instrument_id.clone(),
                     market_id: leg.market_id.clone(),
+                    execution_access_id: None,
                     side: leg.side,
                     order_type: if leg.limit_price.is_some() {
                         OrderType::Limit
@@ -345,6 +362,7 @@ impl ExecutionPreflight for TestPreflight {
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
                 market_id: intent.market_id.clone(),
+                execution_access_id: None,
                 side: OrderSide::Buy,
                 order_type: if intent.limit_price.is_some() {
                     OrderType::Limit
@@ -748,6 +766,40 @@ fn remote_partial_fill_status_is_not_promoted_to_filled() {
         })
         .unwrap();
     assert_eq!(order.status, ExecutionOrderStatus::PartiallyFilled);
+}
+
+#[test]
+fn remote_fill_preserves_fee_payment_currency() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    app.submit(submit_order(
+        "fee-currency-order",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Limit,
+        1,
+        Some(100),
+        None,
+    ))
+    .unwrap();
+
+    app.apply_remote_execution_event(RemoteOrderUpdate {
+        order_id: order_id("fee-currency-order"),
+        symbol: symbol("BTCUSDT"),
+        status: ExecutionOrderStatus::Filled,
+        fill_quantity: Some(quantity("1")),
+        fill_price: Some(price("100")),
+        execution_id: Some(fill_id("fee-currency-fill")),
+        fee_currency: Some(currency("BNB")),
+        fee_amount: Some(money("0.01")),
+        occurred_at_unix_nanos: 42.into(),
+        reason: String::new(),
+    })
+    .unwrap();
+
+    assert_eq!(app.fills(None)[0].fee_currency.as_deref(), Some("BNB"));
 }
 
 #[test]
@@ -1393,6 +1445,77 @@ fn two_leg_buy_sell_intent_is_satisfied_only_after_both_legs_fill() {
     );
 }
 
+fn option_spread_intent(short_quantity: i64, long_quantity: i64) -> ExecuteStrategyIntent {
+    let mut intent = strategy_intent("intent:option-spread", 0, None);
+    intent.intent_type = kairos_execution::IntentType::OptionSpread;
+    intent.completion_policy = kairos_execution::CompletionPolicy::AllOrNothing;
+    intent.failure_policy = kairos_execution::FailurePolicy::CancelRemaining;
+    intent.minimum_net_credit = Some(Money::new(120, 2).unwrap());
+    intent.maximum_loss = Some(Money::new(880, 0).unwrap());
+    intent.legs = vec![
+        intent_leg(
+            "short-put",
+            "main",
+            "options",
+            "SPY-P-500",
+            Some("spy-options"),
+            OrderSide::Sell,
+            short_quantity,
+            None,
+        ),
+        intent_leg(
+            "long-put",
+            "main",
+            "options",
+            "SPY-P-490",
+            Some("spy-options"),
+            OrderSide::Buy,
+            long_quantity,
+            None,
+        ),
+    ];
+    intent
+}
+
+#[test]
+fn option_spread_intent_requires_fixed_risk_package_shape() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = ExecutionApplication::with_dependencies(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    app.attach_preflight(Box::new(TestPreflight));
+    let state = app.submit_intent(option_spread_intent(1, 1)).unwrap();
+    assert_eq!(
+        state.intent.intent_type,
+        kairos_execution::IntentType::OptionSpread
+    );
+    assert_eq!(state.plan.unwrap().legs.len(), 2);
+}
+
+#[test]
+fn option_spread_intent_rejects_unequal_leg_quantities() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let error = app.submit_intent(option_spread_intent(2, 1)).unwrap_err();
+    assert!(error.to_string().contains("equal quantity"));
+}
+
+#[test]
+fn option_spread_intent_rejects_missing_fixed_risk_limits() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let mut intent = option_spread_intent(1, 1);
+    intent.maximum_loss = None;
+    let error = app.submit_intent(intent).unwrap_err();
+    assert!(error.to_string().contains("maximum loss"));
+}
+
 #[test]
 fn pair_fills_create_compensation_from_actual_leader_quantity() {
     let directory = tempfile::tempdir().unwrap();
@@ -1747,6 +1870,7 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
         orders: vec![SimulationOrderRequest {
             order_id: OrderId::new("sim-order-1").unwrap(),
             instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
+            market_id: Some(MarketId::new("binance:spot").unwrap()),
             side: OrderSide::Buy,
             order_type: OrderType::Market,
             quantity: "2".parse().unwrap(),
@@ -1765,6 +1889,7 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
         })],
         simulation: SimulationConfig {
             fee_bps: "10".parse().unwrap(),
+            fee_currency: Some("USDT".parse().unwrap()),
             slippage_bps: "0".parse().unwrap(),
             enforce_quote_quantity: true,
         },
@@ -1775,6 +1900,10 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
     assert_eq!(result.fills[0].quantity.to_string(), "2");
     assert_eq!(result.fills[0].price.to_string(), "100");
     assert_eq!(result.fills[0].fee.to_string(), "0.2");
+    assert_eq!(
+        result.fills[0].execution_market_id.as_deref(),
+        Some("binance:spot")
+    );
     assert_eq!(result.orders[0].status, SimulationOrderStatus::Filled);
 }
 
@@ -1785,6 +1914,7 @@ fn backtest_run_consumes_a_downloaded_bar_and_fills_at_close() {
         orders: vec![SimulationOrderRequest {
             order_id: OrderId::new("bar-order-1").unwrap(),
             instrument_id: InstrumentId::new("instrument:equity:US:AAPL:common").unwrap(),
+            market_id: None,
             side: OrderSide::Buy,
             order_type: OrderType::Market,
             quantity: "1".parse().unwrap(),

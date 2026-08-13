@@ -301,13 +301,33 @@ impl ReferenceSqliteReader {
         query: &SqliteMarketDataAccessQuery,
     ) -> ContractResult<Vec<MarketDataAccess>> {
         let connection = self.connection()?;
-        let mut sql = String::from(
-            "SELECT payload FROM reference_market_data_accesses_current WHERE 1 = 1",
-        );
+        let mut sql =
+            String::from("SELECT payload FROM reference_market_data_accesses_current WHERE 1 = 1");
         let mut values = Vec::<Value>::new();
         push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
-        push_filter(&mut sql, &mut values, "provider_id", query.provider_id.as_ref());
-        push_filter(&mut sql, &mut values, "access_id >", query.after_access_id.as_ref());
+        push_filter(
+            &mut sql,
+            &mut values,
+            "provider_id",
+            query.provider_id.as_ref(),
+        );
+        if !query.statuses.is_empty() {
+            sql.push_str(" AND status IN (");
+            for (index, status) in query.statuses.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push('?');
+                values.push(Value::Text(status.clone()));
+            }
+            sql.push(')');
+        }
+        push_filter(
+            &mut sql,
+            &mut values,
+            "access_id >",
+            query.after_access_id.as_ref(),
+        );
         sql.push_str(" ORDER BY access_id LIMIT ?");
         values.push(Value::Integer(bounded_limit(query.limit) as i64));
         let mut statement = connection.prepare(&sql).map_err(transport)?;
@@ -530,7 +550,12 @@ fn read_markets(
         "instrument_id",
         query.instrument_id.as_ref(),
     );
-    push_filter(&mut sql, &mut values, "listing_id", query.listing_id.as_ref());
+    push_filter(
+        &mut sql,
+        &mut values,
+        "listing_id",
+        query.listing_id.as_ref(),
+    );
     push_filter(
         &mut sql,
         &mut values,

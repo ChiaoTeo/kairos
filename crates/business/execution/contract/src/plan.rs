@@ -77,6 +77,8 @@ pub struct ExecutionIntentLeg {
     pub segment_key: String,
     pub instrument_id: String,
     pub market_id: Option<String>,
+    #[serde(default)]
+    pub execution_access_id: Option<String>,
     pub side: OrderSide,
     pub quantity: Decimal,
     pub limit_price: Option<Decimal>,

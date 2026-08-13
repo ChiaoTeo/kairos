@@ -2477,7 +2477,7 @@ fn binance_equity_provider_catalog(
             routing_mode: "direct".into(),
             instrument_id: Some(instrument_id.clone()),
             listing_id: Some(listing_id.clone()),
-            market_id,
+            market_id: Some(market_id),
             destination_market_id: None,
             broker_id: None,
             provider_id: "binance".into(),

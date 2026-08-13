@@ -327,6 +327,7 @@ fn execution_contract_order(
         segment_key: value.segment_key.to_string(),
         instrument_id: value.instrument_id.to_string(),
         market_id: value.market_id.as_ref().map(ToString::to_string),
+        execution_access_id: value.execution_access_id.as_ref().map(ToString::to_string),
         side: execution_contract_side(value.side),
         order_type: execution_contract_order_type(value.order_type),
         quantity: execution_contract_decimal(value.quantity),
@@ -350,14 +351,12 @@ fn execution_contract_fill(
         leg_id: value.leg_id.as_ref().map(ToString::to_string),
         intent_id: value.intent_id.as_ref().map(ToString::to_string),
         instrument_id: value.instrument_id.to_string(),
-        execution_market_id: value
-            .execution_market_id
-            .as_ref()
-            .map(ToString::to_string),
+        execution_market_id: value.execution_market_id.as_ref().map(ToString::to_string),
         side: execution_contract_side(value.side),
         quantity: execution_contract_decimal(value.quantity),
         price: execution_contract_decimal(value.price),
         fee: execution_contract_decimal(value.fee),
+        fee_currency: value.fee_currency.as_ref().map(ToString::to_string),
         occurred_at_unix_nanos: value.occurred_at_unix_nanos.get(),
     }
 }
@@ -482,6 +481,7 @@ fn execution_contract_intent_state(
             instance_id: intent.instance_id.clone(),
             instrument_id: intent.instrument_id.to_string(),
             market_id: intent.market_id.as_ref().map(ToString::to_string),
+            execution_access_id: intent.execution_access_id.as_ref().map(ToString::to_string),
             account_ids: intent.account_ids.iter().map(ToString::to_string).collect(),
             segment_key: intent.segment_key.to_string(),
             target_quantity: execution_contract_decimal(intent.target_quantity),
@@ -501,6 +501,7 @@ fn execution_contract_intent_state(
                     segment_key: leg.segment_key.to_string(),
                     instrument_id: leg.instrument_id.to_string(),
                     market_id: leg.market_id.as_ref().map(ToString::to_string),
+                    execution_access_id: leg.execution_access_id.as_ref().map(ToString::to_string),
                     side: execution_contract_side(leg.side),
                     quantity: execution_contract_decimal(leg.quantity),
                     limit_price: leg.limit_price.map(execution_contract_decimal),

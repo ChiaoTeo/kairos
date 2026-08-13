@@ -357,6 +357,8 @@ struct FillArgs {
     #[arg(long, default_value = "0")]
     fee: String,
     #[arg(long)]
+    fee_currency: Option<String>,
+    #[arg(long)]
     occurred_at_unix_nanos: Option<u64>,
 }
 
@@ -483,16 +485,22 @@ fn run_direct_with_options(
         Command::Fills { order_id } => {
             serde_json::json!({"fills": application.fills(order_id.as_deref())})
         }
-        Command::Fill(args) => {
-            serde_json::to_value(application.record_fill(ExecutionFillReport {
+        Command::Fill(args) => serde_json::to_value(
+            application.record_fill(ExecutionFillReport {
                 fill_id: kairos_domain_types::FillId::new(args.fill_id)?,
                 order_id: kairos_domain_types::OrderId::new(args.order_id)?,
                 quantity: args.quantity.parse()?,
                 price: args.price.parse()?,
                 fee: args.fee.parse()?,
+                fee_currency: args
+                    .fee_currency
+                    .as_deref()
+                    .map(kairos_domain_types::Currency::new)
+                    .transpose()?,
                 occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
-            })?)?
-        }
+                execution_market_id: None,
+            })?,
+        )?,
         Command::Submit(args) => {
             let request = submit_request(args.clone())?;
             if args.dry_run {
@@ -528,6 +536,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
         segment_key: SegmentKey::new(args.segment_key)?,
         instrument_id: InstrumentId::new(args.instrument_id)?,
         market_id: args.market_id.map(MarketId::new).transpose()?,
+        execution_access_id: None,
         side: parse_side(&args.side)?,
         order_type: parse_order_type(&args.order_type)?,
         quantity: args.quantity.parse()?,

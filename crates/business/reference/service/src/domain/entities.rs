@@ -78,7 +78,8 @@ pub struct Listing {
 pub struct Market {
     #[serde(default)]
     pub source_id: Option<String>,
-    pub market_id: MarketId,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
     pub market_key: String,
     pub instrument_id: InstrumentId,
     pub listing_id: ListingId,
@@ -210,7 +211,7 @@ impl Default for MarketDataAccess {
         Self {
             source_id: None,
             access_id: "market-data-access:default".into(),
-            market_id: MarketId::new("market:default").expect("valid market ID"),
+            market_id: Some(MarketId::new("market:default").expect("valid market ID")),
             provider_id: String::new(),
             product_family: String::new(),
             provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
@@ -567,6 +568,12 @@ impl ProviderCatalog {
             }
         }
         for access in &self.execution_accesses {
+            if !matches!(access.routing_mode.as_str(), "direct" | "smart") {
+                return Err(ReferenceError::Invalid(format!(
+                    "execution access {} has unsupported routing mode {}",
+                    access.access_id, access.routing_mode
+                )));
+            }
             required(
                 &access.provider_id,
                 &format!("execution access {} provider", access.access_id),
@@ -583,11 +590,52 @@ impl ProviderCatalog {
                 access.status.as_str(),
                 &format!("execution access {} status", access.access_id),
             )?;
-            if !market_ids.contains(access.market_id.as_str()) {
+            if access.routing_mode == "direct" {
+                let destination = access
+                    .destination_market_id
+                    .as_ref()
+                    .or(access.market_id.as_ref())
+                    .ok_or_else(|| {
+                        ReferenceError::Invalid(format!(
+                            "direct execution access {} requires a destination market",
+                            access.access_id
+                        ))
+                    })?;
+                if !market_ids.contains(destination.as_str()) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "execution access {} references missing market {}",
+                        access.access_id, destination
+                    )));
+                }
+            } else if access.instrument_id.is_none() {
                 return Err(ReferenceError::Invalid(format!(
-                    "execution access {} references missing market {}",
-                    access.access_id, access.market_id
+                    "smart execution access {} requires an instrument",
+                    access.access_id
                 )));
+            }
+            if let Some(instrument_id) = access.instrument_id.as_ref() {
+                if !instrument_ids.contains(instrument_id.as_str()) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "execution access {} references missing instrument {}",
+                        access.access_id, instrument_id
+                    )));
+                }
+            }
+            if let Some(listing_id) = access.listing_id.as_ref() {
+                if !listing_ids.contains(listing_id.as_str()) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "execution access {} references missing listing {}",
+                        access.access_id, listing_id
+                    )));
+                }
+            }
+            if let Some(destination) = access.destination_market_id.as_ref() {
+                if !market_ids.contains(destination.as_str()) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "execution access {} references missing destination market {}",
+                        access.access_id, destination
+                    )));
+                }
             }
             if let Some(asset_id) = access.settlement_asset_id.as_deref() {
                 if !asset_ids.contains(asset_id) {

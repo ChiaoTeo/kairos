@@ -11,12 +11,18 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{OrderSide, OrderType};
-use kairos_domain_types::{FillId, InstrumentId, Money, OrderId, Price, Quantity, Rate, UnixNanos};
+use kairos_domain_types::{
+    Currency, FillId, InstrumentId, MarketId, Money, OrderId, Price, Quantity, Rate, UnixNanos,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SimulationConfig {
     #[serde(default)]
     pub fee_bps: Rate,
+    /// Currency used to pay simulated fees. It is intentionally explicit;
+    /// the simulator must not infer it from the settlement asset.
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
     #[serde(default)]
     pub slippage_bps: Rate,
     #[serde(default = "default_true")]
@@ -27,6 +33,7 @@ impl Default for SimulationConfig {
     fn default() -> Self {
         Self {
             fee_bps: Rate::ZERO,
+            fee_currency: None,
             slippage_bps: Rate::ZERO,
             enforce_quote_quantity: true,
         }
@@ -37,6 +44,9 @@ impl SimulationConfig {
     fn validate(&self) -> Result<(), String> {
         if self.fee_bps < Rate::ZERO {
             return Err("simulation fee_bps must be non-negative".into());
+        }
+        if self.fee_bps > Rate::ZERO && self.fee_currency.is_none() {
+            return Err("simulation fee_currency is required when fee_bps is non-zero".into());
         }
         if self.slippage_bps < Rate::ZERO {
             return Err("simulation slippage_bps must be non-negative".into());
@@ -49,6 +59,8 @@ impl SimulationConfig {
 pub struct SimulationOrderRequest {
     pub order_id: OrderId,
     pub instrument_id: InstrumentId,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Quantity,
@@ -81,10 +93,14 @@ pub struct SimulationFill {
     pub fill_id: FillId,
     pub order_id: OrderId,
     pub instrument_id: InstrumentId,
+    #[serde(default)]
+    pub execution_market_id: Option<MarketId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub price: Price,
     pub fee: Money,
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
     pub occurred_at_unix_nanos: UnixNanos,
 }
 
@@ -329,10 +345,12 @@ impl ExecutionSimulator {
                 .map_err(|error| error.to_string())?,
             order_id: OrderId::new(order_id.to_string()).map_err(|error| error.to_string())?,
             instrument_id: working.order.request.instrument_id.clone(),
+            execution_market_id: working.order.request.market_id.clone(),
             side: working.order.request.side,
             quantity: quantity_value,
             price: price_value,
             fee: fee_value,
+            fee_currency: self.config.fee_currency.clone(),
             occurred_at_unix_nanos: at.into(),
         });
         self.next_fill_id += 1;
@@ -433,6 +451,7 @@ mod tests {
         SimulationOrderRequest {
             order_id: OrderId::new(order_id).unwrap(),
             instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
+            market_id: None,
             side,
             order_type,
             quantity: quantity.parse().unwrap(),
@@ -445,6 +464,7 @@ mod tests {
     fn market_buy_fills_at_ask_with_fee_and_slippage() {
         let mut simulator = ExecutionSimulator::new(SimulationConfig {
             fee_bps: "10".parse().unwrap(),
+            fee_currency: Some("USDT".parse().unwrap()),
             slippage_bps: "20".parse().unwrap(),
             enforce_quote_quantity: true,
         })
@@ -465,6 +485,7 @@ mod tests {
 
         let fills = simulator.take_fills();
         assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].fee_currency.as_deref(), Some("USDT"));
         assert_eq!(fills[0].quantity.to_string(), "2");
         assert_eq!(fills[0].price.to_string(), "100.2");
         assert_eq!(fills[0].fee.to_string(), "0.2004");
@@ -472,6 +493,18 @@ mod tests {
             simulator.order("order-1").unwrap().status,
             SimulationOrderStatus::Filled
         );
+    }
+
+    #[test]
+    fn rejects_nonzero_fee_without_payment_currency() {
+        let error = ExecutionSimulator::new(SimulationConfig {
+            fee_bps: "1".parse().unwrap(),
+            fee_currency: None,
+            slippage_bps: Rate::ZERO,
+            enforce_quote_quantity: true,
+        })
+        .unwrap_err();
+        assert!(error.contains("fee_currency is required"));
     }
 
     #[test]

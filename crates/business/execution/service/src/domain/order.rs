@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub use kairos_domain_types::IntentId;
 pub use kairos_domain_types::{
-    AccountId, ExecutionAccessId, FillId, InstrumentId, LegId, MarketId, Money, OrderId, OrderSide, PlanId, Price,
-    Quantity, RemoteOrderId, SegmentKey, UnixNanos,
+    AccountId, Currency, ExecutionAccessId, FillId, InstrumentId, LegId, MarketId, Money, OrderId,
+    OrderSide, PlanId, Price, Quantity, RemoteOrderId, SegmentKey, UnixNanos,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -142,5 +142,8 @@ pub struct ExecutionFill {
     pub quantity: Quantity,
     pub price: Price,
     pub fee: Money,
+    /// Currency in which the provider charged the fee.
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
     pub occurred_at_unix_nanos: UnixNanos,
 }

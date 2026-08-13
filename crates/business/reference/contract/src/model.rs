@@ -103,7 +103,8 @@ pub struct ExecutionAccess {
     pub instrument_id: Option<String>,
     #[serde(default)]
     pub listing_id: Option<String>,
-    pub market_id: String,
+    #[serde(default)]
+    pub market_id: Option<String>,
     #[serde(default)]
     pub destination_market_id: Option<String>,
     #[serde(default)]

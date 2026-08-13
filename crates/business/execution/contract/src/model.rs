@@ -120,6 +120,8 @@ pub struct ExecutionOrder {
     pub segment_key: String,
     pub instrument_id: String,
     pub market_id: Option<String>,
+    #[serde(default)]
+    pub execution_access_id: Option<String>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Decimal,
@@ -148,6 +150,8 @@ pub struct ExecutionFill {
     pub quantity: Decimal,
     pub price: Decimal,
     pub fee: Decimal,
+    #[serde(default)]
+    pub fee_currency: Option<String>,
     pub occurred_at_unix_nanos: u64,
 }
 
@@ -176,6 +180,8 @@ pub struct ExecuteStrategyIntent {
     pub instance_id: String,
     pub instrument_id: String,
     pub market_id: Option<String>,
+    #[serde(default)]
+    pub execution_access_id: Option<String>,
     pub account_ids: Vec<String>,
     pub segment_key: String,
     pub target_quantity: Decimal,

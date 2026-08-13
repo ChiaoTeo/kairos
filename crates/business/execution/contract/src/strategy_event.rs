@@ -273,6 +273,10 @@ fn encode_fill<'a>(
     let quantity = decimal(&fill.quantity)?;
     let price = decimal(&fill.price)?;
     let fee = decimal(&fill.fee)?;
+    let fee_asset_id = fill
+        .fee_currency
+        .as_ref()
+        .map(|value| builder.create_string(value));
     Ok(execution_fb::Fill::create(
         builder,
         &execution_fb::FillArgs {
@@ -293,7 +297,7 @@ fn encode_fill<'a>(
             quantity: Some(&quantity),
             price: Some(&price),
             fee: Some(&fee),
-            fee_asset_id: None,
+            fee_asset_id,
             notional: None,
             occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
         },
