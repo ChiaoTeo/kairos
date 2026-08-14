@@ -5,7 +5,7 @@
 
 ## 2026-08-13 Reference SQLite read-model migration（主体完成，bounded promotion 待收口）
 
-- 新增 `reference-sqlite-read-model-design.md`，Reference 数据面改为单写者 SQLite
+- Reference 数据面改为单写者 SQLite
   current tables + lifecycle publication cursor + consumer-owned bounded projection；
 - 新增 schema metadata 和七类规范化 current tables，旧 whole-catalog JSON 在 migration
   中一次性导入后删除；Rust/Python contract 均以 read-only/query-only SQLite 连接读取；

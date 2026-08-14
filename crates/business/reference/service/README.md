@@ -138,7 +138,8 @@ lifecycle; it is not a second catalog state owner.
 - one-shot CLI and workspace-managed Unix-socket server.
 
 Provider-specific implementation details and current delivery status are
-tracked in [`docs/reference-capabilities.md`](../../../../docs/reference-capabilities.md).
+tracked in the Reference service code, tests, and migration notes under
+`docs/integration-migration-status.md`.
 
 ## Verification
 

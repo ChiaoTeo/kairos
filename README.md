@@ -8,11 +8,6 @@
 
 KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运行、回测、纸交易、账户/订单/行情投影、交易所集成和时间线数据能力。
 
-进一步说明：
-
-- [策略运行可观测性](docs/strategy-observability.md)
-- [Account 目标架构](docs/account-target-architecture.md)
-
 ## ✨ 功能亮点
 
 - 🚀 **策略运行时**：通过 `kairospy` / `kairos` CLI 启动、停止、查看和诊断 launch。
@@ -272,7 +267,6 @@ Strategy 的行情订阅返回 owner-scoped `SubscriptionLease`，实例停止�
 批量释放。需要独立于策略长期采集的行情，应在 Workspace manifest 中配置
 `[market.collections.<name>]`；它由 Workspace 而不是 Strategy 拥有，数据持续追加到
 `data/market/collections/<name>/events.jsonl`。完整的 Context 能力与配置示例见
-[Strategy Context 与 Market Collection 设计](docs/strategy-context-and-market-collection-design.md)。
 
 `launch status` 返回 launch 整体状态，同时包含策略状态、依赖组件状态以及异常组件；
 mode 由 launch 配置和 instance identity 决定，查询、日志和停止命令不需要重复传入
@@ -389,7 +383,6 @@ CLI 层级约定：
 
 ## 账户、Scope 与交易锁
 
-账户状态所有权、刷新与查询契约见 [`docs/account-target-architecture.md`](docs/account-target-architecture.md)。
 
 领域模型把交易所账户身份和账户内 segment 分开表达：
 
