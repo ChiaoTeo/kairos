@@ -1036,6 +1036,7 @@ async fn run_direct(
             segment_key: selected_segment_type.clone(),
             market_id: MarketId::new(market_id.clone())?,
             source_symbol: Symbol::new(source_symbol.clone())?,
+            market_data_access_id: None,
         };
         let profile = if native_binance_account || native_okx_account {
             composition

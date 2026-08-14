@@ -94,8 +94,16 @@ impl ReferenceProjection {
         let markets = markets
             .into_iter()
             .map(|market| {
+                let accesses = reader
+                    .market_data_accesses(&kairos_reference_contract::SqliteMarketDataAccessQuery {
+                        market_id: Some(market.market_id.clone()),
+                        statuses: vec!["active".into(), "trading".into()],
+                        limit: 100,
+                        ..Default::default()
+                    })
+                    .map_err(|error| error.to_string())?;
                 let mut descriptor = MarketDescriptor::new(
-                    market.market_id,
+                    market.market_id.clone(),
                     market.instrument_id,
                     market.exchange_id,
                     market.market_type,
@@ -103,6 +111,30 @@ impl ReferenceProjection {
                 )?;
                 descriptor.asset_type = market.asset_type;
                 descriptor.underlying_instrument_id = market.underlying_instrument_id;
+                descriptor.source_id = market.source_id;
+                descriptor.market_data_access_id = market.market_data_access_id;
+                descriptor.provider_symbol = market
+                    .provider_symbol
+                    .map(|value| kairos_domain_types::ProviderSymbol::new(value))
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                if descriptor.provider_symbol.is_none() {
+                    let selected = accesses.iter().find(|access| {
+                        descriptor.source_id.as_deref().is_some_and(|source| {
+                            source == access.access_id || source == access.provider_id
+                        })
+                    });
+                    let selected = selected.or_else(|| (accesses.len() == 1).then(|| &accesses[0]));
+                    if let Some(access) = selected {
+                        descriptor.market_data_access_id = Some(access.access_id.clone());
+                        descriptor.provider_symbol = Some(
+                            kairos_domain_types::ProviderSymbol::new(
+                                access.provider_symbol.clone(),
+                            )
+                            .map_err(|error| error.to_string())?,
+                        );
+                    }
+                }
                 Ok(descriptor)
             })
             .collect::<Result<Vec<_>, String>>()?;

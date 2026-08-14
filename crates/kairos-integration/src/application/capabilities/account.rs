@@ -109,6 +109,7 @@ mod state {
         pub segment_key: SegmentKey,
         pub market_id: MarketId,
         pub source_symbol: Symbol,
+        pub market_data_access_id: Option<String>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]

@@ -185,14 +185,19 @@ pub async fn build_market_process(
                     "Market collection {name} queue_capacity must be positive"
                 )));
             }
-            let exchange = collection.exchange.as_deref().unwrap_or("binance");
-            let market_type = collection.market_type.as_deref().unwrap_or("spot");
-            let source_symbol = collection
-                .subject
-                .strip_prefix("market.")
-                .unwrap_or(&collection.subject);
-            let market_id = format!("market:{exchange}:{market_type}:{source_symbol}");
-            let instrument_id = format!("instrument:{exchange}:{market_type}:{source_symbol}");
+            let market_id = collection.market_id.clone().ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} requires canonical market_id"
+                ))
+            })?;
+            let instrument_id = collection.instrument_id.clone().ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} requires canonical instrument_id"
+                ))
+            })?;
+            let exchange = collection.exchange.as_deref().unwrap_or("unknown");
+            let market_type = collection.market_type.as_deref().unwrap_or("unknown");
+            let source_symbol = collection.subject.as_str();
             let mut descriptor = MarketDescriptor::new(
                 market_id,
                 instrument_id,
@@ -202,6 +207,7 @@ pub async fn build_market_process(
             )
             .map_err(MarketStartupError::new)?;
             descriptor.asset_type = collection.asset_type.clone();
+            descriptor.market_data_access_id = collection.market_data_access_id.clone();
             if let Some(source_id) = &collection.source_id {
                 descriptor = descriptor
                     .with_source(source_id.clone())

@@ -2036,8 +2036,8 @@ fn hyperliquid_provider_catalog(
                 "market:hyperliquid:perpetual:{source_symbol}"
             ))?,
             market_key: format!("hyperliquid.perpetual.{source_symbol}"),
-            instrument_id,
-            listing_id,
+            instrument_id: instrument_id.clone(),
+            listing_id: listing_id.clone(),
             exchange_id,
             market_type: "perpetual".into(),
             asset_type: Some("crypto".into()),
@@ -2455,8 +2455,8 @@ fn binance_equity_provider_catalog(
         catalog.markets.push(Market {
             market_id: market_id.clone(),
             market_key: format!("binance.equity.{symbol}"),
-            instrument_id,
-            listing_id,
+            instrument_id: instrument_id.clone(),
+            listing_id: listing_id.clone(),
             exchange_id: exchange_id.clone(),
             market_type: "equity".into(),
             asset_type: Some("equity".into()),
@@ -2475,8 +2475,8 @@ fn binance_equity_provider_catalog(
                 "execution-access:binance:equity:{symbol}"
             ))?,
             routing_mode: "direct".into(),
-            instrument_id: Some(instrument_id.clone()),
-            listing_id: Some(listing_id.clone()),
+            instrument_id: Some(instrument_id),
+            listing_id: Some(listing_id),
             market_id: Some(market_id),
             destination_market_id: None,
             broker_id: None,

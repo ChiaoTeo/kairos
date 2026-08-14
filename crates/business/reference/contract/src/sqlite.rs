@@ -53,6 +53,7 @@ pub enum ReferenceCollection {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqliteMarketQuery {
+    pub market_id: Option<String>,
     pub source_id: Option<String>,
     pub source_symbol: Option<String>,
     pub instrument_id: Option<String>,
@@ -78,6 +79,7 @@ pub struct SqliteInstrumentQuery {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqliteExecutionAccessQuery {
+    pub access_id: Option<String>,
     pub market_id: Option<String>,
     pub provider_id: Option<String>,
     pub statuses: Vec<String>,
@@ -87,6 +89,7 @@ pub struct SqliteExecutionAccessQuery {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqliteMarketDataAccessQuery {
+    pub access_id: Option<String>,
     pub market_id: Option<String>,
     pub provider_id: Option<String>,
     pub statuses: Vec<String>,
@@ -262,6 +265,7 @@ impl ReferenceSqliteReader {
         let mut sql =
             String::from("SELECT payload FROM reference_execution_accesses_current WHERE 1 = 1");
         let mut values = Vec::<Value>::new();
+        push_filter(&mut sql, &mut values, "access_id", query.access_id.as_ref());
         push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
         push_filter(
             &mut sql,
@@ -304,6 +308,7 @@ impl ReferenceSqliteReader {
         let mut sql =
             String::from("SELECT payload FROM reference_market_data_accesses_current WHERE 1 = 1");
         let mut values = Vec::<Value>::new();
+        push_filter(&mut sql, &mut values, "access_id", query.access_id.as_ref());
         push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
         push_filter(
             &mut sql,
@@ -537,6 +542,7 @@ fn read_markets(
 ) -> ContractResult<Vec<ReferenceMarket>> {
     let mut sql = String::from("SELECT payload FROM reference_markets_current WHERE 1 = 1");
     let mut values = Vec::<Value>::new();
+    push_filter(&mut sql, &mut values, "market_id", query.market_id.as_ref());
     push_filter(&mut sql, &mut values, "source_id", query.source_id.as_ref());
     push_filter(
         &mut sql,
@@ -673,6 +679,8 @@ mod tests {
                     status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);\
                  CREATE TABLE reference_instruments_current(\
                     instrument_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);\
+                 CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);\
                  CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);",
             )
             .unwrap();
@@ -756,6 +764,7 @@ mod tests {
                  CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_financial_products_current(product_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
+                 CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);
                  WITH RECURSIVE rows(value) AS (
                    SELECT 1 UNION ALL SELECT value + 1 FROM rows WHERE value < 1000000

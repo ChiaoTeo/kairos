@@ -107,54 +107,102 @@ impl AccountInstrumentResolver {
         &self,
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
-        let symbol = provider.source_symbol.as_str();
-        if provider.participant.id.eq_ignore_ascii_case("ibkr") {
-            let instruments = self.instruments(symbol, "equity")?;
-            let matches = instruments
-                .iter()
-                .filter(|value| {
-                    value.symbol.eq_ignore_ascii_case(symbol)
-                        && value.instrument_type.eq_ignore_ascii_case("equity")
-                        && matches!(value.status.as_str(), "active" | "trading")
+        if let Some(access_id) = provider.market_data_access_id.as_deref() {
+            let reader = self
+                .reader
+                .as_ref()
+                .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
+            let accesses = reader
+                .market_data_accesses(&kairos_reference_contract::SqliteMarketDataAccessQuery {
+                    access_id: Some(access_id.to_owned()),
+                    statuses: vec!["active".into(), "trading".into()],
+                    limit: 2,
+                    ..Default::default()
                 })
-                .collect::<Vec<_>>();
-            let [instrument] = matches.as_slice() else {
-                return Err(identity_resolution_error(provider, matches.len()));
+                .map_err(|error| error.to_string())?;
+            let [access] = accesses.as_slice() else {
+                return Err(format!(
+                    "Reference has no unique MarketDataAccess {access_id}"
+                ));
+            };
+            let markets = reader
+                .markets(&kairos_reference_contract::SqliteMarketQuery {
+                    market_id: access.market_id.clone().into(),
+                    statuses: vec!["active".into(), "trading".into()],
+                    limit: 2,
+                    ..Default::default()
+                })
+                .map_err(|error| error.to_string())?;
+            let [market] = markets.as_slice() else {
+                return Err(format!("MarketDataAccess {access_id} has no unique Market"));
             };
             return Ok((
-                InstrumentId::new(instrument.instrument_id.clone())
+                InstrumentId::new(market.instrument_id.clone())
                     .map_err(|error| error.to_string())?,
-                None,
+                Some(kairos_domain_types::MarketId::new(
+                    market.market_id.clone(),
+                )?),
             ));
         }
+        #[cfg(not(test))]
+        return Err(
+            "provider instrument must carry market_data_access_id; symbol-based identity resolution is disabled"
+                .into(),
+        );
 
-        let domain = provider
-            .instrument_type
-            .as_ref()
-            .map(|value| value.as_str())
-            .unwrap_or_default();
-        let exchange = format!("exchange:{}", provider.participant.id.to_ascii_lowercase());
-        let markets = self.markets(symbol, &exchange)?;
-        let matches = markets
-            .iter()
-            .filter(|value| {
-                value.exchange_id.eq_ignore_ascii_case(&exchange)
-                    && value.source_symbol.eq_ignore_ascii_case(symbol)
-                    && matches!(value.status.as_str(), "active" | "trading")
-                    && provider_domain_matches_market(domain, &value.market_type)
-            })
-            .collect::<Vec<_>>();
-        let [market] = matches.as_slice() else {
-            return Err(identity_resolution_error(provider, matches.len()));
-        };
-        Ok((
-            InstrumentId::new(market.instrument_id.clone()).map_err(|error| error.to_string())?,
-            Some(kairos_domain_types::MarketId::new(
-                market.market_id.clone(),
-            )?),
-        ))
+        #[cfg(test)]
+        {
+            let symbol = provider.source_symbol.as_str();
+            if provider.participant.id.eq_ignore_ascii_case("ibkr") {
+                let instruments = self.instruments(symbol, "equity")?;
+                let matches = instruments
+                    .iter()
+                    .filter(|value| {
+                        value.symbol.eq_ignore_ascii_case(symbol)
+                            && value.instrument_type.eq_ignore_ascii_case("equity")
+                            && matches!(value.status.as_str(), "active" | "trading")
+                    })
+                    .collect::<Vec<_>>();
+                let [instrument] = matches.as_slice() else {
+                    return Err(identity_resolution_error(provider, matches.len()));
+                };
+                return Ok((
+                    InstrumentId::new(instrument.instrument_id.clone())
+                        .map_err(|error| error.to_string())?,
+                    None,
+                ));
+            }
+
+            let domain = provider
+                .instrument_type
+                .as_ref()
+                .map(|value| value.as_str())
+                .unwrap_or_default();
+            let exchange = format!("exchange:{}", provider.participant.id.to_ascii_lowercase());
+            let markets = self.markets(symbol, &exchange)?;
+            let matches = markets
+                .iter()
+                .filter(|value| {
+                    value.exchange_id.eq_ignore_ascii_case(&exchange)
+                        && value.source_symbol.eq_ignore_ascii_case(symbol)
+                        && matches!(value.status.as_str(), "active" | "trading")
+                        && provider_domain_matches_market(domain, &value.market_type)
+                })
+                .collect::<Vec<_>>();
+            let [market] = matches.as_slice() else {
+                return Err(identity_resolution_error(provider, matches.len()));
+            };
+            Ok((
+                InstrumentId::new(market.instrument_id.clone())
+                    .map_err(|error| error.to_string())?,
+                Some(kairos_domain_types::MarketId::new(
+                    market.market_id.clone(),
+                )?),
+            ))
+        }
     }
 
+    #[cfg(test)]
     fn markets(
         &self,
         source_symbol: &str,
@@ -179,6 +227,7 @@ impl AccountInstrumentResolver {
             .map_err(|error| error.to_string())
     }
 
+    #[cfg(test)]
     fn instruments(
         &self,
         symbol: &str,
@@ -216,6 +265,7 @@ impl AccountInstrumentResolver {
     }
 }
 
+#[cfg(test)]
 fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
     let domain = domain.to_ascii_lowercase();
     let market_type = market_type.to_ascii_lowercase();
@@ -234,6 +284,7 @@ fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
     true
 }
 
+#[cfg(test)]
 fn identity_resolution_error(
     provider: &kairos_integration::application::ProviderInstrumentRef,
     matches: usize,
@@ -473,6 +524,7 @@ impl AccountAsyncMarketProfileGateway {
                 .map_err(|error| error.to_string())?,
             market_id: request.market_id.clone(),
             source_symbol: request.source_symbol.clone(),
+            market_data_access_id: request.market_data_access_id.clone(),
         };
         tokio::time::timeout(
             ASYNC_ACCOUNT_QUERY_TIMEOUT,
@@ -665,6 +717,7 @@ impl AccountMarketProfileGateway {
                     .map_err(|error| error.to_string())?,
                 market_id: request.market_id.clone(),
                 source_symbol: request.source_symbol.clone(),
+                market_data_access_id: request.market_data_access_id.clone(),
             })
             .map_err(|error| error.to_string())
             .and_then(map_profile)
@@ -945,6 +998,8 @@ mod identity_tests {
                 exchange_id: "exchange:binance".into(),
                 market_type: "spot".into(),
                 source_symbol: "BTCUSDT".into(),
+                market_data_access_id: None,
+                provider_symbol: None,
                 status: "active".into(),
                 asset_type: None,
                 base_asset_id: None,

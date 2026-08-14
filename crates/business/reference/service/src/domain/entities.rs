@@ -78,8 +78,7 @@ pub struct Listing {
 pub struct Market {
     #[serde(default)]
     pub source_id: Option<String>,
-    #[serde(default)]
-    pub market_id: Option<MarketId>,
+    pub market_id: MarketId,
     pub market_key: String,
     pub instrument_id: InstrumentId,
     pub listing_id: ListingId,
@@ -169,7 +168,8 @@ pub struct ExecutionAccess {
     pub instrument_id: Option<InstrumentId>,
     #[serde(default)]
     pub listing_id: Option<ListingId>,
-    pub market_id: MarketId,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
     #[serde(default)]
     pub destination_market_id: Option<MarketId>,
     #[serde(default)]
@@ -211,7 +211,7 @@ impl Default for MarketDataAccess {
         Self {
             source_id: None,
             access_id: "market-data-access:default".into(),
-            market_id: Some(MarketId::new("market:default").expect("valid market ID")),
+            market_id: MarketId::new("market:default").expect("valid market ID"),
             provider_id: String::new(),
             product_family: String::new(),
             provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
@@ -230,7 +230,7 @@ impl Default for ExecutionAccess {
             routing_mode: default_execution_routing_mode(),
             instrument_id: None,
             listing_id: None,
-            market_id: MarketId::new("market:default").expect("valid market ID"),
+            market_id: Some(MarketId::new("market:default").expect("valid market ID")),
             destination_market_id: None,
             broker_id: None,
             provider_id: String::new(),

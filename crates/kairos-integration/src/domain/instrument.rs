@@ -30,6 +30,10 @@ pub struct ProviderInstrumentRef {
     pub participant: ParticipantRef,
     pub instrument_type: Option<ParticipantInstrumentTypeRef>,
     pub source_symbol: ProviderSymbol,
+    /// Reference-owned access identity when the caller already resolved the
+    /// provider route. Consumers must not infer it from `source_symbol`.
+    #[serde(default)]
+    pub market_data_access_id: Option<String>,
 }
 
 impl ProviderInstrumentRef {
@@ -44,6 +48,16 @@ impl ProviderInstrumentRef {
             participant,
             instrument_type,
             source_symbol,
+            market_data_access_id: None,
         })
+    }
+
+    pub fn with_market_data_access(mut self, access_id: impl Into<String>) -> Result<Self, String> {
+        let access_id = access_id.into();
+        if access_id.trim().is_empty() {
+            return Err("market data access id is required".into());
+        }
+        self.market_data_access_id = Some(access_id);
+        Ok(self)
     }
 }

@@ -283,6 +283,10 @@ pub struct MarketDescriptor {
     pub asset_type: Option<String>,
     pub underlying_instrument_id: Option<String>,
     pub source_symbol: String,
+    #[serde(default)]
+    pub market_data_access_id: Option<String>,
+    #[serde(default)]
+    pub provider_symbol: Option<String>,
     pub status: String,
 }
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

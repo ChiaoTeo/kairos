@@ -1633,7 +1633,7 @@ async fn replace_current_state(
         track!("market_data_access", access.access_id.as_str());
         sqlx::query("INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_market_data_accesses_current.payload<>excluded.payload")
             .bind(access.access_id.as_str())
-            .bind(access.market_id.as_ref().map(|value| value.as_str()))
+            .bind(access.market_id.as_str())
             .bind(&access.provider_id)
             .bind(&access.product_family)
             .bind(access.provider_symbol.as_str())

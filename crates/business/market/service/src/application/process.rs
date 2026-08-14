@@ -957,13 +957,22 @@ impl MarketActorTask {
                 request.asset_type.as_deref(),
                 &source_symbol,
             ),
-            // Explicit static subscriptions are valid for public feeds even
-            // when the optional Reference projection is not running. Keep
-            // Reference validation when a catalog is available; this
-            // fallback is intentionally not used for dynamic subscriptions.
             _ => {
-                let market_id = format!("market:{exchange}:{market_type}:{source_symbol}");
-                let instrument_id = format!("instrument:{exchange}:{market_type}:{source_symbol}");
+                let Some(market_id) = request.params.get("market_id").and_then(Value::as_str)
+                else {
+                    return (
+                        422,
+                        json!({"error":"market_id is required when Reference is unavailable"}),
+                    );
+                };
+                let Some(instrument_id) =
+                    request.params.get("instrument_id").and_then(Value::as_str)
+                else {
+                    return (
+                        422,
+                        json!({"error":"instrument_id is required when Reference is unavailable"}),
+                    );
+                };
                 MarketDescriptor::new(
                     market_id,
                     instrument_id,
@@ -1345,7 +1354,7 @@ mod tests {
                 "exchange": "binance",
                 "market_type": "spot",
                 "asset_type": "crypto",
-                "params": {},
+                "params": {"market_id":"market:binance:spot:BTCUSDT","instrument_id":"instrument:binance:spot:BTCUSDT"},
                 "dynamic": false
             }
         }))
@@ -1394,7 +1403,7 @@ mod tests {
                     "exchange": "binance",
                     "market_type": "spot",
                     "asset_type": "crypto",
-                    "params": {},
+                    "params": {"market_id":"market:binance:spot:BTCUSDT","instrument_id":"instrument:binance:spot:BTCUSDT"},
                     "dynamic": false
                 }
             }))
@@ -1522,7 +1531,7 @@ mod tests {
             "schema_version":1,"command_id":"replay-sub","idempotency_key":"replay-sub",
             "operation":"market.subscribe","strategy_id":"acceptance","instance_id":"instance",
             "payload":{"subject":"market.TEST","selectors":["bar"],"exchange":"test",
-            "market_type":"spot","asset_type":"crypto","params":{},"dynamic":false}
+            "market_type":"spot","asset_type":"crypto","params":{"market_id":"market:test:spot:TEST","instrument_id":"instrument:test:spot:TEST"},"dynamic":false}
         })
         .to_string();
         assert_eq!(
@@ -1644,7 +1653,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let database = root.path().join("reference.sqlite");
         let connection = rusqlite::Connection::open(&database).unwrap();
-        connection.execute_batch("CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL); INSERT INTO reference_meta VALUES(1,1,1,1,0); CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, source_id TEXT, market_key TEXT, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, market_type TEXT, asset_type TEXT, underlying_instrument_id TEXT, source_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT); CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);").unwrap();
+        connection.execute_batch("CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL); INSERT INTO reference_meta VALUES(1,1,1,1,0); CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, source_id TEXT, market_key TEXT, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, market_type TEXT, asset_type TEXT, underlying_instrument_id TEXT, source_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT); CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, market_id TEXT, provider_id TEXT, product_family TEXT, provider_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT); CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);").unwrap();
         let market = ReferenceMarket {
             source_id: Some("binance-spot".into()),
             market_id: "market:binance:spot:BTCUSDT".into(),
@@ -1655,6 +1664,8 @@ mod tests {
             market_type: "spot".into(),
             asset_type: Some("crypto".into()),
             source_symbol: "BTCUSDT".into(),
+            market_data_access_id: None,
+            provider_symbol: None,
             status: "active".into(),
             base_asset_id: None,
             quote_asset_id: None,

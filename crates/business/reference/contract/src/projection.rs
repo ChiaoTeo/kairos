@@ -18,6 +18,10 @@ pub struct ReferenceMarket {
     pub asset_type: Option<String>,
     pub source_symbol: String,
     #[serde(default)]
+    pub market_data_access_id: Option<String>,
+    #[serde(default)]
+    pub provider_symbol: Option<String>,
+    #[serde(default)]
     pub base_asset_id: Option<String>,
     #[serde(default)]
     pub quote_asset_id: Option<String>,

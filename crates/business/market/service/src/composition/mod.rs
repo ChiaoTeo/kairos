@@ -349,6 +349,11 @@ fn market_contract_snapshot(
                                 asset_type: member.asset_type.clone(),
                                 underlying_instrument_id: member.underlying_instrument_id.clone(),
                                 source_symbol: member.source_symbol.to_string(),
+                                market_data_access_id: member.market_data_access_id.clone(),
+                                provider_symbol: member
+                                    .provider_symbol
+                                    .as_ref()
+                                    .map(ToString::to_string),
                                 status: member.status.as_str().into(),
                             },
                         )

@@ -52,6 +52,14 @@ pub struct WorkspaceMarketCollection {
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
     pub subject: String,
+    /// Canonical Reference identities. A collection must not derive these
+    /// from exchange/type/symbol text.
+    #[serde(default)]
+    pub market_id: Option<String>,
+    #[serde(default)]
+    pub instrument_id: Option<String>,
+    #[serde(default)]
+    pub market_data_access_id: Option<String>,
     #[serde(default)]
     pub selectors: Vec<String>,
     #[serde(default)]

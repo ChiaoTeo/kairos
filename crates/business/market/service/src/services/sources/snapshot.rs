@@ -3,7 +3,6 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use kairos_domain_types::ProviderSymbol;
 use kairos_integration::application::{AsyncMarketSnapshotConnection, IntegrationError};
 use tokio::sync::mpsc;
 
@@ -104,7 +103,9 @@ async fn run<C>(
             }
             _ = ticks.tick(), if !markets.is_empty() => {
                 let symbols = markets.values().map(|market| {
-                    ProviderSymbol::new(market.source_symbol.to_string())
+                    market.provider_symbol.clone().ok_or_else(|| {
+                        format!("MarketDataAccess provider_symbol missing for {}", market.market_id)
+                    })
                 }).collect::<Result<Vec<_>, _>>();
                 let symbols = match symbols {
                     Ok(symbols) => symbols,
@@ -117,7 +118,9 @@ async fn run<C>(
                     Ok(events) => {
                         for event in events {
                             let Some(market) = markets.values().find(|market| {
-                                market.source_symbol.eq_ignore_ascii_case(event.symbol.as_str())
+                                market.provider_symbol.as_ref().is_some_and(|symbol| {
+                                    symbol.eq_ignore_ascii_case(event.symbol.as_str())
+                                })
                             }) else { continue };
                             match super::stream::normalize(&source_id, market, event) {
                                 Ok(Some(super::stream::Normalized::Observation(observation))) => {

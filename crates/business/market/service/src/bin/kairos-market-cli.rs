@@ -128,27 +128,12 @@ async fn download(
                 .await?
         }
     };
-    let symbol = command.symbol.to_ascii_uppercase();
-    let market_id = command.market_id.unwrap_or_else(|| match provider {
-        HistoricalProvider::Massive => match command.market_type {
-            HistoricalMarketType::Equity => format!("market:massive:equity:{symbol}"),
-            HistoricalMarketType::Option => format!("market:massive:options:{symbol}"),
-        },
-        HistoricalProvider::Binance => format!("market:binance:spot:{symbol}"),
-    });
-    if matches!(provider, HistoricalProvider::Massive)
-        && matches!(command.market_type, HistoricalMarketType::Option)
-        && command.instrument_id.is_none()
-    {
-        return Err("Massive option download requires Reference-owned --instrument-id".into());
-    }
-    let instrument_id = command.instrument_id.unwrap_or_else(|| match provider {
-        HistoricalProvider::Massive => match command.market_type {
-            HistoricalMarketType::Equity => format!("instrument:equity:US:{symbol}:common"),
-            HistoricalMarketType::Option => unreachable!("validated above"),
-        },
-        HistoricalProvider::Binance => format!("instrument:spot:{symbol}"),
-    });
+    let market_id = command
+        .market_id
+        .ok_or("historical download requires Reference-owned --market-id")?;
+    let instrument_id = command
+        .instrument_id
+        .ok_or("historical download requires Reference-owned --instrument-id")?;
     let output = command.file;
     if let Some(parent) = output
         .parent()

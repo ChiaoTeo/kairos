@@ -134,6 +134,7 @@ fn intent_leg(
         segment_key: SegmentKey::new(segment_key).unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: market_id.map(|value| MarketId::new(value).unwrap()),
+        execution_access_id: None,
         side,
         quantity: Quantity::new(quantity, 0).unwrap(),
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
@@ -1889,7 +1890,7 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
         })],
         simulation: SimulationConfig {
             fee_bps: "10".parse().unwrap(),
-            fee_currency: Some("USDT".parse().unwrap()),
+            fee_currency: Some(Currency::new("USDT").unwrap()),
             slippage_bps: "0".parse().unwrap(),
             enforce_quote_quantity: true,
         },

@@ -12,6 +12,12 @@ pub struct MarketDescriptor {
     #[serde(default)]
     pub underlying_instrument_id: Option<String>,
     pub source_symbol: Symbol,
+    /// Explicit Reference-owned market-data route. Never infer this from the
+    /// listing symbol when a provider access is unavailable.
+    #[serde(default)]
+    pub market_data_access_id: Option<String>,
+    #[serde(default)]
+    pub provider_symbol: Option<kairos_domain_types::ProviderSymbol>,
     /// Optional market-data source requested by the caller. Reference owns
     /// the canonical market; this field is a route constraint, not provider
     /// payload or exchange identity.
@@ -37,6 +43,8 @@ impl MarketDescriptor {
             asset_type: None,
             underlying_instrument_id: None,
             source_symbol: Symbol::new(source_symbol).map_err(|error| error.to_string())?,
+            market_data_access_id: None,
+            provider_symbol: None,
             source_id: None,
             status: ReferenceStatus::Active,
         };

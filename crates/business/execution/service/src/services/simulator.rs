@@ -464,7 +464,7 @@ mod tests {
     fn market_buy_fills_at_ask_with_fee_and_slippage() {
         let mut simulator = ExecutionSimulator::new(SimulationConfig {
             fee_bps: "10".parse().unwrap(),
-            fee_currency: Some("USDT".parse().unwrap()),
+            fee_currency: Some(Currency::new("USDT").unwrap()),
             slippage_bps: "20".parse().unwrap(),
             enforce_quote_quantity: true,
         })
@@ -497,13 +497,16 @@ mod tests {
 
     #[test]
     fn rejects_nonzero_fee_without_payment_currency() {
-        let error = ExecutionSimulator::new(SimulationConfig {
+        let result = ExecutionSimulator::new(SimulationConfig {
             fee_bps: "1".parse().unwrap(),
             fee_currency: None,
             slippage_bps: Rate::ZERO,
             enforce_quote_quantity: true,
-        })
-        .unwrap_err();
+        });
+        let error = match result {
+            Ok(_) => panic!("non-zero simulation fee without currency must fail"),
+            Err(error) => error,
+        };
         assert!(error.contains("fee_currency is required"));
     }
 

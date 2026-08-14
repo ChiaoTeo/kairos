@@ -180,7 +180,11 @@ async fn run<C>(
                         if matches!(failure_policy, StreamFailurePolicy::MarketScopedResync) => {
                         let affected = markets
                             .values()
-                            .filter(|market| reason.contains(market.source_symbol.as_str()))
+                            .filter(|market| {
+                                market.provider_symbol.as_ref().is_some_and(|symbol| {
+                                    reason.contains(symbol.as_str())
+                                })
+                            })
                             .cloned()
                             .collect::<Vec<_>>();
                         if affected.is_empty() {
@@ -217,7 +221,9 @@ async fn run<C>(
                     }
                 };
                 let Some(market) = markets.values().find(|market| {
-                    market.source_symbol.eq_ignore_ascii_case(event.symbol.as_str())
+                    market.provider_symbol.as_ref().is_some_and(|symbol| {
+                        symbol.eq_ignore_ascii_case(event.symbol.as_str())
+                    })
                 }) else { continue };
                 if blocked_markets.contains(&market.market_id)
                     && event.kind != MarketEventKind::BookSnapshot
@@ -578,7 +584,15 @@ async fn resync<C: AsyncMarketEventSource>(
             markets.remove(&previous);
         }
         let handle = connection
-            .subscribe(MarketSubscription::new([market.source_symbol.to_string()])?)
+            .subscribe(MarketSubscription::new([market
+                .provider_symbol
+                .clone()
+                .ok_or_else(|| {
+                    kairos_integration::application::IntegrationError::InvalidRequest(
+                        "MarketDataAccess provider_symbol missing".into(),
+                    )
+                })?
+                .to_string()])?)
             .await?;
         markets.insert(handle, market.clone());
         Ok::<_, kairos_integration::application::IntegrationError>(())
@@ -611,9 +625,20 @@ async fn subscribe<C: AsyncMarketEventSource>(
     request_id: SourceRequestId,
     market: MarketDescriptor,
 ) {
+    let Some(provider_symbol) = market.provider_symbol.clone() else {
+        let _ = inputs
+            .send(SourceInput::SubscriptionRejected {
+                source_id: source_id.clone(),
+                epoch,
+                request_id,
+                error: "MarketDataAccess provider_symbol missing".into(),
+            })
+            .await;
+        return;
+    };
     let result = connection
         .subscribe(
-            MarketSubscription::new([market.source_symbol.to_string()])
+            MarketSubscription::new([provider_symbol.to_string()])
                 .expect("validated market symbol"),
         )
         .await;
