@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/order.fbs";
+
+namespace kairos.execution.v2;
+table OrderCanceled { metadata:kairos.common.v2.EventMetadata (required); order:OrderState (required); reason:string; }
+root_type OrderCanceled;
+file_identifier "EOC2";

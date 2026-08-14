@@ -50,9 +50,6 @@ class SystemRestClient:
     def status(self) -> dict[str, Any]:
         return self.request("GET", "/v1/health")
 
-    def snapshot(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/snapshot")
-
     def refresh(self) -> dict[str, Any]:
         return self.request("POST", "/v1/refresh")
 
@@ -78,9 +75,6 @@ def _query(path: str, values: Mapping[str, Any]) -> str:
 
 
 class AccountSystemClient(SystemRestClient):
-    def snapshot(self, symbol: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/snapshot", {"symbol": symbol}))
-
     def balances(
         self,
         *,
@@ -146,7 +140,7 @@ class ExecutionSystemClient(SystemRestClient):
         )
 
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/intents/submit", intent)
+        return self.request("POST", "/v1/intents", intent)
 
     def cancel_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
         return self.request(
@@ -192,18 +186,14 @@ class ExecutionSystemClient(SystemRestClient):
         self, request: Mapping[str, Any], *, dry_run: bool = False
     ) -> dict[str, Any]:
         return self.request(
-            "POST", "/v1/preview-submit" if dry_run else "/v1/submit", request
+            "POST", "/v1/preview-submit" if dry_run else "/v1/intents", request
         )
 
     def cancel(self, order_id: str, reason: str = "system cancel") -> dict[str, Any]:
-        return self.request(
-            "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
-        )
+        return self.request("DELETE", f"/v1/orders/{order_id}", {"reason": reason})
 
     def replace(self, order_id: str, replacement: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request(
-            "POST", "/v1/replace", {"order_id": order_id, "replacement": replacement}
-        )
+        return self.request("PATCH", f"/v1/orders/{order_id}", replacement)
 
 
 class MarketSystemClient(SystemRestClient):

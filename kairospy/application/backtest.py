@@ -96,7 +96,7 @@ def run_backtest(
             # mark after a fill is authoritative and will be applied.
             continue
         try:
-            snapshot = account.snapshot()
+            snapshot = account.account_state()
         except (AttributeError, RuntimeError):
             snapshot = None
         equity_curve.append(
@@ -111,7 +111,7 @@ def run_backtest(
         fill_index += 1
 
     try:
-        final_snapshot = account.snapshot()
+        final_snapshot = account.account_state()
     except (AttributeError, RuntimeError):
         final_snapshot = None
 

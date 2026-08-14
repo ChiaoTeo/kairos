@@ -16,7 +16,7 @@ class FakeAccount:
         self.calls.append(("mark", update["observed_at_unix_nanos"]))
         return {"status": "applied"}
 
-    def snapshot(self):
+    def account_state(self):
         return self._snapshot
 
 

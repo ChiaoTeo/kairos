@@ -1,0 +1,37 @@
+namespace kairos.common.v2;
+
+enum ViewCompleteness:ubyte {
+  UNSPECIFIED = 0,
+  COMPLETE = 1,
+  PARTIAL = 2
+}
+
+table EventMetadata {
+  event_id:string (required);
+  stream_id:string (required);
+  sequence:ulong;
+  producer_id:string (required);
+  workspace_id:string (required);
+  launch_id:string;
+  instance_id:string;
+  correlation_id:string;
+  causation_id:string;
+  occurred_at_unix_nanos:ulong;
+  published_at_unix_nanos:ulong;
+}
+
+table ViewMetadata {
+  snapshot_id:string (required);
+  resource_id:string (required);
+  resource_epoch:ulong;
+  view_key:string (required);
+  owner_id:string (required);
+  workspace_id:string (required);
+  launch_id:string;
+  instance_id:string;
+  generation:ulong;
+  as_of_unix_nanos:ulong;
+  published_at_unix_nanos:ulong;
+  completeness:ViewCompleteness = UNSPECIFIED;
+  applied_revision:ulong = null;
+}

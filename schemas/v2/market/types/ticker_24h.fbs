@@ -1,0 +1,25 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table Ticker24h {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  last_price:kairos.common.v2.Decimal64;
+  bid_price:kairos.common.v2.Decimal64;
+  bid_quantity:kairos.common.v2.Decimal64;
+  ask_price:kairos.common.v2.Decimal64;
+  ask_quantity:kairos.common.v2.Decimal64;
+  open_price:kairos.common.v2.Decimal64;
+  high_price:kairos.common.v2.Decimal64;
+  low_price:kairos.common.v2.Decimal64;
+  volume_base:kairos.common.v2.Decimal64;
+  volume_quote:kairos.common.v2.Decimal64;
+  price_change_abs:kairos.common.v2.Decimal64;
+  price_change_pct:kairos.common.v2.Decimal64;
+  vwap:kairos.common.v2.Decimal64;
+  mark_price:kairos.common.v2.Decimal64;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

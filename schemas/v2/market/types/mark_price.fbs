@@ -1,0 +1,16 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table MarkPrice {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  mark_price:kairos.common.v2.Decimal64 (required);
+  index_price:kairos.common.v2.Decimal64;
+  estimated_settlement_price:kairos.common.v2.Decimal64;
+  funding_rate:kairos.common.v2.Decimal64;
+  next_funding_time_unix_nanos:ulong;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

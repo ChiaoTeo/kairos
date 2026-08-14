@@ -1,0 +1,19 @@
+include "../../common/decimal.fbs";
+include "../../common/types.fbs";
+namespace kairos.account.v2;
+
+enum ObservedOrderStatus:ubyte { UNSPECIFIED = 0, OPEN = 1, PARTIALLY_FILLED = 2, PENDING_CANCEL = 3, CLOSED = 4, UNKNOWN = 5 }
+
+table ObservedOrder {
+  observation_id:string (required);
+  source_id:string (required);
+  execution_order_id:string;
+  remote_order_id:string;
+  instrument_id:string (required);
+  market_id:string (required);
+  side:kairos.common.v2.Side = UNSPECIFIED;
+  quantity:kairos.common.v2.Decimal64 (required);
+  filled_quantity:kairos.common.v2.Decimal64 (required);
+  status:ObservedOrderStatus = UNSPECIFIED;
+  observed_at_unix_nanos:ulong;
+}

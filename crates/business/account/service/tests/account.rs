@@ -42,7 +42,7 @@ fn symbol(value: &str) -> kairos_domain_types::Symbol {
 use kairos_account::{
     AccountDataQuery, AccountQuery, MarkToMarket, ReconcileAccount, RefreshAccount,
 };
-use kairos_protocol::generated::kairos::account::v_1::root_as_accounts_snapshot;
+use kairos_protocol::generated::kairos::account::v_2::root_as_account_current_view;
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::account::{AccountRegistry, CredentialRecord, CredentialStore};
 
@@ -468,15 +468,12 @@ fn publisher_emits_current_account_snapshot() {
     );
     publisher.publish(&app.snapshot()).unwrap();
     let payload = publisher.last_payload.as_ref().unwrap();
-    let decoded = root_as_accounts_snapshot(payload).unwrap();
-    assert_eq!(decoded.header().workspace_id(), Some("demo"));
-    assert_eq!(decoded.header().launch_id(), Some("btc-sma"));
-    assert_eq!(decoded.header().instance_id(), Some("run-001"));
-    assert_eq!(decoded.payload().account_count(), 1);
-    assert_eq!(
-        decoded.payload().accounts().unwrap().get(0).segment_key(),
-        "spot"
-    );
+    let decoded = root_as_account_current_view(payload).unwrap();
+    assert_eq!(decoded.metadata().workspace_id(), "demo");
+    assert_eq!(decoded.metadata().launch_id(), Some("btc-sma"));
+    assert_eq!(decoded.metadata().instance_id(), Some("run-001"));
+    assert_eq!(decoded.account_id(), "main");
+    assert_eq!(decoded.segments().get(0).segment_key(), "spot");
 }
 
 #[test]

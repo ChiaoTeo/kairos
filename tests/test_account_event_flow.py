@@ -16,44 +16,47 @@ from kairospy.application.account.events import (
 )
 from kairospy.domain_types import AccountId
 from kairospy.infrastructure.transport.account import decode_account_event
-from kairospy.infrastructure.transport.generated.kairos.account.v1 import (
-    AccountChange,
-    AccountEvent,
+from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
+    AccountFactProvenance,
+    AccountStatus,
+    AccountStatusChanged,
+    FreshnessState,
 )
-from kairospy.infrastructure.transport.generated.kairos.common.v1 import MessageHeader
+from kairospy.infrastructure.transport.generated.kairos.common.v2 import EventMetadata
 
 
 def _status_event_payload() -> bytes:
     builder = flatbuffers.Builder(1024)
-    kind = builder.CreateString("status_changed")
     segment_key = builder.CreateString("spot")
-    status = builder.CreateString("ready")
-    AccountChange.AccountChangeStart(builder)
-    AccountChange.AccountChangeAddKind(builder, kind)
-    AccountChange.AccountChangeAddSegmentKey(builder, segment_key)
-    AccountChange.AccountChangeAddStatus(builder, status)
-    AccountChange.AccountChangeAddTradingEnabled(builder, True)
-    change = AccountChange.AccountChangeEnd(builder)
-    AccountEvent.AccountEventStartChangesVector(builder, 1)
-    builder.PrependUOffsetTRelative(change)
-    changes = builder.EndVector()
-    message_id = builder.CreateString("account:main:1")
-    stream_id = builder.CreateString("account.events:main")
-    producer_id = builder.CreateString("account")
-    MessageHeader.MessageHeaderStart(builder)
-    MessageHeader.MessageHeaderAddMessageId(builder, message_id)
-    MessageHeader.MessageHeaderAddStreamId(builder, stream_id)
-    MessageHeader.MessageHeaderAddProducerId(builder, producer_id)
-    MessageHeader.MessageHeaderAddSequence(builder, 1)
-    header = MessageHeader.MessageHeaderEnd(builder)
     account_id = builder.CreateString("main")
-    AccountEvent.AccountEventStart(builder)
-    AccountEvent.AccountEventAddHeader(builder, header)
-    AccountEvent.AccountEventAddAccountId(builder, account_id)
-    AccountEvent.AccountEventAddChanges(builder, changes)
-    AccountEvent.AccountEventAddOccurredAtUnixNanos(builder, 10)
-    event = AccountEvent.AccountEventEnd(builder)
-    builder.Finish(event, file_identifier=b"ACE1")
+    event_id = builder.CreateString("account:main:1")
+    stream_id = builder.CreateString("account.events/account:main")
+    producer_id = builder.CreateString("account")
+    source_id = builder.CreateString("binance:spot")
+    provider_event_id = builder.CreateString("provider:10")
+    EventMetadata.EventMetadataStart(builder)
+    EventMetadata.EventMetadataAddEventId(builder, event_id)
+    EventMetadata.EventMetadataAddStreamId(builder, stream_id)
+    EventMetadata.EventMetadataAddSequence(builder, 1)
+    EventMetadata.EventMetadataAddProducerId(builder, producer_id)
+    EventMetadata.EventMetadataAddOccurredAtUnixNanos(builder, 10)
+    metadata = EventMetadata.EventMetadataEnd(builder)
+    AccountFactProvenance.AccountFactProvenanceStart(builder)
+    AccountFactProvenance.AccountFactProvenanceAddSourceId(builder, source_id)
+    AccountFactProvenance.AccountFactProvenanceAddProviderEventId(
+        builder, provider_event_id
+    )
+    AccountFactProvenance.AccountFactProvenanceAddProviderSequence(builder, 10)
+    provenance = AccountFactProvenance.AccountFactProvenanceEnd(builder)
+    AccountStatusChanged.AccountStatusChangedStart(builder)
+    AccountStatusChanged.AccountStatusChangedAddMetadata(builder, metadata)
+    AccountStatusChanged.AccountStatusChangedAddAccountId(builder, account_id)
+    AccountStatusChanged.AccountStatusChangedAddSegmentKey(builder, segment_key)
+    AccountStatusChanged.AccountStatusChangedAddStatus(builder, AccountStatus.AccountStatus.ACTIVE)
+    AccountStatusChanged.AccountStatusChangedAddFreshness(builder, FreshnessState.FreshnessState.FRESH)
+    AccountStatusChanged.AccountStatusChangedAddProvenance(builder, provenance)
+    event = AccountStatusChanged.AccountStatusChangedEnd(builder)
+    builder.Finish(event, file_identifier=b"ASC2")
     return bytes(builder.Output())
 
 
@@ -73,7 +76,7 @@ class _LiveRecords(_Records):
 
 def _record(sequence: int, account_id: str = "main") -> AccountEventRecord:
     return AccountEventRecord(
-        f"account.events:{account_id}",
+        f"account.events/account:{account_id}",
         sequence,
         "account",
         account_id,
@@ -92,6 +95,9 @@ def test_decodes_typed_account_status_event() -> None:
     record = decode_account_event(_status_event_payload())
     assert record.account_id == "main"
     assert record.sequence == 1
+    assert record.provenance is not None
+    assert record.provenance.source_id == "binance:spot"
+    assert record.provenance.provider_sequence == 10
     application = AccountApplication({AccountId("main"): object()}, _Records(record))
 
     async def collect():
@@ -131,7 +137,7 @@ def test_account_gap_fails_without_reading_snapshot() -> None:
 def test_account_rejects_a_stream_identity_for_another_scope() -> None:
     invalid = _record(1)
     invalid = AccountEventRecord(
-        "account.events:other",
+        "account.events/account:other",
         invalid.sequence,
         invalid.producer,
         invalid.account_id,
@@ -149,7 +155,7 @@ def test_account_rejects_a_stream_identity_for_another_scope() -> None:
 
 def test_one_account_record_can_map_to_multiple_typed_callbacks() -> None:
     event = AccountEventRecord(
-        "account.events:main",
+        "account.events/account:main",
         1,
         "account",
         "main",

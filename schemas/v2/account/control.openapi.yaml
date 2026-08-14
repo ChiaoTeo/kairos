@@ -1,0 +1,111 @@
+openapi: 3.1.0
+info:
+  title: Kairos Account Control API
+  version: 2.0.0
+  description: >-
+    User-facing Account query and control API over a workspace-scoped Unix
+    domain socket carrying HTTP semantics. Account observations and state
+    changes are published through the Account event and current-view
+    contracts; this API is for bounded queries and explicit control requests.
+servers:
+  - url: unix://{socket}
+    variables:
+      socket: {default: account.sock}
+tags:
+  - name: queries
+  - name: operations
+  - name: health
+paths:
+  /v1/health:
+    get:
+      tags: [health]
+      operationId: getAccountHealth
+      responses:
+        '200':
+          description: Account operational health.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccountHealth'}
+  /v1/account-state:
+    get:
+      tags: [queries]
+      operationId: getAccountState
+      responses:
+        '200':
+          description: Current Account state query result.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /v1/balances:
+    get:
+      tags: [queries]
+      operationId: listAccountBalances
+      responses:
+        '200':
+          description: Account balances.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /v1/positions:
+    get:
+      tags: [queries]
+      operationId: listAccountPositions
+      responses:
+        '200':
+          description: Account positions.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /v1/open-orders:
+    get:
+      tags: [queries]
+      operationId: listAccountOpenOrders
+      responses:
+        '200':
+          description: Provider-observed open orders.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+  /v1/refresh:
+    post:
+      tags: [operations]
+      operationId: refreshAccount
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '../common/control.openapi.yaml#/components/schemas/CommandEnvelope'}
+      responses:
+        '202':
+          description: Refresh accepted for asynchronous processing.
+          content:
+            application/json:
+              schema: {$ref: '../common/control.openapi.yaml#/components/schemas/CommandAccepted'}
+        '503': {$ref: '../common/control.openapi.yaml#/components/responses/ControlUnavailable'}
+  /v1/reconcile:
+    post:
+      tags: [operations]
+      operationId: reconcileAccount
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: '../common/control.openapi.yaml#/components/schemas/CommandEnvelope'}
+      responses:
+        '200':
+          description: Reconciliation completed.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '503': {$ref: '../common/control.openapi.yaml#/components/responses/ControlUnavailable'}
+components:
+  schemas:
+    AccountHealth:
+      allOf:
+        - $ref: '../common/control.openapi.yaml#/components/schemas/HealthResponse'
+        - type: object
+          properties:
+            account_id: {type: string, minLength: 1}
+            actor_id: {type: string, minLength: 1}
+            generation: {type: integer, minimum: 0}
+            event_sequence: {type: integer, minimum: 0}

@@ -1,0 +1,16 @@
+include "../../../common/metadata.fbs";
+include "../../types/balance.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table BalanceUpserted {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  balance:Balance (required);
+  provenance:AccountFactProvenance;
+}
+
+root_type BalanceUpserted;
+file_identifier "ABU2";

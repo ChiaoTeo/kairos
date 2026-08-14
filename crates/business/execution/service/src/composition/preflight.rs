@@ -4,6 +4,7 @@
 //! talks to the already-running Account/Risk/Market processes through their
 //! Unix sockets.  No business state is cached here.
 
+use crate::application::market_input::Quote as MarketQuote;
 use crate::application::{
     DependencyWatermarks, ExecuteStrategyIntent, ExecutionPreflight, QuoteObservation,
     SnapshotWatermark, SubmitOrder,
@@ -28,8 +29,10 @@ use kairos_account_contract::client::{
     PositionsResponse,
 };
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
-use kairos_risk_contract::client::RiskContractClient;
-use kairos_risk_contract::model::{Amount as RiskAmount, AuthorizeRequest, Metric, RiskContext};
+use kairos_risk_contract::{
+    Amount as RiskAmount, AuthorizeRequest, Health as RiskHealth, Metric, RiskContext,
+    RiskControlClient,
+};
 
 const PROJECTION_REFRESH: Duration = Duration::from_millis(250);
 const PROJECTION_MAX_AGE: Duration = Duration::from_secs(5);
@@ -45,8 +48,21 @@ struct AccountProjection {
 
 #[derive(Clone)]
 struct MarketProjection {
-    snapshot: kairos_market_contract::snapshot::MarketSnapshotRead,
+    snapshot: MarketSnapshot,
     refreshed_at: Instant,
+}
+
+#[derive(Clone, Default)]
+struct MarketSnapshot {
+    generation: u64,
+    quotes: Vec<MarketQuote>,
+    freshness: Vec<MarketFreshness>,
+}
+
+#[derive(Clone)]
+struct MarketFreshness {
+    market_id: String,
+    current: bool,
 }
 
 #[derive(Clone)]
@@ -57,7 +73,7 @@ struct ReferenceProjection {
 
 #[derive(Clone)]
 struct RiskProjection {
-    health: kairos_risk_contract::client::Health,
+    health: RiskHealth,
     refreshed_at: Instant,
 }
 
@@ -72,6 +88,7 @@ struct DependencyProjection {
 pub struct SocketExecutionPreflight {
     accounts: BTreeMap<String, PathBuf>,
     market_snapshot: Option<PathBuf>,
+    market_source_id: String,
     reference_database: Option<PathBuf>,
     risk: Option<PathBuf>,
     reservations: BTreeMap<String, String>,
@@ -84,7 +101,7 @@ pub struct SocketExecutionPreflight {
     projection_stop: Arc<AtomicBool>,
     projection_workers: Vec<JoinHandle<()>>,
     account_clients: BTreeMap<String, AccountContractClient>,
-    risk_client: Option<RiskContractClient>,
+    risk_client: Option<RiskControlClient>,
     simulated_settlement: bool,
     allow_backtest_trade_authorization: bool,
     allow_backtest_reference_without_projection: bool,
@@ -138,9 +155,16 @@ impl SocketExecutionPreflight {
             .map(Path::to_path_buf);
         let market_snapshot = instance_root.clone().map(|root| {
             root.join("snapshots")
+                .join("v2")
                 .join("market")
-                .join("market.snapshot")
+                .join("market-shared")
         });
+        let market_source_id = components
+            .and_then(|items| items.get("market"))
+            .and_then(|item| item.get("source_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("default")
+            .to_owned();
         let reference_database =
             instance_root.map(|root| root.join("reference").join("reference.sqlite"));
         let projection = Arc::new(RwLock::new(DependencyProjection::default()));
@@ -156,6 +180,7 @@ impl SocketExecutionPreflight {
         Ok(Self {
             accounts,
             market_snapshot,
+            market_source_id,
             reference_database,
             risk: endpoint("risk"),
             reservations: BTreeMap::new(),
@@ -227,7 +252,7 @@ impl SocketExecutionPreflight {
             .ok_or_else(|| format!("account client is unavailable: {account_id}"))
     }
 
-    fn risk_client(&mut self) -> Result<&RiskContractClient, String> {
+    fn risk_client(&mut self) -> Result<&RiskControlClient, String> {
         if self.risk_client.is_none() {
             let socket = self
                 .risk
@@ -235,7 +260,7 @@ impl SocketExecutionPreflight {
                 .ok_or_else(|| "risk endpoint is not configured".to_string())?
                 .clone();
             self.risk_client =
-                Some(RiskContractClient::connect(socket).map_err(|error| error.to_string())?);
+                Some(RiskControlClient::connect(socket).map_err(|error| error.to_string())?);
         }
         self.risk_client
             .as_ref()
@@ -299,27 +324,23 @@ impl SocketExecutionPreflight {
                 }
             }));
         }
-        if let Some(path) = market_snapshot {
+        if let Some(_path) = market_snapshot {
             let projection = Arc::clone(&projection);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
-                let mut last_generation = None;
                 while !stop.load(Ordering::Acquire) {
-                    if let Ok(snapshot) =
-                        kairos_market_contract::snapshot::read_latest_market_snapshot(&path)
-                    {
-                        if last_generation != Some(snapshot.generation) {
-                            last_generation = Some(snapshot.generation);
-                            if let Ok(mut state) = projection.write() {
-                                state.market = Some(MarketProjection {
-                                    snapshot,
-                                    refreshed_at: Instant::now(),
-                                });
-                            }
-                        } else if let Ok(mut state) = projection.write() {
-                            if let Some(value) = state.market.as_mut() {
-                                value.refreshed_at = Instant::now();
-                            }
+                    // Market v2 is keyed by market/source/view and has no
+                    // aggregate snapshot.  The request-scoped reader is
+                    // attached below; keep this projection slot alive for
+                    // callers that explicitly disable the v2 source.
+                    if let Ok(mut state) = projection.write() {
+                        if let Some(value) = state.market.as_mut() {
+                            value.refreshed_at = Instant::now();
+                        } else {
+                            state.market = Some(MarketProjection {
+                                snapshot: MarketSnapshot::default(),
+                                refreshed_at: Instant::now(),
+                            });
                         }
                     }
                     std::thread::sleep(PROJECTION_REFRESH);
@@ -382,7 +403,7 @@ impl SocketExecutionPreflight {
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
                 let client = loop {
-                    match kairos_risk_contract::client::RiskContractClient::connect(&path) {
+                    match RiskControlClient::connect(&path) {
                         Ok(client) => break client,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
@@ -447,6 +468,84 @@ impl SocketExecutionPreflight {
             return Err("market projection is stale".into());
         }
         Ok(value)
+    }
+
+    fn read_market_quote(
+        &self,
+        market_id: Option<&str>,
+        instrument_id: &str,
+    ) -> Result<Option<(MarketQuote, u64)>, String> {
+        let Some(root) = self.market_snapshot.as_ref() else {
+            return Ok(None);
+        };
+        let Some(market_id) = market_id else {
+            return Ok(None);
+        };
+        let key = kairos_market_contract::MarketViewKey::new(
+            market_id,
+            self.market_source_id.clone(),
+            kairos_market_contract::MarketViewKind::Quote,
+            None::<String>,
+        )
+        .map_err(|error| error.to_string())?;
+        let frame = kairos_market_contract::MarketViewReader::open(root, key)
+            .and_then(|reader| reader.read())
+            .map_err(|error| error.to_string())?;
+        let quote = frame
+            .quote()
+            .map_err(|error| error.to_string())?
+            .quote()
+            .value();
+        if !quote.instrument_id().eq_ignore_ascii_case(instrument_id) {
+            return Ok(None);
+        }
+        let decimal =
+            |value: Option<&kairos_protocol::generated::kairos::common::v_2::Decimal64>| {
+                value.map(|value| {
+                    let scale = value.scale() as usize;
+                    let raw = value.mantissa().to_string();
+                    if scale == 0 {
+                        return raw;
+                    }
+                    let negative = raw.starts_with('-');
+                    let digits = raw.trim_start_matches('-');
+                    let padded = format!("{:0>width$}", digits, width = scale + 1);
+                    let split = padded.len() - scale;
+                    format!(
+                        "{}{}.{}",
+                        if negative { "-" } else { "" },
+                        &padded[..split],
+                        &padded[split..]
+                    )
+                })
+            };
+        Ok(Some((
+            MarketQuote {
+                market_id: quote.market_id().to_owned(),
+                instrument_id: quote.instrument_id().to_owned(),
+                bid_price: decimal(quote.bid_price()),
+                bid_quantity: decimal(quote.bid_quantity()),
+                ask_price: decimal(quote.ask_price()),
+                ask_quantity: decimal(quote.ask_quantity()),
+                observed_at_unix_nanos: quote.source_observed_at_unix_nanos(),
+                source_id: quote.source_id().to_owned(),
+            },
+            frame.generation(),
+        )))
+    }
+
+    fn read_market_quotes_for_orders(
+        &self,
+        orders: &[SubmitOrder],
+    ) -> Result<Vec<MarketQuote>, String> {
+        orders
+            .iter()
+            .filter_map(|order| {
+                self.read_market_quote(order.market_id.as_deref(), order.instrument_id.as_str())
+                    .transpose()
+            })
+            .map(|result| result.map(|(quote, _)| quote))
+            .collect()
     }
 
     fn risk_projection(&self) -> Result<RiskProjection, String> {
@@ -601,36 +700,23 @@ impl SocketExecutionPreflight {
     ) -> Result<(), String> {
         let health = self.risk_projection()?.health;
         let account = self.account_projection(request.account_id.as_str())?;
-        let (market_generation, market_event_sequence, market_is_fresh) =
-            if self.market_snapshot.is_some() {
-                let market = self.market_projection()?;
-                let has_quote = market.snapshot.quotes.iter().any(|quote| {
-                    quote.instrument_id == request.instrument_id
-                        && request
-                            .market_id
-                            .as_ref()
-                            .is_none_or(|market_id| quote.market_id == market_id.as_str())
-                });
-                (
-                    market.snapshot.generation,
-                    0,
-                    has_quote
-                        && market.snapshot.freshness.iter().all(|(_, value)| {
-                            value.market_id
-                                != request
-                                    .market_id
-                                    .as_ref()
-                                    .map(MarketId::as_str)
-                                    .unwrap_or_default()
-                                || matches!(
-                                    value.status,
-                                    kairos_market_contract::model::DataFreshnessStatus::Current
-                                )
-                        }),
-                )
-            } else {
-                (0, 0, true)
-            };
+        let (market_generation, market_event_sequence, market_is_fresh) = if self
+            .market_snapshot
+            .is_some()
+        {
+            let quote = self
+                .read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?;
+            (
+                quote
+                    .as_ref()
+                    .map(|(_, generation)| *generation)
+                    .unwrap_or_default(),
+                0,
+                quote.is_some(),
+            )
+        } else {
+            (0, 0, true)
+        };
         let available_margin = request
             .options
             .quote_asset
@@ -785,14 +871,14 @@ impl SocketExecutionPreflight {
         if intent.intent_type == crate::domain::IntentType::PairArbitrage
             && (intent.min_edge_bps.is_some() || intent.max_slippage_bps.is_some())
         {
-            let quotes = self.market_projection()?.snapshot.quotes;
+            let quotes = self.read_market_quotes_for_orders(&orders)?;
             validate_pair_constraints(intent, &orders, &quotes)?;
         }
         if intent.intent_type == crate::domain::IntentType::QuoteProvisioning {
             validate_quote_provisioning(&orders)?;
         }
         if self.market_snapshot.is_some() {
-            let quotes = self.market_projection()?.snapshot.quotes;
+            let quotes = self.read_market_quotes_for_orders(&orders)?;
             validate_quote_freshness(&orders, &quotes)?;
         }
         Ok(orders)
@@ -1208,7 +1294,10 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             return self.plan_explicit_legs(intent);
         }
         if self.market_snapshot.is_some() {
-            let quotes = self.market_projection()?.snapshot.quotes;
+            let quotes = self
+                .read_market_quote(intent.market_id.as_deref(), intent.instrument_id.as_str())?
+                .map(|(quote, _)| vec![quote])
+                .unwrap_or_default();
             if quotes.is_empty() {
                 return Err("market snapshot has no quotes".into());
             }
@@ -1275,15 +1364,8 @@ impl ExecutionPreflight for SocketExecutionPreflight {
         instrument_id: &str,
         market_id: Option<&str>,
     ) -> Result<Option<QuoteObservation>, String> {
-        let snapshot = self.market_projection()?.snapshot;
-        snapshot
-            .quotes
-            .into_iter()
-            .find(|quote| {
-                quote.instrument_id.eq_ignore_ascii_case(instrument_id)
-                    && market_id.is_none_or(|value| quote.market_id == value)
-            })
-            .map(|quote| {
+        self.read_market_quote(market_id, instrument_id)?
+            .map(|(quote, _generation)| {
                 Ok::<_, String>(QuoteObservation {
                     instrument_id: InstrumentId::new(quote.instrument_id)
                         .map_err(|error| error.to_string())?,
@@ -1402,7 +1484,10 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             }
         }
         if self.market_snapshot.is_some() {
-            let quotes = self.market_projection()?.snapshot.quotes;
+            let quotes = self
+                .read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?
+                .map(|(quote, _)| vec![quote])
+                .unwrap_or_default();
             validate_quote_freshness(std::slice::from_ref(request), &quotes)?;
         }
         Ok(())
@@ -1754,7 +1839,7 @@ fn find_position(
 }
 
 fn validate_market_price(
-    quotes: &[kairos_market_contract::Quote],
+    quotes: &[MarketQuote],
     intent: &ExecuteStrategyIntent,
     limit: Price,
 ) -> Result<(), String> {
@@ -1786,7 +1871,7 @@ fn validate_market_price(
 fn validate_pair_constraints(
     intent: &ExecuteStrategyIntent,
     orders: &[SubmitOrder],
-    quotes: &[kairos_market_contract::Quote],
+    quotes: &[MarketQuote],
 ) -> Result<(), String> {
     if orders.len() < 2 {
         return Err("pair arbitrage requires at least two executable legs".into());
@@ -1897,10 +1982,7 @@ fn validate_quote_provisioning(orders: &[SubmitOrder]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_quote_freshness(
-    orders: &[SubmitOrder],
-    quotes: &[kairos_market_contract::Quote],
-) -> Result<(), String> {
+fn validate_quote_freshness(orders: &[SubmitOrder], quotes: &[MarketQuote]) -> Result<(), String> {
     let now = now_unix_nanos();
     for order in orders {
         let Some(max_age) = order

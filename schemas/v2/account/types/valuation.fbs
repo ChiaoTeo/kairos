@@ -1,0 +1,10 @@
+include "../../common/decimal.fbs";
+namespace kairos.account.v2;
+
+table AccountValuation {
+  valuation_asset_id:string;
+  equity:kairos.common.v2.Decimal64;
+  initial_equity:kairos.common.v2.Decimal64;
+  net_profit:kairos.common.v2.Decimal64;
+  observed_at_unix_nanos:ulong;
+}

@@ -18,6 +18,7 @@ use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     OrderSide, OrderType, SqlxExecutionAudit, UnknownRemoteOrderResolution,
 };
+use kairos_execution::{MarketObservation, Quote};
 use kairos_integration::application::{
     CommandOutcome, ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder,
     ExternalOrderQuery, IndeterminateCommand, IntegrationError,
@@ -28,7 +29,6 @@ use kairos_integration::application::{
     ProviderInstrumentRef,
 };
 use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
-use kairos_market_contract::model::{MarketObservation, Quote};
 use kairos_workspace::control::RestControlClient;
 
 fn fill_report(
@@ -93,7 +93,7 @@ fn strategy_intent(
         instance_id: "instance".into(),
         instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
         market_id: None,
-        execution_access_id: None,
+        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
         account_ids: vec![AccountId::new("main").unwrap()],
         segment_key: SegmentKey::new("spot").unwrap(),
         target_quantity: Quantity::new(quantity, 0).unwrap(),
@@ -134,7 +134,7 @@ fn intent_leg(
         segment_key: SegmentKey::new(segment_key).unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: market_id.map(|value| MarketId::new(value).unwrap()),
-        execution_access_id: None,
+        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
         side,
         quantity: Quantity::new(quantity, 0).unwrap(),
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
@@ -246,6 +246,18 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
     application
 }
 
+fn configure_test_access(application: &mut ExecutionApplication) {
+    application.configure_execution_access(
+        ExecutionAccessId::new("execution-access:test").unwrap(),
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap(),
+    );
+}
+
 #[test]
 fn queued_preflight_keeps_cross_process_commands_off_the_state_caller() {
     let directory = tempfile::tempdir().unwrap();
@@ -283,6 +295,7 @@ fn queued_preflight_keeps_cross_process_commands_off_the_state_caller() {
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
+    configure_test_access(&mut application);
     application.attach_preflight(Box::new(
         QueuedExecutionPreflight::start(Box::new(TestPreflight), 16).unwrap(),
     ));
@@ -335,7 +348,7 @@ impl ExecutionPreflight for TestPreflight {
                     segment_key: leg.segment_key.clone(),
                     instrument_id: leg.instrument_id.clone(),
                     market_id: leg.market_id.clone(),
-                    execution_access_id: None,
+                    execution_access_id: leg.execution_access_id.clone(),
                     side: leg.side,
                     order_type: if leg.limit_price.is_some() {
                         OrderType::Limit
@@ -363,7 +376,7 @@ impl ExecutionPreflight for TestPreflight {
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
                 market_id: intent.market_id.clone(),
-                execution_access_id: None,
+                execution_access_id: intent.execution_access_id.clone(),
                 side: OrderSide::Buy,
                 order_type: if intent.limit_price.is_some() {
                     OrderType::Limit
@@ -609,6 +622,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         Some(Box::new(FileExecutionStore::new(&state))),
     )
     .unwrap();
+    configure_test_access(&mut app);
     app.submit(submit_order(
         "local-1",
         None,
@@ -710,6 +724,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         Some(Box::new(FileExecutionStore::new(&state))),
     )
     .unwrap();
+    configure_test_access(&mut app);
     app.submit(submit_order(
         "local-recovered-fill",
         None,
@@ -906,23 +921,37 @@ async fn execution_server_control_round_trip_uses_same_application_path() {
     }
     let client = RestControlClient::new(&socket);
     assert_eq!(client.health().await.unwrap()["status"], "ready");
-    let submit = serde_json::to_vec(&submit_order(
-        "server-order",
-        None,
-        "main",
-        "BTCUSDT",
-        OrderSide::Buy,
-        OrderType::Market,
-        1,
-        None,
-        None,
-    ))
+    let submit = serde_json::to_vec(&serde_json::json!({
+        "command_id": "server-command",
+        "idempotency_key": "server-intent",
+        "intent": {
+            "intent_id": "server-intent",
+            "strategy_id": "strategy",
+            "launch_id": "launch",
+            "instance_id": "instance",
+            "intent_type": "SingleOrder",
+            "completion_policy": "AllLegsSatisfied",
+            "failure_policy": "CancelRemaining",
+            "legs": [{
+                "leg_id": "server-leg",
+                "account_id": "main",
+                "segment_key": "spot",
+                "instrument_id": "BTCUSDT",
+                "market_id": "BTCUSDT",
+                "execution_access_id": "execution-access:test",
+                "side": "buy",
+                "quantity": "1",
+                "quantity_semantics": "order_quantity",
+                "options": {}
+            }]
+        }
+    }))
     .unwrap();
     let response = client
-        .request_json("POST", "/v1/submit", Some(&submit))
+        .request_json("POST", "/v1/intents", Some(&submit))
         .await
         .unwrap();
-    assert_eq!(response["order_id"], "server-order");
+    assert_eq!(response["intent_id"], "server-intent");
     let orders = client
         .request_json("GET", "/v1/orders?account_id=main", None)
         .await
@@ -949,22 +978,41 @@ async fn simulated_execution_server_fills_from_market_observation() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let client = RestControlClient::new(&socket);
-    let submit = serde_json::to_vec(&submit_order(
-        "simulated-server-order",
-        None,
-        "main",
-        "BTCUSDT",
-        OrderSide::Buy,
-        OrderType::Market,
-        2,
-        None,
-        Some("binance:spot"),
-    ))
+    let submit = serde_json::to_vec(&serde_json::json!({
+        "command_id": "simulated-command",
+        "idempotency_key": "simulated-intent",
+        "intent": {
+            "intent_id": "simulated-intent",
+            "strategy_id": "strategy",
+            "launch_id": "launch",
+            "instance_id": "instance",
+            "intent_type": "SingleOrder",
+            "completion_policy": "AllLegsSatisfied",
+            "failure_policy": "CancelRemaining",
+            "legs": [{
+                "leg_id": "simulated-leg",
+                "account_id": "main",
+                "segment_key": "spot",
+                "instrument_id": "BTCUSDT",
+                "market_id": "binance:spot",
+                "execution_access_id": "execution-access:test",
+                "side": "buy",
+                "quantity": "2",
+                "quantity_semantics": "order_quantity",
+                "options": {}
+            }]
+        }
+    }))
     .unwrap();
     client
-        .request_json("POST", "/v1/submit", Some(&submit))
+        .request_json("POST", "/v1/intents", Some(&submit))
         .await
         .unwrap();
+    let orders = client
+        .request_json("GET", "/v1/orders?account_id=main", None)
+        .await
+        .unwrap();
+    let simulated_order_id = orders["orders"][0]["order_id"].as_str().unwrap().to_owned();
     let market = serde_json::to_vec(&MarketObservation::Quote(Quote {
         market_id: "binance:spot".into(),
         instrument_id: "BTCUSDT".into(),
@@ -982,7 +1030,11 @@ async fn simulated_execution_server_fills_from_market_observation() {
         .unwrap();
     assert_eq!(response["fills"].as_array().unwrap().len(), 1);
     let fills = client
-        .request_json("GET", "/v1/fills?order_id=simulated-server-order", None)
+        .request_json(
+            "GET",
+            &format!("/v1/fills?order_id={simulated_order_id}"),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(fills["fills"].as_array().unwrap().len(), 1);
@@ -1064,6 +1116,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         Some(Box::new(SqlxExecutionStore::new(&path).unwrap())),
     )
     .unwrap();
+    configure_test_access(&mut first);
     first.attach_preflight(Box::new(TestPreflight));
     first
         .submit(submit_order(
@@ -1123,6 +1176,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         Some(Box::new(SqlxExecutionStore::new(&path).unwrap())),
     )
     .unwrap();
+    configure_test_access(&mut app);
     app.attach_preflight(Box::new(TestPreflight));
     app.submit(submit_order(
         "outbox-order",
@@ -1154,6 +1208,7 @@ fn not_sent_submission_is_persisted_as_failed_without_reconciliation() {
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
+    configure_test_access(&mut app);
     let result = app.submit(submit_order(
         "unknown-1",
         None,
@@ -1183,6 +1238,7 @@ fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
+    configure_test_access(&mut app);
 
     let result = app.submit(submit_order(
         "indeterminate-1",
@@ -1482,13 +1538,7 @@ fn option_spread_intent(short_quantity: i64, long_quantity: i64) -> ExecuteStrat
 fn option_spread_intent_requires_fixed_risk_package_shape() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
-    let mut app = ExecutionApplication::with_dependencies(
-        "execution",
-        None,
-        Some(Box::new(FileExecutionStore::new(&path))),
-    )
-    .unwrap();
-    app.attach_preflight(Box::new(TestPreflight));
+    let mut app = application(&path);
     let state = app.submit_intent(option_spread_intent(1, 1)).unwrap();
     assert_eq!(
         state.intent.intent_type,
@@ -1765,6 +1815,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         Some(Box::new(FileExecutionStore::new(path))),
     )
     .unwrap();
+    configure_test_access(&mut app);
     app.attach_preflight(Box::new(AlreadySatisfiedPreflight));
     let state = app
         .submit_intent(strategy_intent("intent:already-satisfied", 0, None))
@@ -1922,7 +1973,7 @@ fn backtest_run_consumes_a_downloaded_bar_and_fills_at_close() {
             limit_price: None,
             submitted_at_unix_nanos: 1_699_999_999_000_000_000.into(),
         }],
-        market_events: vec![MarketObservation::Bar(kairos_market_contract::model::Bar {
+        market_events: vec![MarketObservation::Bar(kairos_execution::Bar {
             market_id: "market:massive:equity:AAPL".into(),
             instrument_id: "instrument:equity:US:AAPL:common".into(),
             timeframe: "1m".into(),

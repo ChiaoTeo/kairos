@@ -1,0 +1,9 @@
+include "../../common/metadata.fbs";
+include "../types/index_price.fbs";
+
+namespace kairos.market.v2;
+
+table LatestIndexPrice { value:IndexPrice (required); source_event_id:string (required); }
+table IndexPriceLatestView { metadata:kairos.common.v2.ViewMetadata (required); index_price:LatestIndexPrice (required); }
+root_type IndexPriceLatestView;
+file_identifier "MLP2";

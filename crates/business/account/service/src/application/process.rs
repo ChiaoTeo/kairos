@@ -31,7 +31,7 @@ use crate::services::integration::{
 use crate::services::refresh::RefreshFetch;
 use kairos_domain_types::AccountId;
 use kairos_integration::application::{ConnectionHealth, ConnectionLifecycle, IntegrationError};
-use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
+use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use tracing::{debug, error, info, warn, Instrument};
 
 pub struct AccountProcess {
@@ -93,6 +93,24 @@ struct AsyncRefreshCompletion {
 struct AsyncStreamHealthUpdate {
     binding_id: String,
     health: ConnectionHealth,
+}
+
+/// Transport-local request for the legacy control route. The wire shape is
+/// kept here; Account contract types describe v2 events and must not become a
+/// bag of unrelated control payloads.
+#[derive(serde::Deserialize)]
+struct AccountOrderEventRequest {
+    order_id: String,
+    remote_order_id: Option<String>,
+    status: String,
+    filled_quantity: DecimalParts,
+    occurred_at_unix_nanos: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct DecimalParts {
+    mantissa: i64,
+    scale: u8,
 }
 
 impl AccountProcess {
@@ -697,6 +715,17 @@ impl AccountProcess {
             .application
             .apply_event(event)
             .map_err(|error| error.to_string())?;
+        if applied > 0 {
+            self.application.attach_business_event_provenance(
+                crate::application::AccountFactProvenance {
+                    source_id: format!("{}:{}", envelope.participant.id, envelope.binding_id),
+                    provider_event_id: envelope.provider_event_id.clone(),
+                    provider_sequence: envelope.provider_sequence,
+                    provider_occurred_at_unix_nanos: Some(envelope.observed_at_unix_nanos.into()),
+                    provider_received_at_unix_nanos: Some(envelope.received_at_unix_nanos.into()),
+                },
+            );
+        }
         self.external_event_watermarks.insert(
             channel_key,
             (envelope.channel_epoch, envelope.provider_sequence),
@@ -789,7 +818,7 @@ impl AccountProcess {
         let account_query = parse_account_query(query, &self.account_id);
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_json()),
-            SNAPSHOT_PATH => (
+            "/v1/account-state" => (
                 200,
                 serde_json::to_value(self.application.snapshot_query(&account_query))?,
             ),
@@ -861,7 +890,7 @@ impl AccountProcess {
                     .map_err(|error| error.to_string())
             }),
             "/v1/order-event" => self.json_command(body, |application, body| {
-                let event: kairos_account_contract::client::OrderEvent =
+                let event: AccountOrderEventRequest =
                     serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 let active = matches!(
                     event.status.to_ascii_lowercase().as_str(),
@@ -1345,6 +1374,19 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].sequence.get(), 1);
         assert_eq!(events[0].account_id.as_str(), "main");
+        assert_eq!(
+            events[0].provenance.as_ref().unwrap().source_id,
+            "test:account.test"
+        );
+        assert_eq!(
+            events[0]
+                .provenance
+                .as_ref()
+                .unwrap()
+                .provider_event_id
+                .as_deref(),
+            Some("one")
+        );
         assert!(!events[0].changes.is_empty());
     }
 

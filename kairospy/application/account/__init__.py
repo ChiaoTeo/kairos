@@ -30,6 +30,7 @@ from .events import (
     AccountStatusChangedEvent,
     BalanceChangedEvent,
     EquityChangedEvent,
+    ObservedOrderChangedEvent,
     PositionChangedEvent,
 )
 from .models import (
@@ -48,6 +49,7 @@ from .models import (
     Balance,
     DataFreshness,
     EquityChange,
+    ObservedOrder,
     Position,
 )
 
@@ -569,6 +571,8 @@ __all__ = [
     "DataFreshness",
     "EquityChange",
     "EquityChangedEvent",
+    "ObservedOrder",
+    "ObservedOrderChangedEvent",
     "Position",
     "PositionNotFoundError",
     "PositionChangedEvent",

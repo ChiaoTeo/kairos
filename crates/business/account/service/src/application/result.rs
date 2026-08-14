@@ -1,9 +1,10 @@
 use crate::domain::{
-    Account, AccountModel, AccountStatus, Balance, MarginMode, Money, OpenOrder, Position,
-    PositionMode,
+    Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, InstrumentId, MarginMode,
+    Money, OpenOrder, Position, PositionMode, SegmentKey,
 };
-use crate::domain::{AccountId, SegmentKey};
-use kairos_domain_types::{ActorId, Currency, Generation, Sequence, UnixNanos};
+use kairos_domain_types::{
+    ActorId, Currency, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AccountProjection {
@@ -88,6 +89,15 @@ pub struct AccountsSnapshot {
     pub accounts: Vec<AccountProjection>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountFactProvenance {
+    pub source_id: String,
+    pub provider_event_id: Option<String>,
+    pub provider_sequence: Option<u64>,
+    pub provider_occurred_at_unix_nanos: Option<u64>,
+    pub provider_received_at_unix_nanos: Option<u64>,
+}
+
 /// A Strategy-visible Account fact emitted by the Account Actor at the same
 /// transition that changed its owned state. This is not a snapshot and is
 /// never reconstructed by a snapshot publisher.
@@ -97,6 +107,7 @@ pub struct AccountBusinessEvent {
     pub account_id: AccountId,
     pub occurred_at_unix_nanos: UnixNanos,
     pub changes: Vec<AccountBusinessChange>,
+    pub provenance: Option<AccountFactProvenance>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,9 +116,27 @@ pub enum AccountBusinessChange {
         segment_key: SegmentKey,
         value: Balance,
     },
+    BalanceRemoved {
+        segment_key: SegmentKey,
+        asset_id: AssetId,
+    },
     Position {
         segment_key: SegmentKey,
         value: Position,
+    },
+    PositionRemoved {
+        segment_key: SegmentKey,
+        instrument_id: InstrumentId,
+        market_id: Option<MarketId>,
+    },
+    ObservedOrder {
+        segment_key: SegmentKey,
+        value: OpenOrder,
+    },
+    ObservedOrderRemoved {
+        segment_key: SegmentKey,
+        order_id: OrderId,
+        remote_order_id: Option<RemoteOrderId>,
     },
     Equity {
         segment_key: SegmentKey,

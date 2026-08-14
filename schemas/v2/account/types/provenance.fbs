@@ -1,0 +1,9 @@
+namespace kairos.account.v2;
+
+table AccountFactProvenance {
+  source_id:string (required);
+  provider_event_id:string;
+  provider_sequence:ulong = null;
+  provider_occurred_at_unix_nanos:ulong = null;
+  provider_received_at_unix_nanos:ulong = null;
+}

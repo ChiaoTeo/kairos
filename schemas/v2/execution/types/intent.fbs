@@ -1,0 +1,160 @@
+include "../../common/decimal.fbs";
+include "../../common/types.fbs";
+
+namespace kairos.execution.v2;
+
+enum IntentType:ubyte {
+  UNSPECIFIED = 0,
+  SINGLE_ORDER = 1,
+  TARGET_POSITION = 2,
+  PAIR_ARBITRAGE = 3,
+  OPTION_SPREAD = 4,
+  PORTFOLIO_REBALANCE = 5,
+  QUOTE_PROVISIONING = 6,
+  HEDGE = 7
+}
+
+enum CompletionPolicy:ubyte {
+  UNSPECIFIED = 0,
+  ALL_LEGS_SATISFIED = 1,
+  ALL_OR_NOTHING = 2,
+  BEST_EFFORT = 3,
+  HEDGE_WITHIN_TOLERANCE = 4,
+  TARGET_QUANTITY_REACHED = 5
+}
+
+enum FailurePolicy:ubyte {
+  UNSPECIFIED = 0,
+  CANCEL_REMAINING = 1,
+  CONTINUE_OTHER_LEGS = 2,
+  COMPENSATE = 3,
+  PAUSE_FOR_MANUAL_INTERVENTION = 4,
+  MARK_RECONCILIATION_REQUIRED = 5
+}
+
+enum QuantitySemantics:ubyte {
+  UNSPECIFIED = 0,
+  ORDER_QUANTITY = 1,
+  TARGET_POSITION = 2
+}
+
+enum IntentLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  ACCEPTED = 1,
+  PLANNING = 2,
+  PLANNED = 3,
+  EXECUTING = 4,
+  PARTIALLY_FILLED = 5,
+  CANCEL_REQUESTED = 6,
+  SATISFIED = 7,
+  REJECTED = 8,
+  CANCELED = 9,
+  EXPIRED = 10,
+  FAILED = 11,
+  COMPENSATING = 12,
+  RECONCILIATION_REQUIRED = 13
+}
+
+enum IntentRejectionCode:ubyte {
+  UNSPECIFIED = 0,
+  INVALID_INTENT = 1,
+  DUPLICATE_CONFLICT = 2,
+  DEADLINE_EXPIRED = 3,
+  UNSUPPORTED_CAPABILITY = 4,
+  STALE_DEPENDENCY = 5,
+  RISK_REJECTED = 6,
+  ACCOUNT_REJECTED = 7,
+  PERSISTENCE_FAILURE = 8,
+  UNAVAILABLE = 9
+}
+
+enum TimeInForce:ubyte {
+  UNSPECIFIED = 0,
+  GOOD_TIL_CANCELED = 1,
+  IMMEDIATE_OR_CANCEL = 2,
+  FILL_OR_KILL = 3,
+  GOOD_TIL_DATE = 4,
+  DAY = 5
+}
+
+enum PositionSide:ubyte {
+  UNSPECIFIED = 0,
+  NET = 1,
+  LONG = 2,
+  SHORT = 3
+}
+
+struct Ratio {
+  numerator:ulong;
+  denominator:ulong;
+}
+
+table SplitOrderPolicy {
+  max_child_quantity:kairos.common.v2.Decimal64;
+  child_count:uint = null;
+  min_child_quantity:kairos.common.v2.Decimal64;
+  interval_nanos:ulong = null;
+}
+
+table MakerExecutionPolicy {
+  min_interval_nanos:ulong = null;
+  max_orders_per_window:uint = null;
+  window_nanos:ulong = null;
+  max_inventory_abs:kairos.common.v2.Decimal64;
+  target_inventory:kairos.common.v2.Decimal64;
+  max_quote_age_nanos:ulong = null;
+}
+
+table ExecutionOrderOptions {
+  time_in_force:TimeInForce = UNSPECIFIED;
+  reduce_only:bool = null;
+  post_only:bool = null;
+  position_side:PositionSide = UNSPECIFIED;
+  settlement_asset_id:string;
+  trading_session_id:string;
+  tokenization_requested:bool = null;
+  split:SplitOrderPolicy;
+  maker:MakerExecutionPolicy;
+}
+
+table HedgePolicy {
+  leader_leg_id:string (required);
+  hedge_leg_id:string (required);
+  ratio:Ratio (required);
+  contract_multiplier:Ratio (required);
+  max_unhedged_quantity:kairos.common.v2.Decimal64 (required);
+  compensate_on_failure:bool;
+  max_compensation_attempts:uint;
+}
+
+table IntentLeg {
+  leg_id:string (required);
+  account_id:string (required);
+  segment_key:string (required);
+  instrument_id:string (required);
+  market_id:string (required);
+  execution_access_id:string (required);
+  side:kairos.common.v2.Side = UNSPECIFIED;
+  quantity:kairos.common.v2.Decimal64 (required);
+  quantity_semantics:QuantitySemantics = UNSPECIFIED;
+  limit_price:kairos.common.v2.Decimal64;
+  options:ExecutionOrderOptions (required);
+}
+
+table ExecutionIntent {
+  intent_id:string (required);
+  strategy_id:string (required);
+  launch_id:string (required);
+  instance_id:string (required);
+  intent_type:IntentType = UNSPECIFIED;
+  legs:[IntentLeg] (required);
+  completion_policy:CompletionPolicy = UNSPECIFIED;
+  failure_policy:FailurePolicy = UNSPECIFIED;
+  hedge_policy:HedgePolicy;
+  deadline_unix_nanos:ulong = null;
+  min_edge_bps:uint = null;
+  max_slippage_bps:uint = null;
+  estimated_fee_bps:uint = null;
+  evidence:[kairos.common.v2.EvidenceRef] (required);
+  reason:string;
+}

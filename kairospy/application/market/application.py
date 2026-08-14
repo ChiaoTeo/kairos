@@ -7,7 +7,7 @@ from typing import Any
 from kairospy.application.reference.models import Market
 from kairospy.domain_types import MarketId
 
-from .events import BarEvent, MarketEvent
+from .events import BarEvent, MarketEvent, TradeEvent
 from .models import Bar, OptionGreeks, Quote, Trade
 from .requests import SubscriptionRequest
 
@@ -60,6 +60,7 @@ class MarketApplication:
         strategy_id: str,
         instance_id: str,
         launch_id: str | None = None,
+        source_id: str = "default",
     ) -> None:
         if not strategy_id.strip() or not instance_id.strip():
             raise ValueError("strategy_id and instance_id are required")
@@ -70,7 +71,9 @@ class MarketApplication:
         self._strategy_id = strategy_id
         self._instance_id = instance_id
         self._launch_id = launch_id
+        self._source_id = source_id
         self._event_sequence: int | None = None
+        self._latest_trades: dict[MarketId, Trade] = {}
         self._event_source_ready = event_source is None
         self._request_counter = 0
         self._handles: dict[str, Any] = {}
@@ -134,6 +137,8 @@ class MarketApplication:
             if not typed and record.kind not in {"bar", "quote", "trade", "greeks"}:
                 continue
             event = record if typed else map_market_event(record)
+            if isinstance(event, TradeEvent):
+                self._latest_trades[event.value.market_id] = event.value
             if self._matches_subscription(event):
                 yield event
 
@@ -205,17 +210,59 @@ class MarketApplication:
         if owner_request_id is not None:
             self._subscription_requests.pop(owner_request_id, None)
 
-    def latest_bar(self, market: Market | MarketId, *, timeframe: str) -> Bar | None:
-        return self._snapshot().latest_bar(_market_id(market), timeframe)
+    def latest_bar(
+        self, market: Market | MarketId, *, timeframe: str, source_id: str | None = None
+    ) -> Bar | None:
+        reader = getattr(self._snapshots, "read_bar", None)
+        if callable(reader):
+            return reader(str(_market_id(market)), source_id or self._source_id, timeframe)
+        raise RuntimeError("Market v2 bar view reader is unavailable")
 
-    def latest_quote(self, market: Market | MarketId) -> Quote | None:
-        return self._snapshot().latest_quote(_market_id(market))
+    def latest_quote(
+        self, market: Market | MarketId, *, source_id: str | None = None
+    ) -> Quote | None:
+        reader = getattr(self._snapshots, "read_quote", None)
+        if callable(reader):
+            return reader(str(_market_id(market)), source_id or self._source_id)
+        raise RuntimeError("Market v2 quote view reader is unavailable")
 
     def latest_trade(self, market: Market | MarketId) -> Trade | None:
-        return self._snapshot().latest_trade(_market_id(market))
+        """Return the latest consumed trade event.
 
-    def latest_greeks(self, market: Market | MarketId) -> OptionGreeks | None:
-        return self._snapshot().latest_greeks(_market_id(market))
+        Trade is event-only in Market v2 and has no mmap current-view
+        resource. The result is therefore available after the event stream has
+        delivered a trade, rather than through an aggregate snapshot read.
+        """
+
+        return self._latest_trades.get(_market_id(market))
+
+    def latest_greeks(
+        self, market: Market | MarketId, *, source_id: str | None = None
+    ) -> OptionGreeks | None:
+        reader = getattr(self._snapshots, "read_greeks", None)
+        if callable(reader):
+            return reader(str(_market_id(market)), source_id or self._source_id)
+        raise RuntimeError("Market v2 greeks view reader is unavailable")
+
+    def current_view(
+        self,
+        market: Market | MarketId,
+        *,
+        source_id: str,
+        kind: Any,
+        qualifier: str | None = None,
+    ):
+        """Read one independent Market v2 current-view resource.
+
+        Current views are partitioned by market, source, data kind, and an
+        optional qualifier. This API intentionally does not reconstruct an
+        aggregate snapshot when one field changes.
+        """
+
+        reader = getattr(self._snapshots, "read_view", None)
+        if not callable(reader):
+            raise RuntimeError("Market v2 view reader is unavailable")
+        return reader(str(_market_id(market)), source_id, kind, qualifier)
 
     def _subscribe(self, request: SubscriptionRequest) -> Subscription:
         request_id = self._request_id("market.subscribe")
@@ -230,9 +277,6 @@ class MarketApplication:
         subscription = _subscription(handle)
         self._subscription_request_ids[subscription.subscription_id] = request_id
         return subscription
-
-    def _snapshot(self):
-        return self._snapshots.read("market.current")
 
     def _request_id(self, operation: str) -> str:
         self._request_counter += 1

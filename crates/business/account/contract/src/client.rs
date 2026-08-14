@@ -1,7 +1,7 @@
-//! Typed low-frequency Account read/write client.
+//! Synchronous Account control/query client.
 //!
-//! The client is deliberately limited to the existing control contract. It
-//! is not a replacement for the mmap snapshot data plane.
+//! This is the JSON control plane only. Account views and events use the v2
+//! FlatBuffers data plane exposed by [`crate::view`] and [`crate::event`].
 
 use reqwest::blocking::Client;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -36,10 +36,7 @@ impl Serialize for DecimalValue {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(
-            &crate::model::format_decimal(self.mantissa, self.scale)
-                .map_err(serde::ser::Error::custom)?,
-        )
+        serializer.serialize_str(&format_decimal(self.mantissa, self.scale))
     }
 }
 
@@ -49,9 +46,9 @@ impl<'de> Deserialize<'de> for DecimalValue {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        let (mantissa, scale) =
-            crate::model::parse_decimal(&value).map_err(serde::de::Error::custom)?;
-        Ok(Self { mantissa, scale })
+        parse_decimal(&value)
+            .map(|(mantissa, scale)| Self { mantissa, scale })
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -92,6 +89,7 @@ pub struct OrderEvent {
     pub remote_order_id: Option<String>,
     pub filled_quantity: DecimalValue,
     pub occurred_at_unix_nanos: u64,
+    #[serde(default)]
     pub reason: String,
 }
 
@@ -105,9 +103,9 @@ pub struct Fill {
     pub price: DecimalValue,
     pub side: String,
     pub occurred_at_unix_nanos: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_asset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_amount: Option<DecimalValue>,
 }
 
@@ -122,9 +120,9 @@ pub struct SimulatedFill {
     pub side: String,
     pub settlement_asset: String,
     pub settlement_delta: DecimalValue,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_asset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_amount: Option<DecimalValue>,
     pub occurred_at_unix_nanos: u64,
 }
@@ -172,11 +170,9 @@ impl AccountContractClient {
     pub fn publish_order_event(&self, event: &OrderEvent) -> ContractResult<()> {
         self.post("/v1/order-event", event)
     }
-
     pub fn publish_fill(&self, fill: &Fill) -> ContractResult<()> {
         self.post("/v1/fill", fill)
     }
-
     pub fn publish_simulated_fill(&self, fill: &SimulatedFill) -> ContractResult<()> {
         self.post("/v1/simulated-fill", fill)
     }
@@ -216,4 +212,50 @@ fn decode_response<T: DeserializeOwned>(
     }
     serde_json::from_value(value)
         .map_err(|error| ContractError::Invalid(format!("decode {path} response: {error}")))
+}
+
+fn format_decimal(mantissa: i64, scale: u8) -> String {
+    let sign = if mantissa < 0 { "-" } else { "" };
+    let digits = mantissa.unsigned_abs().to_string();
+    if scale == 0 {
+        return format!("{sign}{digits}");
+    }
+    let width = usize::from(scale) + 1;
+    let padded = format!("{digits:0>width$}");
+    format!(
+        "{sign}{}.{}",
+        &padded[..padded.len() - usize::from(scale)],
+        &padded[padded.len() - usize::from(scale)..]
+    )
+}
+
+fn parse_decimal(value: &str) -> Result<(i64, u8), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("decimal is empty".into());
+    }
+    let negative = value.starts_with('-');
+    let unsigned = value.trim_start_matches(['-', '+']);
+    let mut parts = unsigned.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || whole.is_empty() && fraction.is_empty()
+        || !whole.chars().all(|c| c.is_ascii_digit())
+        || !fraction.chars().all(|c| c.is_ascii_digit())
+        || fraction.len() > usize::from(u8::MAX)
+    {
+        return Err(format!("invalid decimal: {value}"));
+    }
+    let scale = u8::try_from(fraction.len()).map_err(|_| "decimal scale is too large")?;
+    let digits = format!("{whole}{fraction}");
+    let mut mantissa = digits
+        .parse::<i64>()
+        .map_err(|_| format!("decimal is out of range: {value}"))?;
+    if negative {
+        mantissa = mantissa
+            .checked_neg()
+            .ok_or_else(|| format!("decimal is out of range: {value}"))?;
+    }
+    Ok((mantissa, scale))
 }

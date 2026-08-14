@@ -276,6 +276,9 @@ pub struct LimitView {
 pub struct RiskDecision {
     pub decision_id: String,
     pub request_id: String,
+    pub account_id: String,
+    pub strategy_id: String,
+    pub instrument_id: String,
     pub allowed: bool,
     pub degraded: bool,
     pub reason_codes: Vec<ReasonCode>,

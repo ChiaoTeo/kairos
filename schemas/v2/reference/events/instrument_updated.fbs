@@ -1,0 +1,13 @@
+include "../../common/metadata.fbs";
+include "../types/instrument.fbs";
+
+namespace kairos.reference.v2;
+
+table InstrumentUpdated {
+  metadata:kairos.common.v2.EventMetadata (required);
+  catalog_revision:ulong;
+  instrument:Instrument (required);
+}
+
+root_type InstrumentUpdated;
+file_identifier "RID2";

@@ -1,0 +1,7 @@
+include "../../common/metadata.fbs";
+include "../types/rate.fbs";
+namespace kairos.market.v2;
+table LatestRate { value:Rate (required); source_event_id:string (required); }
+table RateLatestView { metadata:kairos.common.v2.ViewMetadata (required); rate:LatestRate (required); }
+root_type RateLatestView;
+file_identifier "MLR2";

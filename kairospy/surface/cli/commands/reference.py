@@ -8,7 +8,7 @@ import subprocess
 import typer
 
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.infrastructure.contracts.reference_client import ReferenceClient
+from kairospy.infrastructure.contracts.reference import ReferenceClient
 
 reference_app = typer.Typer(
     no_args_is_help=True, help="Query the running Reference process"
@@ -42,17 +42,6 @@ def reference_catalog(
     from kairospy.surface.cli.options import OutputFormat, render
 
     typer.echo(render(_client(workspace).catalog(), OutputFormat(output)))
-
-
-@reference_app.command("views")
-def reference_views(
-    workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("table", "--output", "--format"),
-) -> None:
-    """List Reference SQLite read-model views and resource paths."""
-    from kairospy.surface.cli.options import OutputFormat, render
-
-    typer.echo(render(_client(workspace).reference_views(), OutputFormat(output)))
 
 
 @reference_app.command("providers")

@@ -460,7 +460,7 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["launch", "--help"], ("targets", "diagnose", "replay", "instance")),
         (
             ["reference", "--help"],
-            ("health", "views", "catalog", "assets", "listings", "markets"),
+                ("health", "catalog", "assets", "listings", "markets"),
         ),
         (["system", "--help"], ("account", "restart", "list")),
     ):

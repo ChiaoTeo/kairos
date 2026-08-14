@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json, Router,
 };
-use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
+use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -174,10 +174,6 @@ impl RiskProcess {
         info!(event = "control_request", component = "risk", path = %path, "risk control request received");
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_body()),
-            SNAPSHOT_PATH => match serde_json::to_value(self.application.current_view()) {
-                Ok(value) => (200, value),
-                Err(error) => (500, serde_json::json!({"error": error.to_string()})),
-            },
             "/v1/time/advance" => {
                 let value: serde_json::Value = serde_json::from_str(raw_body)
                     .map_err(|error| error.to_string())
@@ -219,7 +215,7 @@ impl RiskProcess {
                     .map(|_| serde_json::json!({"status":"active"}))
                     .map_err(|error| error.to_string())
             }),
-            "/v1/authorize_and_reserve" => self.json_command(raw_body, |application, body| {
+            "/v1/authorizations" | "/v1/authorize_and_reserve" => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
                     .authorize_and_reserve(request)
@@ -274,7 +270,8 @@ impl RiskProcess {
                     })
                     .map_err(|error| error.to_string())
             }),
-            "/v1/release" => self.json_command(raw_body, |application, body| {
+            path if path == "/v1/release"
+                || (path.starts_with("/v1/reservations/") && path.ends_with("/release")) => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
                     .release(request)
@@ -296,7 +293,8 @@ impl RiskProcess {
                     })
                     .map_err(|error| error.to_string())
             }),
-            "/v1/consume" => self.json_command(raw_body, |application, body| {
+            path if path == "/v1/consume"
+                || (path.starts_with("/v1/reservations/") && path.ends_with("/consume")) => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
                     .consume(request)
@@ -486,7 +484,7 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn control_socket_exposes_health_snapshot_and_stop() {
+    async fn control_socket_exposes_health_and_stop() {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("risk.sock");
         let application =
@@ -506,8 +504,6 @@ mod tests {
                 let client = RestControlClient::new(&socket);
                 let health = client.health().await.unwrap();
                 assert_eq!(health["status"], "ready");
-                let snapshot = client.request_json("GET", "/v1/snapshot", None).await.unwrap();
-                assert_eq!(snapshot["actor_id"], "risk");
                 let policy = r#"{"policy":{"policy_id":"account-notional","version":1,"scope":{"account_id":"main","strategy_id":null,"instrument_id":null,"exchange_id":null},"metric":"notional","limit":"100","enforcement":"reject","valid_from_unix_nanos":0,"valid_until_unix_nanos":null}}"#;
                 let configured = client.request_json("POST", "/v1/publish_policy", Some(policy.as_bytes())).await.unwrap();
                 assert_eq!(configured["status"], "active");

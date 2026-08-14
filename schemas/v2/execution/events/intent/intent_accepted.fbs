@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/intent.fbs";
+
+namespace kairos.execution.v2;
+table IntentAccepted { metadata:kairos.common.v2.EventMetadata (required); intent_id:string (required); lifecycle:IntentLifecycle = ACCEPTED; }
+root_type IntentAccepted;
+file_identifier "EIA2";

@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/reservation.fbs";
+
+namespace kairos.risk.v2;
+table ReservationReserved { metadata:kairos.common.v2.EventMetadata (required); reservation:Reservation (required); }
+root_type ReservationReserved;
+file_identifier "RRV2";

@@ -104,22 +104,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         process
     };
     process
-        .with_snapshot_publisher(SharedExecutionSnapshotPublisher::create(
+        .with_snapshot_publisher(SharedExecutionSnapshotPublisher::create_with_identity(
             execution_snapshot,
             1024 * 1024,
             format!("execution:{}", args.instance_id),
+            transport_identity.clone(),
         )?)
         .with_event_publisher(AeronExecutionEventPublisher::connect(
             args.aeron_dir.as_deref(),
             &args.aeron_channel,
             args.execution_events_stream_id,
             format!("execution:{}", args.instance_id),
-            transport_identity,
+            transport_identity.clone(),
         )?)
-        .with_intent_snapshot_publisher(SharedIntentSnapshotPublisher::create(
+        .with_intent_snapshot_publisher(SharedIntentSnapshotPublisher::create_with_identity(
             intent_snapshot,
             1024 * 1024,
             format!("execution:{}", args.instance_id),
+            transport_identity,
         )?)
         .run()
         .await

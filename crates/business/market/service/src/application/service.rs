@@ -263,4 +263,11 @@ impl MarketApplication {
             .map(|(sequence, event)| (sequence.get(), event))
             .collect()
     }
+
+    pub fn drain_changes_limited(
+        &mut self,
+        limit: usize,
+    ) -> Vec<crate::domain::events::MarketChange> {
+        self.actor.drain_changes_limited(limit)
+    }
 }

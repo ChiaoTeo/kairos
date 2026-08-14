@@ -1581,11 +1581,15 @@ name = "kairos-account-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "futures-core",
  "kairos-protocol",
  "kairos-transport",
+ "kairos-workspace",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1628,12 +1632,16 @@ name = "kairos-execution-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "futures-core",
  "kairos-protocol",
  "kairos-transport",
+ "kairos-workspace",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1642,6 +1650,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "flatbuffers",
  "futures-util",
  "kairos-account-contract",
  "kairos-domain-types",
@@ -1702,12 +1711,15 @@ name = "kairos-market-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "futures-core",
  "kairos-protocol",
- "kairos-reference-contract",
  "kairos-transport",
+ "kairos-workspace",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1758,13 +1770,17 @@ name = "kairos-reference-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "futures-core",
  "kairos-protocol",
  "kairos-transport",
+ "kairos-workspace",
  "rusqlite",
  "rusteron-media-driver",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -1797,11 +1813,15 @@ name = "kairos-risk-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
+ "futures-core",
  "kairos-protocol",
  "kairos-transport",
+ "kairos-workspace",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

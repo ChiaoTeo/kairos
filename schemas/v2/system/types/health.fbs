@@ -1,0 +1,41 @@
+namespace kairos.system.v2;
+
+enum HealthStatus:ubyte {
+  UNSPECIFIED = 0,
+  HEALTHY = 1,
+  DEGRADED = 2,
+  UNHEALTHY = 3,
+  STOPPED = 4
+}
+
+enum ConnectionStatus:ubyte {
+  UNSPECIFIED = 0,
+  CONNECTING = 1,
+  AUTHENTICATING = 2,
+  READY = 3,
+  DEGRADED = 4,
+  DISCONNECTED = 5,
+  FAILED = 6
+}
+
+table ActorHealth {
+  actor_id:string (required);
+  status:HealthStatus = UNSPECIFIED;
+  processed_count:ulong;
+  error_count:ulong;
+  mailbox_depth:ulong;
+  last_processed_at_unix_nanos:ulong = null;
+  last_business_event_at_unix_nanos:ulong = null;
+  last_error:string;
+}
+
+table ConnectionHealth {
+  connection_id:string (required);
+  /// System identity of the business/runtime component that owns this connection.
+  owner_id:string (required);
+  status:ConnectionStatus = UNSPECIFIED;
+  authenticated:bool;
+  reconnect_count:ulong;
+  last_message_at_unix_nanos:ulong = null;
+  last_error:string;
+}

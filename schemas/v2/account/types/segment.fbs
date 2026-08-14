@@ -1,0 +1,24 @@
+include "common.fbs";
+include "balance.fbs";
+include "position.fbs";
+include "valuation.fbs";
+
+namespace kairos.account.v2;
+
+table AccountSegmentState {
+  segment_key:string (required);
+  environment:string (required);
+  broker:string (required);
+  configured_account_model:AccountModel = UNSPECIFIED;
+  observed_account_model:AccountModel = UNSPECIFIED;
+  status:AccountStatus = UNSPECIFIED;
+  freshness:FreshnessState = UNSPECIFIED;
+  observed_at_unix_nanos:ulong;
+  state_generation:ulong;
+  valuation:AccountValuation;
+  balances:[Balance] (required);
+  collateral:[Balance] (required);
+  positions:[Position] (required);
+  margin_mode:MarginMode = UNSPECIFIED;
+  position_mode:PositionMode = UNSPECIFIED;
+}

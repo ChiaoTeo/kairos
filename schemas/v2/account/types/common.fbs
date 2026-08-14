@@ -1,0 +1,7 @@
+namespace kairos.account.v2;
+
+enum AccountStatus:ubyte { UNSPECIFIED = 0, ACTIVE = 1, RESTRICTED = 2, DISABLED = 3, CLOSED = 4, ERROR = 5, RECONCILING = 6, TYPE_MISMATCH = 7, UNAVAILABLE = 8 }
+enum FreshnessState:ubyte { UNSPECIFIED = 0, FRESH = 1, STALE = 2, UNKNOWN = 3 }
+enum AccountModel:ubyte { UNSPECIFIED = 0, CASH = 1, MARGIN = 2, PORTFOLIO_MARGIN = 3 }
+enum MarginMode:ubyte { UNSPECIFIED = 0, CROSS = 1, ISOLATED = 2 }
+enum PositionMode:ubyte { UNSPECIFIED = 0, NET = 1, HEDGED = 2 }

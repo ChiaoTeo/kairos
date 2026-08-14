@@ -151,6 +151,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         aeron_dir,
         aeron_channel,
         reference_changes_stream,
+        database: config.database.clone(),
     });
     run_process(
         application,

@@ -399,6 +399,15 @@ impl AccountRuntime {
         self.pending_business_events.pop_front();
     }
 
+    pub(crate) fn attach_business_event_provenance(
+        &mut self,
+        provenance: crate::application::AccountFactProvenance,
+    ) {
+        if let Some(event) = self.pending_business_events.front_mut() {
+            event.provenance = Some(provenance);
+        }
+    }
+
     fn persist_candidate(&self, candidate: &AccountActor) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
             let (actor_id, generation, event_sequence) = candidate.persistence_metadata();

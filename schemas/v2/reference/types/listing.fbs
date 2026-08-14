@@ -1,0 +1,13 @@
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Listing {
+  listing_id:string (required);
+  instrument_id:string (required);
+  exchange_id:string (required);
+  exchange_symbol:string (required);
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}

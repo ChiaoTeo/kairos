@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/exchange.fbs";
+namespace kairos.reference.v2;
+table ExchangeUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; exchange:Exchange (required); }
+root_type ExchangeUpserted;
+file_identifier "REU2";

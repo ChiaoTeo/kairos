@@ -835,11 +835,12 @@ fn map_open_order(
     value: kairos_integration::application::ExternalOpenOrder,
     resolver: &AccountInstrumentResolver,
 ) -> Result<OpenOrder, String> {
-    let (instrument_id, _) = resolver.resolve(&value.provider_instrument)?;
+    let (instrument_id, market_id) = resolver.resolve(&value.provider_instrument)?;
     Ok(OpenOrder {
         order_id: value.order_id,
         remote_order_id: value.remote_order_id,
         instrument_id,
+        market_id,
         side: value.side,
         quantity: quantity(value.quantity)?,
         filled_quantity: quantity(value.filled_quantity)?,

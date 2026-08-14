@@ -25,6 +25,11 @@ from .application import MarketApplication
 class MarketAccessConfig:
     scope: Literal["shared", "instance"]
     replayable: bool = False
+    source_id: str = "default"
+
+    def __post_init__(self) -> None:
+        if not self.source_id.strip():
+            raise ValueError("Market source_id is required for v2 current views")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,15 +57,18 @@ def build_strategy_access(
     if config.scope == "shared":
         command_socket = workspace.paths.process_socket("market")
         event_socket = workspace.paths.process_socket("market-events")
-        snapshot = workspace.paths.child("snapshots", "market", "market.snapshot")
+        snapshot = workspace.paths.child(
+            "snapshots", "v2", "market", "market-shared"
+        )
     else:
         command_socket = instance.socket("market")
         event_socket = instance.socket("market-events")
-        snapshot = instance.snapshot("market", "market.snapshot")
+        snapshot = instance.root / "snapshots" / "v2" / "market" / "market-shared"
 
     commands = MarketCommandClient(
         UnixJsonCommandClient(command_socket),
         launch_id=identity.launch_id if config.scope == "instance" else None,
+        workspace_id=workspace.identity.workspace_id,
     )
     event_source = (
         UnixMarketEventStream(event_socket, replayable=True)
@@ -79,6 +87,7 @@ def build_strategy_access(
         # Shared Market is a workspace process and intentionally carries no
         # launch/instance ownership. Instance Market must match both.
         launch_id=identity.launch_id if config.scope == "instance" else None,
+        source_id=config.source_id,
     )
     return StrategyMarketAccess(application=application)
 

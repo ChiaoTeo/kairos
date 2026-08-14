@@ -1,6 +1,0 @@
-include "../../common/v1/header.fbs";
-include "data.fbs";
-namespace kairos.market.v1;
-table Ticker24hMessage { header: kairos.common.v1.MessageHeader (required); payload: Ticker24h (required); }
-root_type Ticker24hMessage;
-file_identifier "MT24";

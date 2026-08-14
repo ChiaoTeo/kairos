@@ -11,6 +11,7 @@ from kairospy.application.execution.events import (
     ExecutionChangeRecord,
     ExecutionEventRecord,
 )
+from kairospy.infrastructure.contracts.execution import decode_event
 from kairospy.infrastructure.transport.aeron_bridge import check_aeron_bridge
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 
@@ -84,91 +85,154 @@ class AeronExecutionEventSource:
 
 
 def decode_execution_event(payload: bytes) -> ExecutionEventRecord:
-    from kairospy.infrastructure.transport.generated.kairos.execution.v1.ExecutionEventMessage import (
-        ExecutionEventMessage,
-    )
+    if len(payload) < 8 or payload[4:8] not in _V2_EVENT_ROOTS:
+        raise ValueError("invalid Execution v2 event identifier")
+    return _decode_v2_event(payload)
 
-    if payload[4:8] != b"EXE1":
-        raise ValueError("invalid ExecutionEventMessage identifier")
-    root = cast(Any, ExecutionEventMessage.GetRootAs(payload, 0))
-    header = cast(Any, root.Header())
-    if header is None:
-        raise ValueError("Execution event header is missing")
+
+_V2_EVENT_ROOTS = {
+    b"EIA2": "IntentAccepted",
+    b"EIR2": "IntentRejected",
+    b"EPV2": "PlanCreated",
+    b"EOS2": "OrderSubmitted",
+    b"EOA2": "OrderAccepted",
+    b"EOR2": "OrderRejected",
+    b"EOC2": "OrderCanceled",
+    b"EOX2": "OrderExpired",
+    b"EFV2": "FillRecorded",
+    b"EXV2": "ReconciliationRequired",
+}
+
+
+def _decode_v2_event(payload: bytes) -> ExecutionEventRecord:
+    root_name = _V2_EVENT_ROOTS[payload[4:8]]
+    root = cast(Any, decode_event(payload))
+    metadata = cast(Any, root.Metadata())
+    if metadata is None:
+        raise ValueError("Execution v2 event metadata is missing")
+    kind, payload_value = _v2_payload(root_name, root)
+    strategy_id = _v2_strategy_id(payload_value)
+    account_id = _v2_account_id(payload_value)
     return ExecutionEventRecord(
-        stream_id=_required_text(header.StreamId(), "stream_id"),
-        sequence=int(header.Sequence()),
-        producer=_required_text(header.ProducerId(), "producer_id"),
-        instance_id=_text(header.InstanceId()),
-        changes=tuple(
-            _decode_change(cast(Any, root.Changes(index)))
-            for index in range(root.ChangesLength())
+        stream_id=_required_text(metadata.StreamId(), "stream_id"),
+        sequence=int(metadata.Sequence()),
+        producer=_required_text(metadata.ProducerId(), "producer_id"),
+        instance_id=_text(metadata.InstanceId()),
+        changes=(
+            ()
+            if kind is None
+            else (ExecutionChangeRecord(kind, strategy_id, account_id, payload_value),)
         ),
-        occurred_at_unix_nanos=int(root.OccurredAtUnixNanos()),
-        launch_id=_text(header.LaunchId()),
+        occurred_at_unix_nanos=int(metadata.OccurredAtUnixNanos()),
+        launch_id=_text(metadata.LaunchId()),
     )
 
 
-def _decode_change(change: Any) -> ExecutionChangeRecord:
-    if change is None:
-        raise ValueError("Execution event contains an empty change")
-    kind = _required_text(change.Kind(), "change.kind")
-    strategy_id = _required_text(change.StrategyId(), "strategy_id")
-    account_id = _text(change.AccountId())
-    if kind == "intent_update":
-        value = cast(Any, change.Intent())
+def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object]]:
+    if root_name in {"OrderSubmitted", "OrderAccepted", "OrderRejected", "OrderCanceled", "OrderExpired"}:
+        value = root.Order()
         if value is None:
-            raise ValueError("Execution intent update payload is missing")
-        payload: object = {
-            "intent": {
-                "intent_id": _required_text(value.IntentId(), "intent_id"),
-                "strategy_id": strategy_id,
-                "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
-                "account_ids": [
-                    _required_text(value.AccountIds(index), "account_id")
-                    for index in range(value.AccountIdsLength())
-                ],
-                "target_quantity": _decimal(value.TargetQuantity()),
-                "source_event_sequence": int(value.SourceEventSequence()) or None,
-                "reason": _text(value.Reason()) or "",
-            },
-            "status": _required_text(value.Status(), "intent.status"),
-            "order_ids": [
-                _required_text(value.OrderIds(index), "order_id")
-                for index in range(value.OrderIdsLength())
-            ],
-        }
-    elif kind == "order_update":
-        value = cast(Any, change.Order())
+            raise ValueError(f"{root_name} order payload is missing")
+        order = _v2_order(value)
+        order["status"] = _order_status(int(value.Lifecycle()))
+        return "order_update", order
+    if root_name == "FillRecorded":
+        value = root.Fill()
         if value is None:
-            raise ValueError("Execution order update payload is missing")
-        payload = {
-            "order_id": _required_text(value.OrderId(), "order_id"),
-            "strategy_id": strategy_id,
-            "intent_id": _text(value.IntentId()),
-            "account_id": _required_text(value.AccountId(), "account_id"),
-            "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
-            "side": _side(value.Side()),
-            "quantity": _decimal(value.Quantity()),
-            "filled_quantity": _decimal(value.FilledQuantity()),
-            "limit_price": _decimal(value.LimitPrice()),
-            "status": _required_text(value.Status(), "order.status"),
-            "updated_at_unix_nanos": int(value.UpdatedAtUnixNanos()),
-        }
-    elif kind == "fill":
-        value = cast(Any, change.Fill())
+            raise ValueError("FillRecorded fill payload is missing")
+        fill = _v2_fill(value)
+        fill["occurred_at_unix_nanos"] = int(root.Metadata().OccurredAtUnixNanos())
+        return "fill", fill
+    if root_name == "PlanCreated":
+        value = root.Plan()
         if value is None:
-            raise ValueError("Execution fill payload is missing")
-        payload = {
-            "fill_id": _required_text(value.FillId(), "fill_id"),
-            "order_id": _required_text(value.OrderId(), "order_id"),
-            "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
-            "quantity": _decimal(value.Quantity()),
-            "price": _decimal(value.Price()),
-            "occurred_at_unix_nanos": int(value.OccurredAtUnixNanos()),
+            raise ValueError("PlanCreated plan payload is missing")
+        return None, {"plan_id": _text(value.PlanId()), "intent_id": _text(value.IntentId())}
+    if root_name == "ReconciliationRequired":
+        return None, {
+            "reconciliation_id": _required_text(root.ReconciliationId(), "reconciliation_id"),
+            "reason": int(root.Reason()),
+            "intent_id": _text(root.IntentId()),
+            "plan_id": _text(root.PlanId()),
+            "leg_id": _text(root.LegId()),
+            "order_id": _text(root.OrderId()),
+            "account_id": _text(root.AccountId()),
+            "details": _text(root.Details()) or "",
+            "kind": root_name,
         }
-    else:
-        raise ValueError(f"unsupported Execution event kind: {kind}")
-    return ExecutionChangeRecord(kind, strategy_id, account_id, payload)
+    return None, {"intent_id": _required_text(root.IntentId(), "intent_id")}
+
+
+def _v2_order(value: Any) -> dict[str, object]:
+    return {
+        "order_id": _required_text(value.OrderId(), "order_id"),
+        "intent_id": _required_text(value.IntentId(), "intent_id"),
+        "plan_id": _required_text(value.PlanId(), "plan_id"),
+        "leg_id": _required_text(value.LegId(), "leg_id"),
+        "strategy_id": _required_text(value.StrategyId(), "strategy_id"),
+        "account_id": _required_text(value.AccountId(), "account_id"),
+        "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
+        "market_id": _required_text(value.MarketId(), "market_id"),
+        "execution_access_id": _required_text(value.ExecutionAccessId(), "execution_access_id"),
+        "side": _side(value.Side()),
+        "quantity": _decimal(value.Quantity()),
+        "filled_quantity": _decimal(value.FilledQuantity()),
+        "lifecycle": int(value.Lifecycle()),
+        "reason": _text(value.Reason()) or "",
+    }
+
+
+def _order_status(value: int) -> str:
+    return {
+        1: "pending",
+        2: "submitting",
+        3: "accepted",
+        4: "partially_filled",
+        5: "filled",
+        6: "cancel_requested",
+        7: "canceled",
+        8: "rejected",
+        9: "expired",
+        11: "failed",
+    }.get(value, "unknown")
+
+
+def _v2_fill(value: Any) -> dict[str, object]:
+    return {
+        "fill_id": _required_text(value.FillId(), "fill_id"),
+        "trade_id": _text(value.TradeId()),
+        "order_id": _required_text(value.OrderId(), "order_id"),
+        "intent_id": _required_text(value.IntentId(), "intent_id"),
+        "plan_id": _required_text(value.PlanId(), "plan_id"),
+        "leg_id": _required_text(value.LegId(), "leg_id"),
+        "strategy_id": _required_text(value.StrategyId(), "strategy_id"),
+        "account_id": _required_text(value.AccountId(), "account_id"),
+        "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
+        "quantity": _decimal(value.Quantity()),
+        "price": _decimal(value.Price()),
+    }
+
+
+def _v2_strategy_id(value: object) -> str:
+    if isinstance(value, dict):
+        raw = value.get("strategy_id")
+        if isinstance(raw, str) and raw:
+            return raw
+        nested = value.get("order") or value.get("fill")
+        if isinstance(nested, dict) and isinstance(nested.get("strategy_id"), str):
+            return cast(str, nested["strategy_id"])
+    return "execution"
+
+
+def _v2_account_id(value: object) -> str | None:
+    if isinstance(value, dict):
+        raw = value.get("account_id")
+        if isinstance(raw, str):
+            return raw
+        nested = value.get("order") or value.get("fill")
+        if isinstance(nested, dict):
+            return cast(str | None, nested.get("account_id"))
+    return None
 
 
 def _side(value: int) -> str:

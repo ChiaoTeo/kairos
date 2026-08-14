@@ -1,7 +1,7 @@
 //! Private Market event publication and local subscriber fan-out.
 
 use crate::domain::events::MarketEvent;
-use crate::services::event_wire::encode_event;
+use crate::services::event_wire_v2::encode_event;
 use kairos_protocol::InstanceIdentity;
 use std::collections::VecDeque;
 use tokio::io::AsyncWriteExt;

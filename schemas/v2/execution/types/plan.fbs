@@ -1,0 +1,53 @@
+include "../../common/decimal.fbs";
+include "../../common/types.fbs";
+include "intent.fbs";
+
+namespace kairos.execution.v2;
+
+enum LegLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  PENDING = 1,
+  READY = 2,
+  EXECUTING = 3,
+  PARTIALLY_FILLED = 4,
+  SATISFIED = 5,
+  CANCELED = 6,
+  FAILED = 7,
+  COMPENSATING = 8
+}
+
+table ExecutionLegState {
+  leg_id:string (required);
+  account_id:string (required);
+  segment_key:string (required);
+  instrument_id:string (required);
+  market_id:string (required);
+  side:kairos.common.v2.Side = UNSPECIFIED;
+  target_quantity:kairos.common.v2.Decimal64 (required);
+  order_ids:[string] (required);
+  lifecycle:LegLifecycle = UNSPECIFIED;
+  completed_quantity:kairos.common.v2.Decimal64 (required);
+  reason:string;
+}
+
+table ExecutionPlan {
+  plan_id:string (required);
+  intent_id:string (required);
+  intent_type:IntentType = UNSPECIFIED;
+  legs:[ExecutionLegState] (required);
+  completion_policy:CompletionPolicy = UNSPECIFIED;
+  failure_policy:FailurePolicy = UNSPECIFIED;
+  created_at_unix_nanos:ulong;
+}
+
+table IntentState {
+  intent:ExecutionIntent (required);
+  lifecycle:IntentLifecycle = UNSPECIFIED;
+  plan:ExecutionPlan;
+  updated_at_unix_nanos:ulong;
+  reason:string;
+  dependency_evidence:[kairos.common.v2.EvidenceRef] (required);
+  quote_version:ulong = null;
+  last_quote_refresh_unix_nanos:ulong = null;
+  compensation_attempts:uint;
+}

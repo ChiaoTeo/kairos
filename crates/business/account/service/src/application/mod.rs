@@ -13,7 +13,7 @@ pub use process::{AccountEventPublisher, AccountProcess, AccountSnapshotPublishe
 pub use query::{AccountDataQuery, AccountMarketProfileRequest, AccountQuery};
 pub use result::{
     AccountBalanceRow, AccountBusinessChange, AccountBusinessEvent, AccountCapability,
-    AccountDifference, AccountFeeSchedule, AccountProjection, AccountRefreshIssue,
-    AccountRefreshReport, AccountsSnapshot,
+    AccountDifference, AccountFactProvenance, AccountFeeSchedule, AccountProjection,
+    AccountRefreshIssue, AccountRefreshReport, AccountsSnapshot,
 };
 pub use service::AccountApplication;

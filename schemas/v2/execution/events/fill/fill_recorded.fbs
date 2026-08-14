@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/fill.fbs";
+
+namespace kairos.execution.v2;
+table FillRecorded { metadata:kairos.common.v2.EventMetadata (required); fill:Fill (required); }
+root_type FillRecorded;
+file_identifier "EFV2";

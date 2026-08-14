@@ -1,0 +1,13 @@
+include "../../common/metadata.fbs";
+include "../types/market.fbs";
+
+namespace kairos.reference.v2;
+
+table MarketUpdated {
+  metadata:kairos.common.v2.EventMetadata (required);
+  catalog_revision:ulong;
+  market:Market (required);
+}
+
+root_type MarketUpdated;
+file_identifier "RMD2";

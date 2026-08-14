@@ -1,0 +1,12 @@
+include "../../common/decimal.fbs";
+namespace kairos.account.v2;
+
+table Balance {
+  asset_id:string (required);
+  asset_code:string;
+  total:kairos.common.v2.Decimal64 (required);
+  available:kairos.common.v2.Decimal64;
+  locked:kairos.common.v2.Decimal64;
+  borrowed:kairos.common.v2.Decimal64;
+  interest:kairos.common.v2.Decimal64;
+}

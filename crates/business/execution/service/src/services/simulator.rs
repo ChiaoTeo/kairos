@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use kairos_market_contract::model::{Bar, MarketObservation, Quote};
+use crate::application::market_input::{Bar, MarketObservation, Quote};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 

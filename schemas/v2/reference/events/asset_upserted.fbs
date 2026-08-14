@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/asset.fbs";
+namespace kairos.reference.v2;
+table AssetUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; asset:Asset (required); }
+root_type AssetUpserted;
+file_identifier "RAU2";

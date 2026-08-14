@@ -1,0 +1,16 @@
+include "../../../common/metadata.fbs";
+include "../../types/position.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table PositionUpserted {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  position:Position (required);
+  provenance:AccountFactProvenance;
+}
+
+root_type PositionUpserted;
+file_identifier "APU2";

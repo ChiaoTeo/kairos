@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/rate.fbs";
+namespace kairos.market.v2;
+table RateUpdated { metadata:kairos.common.v2.EventMetadata (required); rate:Rate (required); }
+root_type RateUpdated;
+file_identifier "MRU2";

@@ -1,0 +1,15 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table OpenInterest {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  contracts:kairos.common.v2.Decimal64 (required);
+  quote_value:kairos.common.v2.Decimal64;
+  change_24h:kairos.common.v2.Decimal64;
+  change_pct_24h:kairos.common.v2.Decimal64;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

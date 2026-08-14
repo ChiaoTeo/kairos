@@ -1,0 +1,12 @@
+include "../../common/metadata.fbs";
+include "../types/greeks.fbs";
+
+namespace kairos.market.v2;
+
+table GreeksUpdated {
+  metadata:kairos.common.v2.EventMetadata (required);
+  greeks:Greeks (required);
+}
+
+root_type GreeksUpdated;
+file_identifier "MGU2";

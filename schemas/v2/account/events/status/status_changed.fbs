@@ -1,0 +1,18 @@
+include "../../../common/metadata.fbs";
+include "../../types/common.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table AccountStatusChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  status:AccountStatus = UNSPECIFIED;
+  freshness:FreshnessState = UNSPECIFIED;
+  reason:string;
+  provenance:AccountFactProvenance;
+}
+
+root_type AccountStatusChanged;
+file_identifier "ASC2";

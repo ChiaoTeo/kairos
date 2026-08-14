@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/reservation.fbs";
+
+namespace kairos.risk.v2;
+table ReservationReleased { metadata:kairos.common.v2.EventMetadata (required); reservation:Reservation (required); reason:string; }
+root_type ReservationReleased;
+file_identifier "RRL2";

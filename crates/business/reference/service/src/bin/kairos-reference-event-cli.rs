@@ -1,8 +1,8 @@
 use clap::Parser;
-use kairos_reference_contract::decode_change;
-use kairos_reference_contract::transport::AeronEventSubscriber;
+use kairos_reference_contract::transport::ReferenceAeronTransport;
+use kairos_reference_contract::{decode_event, ReferenceEvent};
 use serde_json::json;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -28,13 +28,10 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut subscriber = AeronEventSubscriber::connect(
+    let mut subscriber = ReferenceAeronTransport::subscriber(
         args.aeron_dir.as_deref(),
         &args.aeron_channel,
         args.stream_id,
-        "reference.lifecycle",
-        1,
-        "reference-actor",
     )?;
     let deadline = Instant::now() + Duration::from_secs(args.timeout_seconds);
     let mut idle_deadline = None;
@@ -45,18 +42,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut first_event_id = None;
     let mut last_event_id = None;
     loop {
-        if let Some(envelope) = subscriber.next(0, unix_nanos())? {
-            let change = decode_change(&envelope.payload)?;
+        if let Some(payload) = subscriber.next_frame()? {
+            let event = decode_event(&payload)?;
+            let (event_id, revision, sequence) = event_metadata(&event);
             batches += 1;
-            events += change.events.len();
-            generation = Some(change.generation);
-            event_sequence = Some(change.event_sequence);
+            events += 1;
+            generation = Some(revision);
+            event_sequence = Some(sequence);
             if first_event_id.is_none() {
-                first_event_id = change.events.first().map(|event| event.event_id.clone());
+                first_event_id = Some(event_id.clone());
             }
-            if let Some(event) = change.events.last() {
-                last_event_id = Some(event.event_id.clone());
-            }
+            last_event_id = Some(event_id);
             idle_deadline = Some(Instant::now() + Duration::from_secs(args.idle_timeout_seconds));
             continue;
         }
@@ -86,9 +82,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn unix_nanos() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
+fn event_metadata(event: &ReferenceEvent<'_>) -> (String, u64, u64) {
+    macro_rules! values {
+        ($value:expr) => {{
+            let metadata = $value.metadata();
+            (
+                metadata.event_id().to_owned(),
+                $value.catalog_revision(),
+                metadata.sequence(),
+            )
+        }};
+    }
+    match event {
+        ReferenceEvent::EntityUpserted(value) => values!(value),
+        ReferenceEvent::EntityUpdated(value) => values!(value),
+        ReferenceEvent::FinancialProductUpserted(value) => values!(value),
+        ReferenceEvent::FinancialProductUpdated(value) => values!(value),
+        ReferenceEvent::AssetUpserted(value) => values!(value),
+        ReferenceEvent::AssetUpdated(value) => values!(value),
+        ReferenceEvent::ExchangeUpserted(value) => values!(value),
+        ReferenceEvent::ExchangeUpdated(value) => values!(value),
+        ReferenceEvent::ProviderUpserted(value) => values!(value),
+        ReferenceEvent::ProviderUpdated(value) => values!(value),
+        ReferenceEvent::BrokerUpserted(value) => values!(value),
+        ReferenceEvent::BrokerUpdated(value) => values!(value),
+        ReferenceEvent::ExecutionAccessUpserted(value) => values!(value),
+        ReferenceEvent::ExecutionAccessUpdated(value) => values!(value),
+        ReferenceEvent::MarketDataAccessUpserted(value) => values!(value),
+        ReferenceEvent::MarketDataAccessUpdated(value) => values!(value),
+        ReferenceEvent::InstrumentUpserted(value) => values!(value),
+        ReferenceEvent::InstrumentUpdated(value) => values!(value),
+        ReferenceEvent::ListingUpserted(value) => values!(value),
+        ReferenceEvent::ListingUpdated(value) => values!(value),
+        ReferenceEvent::MarketUpserted(value) => values!(value),
+        ReferenceEvent::MarketUpdated(value) => values!(value),
+    }
 }

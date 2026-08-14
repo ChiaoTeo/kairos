@@ -1,0 +1,11 @@
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Asset {
+  asset_id:string (required);
+  code:string (required);
+  name:string;
+  asset_class:string (required);
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+}

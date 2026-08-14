@@ -1,0 +1,52 @@
+include "../../common/decimal.fbs";
+include "../../common/types.fbs";
+
+namespace kairos.execution.v2;
+
+enum OrderType:ubyte {
+  UNSPECIFIED = 0,
+  MARKET = 1,
+  LIMIT = 2,
+  STOP_MARKET = 3,
+  STOP_LIMIT = 4
+}
+
+enum OrderLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  PENDING = 1,
+  SUBMITTING = 2,
+  ACCEPTED = 3,
+  PARTIALLY_FILLED = 4,
+  FILLED = 5,
+  CANCEL_REQUESTED = 6,
+  CANCELED = 7,
+  REJECTED = 8,
+  EXPIRED = 9,
+  UNKNOWN = 10,
+  FAILED = 11
+}
+
+table OrderState {
+  order_id:string (required);
+  intent_id:string (required);
+  plan_id:string (required);
+  leg_id:string (required);
+  strategy_id:string (required);
+  account_id:string (required);
+  segment_key:string (required);
+  instrument_id:string (required);
+  market_id:string (required);
+  execution_access_id:string (required);
+  remote_order_id:string;
+  side:kairos.common.v2.Side = UNSPECIFIED;
+  order_type:OrderType = UNSPECIFIED;
+  quantity:kairos.common.v2.Decimal64 (required);
+  filled_quantity:kairos.common.v2.Decimal64 (required);
+  limit_price:kairos.common.v2.Decimal64;
+  average_fill_price:kairos.common.v2.Decimal64;
+  lifecycle:OrderLifecycle = UNSPECIFIED;
+  created_at_unix_nanos:ulong;
+  submitted_at_unix_nanos:ulong = null;
+  updated_at_unix_nanos:ulong;
+  reason:string;
+}

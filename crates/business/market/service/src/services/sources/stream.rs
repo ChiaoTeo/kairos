@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use kairos_domain_types::{Money, UnixNanos};
+use kairos_domain_types::Money;
 use kairos_integration::application::{
     AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
     SubscriptionId as IntegrationSubscriptionId,
@@ -13,8 +13,8 @@ use tokio::sync::mpsc;
 use super::SourceHandle;
 use crate::domain::market::MarketDescriptor;
 use crate::domain::observations::{
-    Bar, FundingRate, IndexPrice, InstrumentStatus, MarkPrice, MarketObservation, OpenInterest,
-    OptionGreeks, Quote, QuoteBar, Rate, Ticker24h, Trade, TradeBar,
+    Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, OpenInterest, OptionGreeks, Quote,
+    QuoteBar, Rate, Ticker24h, Trade, TradeBar,
 };
 use crate::domain::orderbook::PriceLevel;
 use crate::domain::source::{
@@ -517,19 +517,7 @@ pub(super) fn normalize(
             source_id,
         }),
         MarketEventKind::InstrumentStatus => {
-            MarketObservation::InstrumentStatus(InstrumentStatus {
-                market_id: market.market_id.clone(),
-                instrument_id: market.instrument_id.clone(),
-                status: event
-                    .price
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "unknown".into())
-                    .into(),
-                reason: event.quantity.map(|value| value.to_string()),
-                effective_at_unix_nanos: event.sequence.map(|value| UnixNanos::new(value.get())),
-                observed_at_unix_nanos: event.observed_at_unix_nanos,
-                source_id,
-            })
+            return Err("InstrumentStatus is not part of Market v2".into());
         }
         MarketEventKind::BookSnapshot | MarketEventKind::BookDelta => {
             let update = SourceOrderBookUpdate {

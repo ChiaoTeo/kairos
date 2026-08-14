@@ -1,0 +1,14 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table FundingRate {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  funding_rate:kairos.common.v2.Decimal64 (required);
+  funding_period_seconds:ulong;
+  next_funding_time_unix_nanos:ulong;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

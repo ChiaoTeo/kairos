@@ -1,0 +1,16 @@
+include "../../common/decimal.fbs";
+include "../../common/types.fbs";
+
+namespace kairos.market.v2;
+
+table Trade {
+  trade_id:string;
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  price:kairos.common.v2.Decimal64 (required);
+  quantity:kairos.common.v2.Decimal64 (required);
+  aggressor_side:kairos.common.v2.Side = UNSPECIFIED;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

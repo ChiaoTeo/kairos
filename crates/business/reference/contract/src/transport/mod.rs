@@ -1,7 +1,5 @@
-//! Concrete transport adapters for the Reference contract.
+//! Concrete transport adapters for the Reference event contract.
 
 mod aeron;
-mod reference_aeron;
 
-pub use aeron::{AeronEventPublisher, AeronEventSubscriber};
-pub use reference_aeron::ReferenceAeronEventWriter;
+pub use aeron::ReferenceAeronTransport;

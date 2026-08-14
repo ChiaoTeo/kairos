@@ -1,13 +1,12 @@
 use flatbuffers::FlatBufferBuilder;
-use kairos_market::application::wire::decode_reference_changed;
 use kairos_market::{
     MarketApplication, MarketDescriptor, MarketObservation, MarketSelectionQuery, Quote, Rate,
     ReferenceChanged, SubscriptionId,
 };
-use kairos_protocol::generated::kairos::common::v_1::{MessageHeader, MessageHeaderArgs};
-use kairos_protocol::generated::kairos::reference::v_1::{
-    finish_reference_changed_buffer, LifecycleEvent, LifecycleEventArgs,
-    ReferenceChanged as ReferenceChangedMessage, ReferenceChangedArgs,
+use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, EventMetadataArgs};
+use kairos_protocol::generated::kairos::reference::v_2::{
+    finish_market_upserted_buffer, Market as MarketMessage, MarketArgs,
+    MarketUpserted as MarketUpsertedMessage, MarketUpsertedArgs,
 };
 
 fn market(id: &str, symbol: &str) -> MarketDescriptor {
@@ -264,53 +263,58 @@ fn stale_reference_changes_are_ignored_by_watermark() {
 }
 
 #[test]
-fn reference_changed_wire_notice_decodes_with_watermarks() {
+fn reference_v2_wire_event_decodes_with_watermarks() {
     let mut builder = FlatBufferBuilder::new();
-    let message_id = builder.create_string("change-1");
     let stream_id = builder.create_string("reference.lifecycle");
     let producer_id = builder.create_string("reference-1");
-    let snapshot_id = builder.create_string("reference:2");
-    let market_id = builder.create_string("market:two");
-    let kind = builder.create_string("listed");
     let event_id = builder.create_string("lifecycle-1");
-    let event_type = builder.create_string("listing_added");
-    let lifecycle_event = LifecycleEvent::create(
+    let metadata = EventMetadata::create(
         &mut builder,
-        &LifecycleEventArgs {
+        &EventMetadataArgs {
             event_id: Some(event_id),
-            event_type: Some(event_type),
-            event_time_unix_nanos: 9,
-            ..Default::default()
-        },
-    );
-    let events = builder.create_vector(&[lifecycle_event]);
-    let market_ids = builder.create_vector(&[market_id]);
-    let change_kinds = builder.create_vector(&[kind]);
-    let header = MessageHeader::create(
-        &mut builder,
-        &MessageHeaderArgs {
-            message_id: Some(message_id),
             stream_id: Some(stream_id),
             producer_id: Some(producer_id),
             sequence: 9,
+            occurred_at_unix_nanos: 9,
             ..Default::default()
         },
     );
-    let root = ReferenceChangedMessage::create(
+    let market_id = builder.create_string("market:two");
+    let market_key = builder.create_string("TWO");
+    let instrument_id = builder.create_string("instrument:two");
+    let listing_id = builder.create_string("listing:two");
+    let exchange_id = builder.create_string("exchange:two");
+    let market_type = builder.create_string("spot");
+    let source_symbol = builder.create_string("TWO");
+    let market = MarketMessage::create(
         &mut builder,
-        &ReferenceChangedArgs {
-            header: Some(header),
-            generation: 2,
-            event_sequence: 9,
-            snapshot_id: Some(snapshot_id),
-            events: Some(events),
-            affected_market_ids: Some(market_ids),
-            change_kinds: Some(change_kinds),
+        &MarketArgs {
+            market_id: Some(market_id),
+            market_key: Some(market_key),
+            instrument_id: Some(instrument_id),
+            listing_id: Some(listing_id),
+            exchange_id: Some(exchange_id),
+            market_type: Some(market_type),
+            source_symbol: Some(source_symbol),
+            ..Default::default()
         },
     );
-    finish_reference_changed_buffer(&mut builder, root);
-    let notice = decode_reference_changed(builder.finished_data()).unwrap();
-    assert_eq!(notice.generation, 2);
-    assert_eq!(notice.event_sequence, 9);
-    assert_eq!(notice.affected_market_ids, vec!["market:two"]);
+    let root = MarketUpsertedMessage::create(
+        &mut builder,
+        &MarketUpsertedArgs {
+            metadata: Some(metadata),
+            catalog_revision: 2,
+            market: Some(market),
+        },
+    );
+    finish_market_upserted_buffer(&mut builder, root);
+    let event = kairos_reference_contract::decode_event(builder.finished_data()).unwrap();
+    match event {
+        kairos_reference_contract::ReferenceEvent::MarketUpserted(value) => {
+            assert_eq!(value.catalog_revision(), 2);
+            assert_eq!(value.metadata().sequence(), 9);
+            assert_eq!(value.market().market_id(), "market:two");
+        }
+        _ => panic!("unexpected Reference event"),
+    }
 }

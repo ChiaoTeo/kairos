@@ -1,7 +1,7 @@
 //! Market process runtime and strategy command boundary.
 
 use crate::application::MarketApplication;
-use crate::domain::snapshot::MarketCurrentView;
+use crate::domain::events::MarketChange;
 use crate::services::control::{
     spawn_server as spawn_control_server, EngineCommand, MarketHttpResponse,
 };
@@ -12,7 +12,7 @@ use crate::services::sources::SourceActivator;
 use crate::{MarketDescriptor, SubscriptionId};
 use kairos_domain_types::Sequence;
 use kairos_protocol::InstanceIdentity;
-use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
+use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -27,6 +27,14 @@ use tracing::{error, info, warn};
 
 const MAX_COMMAND_RESULTS: usize = 4_096;
 
+fn now_unix_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64
+}
+
 #[derive(Debug, Deserialize)]
 struct SubscribePayload {
     subject: String,
@@ -37,6 +45,7 @@ struct SubscribePayload {
     asset_type: Option<String>,
     #[serde(default)]
     params: BTreeMap<String, Value>,
+    #[serde(default)]
     dynamic: bool,
 }
 
@@ -110,7 +119,7 @@ pub(crate) struct MarketProcessSettings {
 /// Application-owned publication capability. Concrete storage and wire
 /// encoding are selected by composition and never cross this boundary.
 pub trait MarketSnapshotPublisher: Send {
-    fn publish(&mut self, snapshot: &MarketCurrentView) -> Result<(), String>;
+    fn publish(&mut self, change: &MarketChange) -> Result<(), String>;
 }
 
 enum MarketHistoryRecorder {
@@ -434,14 +443,11 @@ impl MarketActorTask {
                 json!({"error": error}),
             );
         }
-        self.publish_snapshot()?;
         let mut event_publication = EventPublication::new(
             self.event_actor_id.clone(),
             self.event_identity.clone(),
             event_sender,
         );
-        let mut snapshot_ticks = time::interval(self.snapshot_interval);
-        snapshot_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut freshness_ticks = time::interval(self.freshness_check_interval);
         freshness_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut reference_recovery_ticks = time::interval(self.reference_recovery_interval);
@@ -457,9 +463,10 @@ impl MarketActorTask {
                             if matches!(
                                 request.path.as_str(),
                                 "/v1/subscribe"
+                                    | "/v1/subscriptions"
                                     | "/v1/unsubscribe"
                                     | "/v1/subscriptions/release-owner"
-                            )
+                            ) || request.path.starts_with("/v1/subscriptions/")
                                 && (200..300).contains(&response.status)
                             {
                                 if let Some(activator) = self.source_activator.as_deref_mut() {
@@ -472,7 +479,9 @@ impl MarketActorTask {
                                     }
                                 }
                                 if let Err(error) = self.application.sync_source_subscriptions().await {
-                                    if response.status < 300 && request.path == "/v1/subscribe" {
+                                    if response.status < 300
+                                        && matches!(request.path.as_str(), "/v1/subscribe" | "/v1/subscriptions")
+                                    {
                                         rollback_subscribe_intent(&mut self.application, &body);
                                         response = MarketHttpResponse {
                                             status: 422,
@@ -519,12 +528,6 @@ impl MarketActorTask {
                             json!({"error": error.to_string()}),
                         );
                     }
-                    let events = self.application.drain_events_limited(1_024);
-                    self.history_recorder.record(&events).await?;
-                    event_publication.publish(events)?;
-                }
-                _ = snapshot_ticks.tick() => {
-                    self.publish_snapshot()?;
                 }
                 _ = freshness_ticks.tick() => {
                     let now_nanos = SystemTime::now()
@@ -562,6 +565,7 @@ impl MarketActorTask {
                     }
                 }
             }
+            self.publish_changes(&mut event_publication).await?;
             // Retry a bounded publication queue whenever any engine input or
             // maintenance wake-up occurs. Finite replay must not wait forever
             // merely because its final event first encountered a full queue.
@@ -573,12 +577,9 @@ impl MarketActorTask {
         self.application
             .shutdown_sources(self.shutdown_timeout)
             .await?;
-        let events = self.application.drain_events_limited(1_024);
-        self.history_recorder.record(&events).await?;
-        event_publication.publish(events)?;
+        self.publish_changes(&mut event_publication).await?;
         event_publication.drain(self.shutdown_timeout).await?;
         self.history_recorder.shutdown().await?;
-        self.publish_snapshot()?;
         info!(
             event = "actor_task_stopped",
             component = "market",
@@ -587,27 +588,28 @@ impl MarketActorTask {
         Ok(())
     }
 
-    fn publish_snapshot(&mut self) -> Result<(), String> {
-        let snapshot = self.application.current_view();
-        kairos_workspace::logging::record_gauge(
-            "kairos.snapshot.generation",
-            snapshot.generation.get(),
-        );
-        let now_nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let now_nanos = u64::try_from(now_nanos).unwrap_or(u64::MAX);
-        let max_lag_ms = snapshot
-            .freshness
-            .values()
-            .map(|freshness| {
-                now_nanos.saturating_sub(freshness.last_received_time_unix_nanos.get()) / 1_000_000
+    async fn publish_changes(
+        &mut self,
+        event_publication: &mut EventPublication,
+    ) -> Result<(), String> {
+        let changes = self.application.drain_changes_limited(1_024);
+        let events = changes
+            .iter()
+            .filter_map(|change| {
+                change
+                    .event
+                    .clone()
+                    .map(|event| (change.sequence.get(), event))
             })
-            .max()
-            .unwrap_or_default();
-        kairos_workspace::logging::record_gauge("kairos.event.lag", max_lag_ms);
-        self.publisher.publish(&snapshot)
+            .collect::<Vec<_>>();
+        self.history_recorder.record(&events).await?;
+        event_publication.publish(events)?;
+        for change in changes {
+            if change.view.is_some() {
+                self.publisher.publish(&change)?;
+            }
+        }
+        Ok(())
     }
 
     fn recover_reference_projection(&mut self) -> Result<(), String> {
@@ -630,7 +632,10 @@ impl MarketActorTask {
         );
         let command_key = if matches!(
             path,
-            "/v1/subscribe" | "/v1/unsubscribe" | "/v1/subscriptions/release-owner"
+            "/v1/subscribe"
+                | "/v1/subscriptions"
+                | "/v1/unsubscribe"
+                | "/v1/subscriptions/release-owner"
         ) {
             serde_json::from_str::<Value>(body)
                 .ok()
@@ -666,15 +671,59 @@ impl MarketActorTask {
         }
         let (status, payload) = match path {
             HEALTH_PATH => (200, self.health()),
-            SNAPSHOT_PATH => match serde_json::to_value(self.application.snapshot()) {
-                Ok(value) => (200, value),
-                Err(error) => (500, json!({"error": error.to_string()})),
-            },
             "/v1/subscribe" => self.subscribe(body),
+            "/v1/subscriptions" => {
+                let (status, payload) = self.subscribe(body);
+                if status == 202 {
+                    let subscription_id = payload
+                        .get("subscription_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let owner_id = self
+                        .application
+                        .snapshot()
+                        .subscriptions
+                        .into_iter()
+                        .find(|item| item.id.0 == subscription_id)
+                        .map(|item| item.owner_id)
+                        .unwrap_or_default();
+                    (
+                        201,
+                        json!({
+                            "subscription_id": subscription_id,
+                            "owner_id": owner_id,
+                            "status": payload.get("subscription_status").cloned().unwrap_or(json!("pending")),
+                            "members": [],
+                            "updated_at_unix_nanos": now_unix_nanos(),
+                        }),
+                    )
+                } else {
+                    (status, payload)
+                }
+            }
+            path if path.starts_with("/v1/subscriptions/") && method == "GET" => {
+                let subscription_id = path.trim_start_matches("/v1/subscriptions/");
+                self.get_subscription(subscription_id)
+            }
+            path if path.starts_with("/v1/subscriptions/") && method == "DELETE" => {
+                let (status, payload) = self.unsubscribe(body);
+                if status == 202 {
+                    (204, Value::Null)
+                } else {
+                    (status, payload)
+                }
+            }
             "/v1/unsubscribe" => self.unsubscribe(body),
             "/v1/subscriptions/release-owner" => self.release_owner(body),
-            "/v1/recover" => match self.application.recover_sources().await {
-                Ok(()) => (202, json!({"status":"recovering"})),
+            "/v1/recover" | "/v1/recovery" => match self.application.recover_sources().await {
+                Ok(()) => (
+                    202,
+                    json!({
+                        "command_id": serde_json::from_str::<Value>(body).ok().and_then(|v| v.get("command_id").cloned()).unwrap_or(Value::Null),
+                        "status": "accepted",
+                        "operation": "market.recovery"
+                    }),
+                ),
                 Err(error) => (422, json!({"error": error.to_string()})),
             },
             "/v1/replay/pause" => match self.application.set_replay_paused(true).await {
@@ -783,8 +832,51 @@ impl MarketActorTask {
         })
     }
 
+    fn get_subscription(&self, subscription_id: &str) -> (u16, Value) {
+        let Ok(id) = SubscriptionId::new(subscription_id) else {
+            return (
+                404,
+                json!({"error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
+            );
+        };
+        let Some(subscription) = self
+            .application
+            .snapshot()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.id == id)
+        else {
+            return (
+                404,
+                json!({"error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
+            );
+        };
+        let members = subscription
+            .members
+            .into_values()
+            .map(|member| {
+                json!({
+                    "market_id": member.market_id,
+                    "instrument_id": member.instrument_id,
+                    "source_id": member.source_id,
+                    "source_symbol": member.source_symbol,
+                })
+            })
+            .collect::<Vec<_>>();
+        (
+            200,
+            json!({
+                "subscription_id": subscription_id,
+                "owner_id": subscription.owner_id,
+                "status": subscription.status,
+                "members": members,
+                "updated_at_unix_nanos": now_unix_nanos(),
+            }),
+        )
+    }
+
     fn subscribe(&mut self, body: &str) -> (u16, Value) {
-        let value: CommandEnvelope<SubscribePayload> = match serde_json::from_str(body) {
+        let value: CommandEnvelope<SubscribePayload> = match parse_subscribe_command(body) {
             Ok(value) => value,
             Err(error) => {
                 return (
@@ -793,7 +885,7 @@ impl MarketActorTask {
                 )
             }
         };
-        if value.schema_version != 1
+        if !matches!(value.schema_version, 1 | 2)
             || value.operation != "market.subscribe"
             || value.command_id.trim().is_empty()
             || value.idempotency_key.trim().is_empty()
@@ -1035,7 +1127,7 @@ impl MarketActorTask {
     }
 
     fn unsubscribe(&mut self, body: &str) -> (u16, Value) {
-        let value: CommandEnvelope<UnsubscribePayload> = match serde_json::from_str(body) {
+        let value: CommandEnvelope<UnsubscribePayload> = match parse_unsubscribe_command(body) {
             Ok(value) => value,
             Err(error) => {
                 return (
@@ -1044,7 +1136,7 @@ impl MarketActorTask {
                 )
             }
         };
-        if value.schema_version != 1
+        if !matches!(value.schema_version, 1 | 2)
             || value.operation != "market.unsubscribe"
             || value.command_id.trim().is_empty()
             || value.idempotency_key.trim().is_empty()
@@ -1082,7 +1174,7 @@ impl MarketActorTask {
     }
 
     fn release_owner(&mut self, body: &str) -> (u16, Value) {
-        let value: CommandEnvelope<ReleaseOwnerPayload> = match serde_json::from_str(body) {
+        let value: CommandEnvelope<ReleaseOwnerPayload> = match parse_release_owner_command(body) {
             Ok(value) => value,
             Err(error) => {
                 return (
@@ -1091,7 +1183,7 @@ impl MarketActorTask {
                 )
             }
         };
-        if value.schema_version != 1
+        if !matches!(value.schema_version, 1 | 2)
             || value.operation != "market.release_owner"
             || value.command_id.trim().is_empty()
             || value.idempotency_key.trim().is_empty()
@@ -1110,20 +1202,92 @@ impl MarketActorTask {
         );
         let removed = self.application.release_subscription_owner(&owner_id);
         (
-            202,
+            200,
             json!({
-                "schema_version": 1,
                 "command_id": value.command_id,
-                "request_id": value.command_id,
-                "status": "accepted",
-                "result": {
-                    "owner_id": owner_id,
-                    "removed_subscription_ids": removed,
-                    "removed_count": removed.len(),
-                }
+                "status": "completed",
+                "removed_subscription_ids": removed,
             }),
         )
     }
+}
+
+fn parse_subscribe_command(
+    body: &str,
+) -> Result<CommandEnvelope<SubscribePayload>, serde_json::Error> {
+    let raw: Value = serde_json::from_str(body)?;
+    if raw.get("scope").is_none() {
+        return serde_json::from_value(raw);
+    }
+    let scope = raw.get("scope").cloned().unwrap_or_default();
+    let caller_id = scope
+        .get("caller_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let instance_id = scope
+        .get("instance_id")
+        .and_then(Value::as_str)
+        .or_else(|| scope.get("market_runtime_id").and_then(Value::as_str))
+        .unwrap_or("market");
+    let converted = json!({
+        "schema_version": 2,
+        "command_id": raw.get("command_id").and_then(Value::as_str).unwrap_or_default(),
+        "idempotency_key": raw.get("idempotency_key").and_then(Value::as_str).unwrap_or_default(),
+        "operation": "market.subscribe",
+        "strategy_id": caller_id,
+        "launch_id": scope.get("launch_id").and_then(Value::as_str),
+        "instance_id": instance_id,
+        "payload": {
+            "subject": raw.get("subject").and_then(Value::as_str).unwrap_or_default(),
+            "selectors": raw.get("selectors").cloned().unwrap_or_else(|| json!([])),
+            "exchange": raw.get("exchange").cloned().unwrap_or(Value::Null),
+            "market_type": raw.get("market_type").cloned().unwrap_or(Value::Null),
+            "asset_type": raw.get("asset_type").cloned().unwrap_or(Value::Null),
+            "params": raw.get("params").cloned().unwrap_or_else(|| json!({})),
+            "dynamic": raw.get("dynamic").cloned().unwrap_or(json!(false)),
+        }
+    });
+    serde_json::from_value(converted)
+}
+
+fn parse_unsubscribe_command(
+    body: &str,
+) -> Result<CommandEnvelope<UnsubscribePayload>, serde_json::Error> {
+    let raw: Value = serde_json::from_str(body)?;
+    if raw.get("scope").is_none() {
+        return serde_json::from_value(raw);
+    }
+    let scope = raw.get("scope").cloned().unwrap_or_default();
+    serde_json::from_value(json!({
+        "schema_version": 2,
+        "command_id": raw.get("command_id").and_then(Value::as_str).unwrap_or_default(),
+        "idempotency_key": raw.get("idempotency_key").and_then(Value::as_str).unwrap_or_default(),
+        "operation": "market.unsubscribe",
+        "strategy_id": scope.get("caller_id").and_then(Value::as_str).unwrap_or_default(),
+        "launch_id": scope.get("launch_id").and_then(Value::as_str),
+        "instance_id": scope.get("instance_id").and_then(Value::as_str).or_else(|| scope.get("market_runtime_id").and_then(Value::as_str)).unwrap_or("market"),
+        "payload": {"subscription_id": raw.get("subscription_id").and_then(Value::as_str).unwrap_or_default()}
+    }))
+}
+
+fn parse_release_owner_command(
+    body: &str,
+) -> Result<CommandEnvelope<ReleaseOwnerPayload>, serde_json::Error> {
+    let raw: Value = serde_json::from_str(body)?;
+    if raw.get("scope").is_none() {
+        return serde_json::from_value(raw);
+    }
+    let scope = raw.get("scope").cloned().unwrap_or_default();
+    serde_json::from_value(json!({
+        "schema_version": 2,
+        "command_id": raw.get("command_id").and_then(Value::as_str).unwrap_or_default(),
+        "idempotency_key": raw.get("idempotency_key").and_then(Value::as_str).unwrap_or_default(),
+        "operation": "market.release_owner",
+        "strategy_id": scope.get("caller_id").and_then(Value::as_str).unwrap_or_default(),
+        "launch_id": scope.get("launch_id").and_then(Value::as_str),
+        "instance_id": scope.get("instance_id").and_then(Value::as_str).or_else(|| scope.get("market_runtime_id").and_then(Value::as_str)).unwrap_or("market"),
+        "payload": {}
+    }))
 }
 
 fn strategy_subscription_owner(
@@ -1157,7 +1321,7 @@ mod tests {
         Ticker24h,
     };
     use crate::services::control::EngineCommand;
-    use crate::services::event_wire::{encode_event, encode_observation_event};
+    use crate::services::event_wire_v2::encode_event;
     use crate::{MarketApplication, MarketEvent, OrderBook, PriceLevel};
     use kairos_protocol::InstanceIdentity;
     use kairos_reference_contract::ReferenceMarket;
@@ -1168,10 +1332,7 @@ mod tests {
     struct NullPublisher;
 
     impl MarketSnapshotPublisher for NullPublisher {
-        fn publish(
-            &mut self,
-            _snapshot: &crate::domain::snapshot::MarketCurrentView,
-        ) -> Result<(), String> {
+        fn publish(&mut self, _change: &crate::domain::events::MarketChange) -> Result<(), String> {
             Ok(())
         }
     }
@@ -1207,12 +1368,12 @@ mod tests {
             derivation: "direct".into(),
         });
         assert_eq!(
-            &encode_observation_event("actor", &identity, 1, &bar).unwrap()[4..8],
-            b"MBA1"
+            &encode_event("actor", &identity, 1, &MarketEvent::Observation(bar)).unwrap()[4..8],
+            b"MBV2"
         );
         assert_eq!(
-            &encode_observation_event("actor", &identity, 2, &greeks).unwrap()[4..8],
-            b"MGR1"
+            &encode_event("actor", &identity, 2, &MarketEvent::Observation(greeks)).unwrap()[4..8],
+            b"MGU2"
         );
     }
 
@@ -1236,15 +1397,18 @@ mod tests {
         )
         .unwrap();
 
-        let encoded = encode_event("actor", &identity, 7, &MarketEvent::OrderBook(book)).unwrap();
+        let encoded =
+            encode_event("actor", &identity, 7, &MarketEvent::OrderBookSnapshot(book)).unwrap();
 
-        assert_eq!(&encoded[4..8], b"MOB1");
-        let decoded =
-            kairos_protocol::generated::kairos::market::v_1::root_as_order_book_message(&encoded)
-                .unwrap();
-        assert_eq!(decoded.header().sequence(), 7);
-        assert_eq!(decoded.payload().sequence(), 42);
-        assert!(decoded.payload().synchronized());
+        assert_eq!(&encoded[4..8], b"MOS2");
+        let decoded = kairos_market_contract::event::decode_event(&encoded).unwrap();
+        let kairos_market_contract::event::MarketEvent::OrderBookSnapshotReceived(decoded) =
+            decoded
+        else {
+            panic!("wrong v2 event root")
+        };
+        assert_eq!(decoded.metadata().sequence(), 7);
+        assert_eq!(decoded.snapshot().sequence(), 42);
     }
 
     #[test]
@@ -1316,15 +1480,20 @@ mod tests {
             source_id: common.2,
         });
         for (sequence, observation, identifier) in [
-            (1, ticker, b"MT24"),
-            (2, mark, b"MMP1"),
-            (3, index, b"MIP1"),
-            (4, funding, b"MFR1"),
-            (5, open_interest, b"MOI1"),
+            (1, ticker, b"MTU2"),
+            (2, mark, b"MMP2"),
+            (3, index, b"MIP2"),
+            (4, funding, b"MFR2"),
+            (5, open_interest, b"MOI2"),
         ] {
             assert_eq!(
-                &encode_observation_event("actor", &identity, sequence, &observation).unwrap()
-                    [4..8],
+                &encode_event(
+                    "actor",
+                    &identity,
+                    sequence,
+                    &MarketEvent::Observation(observation)
+                )
+                .unwrap()[4..8],
                 identifier
             );
         }
@@ -1457,8 +1626,8 @@ mod tests {
             .actor_task
             .handle_request("POST", "/v1/subscriptions/release-owner", &release)
             .await;
-        assert_eq!(released.status, 202);
-        assert_eq!(released.payload["result"]["removed_count"], 1);
+        assert_eq!(released.status, 200);
+        assert_eq!(released.payload["removed_subscription_ids"].as_array().unwrap().len(), 1);
         let subscriptions = process.actor_task.application.snapshot().subscriptions;
         assert_eq!(subscriptions.len(), 1);
         assert_eq!(subscriptions[0].id.0, "subscription-b");
@@ -1468,8 +1637,8 @@ mod tests {
             .actor_task
             .handle_request("POST", "/v1/subscriptions/release-owner", &repeated)
             .await;
-        assert_eq!(released.status, 202);
-        assert_eq!(released.payload["result"]["removed_count"], 0);
+        assert_eq!(released.status, 200);
+        assert_eq!(released.payload["removed_subscription_ids"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

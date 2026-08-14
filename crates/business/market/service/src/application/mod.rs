@@ -3,10 +3,6 @@ mod process;
 mod query;
 pub mod replay;
 mod service;
-pub mod wire {
-    pub use kairos_market_contract::reference::{decode_reference_changed, ReferenceChangeNotice};
-}
-
 pub use crate::domain::snapshot::{
     MarketCurrentFreshness, MarketCurrentView, MarketSnapshot, ReconcileResult, SubscriptionState,
 };

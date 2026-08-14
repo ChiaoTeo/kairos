@@ -298,7 +298,6 @@ def _market_remote_action(action: str):
         client = ComponentProcessApplication(owner).ensure_running("market")
         operation = {
             "status": client.status,
-            "snapshot": client.snapshot,
             "refresh": client.refresh,
             "recover": client.recover,
             "stop": client.stop,
@@ -312,7 +311,7 @@ def _market_remote_action(action: str):
     return command
 
 
-for _command_name in ("status", "snapshot", "refresh", "recover", "stop"):
+for _command_name in ("status", "refresh", "recover", "stop"):
     market_app.command(_command_name)(_market_remote_action(_command_name))
 
 

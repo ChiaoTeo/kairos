@@ -11,8 +11,10 @@ use std::time::Duration;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 
-use crate::model::{ExecutionAccess, Instrument, MarketDataAccess};
-use crate::{ContractError, ContractResult, LifecycleEvent, ReferenceMarket};
+use crate::model::{
+    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, MarketDataAccess,
+};
+use crate::{ContractError, ContractResult, ReferenceMarket};
 
 pub const REFERENCE_SQLITE_SCHEMA_VERSION: u32 = 1;
 const MAX_PAGE_SIZE: usize = 10_000;
@@ -254,6 +256,60 @@ impl ReferenceSqliteReader {
         )
     }
 
+    pub fn asset(&self, asset_id: &str) -> ContractResult<Option<Asset>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_assets_current WHERE asset_id = ?",
+            asset_id,
+        )
+    }
+
+    pub fn entity(&self, entity_id: &str) -> ContractResult<Option<Entity>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_entities_current WHERE entity_id = ?",
+            entity_id,
+        )
+    }
+
+    pub fn financial_product(&self, product_id: &str) -> ContractResult<Option<FinancialProduct>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_financial_products_current WHERE product_id = ?",
+            product_id,
+        )
+    }
+
+    pub fn listing(&self, listing_id: &str) -> ContractResult<Option<Listing>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_listings_current WHERE listing_id = ?",
+            listing_id,
+        )
+    }
+
+    pub fn execution_access(&self, access_id: &str) -> ContractResult<Option<ExecutionAccess>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_execution_accesses_current WHERE access_id = ?",
+            access_id,
+        )
+    }
+
+    pub fn market_data_access(&self, access_id: &str) -> ContractResult<Option<MarketDataAccess>> {
+        let connection = self.connection()?;
+        read_payload_optional(
+            &connection,
+            "SELECT payload FROM reference_market_data_accesses_current WHERE access_id = ?",
+            access_id,
+        )
+    }
+
     /// Read a bounded, typed set of execution paths. Execution consumers use
     /// this before preflight; they must not inspect the generic JSON collection
     /// or infer a provider address from a MarketId.
@@ -438,7 +494,7 @@ impl ReferenceSqliteReader {
         &self,
         sequence: u64,
         limit: usize,
-    ) -> ContractResult<Vec<LifecycleEvent>> {
+    ) -> ContractResult<Vec<serde_json::Value>> {
         let connection = self.connection()?;
         let from = sequence
             .checked_add(1)

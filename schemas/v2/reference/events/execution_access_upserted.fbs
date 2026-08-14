@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/execution_access.fbs";
+namespace kairos.reference.v2;
+table ExecutionAccessUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; access:ExecutionAccess (required); }
+root_type ExecutionAccessUpserted;
+file_identifier "RXU2";

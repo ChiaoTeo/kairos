@@ -1,34 +1,83 @@
-//! Public cross-process contract for the Account module.
+//! v2 public cross-process contract for Account.
+//!
+//! The contract crate owns transport framing, generated-root selection and
+//! encode/decode capabilities. It does not expose provider payloads or the
+//! Account service's mutable state model.
 
-pub mod account_event;
 pub mod client;
-pub mod encoding;
+pub mod control;
+pub mod encode;
+pub mod error;
 pub mod event;
-pub mod model;
-pub mod query;
-pub mod snapshot;
 pub mod transport;
+pub mod view;
 
-pub use event::EventEnvelope;
-pub use model::AccountsSnapshot;
-pub use query::{CommandEnvelope, QueryEnvelope};
-pub use snapshot::SnapshotEnvelope;
+pub use client::{
+    AccountContractClient, BalancesResponse, Capability, DecimalValue, Health, PositionsResponse,
+};
+pub use control::{AccountControlClient, AccountControlResponse};
+pub use encode::{
+    event_metadata, view_metadata, BalanceEncoder, EncodeContext, ObservedOrderEncoder,
+    PositionEncoder, StatusEncoder, ValuationEncoder,
+};
+pub use error::{ContractError, ContractResult};
+pub use event::{AccountEvent, AccountEventFrame, AccountEventStream};
+pub use transport::{
+    AccountAeronTransport, AccountMmapReader, AccountMmapWriter, AccountUdsTransport,
+};
+pub use view::{AccountViewKey, AccountViewKind, AccountViewPublisher, ViewFrame, ViewMetadata};
 
-#[derive(Debug)]
-pub enum ContractError {
-    Invalid(String),
-    Transport(String),
+use std::path::PathBuf;
+
+/// Unified public entry point. Control, events and views remain separate
+/// capabilities underneath this facade.
+pub struct AccountClient {
+    control: AccountControlClient,
+    control_socket: PathBuf,
+    view_root: PathBuf,
+    aeron_dir: Option<String>,
+    aeron_channel: String,
+    event_stream_id: i32,
 }
 
-impl std::fmt::Display for ContractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Invalid(value) => write!(f, "invalid account contract data: {value}"),
-            Self::Transport(value) => write!(f, "account contract transport failed: {value}"),
+pub struct AccountEndpoint {
+    pub control_socket: PathBuf,
+    pub view_root: PathBuf,
+    pub aeron_dir: Option<String>,
+    pub aeron_channel: String,
+    pub event_stream_id: i32,
+}
+
+impl AccountClient {
+    pub fn connect(endpoint: AccountEndpoint) -> Self {
+        Self {
+            control: AccountControlClient::connect(endpoint.control_socket.clone()),
+            control_socket: endpoint.control_socket,
+            view_root: endpoint.view_root,
+            aeron_dir: endpoint.aeron_dir,
+            aeron_channel: endpoint.aeron_channel,
+            event_stream_id: endpoint.event_stream_id,
         }
     }
+
+    pub fn control(&self) -> &AccountControlClient {
+        &self.control
+    }
+
+    pub fn events(&self, capacity: usize) -> ContractResult<AccountEventStream> {
+        AccountEventStream::connect(
+            self.aeron_dir.as_deref(),
+            &self.aeron_channel,
+            self.event_stream_id,
+            capacity,
+        )
+    }
+
+    pub fn view(&self, key: AccountViewKey) -> ContractResult<view::AccountViewReader> {
+        view::AccountViewReader::open(&self.view_root, key)
+    }
+
+    pub fn control_socket(&self) -> &std::path::Path {
+        &self.control_socket
+    }
 }
-
-impl std::error::Error for ContractError {}
-
-pub type ContractResult<T> = Result<T, ContractError>;

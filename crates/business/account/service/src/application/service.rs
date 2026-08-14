@@ -66,6 +66,13 @@ impl AccountApplication {
         self.runtime.acknowledge_business_event();
     }
 
+    pub(crate) fn attach_business_event_provenance(
+        &mut self,
+        provenance: super::AccountFactProvenance,
+    ) {
+        self.runtime.attach_business_event_provenance(provenance);
+    }
+
     pub fn actor_id(&self) -> &str {
         self.runtime.actor_id()
     }

@@ -1,0 +1,28 @@
+include "../../common/decimal.fbs";
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Market {
+  market_id:string (required);
+  market_key:string (required);
+  instrument_id:string (required);
+  listing_id:string (required);
+  exchange_id:string (required);
+  market_type:string (required);
+  source_symbol:string (required);
+  base_asset_id:string;
+  quote_asset_id:string;
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+  price_tick:kairos.common.v2.Decimal64;
+  quantity_tick:kairos.common.v2.Decimal64;
+  price_precision:int;
+  quantity_precision:int;
+  minimum_quantity:kairos.common.v2.Decimal64;
+  minimum_notional:kairos.common.v2.Decimal64;
+  contract_size:kairos.common.v2.Decimal64;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+  asset_type:string;
+  underlying_instrument_id:string;
+}

@@ -15,7 +15,6 @@ use kairos_workspace::{
     WorkspaceMarketSourceBinding, WorkspaceMarketSourceBinding as Binding,
 };
 
-use crate::application::{MarketSnapshotPublisher, ReferenceChangeSource, ReferenceEvent};
 use crate::domain::source::{SourceDescriptor, SourceId};
 use crate::services::sources::{
     spawn_binance, spawn_replay, spawn_snapshot, spawn_stream, ReplaySource, SourceActivator,
@@ -26,7 +25,9 @@ use crate::MarketApplication;
 mod config;
 mod diagnostic;
 mod process;
+mod reference;
 mod sources;
+mod v2_publisher;
 
 pub use config::{
     MarketProcessRequest, MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile,
@@ -36,8 +37,9 @@ pub use diagnostic::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
 };
 pub use process::{build_market_process, MarketStartupError};
+pub use v2_publisher::MmapMarketSnapshotPublisher;
 
-pub use kairos_market_contract::transport::AeronReferenceChangeSource;
+pub use reference::AeronReferenceChangeSource;
 
 /// Demand-driven source construction for live and paper Market processes.
 ///
@@ -221,22 +223,13 @@ pub enum MarketProduct {
     Equity,
 }
 
-impl ReferenceChangeSource for AeronReferenceChangeSource {
-    fn next_event(&mut self) -> Result<Option<ReferenceEvent>, String> {
-        self.next_change()
-            .map(|value| {
-                value.map(|change| ReferenceEvent {
-                    sequence: change.sequence.into(),
-                })
-            })
-            .map_err(|error| error.to_string())
-    }
-}
-pub struct MmapMarketSnapshotPublisher {
+#[cfg(any())]
+pub struct LegacyMmapMarketSnapshotPublisher {
     inner: kairos_market_contract::encoding::MmapMarketSnapshotPublisher,
 }
 
-impl MmapMarketSnapshotPublisher {
+#[cfg(any())]
+impl LegacyMmapMarketSnapshotPublisher {
     pub fn create(
         path: impl AsRef<std::path::Path>,
         slot_size: usize,
@@ -273,6 +266,7 @@ impl MmapMarketSnapshotPublisher {
     }
 }
 
+#[cfg(any())]
 fn market_contract_snapshot(
     snapshot: &crate::domain::snapshot::MarketCurrentView,
 ) -> kairos_market_contract::MarketCurrentView {
@@ -371,6 +365,7 @@ fn market_contract_snapshot(
     }
 }
 
+#[cfg(any())]
 fn market_contract_observation(
     value: &crate::MarketObservation,
 ) -> kairos_market_contract::model::MarketObservation {
@@ -520,20 +515,10 @@ fn market_contract_observation(
                 source_id: value.source_id.clone(),
             })
         }
-        Domain::InstrumentStatus(value) => {
-            contract::MarketObservation::InstrumentStatus(contract::InstrumentStatus {
-                market_id: value.market_id.to_string(),
-                instrument_id: value.instrument_id.to_string(),
-                status: value.status.as_str().into(),
-                reason: value.reason.clone(),
-                effective_at_unix_nanos: value.effective_at_unix_nanos.map(|value| value.get()),
-                observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
-                source_id: value.source_id.clone(),
-            })
-        }
     }
 }
 
+#[cfg(any())]
 fn market_contract_orderbook(value: &crate::OrderBook) -> kairos_market_contract::model::OrderBook {
     use kairos_market_contract::model as contract;
     let levels = |values: &[crate::PriceLevel]| {
@@ -569,7 +554,8 @@ fn market_contract_orderbook(value: &crate::OrderBook) -> kairos_market_contract
     }
 }
 
-impl MarketSnapshotPublisher for MmapMarketSnapshotPublisher {
+#[cfg(any())]
+impl MarketSnapshotPublisher for LegacyMmapMarketSnapshotPublisher {
     fn publish(
         &mut self,
         snapshot: &crate::domain::snapshot::MarketCurrentView,

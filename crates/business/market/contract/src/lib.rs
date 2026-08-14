@@ -1,41 +1,74 @@
-//! Public cross-process contract for the Market module.
+//! v2 public cross-process contract for Market.
 
-pub mod encoding;
+pub mod control;
+pub mod encode;
+pub mod error;
 pub mod event;
-pub mod model;
-pub mod query;
-pub mod reference;
-pub mod snapshot;
 pub mod transport;
+pub mod view;
 
-pub use event::EventEnvelope;
-pub use model::{
-    DepthCursor, DepthPolicy, FundingRate, IndexPrice, InstrumentStatus, MarkPrice,
-    MarketCurrentView, MarketFreshness, OpenInterest, Quote, QuoteBar, Rate, Ticker24h, TradeBar,
+pub use control::{MarketControlClient, MarketControlResponse};
+pub use encode::{
+    event_metadata, view_metadata, BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder,
+    QuoteEncoder, TradeEncoder,
 };
-pub use query::{CommandEnvelope, QueryEnvelope};
-pub use reference::{decode_reference_changed, ReferenceChangeNotice};
-pub use snapshot::{
-    read_latest_bars, read_latest_greeks, read_latest_market_snapshot, read_latest_quote_bars,
-    read_latest_quotes, read_latest_trade_bars, read_latest_trades, read_orderbooks,
-    MarketSnapshotFreshness, MarketSnapshotRead, SnapshotEnvelope,
+pub use error::{ContractError, ContractResult};
+pub use event::{MarketEvent, MarketEventFrame, MarketEventStream};
+pub use view::{
+    MarketViewKey, MarketViewKind, MarketViewPublisher, MarketViewReader, ViewFrame, ViewMetadata,
 };
 
-#[derive(Debug)]
-pub enum ContractError {
-    Invalid(String),
-    Transport(String),
+use std::path::PathBuf;
+
+/// Unified public entry point. Control, events, and views remain separate
+/// capabilities underneath this facade.
+pub struct MarketClient {
+    control: MarketControlClient,
+    control_socket: PathBuf,
+    view_root: PathBuf,
+    aeron_dir: Option<String>,
+    aeron_channel: String,
+    event_stream_id: i32,
 }
 
-impl std::fmt::Display for ContractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Invalid(value) => write!(f, "invalid market contract data: {value}"),
-            Self::Transport(value) => write!(f, "market contract transport failed: {value}"),
+pub struct MarketEndpoint {
+    pub control_socket: PathBuf,
+    pub view_root: PathBuf,
+    pub aeron_dir: Option<String>,
+    pub aeron_channel: String,
+    pub event_stream_id: i32,
+}
+
+impl MarketClient {
+    pub fn connect(endpoint: MarketEndpoint) -> Self {
+        Self {
+            control: MarketControlClient::connect(endpoint.control_socket.clone()),
+            control_socket: endpoint.control_socket,
+            view_root: endpoint.view_root,
+            aeron_dir: endpoint.aeron_dir,
+            aeron_channel: endpoint.aeron_channel,
+            event_stream_id: endpoint.event_stream_id,
         }
     }
+
+    pub fn control(&self) -> &MarketControlClient {
+        &self.control
+    }
+
+    pub fn events(&self, capacity: usize) -> ContractResult<MarketEventStream> {
+        MarketEventStream::connect(
+            self.aeron_dir.as_deref(),
+            &self.aeron_channel,
+            self.event_stream_id,
+            capacity,
+        )
+    }
+
+    pub fn view(&self, key: MarketViewKey) -> ContractResult<view::MarketViewReader> {
+        view::MarketViewReader::open(&self.view_root, key)
+    }
+
+    pub fn control_socket(&self) -> &std::path::Path {
+        &self.control_socket
+    }
 }
-
-impl std::error::Error for ContractError {}
-
-pub type ContractResult<T> = Result<T, ContractError>;

@@ -1,0 +1,13 @@
+include "../../common/decimal.fbs";
+namespace kairos.account.v2;
+
+table Position {
+  instrument_id:string (required);
+  market_id:string (required);
+  quantity:kairos.common.v2.Decimal64 (required);
+  average_price:kairos.common.v2.Decimal64;
+  mark_price:kairos.common.v2.Decimal64;
+  unrealized_pnl:kairos.common.v2.Decimal64;
+  realized_pnl:kairos.common.v2.Decimal64;
+  observed_at_unix_nanos:ulong;
+}

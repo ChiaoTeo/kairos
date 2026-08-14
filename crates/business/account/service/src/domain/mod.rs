@@ -419,6 +419,8 @@ pub struct OpenOrder {
     pub order_id: OrderId,
     pub remote_order_id: Option<RemoteOrderId>,
     pub instrument_id: InstrumentId,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub filled_quantity: Quantity,

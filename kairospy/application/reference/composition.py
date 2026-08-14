@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kairospy.application.workspace import Workspace
-from kairospy.infrastructure.contracts.reference_client import ReferenceClient
+from kairospy.infrastructure.contracts.reference import ReferenceClient
 
 from .application import ReferenceApplication
 

@@ -15,13 +15,13 @@ pub use application::{
     MarketSnapshotPublisher, OrderBookSide, ReconcileResult, ReferenceChangeSource, ReferenceEvent,
     SubscriptionState,
 };
-pub use domain::events::MarketEvent;
+pub use domain::events::{MarketChange, MarketEvent, MarketViewUpdate, OrderBookResyncRequired};
 pub use domain::freshness::FeedStatus;
 pub use domain::freshness::{DataFreshnessStatus, MarketFreshness};
 pub use domain::market::{MarketDescriptor, MarketSelectionQuery};
 pub use domain::observations::{
-    Bar, FundingRate, IndexPrice, InstrumentStatus, MarkPrice, MarketObservation, OpenInterest,
-    OptionGreeks, Quote, QuoteBar, Rate, Ticker24h, Trade, TradeBar,
+    Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, OpenInterest, OptionGreeks, Quote,
+    QuoteBar, Rate, Ticker24h, Trade, TradeBar,
 };
 pub use domain::orderbook::{OrderBook, OrderBookDelta, PriceLevel};
 pub use domain::reference::ReferenceChanged;

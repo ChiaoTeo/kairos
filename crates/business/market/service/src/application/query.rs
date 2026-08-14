@@ -178,16 +178,6 @@ impl MarketQueryResult {
         }
     }
 
-    pub fn latest_instrument_status(
-        &self,
-        market_id: &str,
-    ) -> Option<&crate::domain::observations::InstrumentStatus> {
-        match self.latest_view(market_id, "instrument_status", None) {
-            Some(MarketObservation::InstrumentStatus(value)) => Some(value),
-            _ => None,
-        }
-    }
-
     pub fn view(&self, key: &MarketViewKey) -> Option<MarketObservationResult> {
         self.snapshot
             .views

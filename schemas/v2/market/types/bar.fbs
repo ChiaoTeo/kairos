@@ -1,0 +1,27 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+enum BarKind:ubyte {
+  UNSPECIFIED = 0,
+  TRADES = 1,
+  QUOTES = 2,
+  MIDPOINT = 3
+}
+
+table Bar {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  bar_spec_id:string (required);
+  kind:BarKind = UNSPECIFIED;
+  window_start_unix_nanos:ulong;
+  window_end_unix_nanos:ulong;
+  open:kairos.common.v2.Decimal64 (required);
+  high:kairos.common.v2.Decimal64 (required);
+  low:kairos.common.v2.Decimal64 (required);
+  close:kairos.common.v2.Decimal64 (required);
+  volume:kairos.common.v2.Decimal64;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/broker.fbs";
+namespace kairos.reference.v2;
+table BrokerUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; broker:Broker (required); }
+root_type BrokerUpserted;
+file_identifier "RBU2";

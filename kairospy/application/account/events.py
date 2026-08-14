@@ -5,7 +5,7 @@ from typing import Literal, TypeAlias
 
 from kairospy.domain_types import DataEvent
 
-from .models import AccountStatusChange, Balance, EquityChange, Position
+from .models import AccountStatusChange, Balance, EquityChange, ObservedOrder, Position
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +13,15 @@ class AccountChangeRecord:
     kind: str
     segment_key: str
     payload: object
+
+
+@dataclass(frozen=True, slots=True)
+class AccountFactProvenanceRecord:
+    source_id: str
+    provider_event_id: str | None = None
+    provider_sequence: int | None = None
+    provider_occurred_at_unix_nanos: int | None = None
+    provider_received_at_unix_nanos: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +34,7 @@ class AccountEventRecord:
     occurred_at_unix_nanos: int
     launch_id: str | None = None
     instance_id: str | None = None
+    provenance: AccountFactProvenanceRecord | None = None
 
     def __post_init__(self) -> None:
         if not self.stream_id.strip() or self.sequence <= 0:
@@ -53,9 +63,15 @@ class AccountStatusChangedEvent(DataEvent[AccountStatusChange]):
     kind: Literal["status_changed"] = field(init=False, default="status_changed")
 
 
+@dataclass(frozen=True, slots=True)
+class ObservedOrderChangedEvent(DataEvent[ObservedOrder]):
+    kind: Literal["observed_order_changed"] = field(init=False, default="observed_order_changed")
+
+
 AccountEvent: TypeAlias = (
     BalanceChangedEvent
     | PositionChangedEvent
     | EquityChangedEvent
     | AccountStatusChangedEvent
+    | ObservedOrderChangedEvent
 )

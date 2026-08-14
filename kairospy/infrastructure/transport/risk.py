@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import struct
-import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 from kairospy.application.risk.events import RiskEventRecord
+from kairospy.infrastructure.contracts.risk import decode_event
 from kairospy.infrastructure.transport.aeron_bridge import check_aeron_bridge
-from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
-
-sys.modules.setdefault("kairos", _generated_kairos)
 
 
 class AeronRiskEventSource:
@@ -79,64 +76,78 @@ class AeronRiskEventSource:
 
 
 def decode_risk_event(payload: bytes) -> RiskEventRecord:
-    from kairospy.infrastructure.transport.generated.kairos.risk.v1.RiskEventMessage import (
-        RiskEventMessage,
-    )
-
-    if not RiskEventMessage.RiskEventMessageBufferHasIdentifier(payload, 0):
-        raise ValueError("Risk event has an invalid RKE1 identifier")
-    root = cast(Any, RiskEventMessage.GetRootAs(payload, 0))
-    header = root.Header()
-    if header is None:
-        raise ValueError("Risk event header is missing")
-    sequence = int(header.Sequence())
+    root = cast(Any, decode_event(payload))
+    metadata = root.Metadata()
+    if metadata is None:
+        raise ValueError("Risk event metadata is missing")
+    sequence = int(metadata.Sequence())
     if sequence <= 0:
         raise ValueError("Risk event sequence must be positive")
-    occurred_at = int(root.OccurredAtUnixNanos())
-    kind = _required_text(root.Kind(), "kind")
-    account_id = _optional_text(root.AccountId())
-    strategy_id = _optional_text(root.StrategyId())
-    if kind == "reservation_changed":
+    occurred_at = int(metadata.OccurredAtUnixNanos())
+    root_name = type(root).__name__
+    if root_name.startswith("Reservation"):
+        kind = "reservation_changed"
+        reservation = root.Reservation()
+        if reservation is None:
+            raise ValueError("Risk reservation event is missing reservation")
+        account_id = _required_text(reservation.AccountId(), "reservation.account_id")
+        strategy_id = _required_text(reservation.StrategyId(), "reservation.strategy_id")
         body: object = {
-            "reservation_id": _required_text(root.ReservationId(), "reservation_id"),
-            "request_id": _required_text(root.RequestId(), "request_id"),
-            "status": _required_text(root.ReservationStatus(), "reservation_status"),
+            "reservation_id": _required_text(reservation.ReservationId(), "reservation_id"),
+            "request_id": _required_text(reservation.RequestId(), "request_id"),
+            "status": _reservation_status(reservation.Status()),
         }
-    elif kind == "decision_evaluated":
+    elif root_name == "RiskDecisionMade":
+        kind = "decision_evaluated"
+        decision = root.Decision()
+        if decision is None:
+            raise ValueError("Risk decision event is missing decision")
+        account_id = _required_text(decision.AccountId(), "decision.account_id")
+        strategy_id = _required_text(decision.StrategyId(), "decision.strategy_id")
+        reasons = tuple(
+            decision.Reasons(index)
+            for index in range(decision.ReasonsLength())
+        )
         body = {
-            "decision_id": _required_text(root.DecisionId(), "decision_id"),
-            "request_id": _required_text(root.RequestId(), "request_id"),
-            "allowed": bool(root.Allowed()),
-            "degraded": bool(root.Degraded()),
-            "reason_codes": _text_vector(root.ReasonCodesLength, root.ReasonCodes),
-            "violations": _text_vector(root.ViolationsLength, root.Violations),
+            "decision_id": _required_text(decision.DecisionId(), "decision_id"),
+            "request_id": _required_text(decision.RequestId(), "request_id"),
+            "allowed": int(decision.Outcome()) in {1, 2},
+            "degraded": int(decision.Outcome()) == 2,
+            "reason_codes": tuple(_reason_code(reason.Code()) for reason in reasons),
+            "violations": tuple(
+                _optional_text(reason.Detail()) or ""
+                for reason in reasons
+                if reason.Detail() is not None
+            ),
         }
-    elif kind == "circuit_changed":
+    elif root_name in {"CircuitOpened", "CircuitClosed"}:
+        kind = "circuit_changed"
         circuit = root.Circuit()
         if circuit is None:
             raise ValueError("Risk circuit event is missing circuit state")
+        scope = circuit.Scope()
+        account_id = None if scope is None else _optional_text(scope.AccountId())
+        strategy_id = None if scope is None else _optional_text(scope.StrategyId())
         body = {
-            "exchange_id": _optional_text(circuit.ExchangeId()),
-            "state": _required_text(circuit.State(), "circuit.state"),
+            "exchange_id": None if scope is None else _optional_text(scope.ExchangeId()),
+            "state": "open" if root_name == "CircuitOpened" else "closed",
             "reason": _required_text(circuit.Reason(), "circuit.reason"),
-            "opened_at_unix_nanos": int(circuit.OpenedAtUnixNanos()),
-            "reset_at_unix_nanos": int(circuit.ResetAtUnixNanos()),
+            "opened_at_unix_nanos": _optional_int(circuit.OpenedAtUnixNanos()),
+            "reset_at_unix_nanos": _optional_int(circuit.ResetAtUnixNanos()),
         }
-    elif kind == "policy_activated":
-        body = {}
     else:
-        raise ValueError(f"unsupported Risk event kind: {kind}")
+        raise ValueError(f"unsupported Risk v2 event root: {root_name}")
     return RiskEventRecord(
-        stream_id=_required_text(header.StreamId(), "stream_id"),
+        stream_id=_required_text(metadata.StreamId(), "stream_id"),
         sequence=sequence,
-        producer=_required_text(header.ProducerId(), "producer_id"),
+        producer=_required_text(metadata.ProducerId(), "producer_id"),
         kind=kind,
         account_id=account_id,
         strategy_id=strategy_id,
         payload=body,
         occurred_at_unix_nanos=occurred_at,
-        launch_id=_optional_text(header.LaunchId()),
-        instance_id=_optional_text(header.InstanceId()),
+        launch_id=_optional_text(metadata.LaunchId()),
+        instance_id=_optional_text(metadata.InstanceId()),
     )
 
 
@@ -154,10 +165,35 @@ def _optional_text(value: bytes | None) -> str | None:
     return result if result.strip() else None
 
 
-def _text_vector(length, value) -> tuple[str, ...]:
-    return tuple(
-        _required_text(value(index), "vector value") for index in range(length())
-    )
+def _optional_int(value: int | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _reservation_status(value: int) -> str:
+    return {
+        1: "reserved",
+        2: "consumed",
+        3: "released",
+        4: "expired",
+    }.get(int(value), "unspecified")
+
+
+def _reason_code(value: int) -> str:
+    return {
+        1: "no_matching_policy",
+        2: "limit_exceeded",
+        3: "stale_dependency",
+        4: "duplicate_request",
+        5: "reservation_not_found",
+        6: "reservation_not_active",
+        7: "invalid_request",
+        8: "persistence_failure",
+        9: "circuit_open",
+        10: "stale_market",
+        11: "insufficient_margin",
+        12: "leverage_exceeded",
+        13: "loss_limit_exceeded",
+    }.get(int(value), "unspecified")
 
 
 __all__ = ["AeronRiskEventSource", "RiskEventRecord", "decode_risk_event"]

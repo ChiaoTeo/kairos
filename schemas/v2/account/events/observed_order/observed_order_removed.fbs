@@ -1,0 +1,17 @@
+include "../../../common/metadata.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table ObservedOrderRemoved {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  observation_id:string (required);
+  execution_order_id:string;
+  remote_order_id:string;
+  provenance:AccountFactProvenance;
+}
+
+root_type ObservedOrderRemoved;
+file_identifier "AOR2";

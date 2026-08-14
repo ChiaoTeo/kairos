@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/circuit.fbs";
+
+namespace kairos.risk.v2;
+table CircuitOpened { metadata:kairos.common.v2.EventMetadata (required); circuit:CircuitState (required); }
+root_type CircuitOpened;
+file_identifier "RKO2";

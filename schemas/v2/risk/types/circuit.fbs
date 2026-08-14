@@ -1,0 +1,32 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.risk.v2;
+
+enum CircuitStatus:ubyte {
+  UNSPECIFIED = 0,
+  CLOSED = 1,
+  OPEN = 2
+}
+
+enum CleanupOutcome:ubyte {
+  UNSPECIFIED = 0,
+  APPLIED = 1,
+  ALREADY_TERMINAL = 2,
+  NOT_FOUND = 3,
+  REJECTED = 4
+}
+
+table CircuitScope {
+  account_id:string;
+  strategy_id:string;
+  exchange_id:string;
+}
+
+table CircuitState {
+  circuit_id:string (required);
+  scope:CircuitScope (required);
+  status:CircuitStatus = UNSPECIFIED;
+  opened_at_unix_nanos:ulong = null;
+  reset_at_unix_nanos:ulong = null;
+  reason:string;
+}

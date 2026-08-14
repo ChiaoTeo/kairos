@@ -1,43 +1,65 @@
-//! Public cross-process contract for the Execution module.
+//! v2 public cross-process contract for Execution.
 
-pub mod encoding;
+pub mod control;
+pub mod encode;
+pub mod error;
 pub mod event;
-pub mod model;
-pub mod plan;
-pub mod query;
-pub mod snapshot;
-pub mod strategy_event;
 pub mod transport;
+pub mod view;
 
-pub use event::{EventEnvelope, ExecutionEventEnvelope};
-pub use model::{DependencyWatermarks, ExecutionCurrentView, SnapshotWatermark};
-pub use plan::{
-    CompletionPolicy, ExecutionIntentLeg, ExecutionLeg, ExecutionOrderOptions, ExecutionPlan,
-    FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy,
-    PairArbitrageIntent, PairArbitrageLeg, PortfolioRebalanceTarget, SplitOrderPolicy,
+pub use control::{ExecutionControlClient, ExecutionControlResponse};
+pub use encode::{event_metadata, view_metadata, EncodeContext};
+pub use error::{ContractError, ContractResult};
+pub use event::{ExecutionEvent, ExecutionEventFrame, ExecutionEventStream};
+pub use view::{
+    ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher, ViewFrame, ViewMetadata,
 };
-pub use query::{
-    CancelIntentCommand, CommandEnvelope, ExecutionIntentCommand, ExpireIntentCommand,
-    HedgeRequirementQuery, IntentCommandEnvelope, IntentEventQuery, IntentQuery, QueryEnvelope,
-    RefreshQuoteCommand, SubmitIntentPayload,
-};
-pub use snapshot::SnapshotEnvelope;
 
-#[derive(Debug)]
-pub enum ContractError {
-    Invalid(String),
-    Transport(String),
+use std::path::PathBuf;
+
+pub struct ExecutionClient {
+    control: ExecutionControlClient,
+    control_socket: PathBuf,
+    view_root: PathBuf,
+    aeron_dir: Option<String>,
+    aeron_channel: String,
+    event_stream_id: i32,
 }
 
-impl std::fmt::Display for ContractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Invalid(value) => write!(f, "invalid execution contract data: {value}"),
-            Self::Transport(value) => write!(f, "execution contract transport failed: {value}"),
+pub struct ExecutionEndpoint {
+    pub control_socket: PathBuf,
+    pub view_root: PathBuf,
+    pub aeron_dir: Option<String>,
+    pub aeron_channel: String,
+    pub event_stream_id: i32,
+}
+
+impl ExecutionClient {
+    pub fn connect(endpoint: ExecutionEndpoint) -> Self {
+        Self {
+            control: ExecutionControlClient::connect(endpoint.control_socket.clone()),
+            control_socket: endpoint.control_socket,
+            view_root: endpoint.view_root,
+            aeron_dir: endpoint.aeron_dir,
+            aeron_channel: endpoint.aeron_channel,
+            event_stream_id: endpoint.event_stream_id,
         }
     }
+    pub fn control(&self) -> &ExecutionControlClient {
+        &self.control
+    }
+    pub fn events(&self, capacity: usize) -> ContractResult<ExecutionEventStream> {
+        ExecutionEventStream::connect(
+            self.aeron_dir.as_deref(),
+            &self.aeron_channel,
+            self.event_stream_id,
+            capacity,
+        )
+    }
+    pub fn view(&self, key: ExecutionViewKey) -> ContractResult<view::ExecutionViewReader> {
+        view::ExecutionViewReader::open(&self.view_root, key)
+    }
+    pub fn control_socket(&self) -> &std::path::Path {
+        &self.control_socket
+    }
 }
-
-impl std::error::Error for ContractError {}
-
-pub type ContractResult<T> = Result<T, ContractError>;

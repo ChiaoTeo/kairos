@@ -74,7 +74,7 @@ def _build_binaries(output: Path) -> None:
         flush=True,
     )
     subprocess.run(
-        [os.environ.get("PYTHON", sys.executable), str(ROOT / "scripts" / "build_rust_binaries.py"), "--output", str(output)],
+        [os.environ.get("PYTHON", sys.executable), str(ROOT / "scripts" / "build" / "build_rust_binaries.py"), "--output", str(output)],
         cwd=ROOT,
         check=True,
     )

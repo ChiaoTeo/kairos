@@ -1,0 +1,20 @@
+include "../../common/decimal.fbs";
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Instrument {
+  instrument_id:string (required);
+  symbol:string (required);
+  name:string;
+  instrument_type:string (required);
+  product_family:string;
+  underlying_instrument_id:string;
+  expiry_unix_nanos:ulong;
+  strike:kairos.common.v2.Decimal64;
+  option_right:string;
+  issuer_id:string;
+  share_class:string;
+  primary_currency_asset_id:string;
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+}

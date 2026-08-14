@@ -58,7 +58,7 @@ def test_execution_system_client_owns_intent_endpoint() -> None:
 
     client = RecordingExecutionClient()
     client.submit_intent({"intent_id": "i-1"})
-    assert client.calls == [("POST", "/v1/intents/submit", {"intent_id": "i-1"})]
+    assert client.calls == [("POST", "/v1/intents", {"intent_id": "i-1"})]
 
 
 def test_system_process_factory_returns_typed_business_clients() -> None:

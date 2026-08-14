@@ -1,4 +1,5 @@
 pub mod backtest;
+pub mod market_input;
 mod preflight;
 mod process;
 mod service;
@@ -23,6 +24,7 @@ pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
     BacktestRunResult,
 };
+pub use market_input::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
 
 pub trait ExecutionAuditSink: Send {
     fn publish(&mut self, event: &ExecutionEvent) -> Result<(), String>;

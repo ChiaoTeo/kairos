@@ -6,58 +6,73 @@ from pathlib import Path
 import flatbuffers
 
 from kairospy.domain_types import AccountId
-from kairospy.infrastructure.contracts.account import AccountMmapProjection
-from kairospy.infrastructure.transport.generated.kairos.account.v1 import (
-    Account,
-    Accounts,
-    AccountsSnapshot,
+from kairospy.infrastructure.contracts.account import AccountProjection
+from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
+    AccountCurrentView,
+    AccountModel,
+    AccountSegmentState,
+    AccountStatus,
+    FreshnessState,
 )
-from kairospy.infrastructure.transport.generated.kairos.common.v1 import SnapshotHeader
+from kairospy.infrastructure.transport.generated.kairos.common.v2 import (
+    ViewCompleteness,
+    ViewMetadata,
+)
 
 
 def _account_snapshot() -> bytes:
     builder = flatbuffers.Builder(2048)
 
     def account(segment: str) -> int:
-        account_id = builder.CreateString("main")
         segment_key = builder.CreateString(segment)
         environment = builder.CreateString("live")
         broker = builder.CreateString("binance")
-        status = builder.CreateString("ready")
-        Account.AccountStart(builder)
-        Account.AccountAddAccountId(builder, account_id)
-        Account.AccountAddSegmentKey(builder, segment_key)
-        Account.AccountAddEnvironment(builder, environment)
-        Account.AccountAddBroker(builder, broker)
-        Account.AccountAddStatus(builder, status)
-        return Account.AccountEnd(builder)
+        empty_balances = builder.StartVector(4, 0, 4)
+        balances = builder.EndVector()
+        empty_collateral = builder.StartVector(4, 0, 4)
+        collateral = builder.EndVector()
+        empty_positions = builder.StartVector(4, 0, 4)
+        positions = builder.EndVector()
+        AccountSegmentState.AccountSegmentStateStart(builder)
+        AccountSegmentState.AccountSegmentStateAddSegmentKey(builder, segment_key)
+        AccountSegmentState.AccountSegmentStateAddEnvironment(builder, environment)
+        AccountSegmentState.AccountSegmentStateAddBroker(builder, broker)
+        AccountSegmentState.AccountSegmentStateAddObservedAccountModel(builder, AccountModel.AccountModel.MARGIN)
+        AccountSegmentState.AccountSegmentStateAddStatus(builder, AccountStatus.AccountStatus.ACTIVE)
+        AccountSegmentState.AccountSegmentStateAddFreshness(builder, FreshnessState.FreshnessState.FRESH)
+        AccountSegmentState.AccountSegmentStateAddObservedAtUnixNanos(builder, 1_000)
+        AccountSegmentState.AccountSegmentStateAddStateGeneration(builder, 7)
+        AccountSegmentState.AccountSegmentStateAddBalances(builder, balances)
+        AccountSegmentState.AccountSegmentStateAddCollateral(builder, collateral)
+        AccountSegmentState.AccountSegmentStateAddPositions(builder, positions)
+        return AccountSegmentState.AccountSegmentStateEnd(builder)
 
     rows = (account("spot"), account("usd_m_futures"))
-    Accounts.AccountsStartAccountsVector(builder, len(rows))
+    AccountCurrentView.AccountCurrentViewStartSegmentsVector(builder, len(rows))
     for row in reversed(rows):
         builder.PrependUOffsetTRelative(row)
     row_vector = builder.EndVector()
-    Accounts.AccountsStart(builder)
-    Accounts.AccountsAddAccountCount(builder, len(rows))
-    Accounts.AccountsAddActiveCount(builder, len(rows))
-    Accounts.AccountsAddAccounts(builder, row_vector)
-    payload = Accounts.AccountsEnd(builder)
-
-    snapshot_id = builder.CreateString("account:7")
-    view_key = builder.CreateString("account.current")
-    owner = builder.CreateString("account-main")
-    SnapshotHeader.SnapshotHeaderStart(builder)
-    SnapshotHeader.SnapshotHeaderAddSnapshotId(builder, snapshot_id)
-    SnapshotHeader.SnapshotHeaderAddViewKey(builder, view_key)
-    SnapshotHeader.SnapshotHeaderAddOwnerActorId(builder, owner)
-    SnapshotHeader.SnapshotHeaderAddGeneration(builder, 7)
-    header = SnapshotHeader.SnapshotHeaderEnd(builder)
-
-    AccountsSnapshot.AccountsSnapshotStart(builder)
-    AccountsSnapshot.AccountsSnapshotAddHeader(builder, header)
-    AccountsSnapshot.AccountsSnapshotAddPayload(builder, payload)
-    root = AccountsSnapshot.AccountsSnapshotEnd(builder)
-    builder.Finish(root, file_identifier=b"AAC1")
+    account_id = builder.CreateString("main")
+    snapshot_id = builder.CreateString("account:main:7")
+    resource_id = builder.CreateString("account:main")
+    view_key = builder.CreateString("runtime=account:main;account=main;view=current")
+    owner = builder.CreateString("account:main")
+    ViewMetadata.ViewMetadataStart(builder)
+    ViewMetadata.ViewMetadataAddSnapshotId(builder, snapshot_id)
+    ViewMetadata.ViewMetadataAddResourceId(builder, resource_id)
+    ViewMetadata.ViewMetadataAddViewKey(builder, view_key)
+    ViewMetadata.ViewMetadataAddOwnerId(builder, owner)
+    ViewMetadata.ViewMetadataAddGeneration(builder, 7)
+    ViewMetadata.ViewMetadataAddAsOfUnixNanos(builder, 1_000)
+    ViewMetadata.ViewMetadataAddPublishedAtUnixNanos(builder, 2_000)
+    ViewMetadata.ViewMetadataAddCompleteness(builder, ViewCompleteness.ViewCompleteness.COMPLETE)
+    metadata = ViewMetadata.ViewMetadataEnd(builder)
+    AccountCurrentView.AccountCurrentViewStart(builder)
+    AccountCurrentView.AccountCurrentViewAddMetadata(builder, metadata)
+    AccountCurrentView.AccountCurrentViewAddAccountId(builder, account_id)
+    AccountCurrentView.AccountCurrentViewAddSegments(builder, row_vector)
+    root = AccountCurrentView.AccountCurrentViewEnd(builder)
+    builder.Finish(root, file_identifier=b"AAV2")
     return bytes(builder.Output())
 
 
@@ -78,7 +93,7 @@ def test_one_account_mmap_decodes_every_segment_at_one_generation(
     path = tmp_path / "account-main.snapshot"
     _write_shared_snapshot(path, _account_snapshot())
 
-    snapshot = AccountMmapProjection(path).snapshot(AccountId("main"))
+    snapshot = AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
 
     assert snapshot.generation == 7
     assert [str(value.segment_key) for value in snapshot.segments] == [

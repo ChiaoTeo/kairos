@@ -8,7 +8,7 @@ from pathlib import Path
 from kairospy.application.workspace import InstanceWorkspace
 from kairospy.application.system.binaries import resolve_binary
 from kairospy.domain_types import AccountId
-from kairospy.infrastructure.contracts.account import AccountMmapProjection
+from kairospy.infrastructure.contracts.account import AccountProjection
 from kairospy.infrastructure.contracts.account import backtest_mark_to_market
 from kairospy.infrastructure.transport.account import AeronAccountEventSource
 
@@ -28,7 +28,7 @@ def build_strategy_access(
         return AccountApplication({})
     return AccountApplication(
         {
-            account_id: AccountMmapProjection(snapshot)
+            account_id: AccountProjection(snapshot, account_id=account_id)
             for account_id, snapshot in account_snapshots.items()
         },
         AeronAccountEventSource(

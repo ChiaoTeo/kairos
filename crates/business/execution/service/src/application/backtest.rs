@@ -5,12 +5,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::market_input::MarketObservation;
 use crate::domain::OrderSide;
 use crate::services::simulator::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
 };
 use kairos_domain_types::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
-use kairos_market_contract::model::MarketObservation;
 use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

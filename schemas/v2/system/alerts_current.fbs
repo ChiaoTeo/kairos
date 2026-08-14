@@ -1,0 +1,12 @@
+include "../common/metadata.fbs";
+include "types/alert.fbs";
+
+namespace kairos.system.v2;
+
+table AlertsCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  alerts:[Alert] (required);
+}
+
+root_type AlertsCurrentView;
+file_identifier "SAV2";

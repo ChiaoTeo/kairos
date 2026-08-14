@@ -1,35 +1,36 @@
-//! Public cross-process contract for the Risk module.
+//! v2 public cross-process contract for Risk.
+//!
+//! The crate owns the control, event, transport and view boundaries. It does
+//! not expose the Risk service actor or its persistence representation.
 
-pub mod client;
-pub mod encoding;
+pub mod control;
+pub mod encode;
+pub mod error;
 pub mod event;
-pub mod model;
-pub mod query;
-pub mod snapshot;
 pub mod transport;
+pub mod view;
+mod encoding_v2;
 
-pub use event::EventEnvelope;
-pub use model::*;
-pub use query::{CommandEnvelope, QueryEnvelope};
-pub use snapshot::SnapshotEnvelope;
+mod model;
+pub use model::{Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState,
+    CloseCircuitRequest, DependencyWatermarks, EnforcementMode, LimitView, Metric,
+    OpenCircuitRequest, PolicyScope, ReasonCode, Reservation, ReservationStatus,
+    RiskContext, RiskCurrentView, RiskDecision, RiskEvent, RiskPolicy};
+pub use control::{Health, RiskControlClient};
+pub use event::encode::{FlatbuffersRiskEventWriter, RiskAeronEventPublisher};
+pub use view::encode::{FlatbuffersRiskSnapshotWriter, MmapRiskSnapshotPublisher};
+pub use error::{ContractError, ContractResult};
+pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
+pub use view::{RiskViewKey, RiskViewKind, RiskViewReader, ViewFrame, ViewMetadata};
 
-#[derive(Debug)]
-pub enum ContractError {
-    Invalid(String),
-    Transport(String),
-    Rejected(String),
+use std::path::PathBuf;
+
+pub struct RiskEndpoint { pub control_socket: PathBuf, pub view_root: PathBuf, pub aeron_dir: Option<String>, pub aeron_channel: String, pub event_stream_id: i32 }
+pub struct RiskClient { control: RiskControlClient, view_root: PathBuf, aeron_dir: Option<String>, aeron_channel: String, event_stream_id: i32 }
+
+impl RiskClient {
+    pub fn connect(endpoint: RiskEndpoint) -> ContractResult<Self> { Ok(Self { control: RiskControlClient::connect(endpoint.control_socket)?, view_root: endpoint.view_root, aeron_dir: endpoint.aeron_dir, aeron_channel: endpoint.aeron_channel, event_stream_id: endpoint.event_stream_id }) }
+    pub fn control(&self) -> &RiskControlClient { &self.control }
+    pub fn events(&self, capacity: usize) -> ContractResult<RiskEventStream> { RiskEventStream::connect(self.aeron_dir.as_deref(), &self.aeron_channel, self.event_stream_id, capacity) }
+    pub fn view(&self, key: RiskViewKey) -> ContractResult<RiskViewReader> { RiskViewReader::open(&self.view_root, key) }
 }
-
-impl std::fmt::Display for ContractError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Invalid(value) => write!(f, "invalid risk contract data: {value}"),
-            Self::Transport(value) => write!(f, "risk contract transport failed: {value}"),
-            Self::Rejected(value) => write!(f, "risk contract request rejected: {value}"),
-        }
-    }
-}
-
-impl std::error::Error for ContractError {}
-
-pub type ContractResult<T> = Result<T, ContractError>;

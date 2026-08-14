@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/ticker_24h.fbs";
+namespace kairos.market.v2;
+table Ticker24hUpdated { metadata:kairos.common.v2.EventMetadata (required); ticker:Ticker24h (required); }
+root_type Ticker24hUpdated;
+file_identifier "MTU2";

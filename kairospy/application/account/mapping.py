@@ -12,6 +12,7 @@ from .events import (
     AccountStatusChangedEvent,
     BalanceChangedEvent,
     EquityChangedEvent,
+    ObservedOrderChangedEvent,
     PositionChangedEvent,
 )
 from .models import (
@@ -22,6 +23,7 @@ from .models import (
     Balance,
     DataFreshness,
     EquityChange,
+    ObservedOrder,
     Position,
 )
 
@@ -48,6 +50,21 @@ def map_account_event(record: AccountEventRecord) -> tuple[AccountEvent, ...]:
                     metadata,
                 )
             )
+        elif change.kind == "balance_removed":
+            row = _mapping(change.payload, "removed balance")
+            events.append(
+                BalanceChangedEvent(
+                    Balance(
+                        account_id,
+                        segment_key,
+                        str(row.get("asset_id", "")),
+                        Decimal("0"),
+                        Decimal("0"),
+                        Decimal("0"),
+                    ),
+                    metadata,
+                )
+            )
         elif change.kind == "position_changed":
             events.append(
                 PositionChangedEvent(
@@ -55,6 +72,42 @@ def map_account_event(record: AccountEventRecord) -> tuple[AccountEvent, ...]:
                         change.payload,
                         account_id=account_id,
                         segment_key=segment_key,
+                    ),
+                    metadata,
+                )
+            )
+        elif change.kind == "position_removed":
+            row = _mapping(change.payload, "removed position")
+            instrument_id = str(row.get("instrument_id", ""))
+            events.append(
+                PositionChangedEvent(
+                    Position(
+                        account_id,
+                        segment_key,
+                        InstrumentRef(InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]),
+                        Decimal("0"),
+                    ),
+                    metadata,
+                )
+            )
+        elif change.kind in {"observed_order_changed", "observed_order_removed"}:
+            row = _mapping(change.payload, "observed order")
+            instrument_id = str(row.get("instrument_id", row.get("order_id", "")))
+            events.append(
+                ObservedOrderChangedEvent(
+                    ObservedOrder(
+                        account_id=account_id,
+                        segment_key=segment_key,
+                        order_id=str(row.get("order_id", "")),
+                        remote_order_id=row.get("remote_order_id"),
+                        instrument=InstrumentRef(
+                            InstrumentId(instrument_id),
+                            instrument_id.rsplit(":", 1)[-1],
+                        ),
+                        market_id=str(row.get("market_id", "")),
+                        quantity=_decimal(row.get("quantity")) or Decimal("0"),
+                        filled_quantity=_decimal(row.get("filled_quantity")) or Decimal("0"),
+                        status=str(row.get("status", "closed" if change.kind == "observed_order_removed" else "unknown")),
                     ),
                     metadata,
                 )

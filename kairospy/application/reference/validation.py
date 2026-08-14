@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from kairospy.infrastructure.contracts.reference_client import ReferenceClient
+from kairospy.infrastructure.contracts.reference import ReferenceClient
 
 
 PUBLIC_REFERENCE_SOURCES = (
@@ -31,7 +31,6 @@ def validate_reference_runtime(
 ) -> dict[str, Any]:
     """Validate the running process, snapshots, durable tail, and providers."""
     health = client.health()
-    views = client.reference_views()
     snapshot = client.catalog()
     event_sequence = _integer(health.get("event_sequence"))
     tail = (
@@ -84,12 +83,6 @@ def validate_reference_runtime(
         "required_providers_ready",
         not missing and not unhealthy,
         {"required": list(required), "missing": missing, "unhealthy": unhealthy},
-    )
-    missing_views = [str(view.get("view")) for view in views if not view.get("exists")]
-    check(
-        "reference_views_complete",
-        len(views) == 8 and not missing_views,
-        {"view_count": len(views), "missing": missing_views},
     )
     health_generation = _integer(health.get("generation"))
     snapshot_generation = _integer(snapshot.get("generation"))

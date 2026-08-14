@@ -341,6 +341,7 @@ impl AccountActor {
                     } else {
                         Vec::new()
                     },
+                    provenance: None,
                 });
             }
         }
@@ -377,17 +378,9 @@ fn collect_business_changes(
     }
     for (asset_id, removed) in &old_balances {
         if !current_balances.contains_key(asset_id) {
-            out.push(AccountBusinessChange::Balance {
+            out.push(AccountBusinessChange::BalanceRemoved {
                 segment_key: current.segment_key.clone(),
-                value: Balance {
-                    asset_id: removed.asset_id.clone(),
-                    asset_code: removed.asset_code.clone(),
-                    total: SignedQuantity::ZERO,
-                    available: Some(SignedQuantity::ZERO),
-                    locked: Some(SignedQuantity::ZERO),
-                    borrowed: None,
-                    interest: None,
-                },
+                asset_id: removed.asset_id.clone(),
             });
         }
     }
@@ -416,18 +409,42 @@ fn collect_business_changes(
     }
     for (instrument_id, removed) in &old_positions {
         if !current_positions.contains_key(instrument_id) {
-            out.push(AccountBusinessChange::Position {
+            out.push(AccountBusinessChange::PositionRemoved {
                 segment_key: current.segment_key.clone(),
-                value: crate::domain::Position {
-                    instrument_id: removed.instrument_id.clone(),
-                    market_id: removed.market_id.clone(),
-                    quantity: SignedQuantity::ZERO,
-                    average_price: removed.average_price,
-                    mark_price: removed.mark_price,
-                    unrealized_pnl: Some(crate::domain::Money::ZERO),
-                    realized_pnl: removed.realized_pnl,
-                    updated_at_unix_nanos: current.observed_at_unix_nanos,
-                },
+                instrument_id: removed.instrument_id.clone(),
+                market_id: removed.market_id.clone(),
+            });
+        }
+    }
+
+    let old_orders = old
+        .map(|value| {
+            value
+                .open_orders
+                .iter()
+                .map(|order| (order.order_id.clone(), order))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_orders = current
+        .open_orders
+        .iter()
+        .map(|order| (order.order_id.clone(), order))
+        .collect::<BTreeMap<_, _>>();
+    for order in current_orders.values() {
+        if old_orders.get(&order.order_id).copied() != Some(*order) {
+            out.push(AccountBusinessChange::ObservedOrder {
+                segment_key: current.segment_key.clone(),
+                value: (*order).clone(),
+            });
+        }
+    }
+    for (order_id, order) in &old_orders {
+        if !current_orders.contains_key(order_id) {
+            out.push(AccountBusinessChange::ObservedOrderRemoved {
+                segment_key: current.segment_key.clone(),
+                order_id: order.order_id.clone(),
+                remote_order_id: order.remote_order_id.clone(),
             });
         }
     }

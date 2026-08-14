@@ -121,7 +121,6 @@ pub fn validate_selectors(selectors: &[String]) -> Result<(), String> {
                 | "mark_price"
                 | "index_price"
                 | "open_interest"
-                | "instrument_status"
         ) {
             return Err(format!("unsupported market selector: {selector}"));
         }

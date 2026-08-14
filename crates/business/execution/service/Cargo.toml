@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 axum = "0.8"
+flatbuffers = "25.12.19"
 kairos-domain-types = { path = "../../../kairos-domain-types" }
 kairos-integration = { path = "../../../kairos-integration" }
 kairos-protocol = { path = "../../../kairos-protocol" }

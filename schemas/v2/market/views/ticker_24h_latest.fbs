@@ -1,0 +1,7 @@
+include "../../common/metadata.fbs";
+include "../types/ticker_24h.fbs";
+namespace kairos.market.v2;
+table LatestTicker24h { value:Ticker24h (required); source_event_id:string (required); }
+table Ticker24hLatestView { metadata:kairos.common.v2.ViewMetadata (required); ticker:LatestTicker24h (required); }
+root_type Ticker24hLatestView;
+file_identifier "MLT2";

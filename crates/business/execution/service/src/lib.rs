@@ -20,6 +20,7 @@ pub use application::{
     RefreshQuoteIntent, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,
 };
+pub use application::market_input::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
 pub use composition::{
     compose_execution_connections, compose_order_entry, ExecutionConnectionOptions,
     ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionPreflight,

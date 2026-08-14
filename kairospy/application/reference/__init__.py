@@ -8,6 +8,7 @@ from .application import (
     ReferenceNotFoundError,
 )
 from .cli import ReferenceCliApplication
+from .events import ReferenceEventRecord
 from .models import InstrumentRef, Market, MarketStatus, TradingRules
 from .validation import (
     MASSIVE_REFERENCE_SOURCES,
@@ -20,6 +21,7 @@ __all__ = [
     "MASSIVE_REFERENCE_SOURCES",
     "PUBLIC_REFERENCE_SOURCES",
     "ReferenceCliApplication",
+    "ReferenceEventRecord",
     "ReferenceApplication",
     "ReferenceNotFoundError",
     "AmbiguousReferenceError",

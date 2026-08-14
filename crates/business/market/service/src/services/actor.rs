@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::domain::events::MarketEvent;
+use crate::domain::events::OrderBookResyncRequired;
+use crate::domain::events::{MarketChange, MarketEvent, MarketViewUpdate};
 use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
 use crate::domain::market::{MarketDescriptor, MarketSelectionQuery};
 use crate::domain::observations::MarketObservation;
@@ -78,7 +79,7 @@ pub struct MarketActor {
     static_subscriptions: BTreeMap<SubscriptionId, SubscriptionState>,
     dynamic_intents: BTreeMap<SubscriptionId, DynamicIntent>,
     max_dynamic_members: usize,
-    pending_events: Vec<(Sequence, MarketEvent)>,
+    pending_changes: Vec<MarketChange>,
     reference_generation: Generation,
     reference_event_sequence: Sequence,
     feed_status: FeedStatus,
@@ -122,7 +123,7 @@ impl MarketActor {
             reference_event_sequence: 0.into(),
             feed_status: FeedStatus::Disconnected,
             sources: BTreeMap::new(),
-            pending_events: Vec::new(),
+            pending_changes: Vec::new(),
             attached_sources: BTreeMap::new(),
             source_input_capacity,
             next_source_input_index: 0,
@@ -173,7 +174,7 @@ impl MarketActor {
             static_subscriptions,
             dynamic_intents,
             max_dynamic_members,
-            pending_events: Vec::new(),
+            pending_changes: Vec::new(),
             reference_generation: 0.into(),
             reference_event_sequence: 0.into(),
             feed_status: FeedStatus::Disconnected,
@@ -279,11 +280,12 @@ impl MarketActor {
         if epoch != source.epoch {
             return Ok(false);
         }
-        if !source.resyncing_markets.contains(market_id) {
+        let first_request = !source.resyncing_markets.contains(market_id);
+        if first_request {
             source.resyncing_markets.push(market_id.clone());
         }
         source.status = SourceStatus::WarmingUp;
-        source.last_error = Some(reason);
+        source.last_error = Some(reason.clone());
         if let Some(book) = self
             .order_books
             .get_mut(&format!("{source_id}:{market_id}"))
@@ -298,6 +300,35 @@ impl MarketActor {
             freshness.status = DataFreshnessStatus::Stale;
         }
         self.refresh_feed_status();
+        if first_request {
+            let instrument_id = self
+                .order_books
+                .get(&format!("{source_id}:{market_id}"))
+                .map(|book| book.instrument_id.clone())
+                .unwrap_or_else(|| {
+                    kairos_domain_types::InstrumentId::new(market_id.as_str())
+                        .expect("validated market id is a valid fallback instrument id")
+                });
+            self.event_sequence += 1;
+            self.pending_changes.push(MarketChange {
+                sequence: self.event_sequence,
+                event: Some(MarketEvent::OrderBookResyncRequired(
+                    OrderBookResyncRequired {
+                        source_id: source_id.to_string(),
+                        market_id: market_id.clone(),
+                        instrument_id,
+                        expected_sequence: self
+                            .order_books
+                            .get(&format!("{source_id}:{market_id}"))
+                            .map(|book| book.sequence.get().saturating_add(1).into())
+                            .unwrap_or_else(|| 0.into()),
+                        observed_sequence: 0.into(),
+                        reason,
+                    },
+                )),
+                view: None,
+            });
+        }
         Ok(true)
     }
 
@@ -595,7 +626,7 @@ impl MarketActor {
         if !self.observation_is_selected(&observation) {
             return Ok(self.event_sequence.get());
         }
-        if self.pending_events.len() >= Self::MAX_PENDING_EVENTS {
+        if self.pending_changes.len() >= Self::MAX_PENDING_EVENTS {
             return Err(format!(
                 "market event backlog exceeded limit {}",
                 Self::MAX_PENDING_EVENTS
@@ -644,21 +675,32 @@ impl MarketActor {
             self.feed_status = FeedStatus::Ready;
         }
         self.event_sequence += 1;
-        self.pending_events
-            .push((self.event_sequence, MarketEvent::Observation(observation)));
+        self.pending_changes.push(MarketChange {
+            sequence: self.event_sequence,
+            event: Some(MarketEvent::Observation(observation.clone())),
+            view: Some(MarketViewUpdate::Observation(observation)),
+        });
         Ok(self.event_sequence.get())
     }
 
     pub(crate) fn drain_events(&mut self) -> Vec<(Sequence, MarketEvent)> {
-        std::mem::take(&mut self.pending_events)
+        self.drain_changes()
+            .into_iter()
+            .filter_map(|change| change.event.map(|event| (change.sequence, event)))
+            .collect()
+    }
+
+    pub(crate) fn drain_changes(&mut self) -> Vec<MarketChange> {
+        std::mem::take(&mut self.pending_changes)
     }
 
     /// Re-evaluate receive-time freshness without performing external I/O.
     /// This is deliberately timer driven while live ingest remains wake
     /// driven by SourceInput.
     pub fn evaluate_freshness(&mut self, now_unix_nanos: u64, max_age_nanos: u64) {
+        let mut changed = Vec::new();
         for freshness in self.freshness.values_mut() {
-            freshness.status = if now_unix_nanos
+            let next_status = if now_unix_nanos
                 .saturating_sub(freshness.last_received_time_unix_nanos.get())
                 > max_age_nanos
             {
@@ -666,6 +708,22 @@ impl MarketActor {
             } else {
                 DataFreshnessStatus::Current
             };
+            if freshness.status != next_status {
+                freshness.status = next_status;
+                self.event_sequence += 1;
+                freshness.event_sequence = self.event_sequence;
+                changed.push((self.event_sequence, freshness.clone()));
+            }
+        }
+        for (sequence, freshness) in changed {
+            if self.pending_changes.len() >= Self::MAX_PENDING_EVENTS {
+                break;
+            }
+            self.pending_changes.push(MarketChange {
+                sequence,
+                event: None,
+                view: Some(MarketViewUpdate::Freshness(freshness)),
+            });
         }
     }
 
@@ -673,15 +731,25 @@ impl MarketActor {
         if limit == 0 {
             return Vec::new();
         }
-        let count = self.pending_events.len().min(limit);
-        self.pending_events.drain(..count).collect()
+        self.drain_changes_limited(limit)
+            .into_iter()
+            .filter_map(|change| change.event.map(|event| (change.sequence, event)))
+            .collect()
+    }
+
+    pub(crate) fn drain_changes_limited(&mut self, limit: usize) -> Vec<MarketChange> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let count = self.pending_changes.len().min(limit);
+        self.pending_changes.drain(..count).collect()
     }
 
     pub fn apply_orderbook_snapshot(&mut self, book: OrderBook) -> Result<u64, String> {
         if !self.orderbook_is_selected(&book.market_id) {
             return Ok(self.event_sequence.get());
         }
-        if self.pending_events.len() >= Self::MAX_PENDING_EVENTS {
+        if self.pending_changes.len() >= Self::MAX_PENDING_EVENTS {
             return Err(format!(
                 "market event backlog exceeded limit {}",
                 Self::MAX_PENDING_EVENTS
@@ -712,8 +780,11 @@ impl MarketActor {
             self.event_sequence.get(),
             synchronized,
         );
-        self.pending_events
-            .push((self.event_sequence, MarketEvent::OrderBook(book)));
+        self.pending_changes.push(MarketChange {
+            sequence: self.event_sequence,
+            event: Some(MarketEvent::OrderBookSnapshot(book.clone())),
+            view: Some(MarketViewUpdate::OrderBook(book)),
+        });
         Ok(self.event_sequence.get())
     }
 
@@ -721,7 +792,7 @@ impl MarketActor {
         if !self.orderbook_is_selected(&delta.market_id) {
             return Ok(self.event_sequence.get());
         }
-        if self.pending_events.len() >= Self::MAX_PENDING_EVENTS {
+        if self.pending_changes.len() >= Self::MAX_PENDING_EVENTS {
             return Err(format!(
                 "market event backlog exceeded limit {}",
                 Self::MAX_PENDING_EVENTS
@@ -734,6 +805,7 @@ impl MarketActor {
         if delta.last_sequence <= book.sequence {
             return Ok(self.event_sequence.get());
         }
+        let delta_for_event = delta.clone();
         book.apply_delta(delta)?;
         let freshness = (
             book.source_id.clone(),
@@ -750,8 +822,11 @@ impl MarketActor {
             self.event_sequence.get(),
             true,
         );
-        self.pending_events
-            .push((self.event_sequence, MarketEvent::OrderBook(event)));
+        self.pending_changes.push(MarketChange {
+            sequence: self.event_sequence,
+            event: Some(MarketEvent::OrderBookDelta(delta_for_event)),
+            view: Some(MarketViewUpdate::OrderBook(event)),
+        });
         Ok(self.event_sequence.get())
     }
 

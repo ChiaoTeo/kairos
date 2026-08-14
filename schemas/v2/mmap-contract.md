@@ -15,22 +15,25 @@ that a revision exists, but there is no Reference v2 mmap catalog.
 
 A **publisher** is one concrete owner Actor/process. A **resource** is one mmap
 file containing one KSS envelope and exactly one FlatBuffers current-view root.
-A **resource manifest** is a small atomic JSON discovery document. It is
-control/resource metadata, not a business payload.
+Resource discovery is not a generated JSON artifact. Typed runtime/component
+configuration supplies the publisher root, and `MarketViewKey` derives each
+resource filename deterministically. The publisher must not create
+`manifest.json` files, and there is no `schemas/v2/*.json` mmap manifest
+schema.
 
 The public boundary remains the owning module's contract/application API:
 
 ```text
 caller
   -> module current-view reader
-  -> resource manifest
+  -> typed component/runtime resource root
   -> one or more mmap resources
   -> validated FlatBuffers roots
   -> owned application values
 ```
 
-Callers do not construct paths, scan snapshot directories, parse the resource
-manifest, or retain generated FlatBuffers table references.
+Callers do not scan snapshot directories or retain generated FlatBuffers table
+references; they use the typed reader for the requested resource key.
 
 ## 2. Scope roots and paths
 
@@ -43,7 +46,6 @@ the launch-instance root.
     v2/
       <owner>/
         <publisher-resource-id>/
-          manifest.json
           <resource-id>.e<resource-epoch>.mmap
 ```
 
@@ -51,11 +53,9 @@ Examples:
 
 ```text
 # Shared Market runtime
-<workspace>/snapshots/v2/market/market-shared/manifest.json
-<workspace>/snapshots/v2/market/market-shared/quote-s0000.e1.mmap
+<workspace>/snapshots/v2/market/market-shared/market-...-quote-none.e1.mmap
 
 # One instance Account process
-<instance>/snapshots/v2/account/account-7f83a921/manifest.json
 <instance>/snapshots/v2/account/account-7f83a921/current.e1.mmap
 
 # Instance Risk and Execution
@@ -63,96 +63,28 @@ Examples:
 <instance>/snapshots/v2/execution/execution-default/active-intents.e1.mmap
 ```
 
-`publisher-resource-id` and filenames are System/composition-owned safe ASCII
-resource identifiers. They are not arbitrary business IDs. The manifest maps
-them to canonical owner and business identities.
+`publisher-resource-id` and filenames are System/composition-owned safe
+resource identifiers. They are not arbitrary business IDs. The application
+reader receives the exact publisher root from the typed runtime boundary and
+constructs only the requested `MarketViewKey` resource path. Readers never
+infer a Market snapshot path from an Execution resource or fall back to an aggregate service snapshot filename.
 
-The instance component endpoint manifest exposes the exact resource-manifest
-path:
+## 3. Resource discovery and identity
 
-```json
-{
-  "schema_version": 2,
-  "components": {
-    "market": {
-      "current_views": {
-        "manifest": "/absolute/scope/snapshots/v2/market/market-shared/manifest.json"
-      }
-    },
-    "risk": {
-      "current_views": {
-        "manifest": "/absolute/instance/snapshots/v2/risk/risk-default/manifest.json"
-      }
-    }
-  },
-  "accounts": {
-    "account:example": {
-      "current_views": {
-        "manifest": "/absolute/instance/snapshots/v2/account/account-7f83a921/manifest.json"
-      }
-    }
-  }
-}
-```
+The runtime boundary carries the publisher root and the requested view key;
+it does not carry or generate a JSON manifest. A resource is discoverable when
+its deterministic path exists and its KSS header and FlatBuffers metadata
+validate against the requested key.
 
-Readers never infer a Market snapshot path from an Execution manifest and do
-not fall back to a v1 `service.snapshot` filename.
-
-## 3. Resource manifest
-
-The v2 resource manifest is machine-validated by
-[`mmap-manifest.schema.json`](./mmap-manifest.schema.json) and has this shape:
-
-```json
-{
-  "schema_version": 2,
-  "manifest_generation": 4,
-  "owner": "market",
-  "publisher_id": "market:shared",
-  "publisher_resource_id": "market-shared",
-  "scope": "workspace",
-  "workspace_id": "workspace-id",
-  "launch_id": null,
-  "instance_id": null,
-  "resources": [
-    {
-      "semantic_name": "quote_current",
-      "resource_id": "quote-s0000",
-      "resource_epoch": 1,
-      "relative_path": "quote-s0000.e1.mmap",
-      "file_identifier": "MCQ2",
-      "view_key": "market.quote.current/market-shared/0000-of-0001",
-      "slot_size": 4194304,
-      "max_payload_bytes": 4194304,
-      "max_rows": 32768,
-      "shard_id": 0,
-      "shard_count": 1,
-      "required": true
-    }
-  ]
-}
-```
-
-Rules:
-
-- `manifest_generation` increases for every resource-set/path/capacity change.
-- `resource_id` is unique within the publisher manifest and stable while the
-  logical resource exists.
+- `resource_id` is stable while the logical resource exists.
 - `resource_epoch` increases when slot size, schema root, shard count, or file
   identity changes.
-- `relative_path` is a single safe filename resolved below the manifest
-  directory; absolute paths and traversal are rejected.
-- `file_identifier`, `view_key`, shard metadata, and capacity must match the
-  decoded resource.
-- `max_payload_bytes` cannot exceed KSS slot size.
-- `max_rows` is enforced by the encoder even when the FlatBuffers vector could
-  technically hold more.
-- a required resource is advertised only after its first complete generation
-  is readable.
-
-The writer publishes a manifest through write-to-new-file, file flush, and
-atomic rename. Readers reject a malformed manifest rather than directory-scan
-for something plausible.
+- `resource_path` is a safe filename below the publisher root; absolute paths
+  and traversal are rejected.
+- file identifier, view key, shard metadata, capacity, and runtime identity
+  must match the decoded resource.
+- a resource is visible only after its first complete KSS generation is
+  readable.
 
 ## 4. Physical envelope
 
@@ -175,9 +107,9 @@ Each active slot contains exactly one complete FlatBuffers root with the file
 identifier registered for that resource. Payload bytes never span resources.
 
 The KSS header generation, selected slot generation, and decoded
-`ViewMetadata.generation` must be equal. The decoded `resource_id`,
-`resource_epoch`, `view_key`, owner, and runtime identity must match the
-manifest and requested application scope.
+`ViewMetadata.generation` must be equal. The decoded resource identity,
+resource epoch, view key, owner, and runtime identity must match the requested
+application scope and typed runtime boundary.
 
 KSS1 readers return an owned payload copy. V2 does not claim zero-copy lifetime
 semantics. A future leased zero-copy envelope is a transport-version change,
@@ -188,7 +120,7 @@ not a schema reinterpretation.
 FlatBuffers is the byte-level payload contract, not an authorization to expose
 process-local Rust addresses. A pointer or reference is meaningful only in the
 virtual address space and lifetime of the process that created it. No mmap
-manifest, KSS header, FlatBuffers table, application result, or cross-process
+JSON discovery document, KSS header, FlatBuffers table, application result, or cross-process
 API may contain or transfer a Rust pointer as an object reference.
 
 The v2 baseline writer path is:
@@ -230,9 +162,9 @@ zero-copy reader needs an explicit lease/pinning or hazard protocol and is a new
 KSS transport version. A closure alone is insufficient because the writer can
 publish twice during the closure.
 
-Current v1 migration findings and v2 disposition:
+Current implementation and v2 transport target:
 
-| Contract | Current publication behavior | V2 target |
+| Contract | Current publication behavior | Target |
 | --- | --- | --- |
 | Account | builder -> `Vec` -> envelope clone -> mmap copy | remove both intermediate owned-buffer copies |
 | Risk | builder -> `Vec` -> envelope clone -> mmap copy | remove both intermediate owned-buffer copies |
@@ -257,13 +189,13 @@ Creation/replacement follows:
 2. create the fixed-size KSS file with owner-only write permissions;
 3. publish generation 1 with a complete v2 payload;
 4. reopen/read/validate it through the contract reader;
-5. atomically publish the new resource manifest;
-6. readers observe the manifest generation and remap the new path;
+5. atomically make the new resource path visible through the typed runtime boundary;
+6. readers resolve the new path and remap the resource;
 7. the previous file is retired after the configured grace period.
 
 On Unix, unlinking an old file does not invalidate an existing mapping, but a
-reader must still refresh the manifest periodically and before each new
-application query after an epoch change. No correctness rule depends on inode
+reader must resolve the typed resource boundary periodically and before each
+new application query after an epoch change. No correctness rule depends on inode
 replacement behavior.
 
 Slot size and Market shard count are immutable for a resource epoch. Capacity
@@ -280,7 +212,7 @@ Publication rules:
 - encode and semantically validate the entire FlatBuffers payload first;
 - reject empty, oversized, over-row-limit, or incomplete payloads;
 - write the inactive slot and publish it through the KSS generation switch;
-- update neither manifest nor resource epoch for an ordinary generation;
+- update neither runtime resource metadata nor resource epoch for an ordinary generation;
 - retain the previous active generation if publication fails;
 - mark publisher health degraded and fail closed for trading readiness when a
   required resource can no longer publish.
@@ -292,9 +224,9 @@ into a slot.
 
 Read rules:
 
-1. resolve the owner through the component endpoint manifest;
-2. read and validate the resource manifest;
-3. select exact semantic resources and Market shards;
+1. resolve the owner through typed component/runtime metadata;
+2. derive and validate the exact resource path from the requested view key;
+3. select exact Market resources and shards;
 4. open KSS resources read-only;
 5. perform the stable double-slot read;
 6. verify KSS generation and FlatBuffers identity/metadata equality;
@@ -302,7 +234,7 @@ Read rules:
 8. return owned application values.
 
 A reader retries a concurrently changing slot a bounded number of times. A
-manifest/root/identity mismatch is not retried as transient corruption.
+resource/root/identity mismatch is not retried as transient corruption.
 
 ## 7. Generation and consistency
 
@@ -330,12 +262,17 @@ keys, payloads, update cadence, and consumers differ. Trade remains event-only.
 
 | Family | Root | Row key | Resource payload |
 | --- | --- | --- | --- |
-| Quote | `MCQ2 QuoteCurrentView` | `(source_id, market_id)` | latest canonical quote per key |
-| Completed Bar | `MCB2 BarCurrentView` | `(source_id, market_id, bar_spec_id)` | latest completed bar per key |
-| Greeks | `MCG2 GreeksCurrentView` | `(source_id, market_id)` | latest Greeks observation per key |
+| Quote | `MLQ2 QuoteLatestView` | `(source_id, market_id)` | latest canonical quote per key |
+| Quote | `MLQ2 QuoteLatestView` | `(source_id, market_id)` | one latest value |
+| Completed Bar | `MBW2 BarWindowView` | `(source_id, market_id, bar_spec_id)` | bounded completed-bar window per key |
+| Greeks | `MLG2 GreeksLatestView` | `(source_id, market_id)` | one latest value |
+| Order Book | `MLO2 OrderBookLatestView` | `(source_id, market_id)` | one latest synchronized book per key |
+| Greeks | `MLG2 GreeksLatestView` | `(source_id, market_id)` | latest Greeks value per key |
+| Order Book | `MLO2 OrderBookLatestView` | `(source_id, market_id, instrument_id)` | one latest synchronized or explicitly unsynchronized book |
+| Freshness | `MLF2 MarketFreshnessLatestView` | `(source_id, market_id, data_kind)` | one latest age, sequence evidence, and freshness status |
 
 Each resource is one shard and carries `shard_id` and `shard_count`. The values
-must match its manifest entry. Shard count is a power of two and immutable for
+must match its typed resource metadata. Shard count is a power of two and immutable for
 the resource epoch.
 
 The shard input is the UTF-8 canonical row key with components length-prefixed
@@ -351,12 +288,19 @@ default application behavior.
 
 V2 starts with `shard_count = 1`. Increasing it requires measured payload size
 or publication-cost evidence, creates a new resource epoch/set, and updates the
-manifest atomically. The schema supports sharding without assuming it is
+typed runtime resource metadata atomically. The schema supports sharding without assuming it is
 always beneficial.
 
 Market publishes dirty shards at its configured snapshot interval, not once
 for every incoming tick. This is a bounded current-state publication policy,
 not event batching; Aeron facts remain independent.
+
+OrderBook current views are published only by the Market Actor after applying a
+provider snapshot or a contiguous delta range. `synchronized = false` is an
+explicit degraded image and must be rejected by execution preflight. A
+freshness view is independently generated because its rows and cadence are not
+the same as the observation current views. Its `event_sequence` field is audit
+evidence only and is never a resumable stream cursor.
 
 `COMPLETE` means every current row held by Market for the declared family and
 shard is included. It does not promise that every subscribed market has
@@ -388,7 +332,7 @@ may coalesce into one generation, but the final image must be complete.
 
 ## 10. Risk mmap resources
 
-One Risk Actor exposes one `RXV2 RiskCurrentView` resource containing:
+One Risk Actor exposes one `RXV2 RiskLatestView` resource containing:
 
 - the active policy version;
 - complete structured policy scopes and current limit usage;
@@ -410,8 +354,8 @@ One Execution Actor exposes:
 
 | Resource | Root | Logical content |
 | --- | --- | --- |
-| `active-intents` | `ECI2 ActiveIntentsCurrentView` | non-terminal intents and their current plans/legs |
-| `active-orders` | `ECO2 ActiveOrdersCurrentView` | non-terminal exchange-facing orders |
+| `active-intents` | `ECI2 ActiveIntentsView` | non-terminal intents and their current plans/legs |
+| `active-orders` | `ECO2 ActiveOrdersView` | non-terminal exchange-facing orders |
 
 Terminal intents, orders, and fills are query/audit records. They do not remain
 in mmap merely to provide history.
@@ -444,7 +388,7 @@ required business resources.
 ## 13. Capacity contract
 
 Slot sizes and row limits are configuration validated at publisher startup and
-recorded in the manifest. They are not hidden constants in readers.
+carried by the typed runtime boundary. They are not hidden constants in readers.
 
 Initial configuration uses one Market shard per family. Composition estimates
 the maximum encoded size from configured universe/Actor limits plus explicit
@@ -468,10 +412,10 @@ bytes. Capacity planning counts both slots and every Market shard.
 
 ## 14. Permissions and validation
 
-- resource directories and manifests are workspace/instance owned;
+- resource directories and typed runtime metadata are workspace/instance owned;
 - only the owner process has write access to its mmap files;
 - consumers open files read-only;
-- manifest paths are resolved below the validated publisher directory;
+- resource paths are resolved below the validated publisher directory;
 - symlink/path traversal checks are applied before mmap;
 - workspace, launch, and instance identity in payload metadata must match the
   caller's resolved runtime scope;
@@ -483,15 +427,15 @@ bytes. Capacity planning counts both slots and every Market shard.
 
 Every active resource requires:
 
-1. first-generation creation and manifest publication;
+1. first-generation creation and typed resource registration;
 2. stable reads while the writer switches slots;
 3. KSS/header/payload generation equality;
 4. wrong file identifier, resource ID, epoch, view key, and runtime identity
    rejection;
 5. row uniqueness, sort order, bounds, and Market shard validation;
 6. oversized payload leaves the previous generation active;
-7. new file epoch and atomic manifest switch without in-place truncate;
-8. stale manifest and missing resource failure behavior;
+7. new file epoch and typed resource-path switch without in-place truncate;
+8. stale resource metadata and missing resource failure behavior;
 9. Rust writer to Python reader parity;
 10. application APIs return owned values and do not expose mmap/generated
     types;
@@ -503,14 +447,13 @@ Every active resource requires:
 V2 migration must not reuse the existing one-service/one-snapshot assumption.
 It requires:
 
-- workspace APIs for a publisher resource directory and manifest path;
-- component endpoint manifests carrying `current_views.manifest`;
-- a generic validated resource-manifest reader;
+- workspace APIs for a publisher resource directory and typed resource paths;
+- component endpoint metadata carrying the Market publisher root;
+- a generic validated resource-key reader;
 - epoch-specific KSS file creation without truncating an advertised path;
 - business contract readers selecting semantic resources and Market shards;
-- owner publishers enforcing manifest capacity and payload metadata equality;
-- migration tests proving v1 and v2 readers never resolve the same path by
-  accident.
+- owner publishers enforcing configured capacity and payload metadata equality;
+- tests proving independent readers resolve only their declared resource.
 
 These are transport/composition responsibilities. They do not create a global
 snapshot manager or move business ownership out of the module Actors.

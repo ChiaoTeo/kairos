@@ -22,6 +22,7 @@ class TargetPositionRequest:
     source_event_time_unix_nanos: int | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
+    execution_access_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.instrument_id.strip():
@@ -57,6 +58,7 @@ class ArbitrageLegRequest:
     limit_price: Decimal | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
+    execution_access_id: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -96,6 +98,7 @@ class OptionSpreadLegRequest:
     quantity: Decimal
     market_id: str | None = None
     limit_price: Decimal | None = None
+    execution_access_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.leg_id.strip() or not self.instrument_id.strip():
@@ -251,6 +254,7 @@ class QuoteProvisioningRequest:
     maker: MakerExecutionPolicy | None = None
     reason: str = ""
     intent_id: str | None = None
+    execution_access_id: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -304,6 +308,7 @@ class PortfolioRebalanceTarget:
     limit_price: Decimal | None = None
     split: "SplitOrderPolicy | None" = None
     maker: "MakerExecutionPolicy | None" = None
+    execution_access_id: str | None = None
 
     def __post_init__(self) -> None:
         if (

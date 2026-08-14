@@ -1,0 +1,16 @@
+include "../../../common/metadata.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table PositionRemoved {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  instrument_id:string (required);
+  market_id:string (required);
+  provenance:AccountFactProvenance;
+}
+
+root_type PositionRemoved;
+file_identifier "APR2";

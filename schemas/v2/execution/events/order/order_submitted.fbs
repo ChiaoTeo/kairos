@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/order.fbs";
+
+namespace kairos.execution.v2;
+table OrderSubmitted { metadata:kairos.common.v2.EventMetadata (required); order:OrderState (required); }
+root_type OrderSubmitted;
+file_identifier "EOS2";

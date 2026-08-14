@@ -21,23 +21,14 @@ use crate::ReferenceApplication;
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
 use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
-use kairos_reference_contract::transport::ReferenceAeronEventWriter as AeronEventWriter;
+use kairos_protocol::InstanceIdentity;
+use kairos_reference_contract::transport::ReferenceAeronTransport;
+use kairos_reference_contract::{EncodeContext, ReferenceEncoder, ReferenceSqliteReader};
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
     fn from(error: kairos_reference_contract::ContractError) -> Self {
         Self::Publication(error.to_string())
     }
-}
-
-fn to_contract_events(
-    events: &[crate::domain::LifecycleEvent],
-) -> ReferenceResult<Vec<kairos_reference_contract::LifecycleEvent>> {
-    serde_json::to_value(events)
-        .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))
-        .and_then(|value| {
-            serde_json::from_value(value)
-                .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))
-        })
 }
 
 #[derive(Clone, Debug)]
@@ -188,7 +179,8 @@ impl ReferenceSource for ConfiguredReferenceSource {
 }
 
 pub struct ReferenceEventWriter {
-    inner: AeronEventWriter,
+    publisher: kairos_transport::AeronBytePublisher,
+    reader: ReferenceSqliteReader,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +188,7 @@ pub struct ReferenceEventWriterConfig {
     pub aeron_dir: Option<String>,
     pub aeron_channel: String,
     pub reference_changes_stream: i32,
+    pub database: std::path::PathBuf,
 }
 
 /// Canonical provider endpoint defaults shared by the one-shot CLI and the
@@ -480,13 +473,12 @@ fn product_enabled(
 impl ReferenceEventWriter {
     pub fn connect(config: &ReferenceEventWriterConfig) -> ReferenceResult<Self> {
         Ok(Self {
-            inner: AeronEventWriter::connect(
+            publisher: ReferenceAeronTransport::publisher(
                 config.aeron_dir.as_deref(),
                 &config.aeron_channel,
                 config.reference_changes_stream,
-                "reference-actor",
-                "reference.lifecycle",
             )?,
+            reader: ReferenceSqliteReader::open(&config.database)?,
         })
     }
 
@@ -496,24 +488,225 @@ impl ReferenceEventWriter {
         current_event_sequence: kairos_domain_types::Sequence,
         events: &[crate::domain::LifecycleEvent],
     ) -> ReferenceResult<()> {
-        // Change encoding needs only the catalog watermarks. Converting the
-        // complete catalog for every outbox batch is prohibitively expensive
-        // for large reference universes. The batch sequence is its own high
-        // watermark, not the latest catalog sequence repeated for old events.
-        let event_sequence = events
-            .last()
-            .and_then(|event| event.event_id.rsplit(':').next())
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or_else(|| current_event_sequence.get());
-        let contract_catalog = kairos_reference_contract::ReferenceCatalog {
-            generation: generation.get(),
-            event_sequence,
-            ..Default::default()
-        };
-        self.inner
-            .publish(&contract_catalog, &to_contract_events(events)?)?;
+        for event in events {
+            let record_kind = event.record_kind.as_deref().ok_or_else(|| {
+                crate::domain::ReferenceError::Publication(
+                    "Reference event is missing record_kind".into(),
+                )
+            })?;
+            let record_id = event.record_id.as_deref().ok_or_else(|| {
+                crate::domain::ReferenceError::Publication(
+                    "Reference event is missing record_id".into(),
+                )
+            })?;
+            let sequence = event
+                .event_id
+                .rsplit(':')
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(current_event_sequence.get());
+            let context = EncodeContext::event(
+                "reference-actor",
+                InstanceIdentity::default(),
+                sequence,
+                event.event_id.clone(),
+                generation.get(),
+            );
+            let updated = !event.event_type.ends_with("_added") && event.event_type != "listed";
+            let payload = match record_kind {
+                "asset" => {
+                    let record = self
+                        .reader
+                        .asset(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::asset_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::asset_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "entity" => {
+                    let record = self
+                        .reader
+                        .entity(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::entity_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::entity_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "instrument" => {
+                    let record = self
+                        .reader
+                        .instrument(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::instrument_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::instrument_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "listing" => {
+                    let record = self
+                        .reader
+                        .listing(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::listing_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::listing_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "market" => {
+                    let record = self
+                        .reader
+                        .market(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    let record = kairos_reference_contract::model::Market {
+                        market_id: record.market_id,
+                        market_key: record.market_key,
+                        instrument_id: record.instrument_id,
+                        listing_id: record.listing_id,
+                        exchange_id: record.exchange_id,
+                        market_type: record.market_type,
+                        asset_type: record.asset_type,
+                        underlying_instrument_id: record.underlying_instrument_id,
+                        source_symbol: record.source_symbol,
+                        base_asset_id: record.base_asset_id,
+                        quote_asset_id: record.quote_asset_id,
+                        status: record.status,
+                        price_tick: record.price_tick,
+                        quantity_tick: record.quantity_tick,
+                        price_precision: record.price_precision,
+                        quantity_precision: record.quantity_precision,
+                        minimum_quantity: record.minimum_quantity,
+                        minimum_notional: record.minimum_notional,
+                        contract_size: record.contract_size,
+                        effective_from_unix_nanos: record.effective_from_unix_nanos,
+                        effective_to_unix_nanos: record.effective_to_unix_nanos,
+                    };
+                    if updated {
+                        ReferenceEncoder::market_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::market_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "financial_product" => {
+                    let record = self
+                        .reader
+                        .financial_product(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::financial_product_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::financial_product_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "execution_access" => {
+                    let record = self
+                        .reader
+                        .execution_access(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::execution_access_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::execution_access_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                "market_data_access" => {
+                    let record = self
+                        .reader
+                        .market_data_access(record_id)?
+                        .ok_or_else(|| missing(record_kind, record_id))?;
+                    if updated {
+                        ReferenceEncoder::market_data_access_updated(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    } else {
+                        ReferenceEncoder::market_data_access_upserted(
+                            &record,
+                            &context,
+                            event.event_time_unix_nanos.get(),
+                        )?
+                    }
+                }
+                other => {
+                    return Err(crate::domain::ReferenceError::Publication(format!(
+                        "Reference v2 event schema is not defined for record kind {other}"
+                    )))
+                }
+            };
+            self.publisher
+                .publish(&payload)
+                .map_err(crate::domain::ReferenceError::Publication)?;
+        }
         Ok(())
     }
+}
+
+fn missing(kind: &str, id: &str) -> crate::domain::ReferenceError {
+    crate::domain::ReferenceError::Publication(format!(
+        "Reference SQLite record missing: {kind}:{id}"
+    ))
 }
 
 pub async fn build_application(
@@ -534,6 +727,7 @@ pub async fn build_application(
                 aeron_dir: config.aeron_dir.clone(),
                 aeron_channel: config.aeron_channel.clone(),
                 reference_changes_stream: config.reference_changes_stream,
+                database: config.database.clone(),
             },
         )?)
     } else {

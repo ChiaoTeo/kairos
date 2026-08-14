@@ -1,0 +1,12 @@
+include "../../common/metadata.fbs";
+include "../types/order_book.fbs";
+
+namespace kairos.market.v2;
+
+table OrderBookDeltaReceived {
+  metadata:kairos.common.v2.EventMetadata (required);
+  delta:OrderBookDeltaValue (required);
+}
+
+root_type OrderBookDeltaReceived;
+file_identifier "MOD2";

@@ -9,45 +9,107 @@ Current-view entries use the external resource topology and lifecycle defined
 in [`mmap-contract.md`](./mmap-contract.md); a FlatBuffers root alone is not a
 complete mmap contract.
 
-| Status | Owner | Shape | Semantic root | File identifier | Publisher/caller | Consumer | Transport/profile | Replaces |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DRAFT | Reference | event | `ReferenceChanged` | `RCV2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target | `RCH1` |
-| DRAFT | Market | event | `QuoteObserved` | `MQV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially | `MQT1` |
-| DRAFT | Market | event | `TradeObserved` | `MTV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially | `MTR1` |
-| DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially | `MBA1` |
-| DRAFT | Market | event | `GreeksObserved` | `MGV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially | `MGR1` |
-| DRAFT | Market | current view | `QuoteCurrentView` | `MCQ2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer | Quote part of `PMC1` |
-| DRAFT | Market | current view | `BarCurrentView` | `MCB2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer | Bar part of `PMC1` |
-| DRAFT | Market | current view | `GreeksCurrentView` | `MCG2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer | Greeks part of `PMC1` |
-| DRAFT | Account | event | `AccountChanged` | `ACV2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target | `ACE1` |
-| DRAFT | Account | current view | `AccountCurrentView` | `AAV2` | Account Actor | Execution preflight, Strategy Account application | KSS1 mmap / one writer | `AAC1` |
-| DRAFT | Account | current view | `ObservedOrdersCurrentView` | `AOV2` | Account Actor | reconciliation | KSS1 mmap / one writer | `AAC1.open_orders` |
-| DRAFT | Risk | command | `AuthorizeAndReserveCommand` | `RAV2` | Execution application | Risk application | command transport / no unsafe retry | `RAR3` |
-| DRAFT | Risk | command result | `AuthorizeAndReserveResult` | `RSV2` | Risk Actor | Execution application | command response | `RRD1` response path |
-| DRAFT | Risk | command | `ConsumeReservationCommand` | `RUV2` | Execution application | Risk application | command transport / idempotent retry | `RCR1` |
-| DRAFT | Risk | command result | `ReservationCleanupResult` | `RTV2` | Risk Actor | Execution application | command response | implicit v1 response |
-| DRAFT | Risk | command | `ReleaseReservationCommand` | `RLV2` | Execution application | Risk application | command transport / idempotent retry | `RLR1` |
-| DRAFT | Risk | event | `RiskDecisionMade` | `RDV2` | Risk Actor | Strategy Risk application, audit | Risk event stream / retained target | decision part of `RKE1` |
-| DRAFT | Risk | event | `ReservationChanged` | `RRV2` | Risk Actor | Execution, audit | Risk event stream / retained target | reservation part of `RKE1`, `RSE1` |
-| DRAFT | Risk | event | `CircuitChanged` | `RKV2` | Risk Actor | Execution, operations | Risk event stream / retained target | circuit part of `RKE1` |
-| DRAFT | Risk | current view | `RiskCurrentView` | `RXV2` | Risk Actor | Execution preflight, operations | KSS1 mmap / one writer | `PRK1` |
-| DRAFT | Execution | command | `SubmitExecutionIntentCommand` | `EIV2` | Strategy application | Execution application | command transport / no unsafe retry | `OIR1` |
-| DRAFT | Execution | command result | `SubmitExecutionIntentResult` | `ERV2` | Execution Actor | Strategy application | command response | implicit v1 response |
-| DRAFT | Execution | event | `IntentLifecycleChanged` | `ELV2` | Execution Actor | Strategy Execution application | Execution event stream / retained target | intent part of `EXE1` |
-| DRAFT | Execution | event | `PlanCreated` | `EPV2` | Execution Actor | Strategy Execution application, audit | Execution event stream / retained target | absent in v1 |
-| DRAFT | Execution | event | `OrderLifecycleChanged` | `EOV2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target | order part of `EXE1` |
-| DRAFT | Execution | event | `FillRecorded` | `EFV2` | Execution Actor | Account settlement, Strategy | Execution event stream / retained target | fill part of `EXE1`, `OFL1` |
-| DRAFT | Execution | event | `ReconciliationRequired` | `EXV2` | Execution Actor | operations, Strategy | Execution event stream / retained target | absent in v1 |
-| DRAFT | Execution | current view | `ActiveIntentsCurrentView` | `ECI2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer | `PIJ1` active slice under new owner |
-| DRAFT | Execution | current view | `ActiveOrdersCurrentView` | `ECO2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer | `PEO1` active slice |
-| DRAFT | System | current view | `SystemHealthCurrentView` | `SHV2` | System monitor | operations | KSS1 mmap / one writer | `RTH1` |
-| DRAFT | System | current view | `AlertsCurrentView` | `SAV2` | System monitor | operations | KSS1 mmap / one writer | `RTA1` |
+Market and Execution control are intentionally not FlatBuffers roots. Their
+UDS HTTP-shaped contracts are [`schemas/v2/market/control.openapi.yaml`](./market/control.openapi.yaml)
+and [`schemas/v2/execution/control.openapi.yaml`](./execution/control.openapi.yaml):
+JSON/OpenAPI defines command and bounded-status request/response semantics,
+while FlatBuffers is reserved for business events and mmap views.
+
+| Status | Owner | Shape | Semantic root | File identifier | Publisher/caller | Consumer | Transport/profile |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| DRAFT | Reference | event | `InstrumentUpserted` | `RIU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `InstrumentUpdated` | `RID2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `ListingUpserted` | `RLU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `ListingUpdated` | `RLD2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketUpserted` | `RMU2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketUpdated` | `RMD2` | Reference Actor | Market Reference projection, operations | owner event stream / retained target |
+| DRAFT | Reference | event | `AssetUpserted` | `RAU2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `AssetUpdated` | `RAD2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `EntityUpserted` | `RENU` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `EntityUpdated` | `REND` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `FinancialProductUpserted` | `RFPU` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `FinancialProductUpdated` | `RFPD` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExchangeUpserted` | `REU2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExchangeUpdated` | `RED2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ProviderUpserted` | `RPU2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ProviderUpdated` | `RPD2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `BrokerUpserted` | `RBU2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `BrokerUpdated` | `RBD2` | Reference Actor | Reference consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExecutionAccessUpserted` | `RXU2` | Reference Actor | Execution consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `ExecutionAccessUpdated` | `RXD2` | Reference Actor | Execution consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketDataAccessUpserted` | `RMDA` | Reference Actor | Market consumers | owner event stream / retained target |
+| DRAFT | Reference | event | `MarketDataAccessUpdated` | `RMDD` | Reference Actor | Market consumers | owner event stream / retained target |
+| DRAFT | Market | event | `QuoteUpdated` | `MQU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `TradeOccurred` | `MTO2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `GreeksUpdated` | `MGU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `RateUpdated` | `MRU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `Ticker24hUpdated` | `MTU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `MarkPriceUpdated` | `MMP2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `FundingRateUpdated` | `MFR2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `OpenInterestUpdated` | `MOI2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `IndexPriceUpdated` | `MIP2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
+| DRAFT | Market | event | `OrderBookSnapshotReceived` | `MOS2` | Market Actor | OrderBook application, execution preflight | Market event stream / gap-aware |
+| DRAFT | Market | event | `OrderBookDeltaReceived` | `MOD2` | Market Actor | OrderBook application, execution preflight | Market event stream / gap-aware |
+| DRAFT | Market | event | `OrderBookResyncRequired` | `MOR2` | Market Actor | OrderBook application, operations | Market event stream / explicit recovery fact |
+| DRAFT | Market | latest view | `QuoteLatestView` | `MLQ2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | window view | `BarWindowView` | `MBW2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `GreeksLatestView` | `MLG2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `RateLatestView` | `MLR2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `Ticker24hLatestView` | `MLT2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `MarkPriceLatestView` | `MLM2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `FundingRateLatestView` | `MFD2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `OpenInterestLatestView` | `MLI2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `IndexPriceLatestView` | `MLP2` | Market Actor | Strategy bootstrap | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `OrderBookLatestView` | `MLO2` | Market Actor | OrderBook application, execution preflight | KSS1 mmap / one writer |
+| DRAFT | Market | latest view | `MarketFreshnessLatestView` | `MLF2` | Market Actor | Execution preflight, Strategy | KSS1 mmap / one writer |
+| DRAFT | Account | event | `BalanceUpserted` | `ABU2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `BalanceRemoved` | `ABR2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `PositionUpserted` | `APU2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `PositionRemoved` | `APR2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `ValuationChanged` | `AVC2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `AccountStatusChanged` | `ASC2` | Account Actor | Strategy Account application, operations | Account event stream / retained target |
+| DRAFT | Account | event | `ObservedOrderUpserted` | `AOU2` | Account Actor | reconciliation | Account event stream / retained target |
+| DRAFT | Account | event | `ObservedOrderRemoved` | `AOR2` | Account Actor | reconciliation | Account event stream / retained target |
+| DRAFT | Account | current view | `AccountCurrentView` | `AAV2` | Account Actor | Execution preflight, Strategy Account application | KSS1 mmap / one writer |
+| DRAFT | Account | current view | `ObservedOrdersCurrentView` | `AOV2` | Account Actor | reconciliation | KSS1 mmap / one writer |
+| DRAFT | Risk | command | `AuthorizeAndReserve` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / atomic synchronous decision |
+| DRAFT | Risk | command result | `AuthorizeAndReserveResponse` | `control.openapi.yaml` | Risk Actor | Execution application | UDS HTTP/JSON response |
+| DRAFT | Risk | command | `ConsumeReservation` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / idempotent retry |
+| DRAFT | Risk | command result | `ReservationCleanupResponse` | `control.openapi.yaml` | Risk Actor | Execution application | UDS HTTP/JSON response |
+| DRAFT | Risk | command | `ReleaseReservation` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / idempotent retry |
+| DRAFT | Risk | event | `RiskDecisionMade` | `RDV2` | Risk Actor | Strategy Risk application, audit | Risk event stream / retained target |
+| DRAFT | Risk | event | `ReservationReserved` | `RRV2` | Risk Actor | Execution, audit | Risk event stream / retained target |
+| DRAFT | Risk | event | `ReservationConsumed` | `RRC2` | Risk Actor | Execution, audit | Risk event stream / retained target |
+| DRAFT | Risk | event | `ReservationReleased` | `RRL2` | Risk Actor | Execution, audit | Risk event stream / retained target |
+| DRAFT | Risk | event | `ReservationExpired` | `RRX2` | Risk Actor | Execution, audit | Risk event stream / retained target |
+| DRAFT | Risk | event | `CircuitOpened` | `RKO2` | Risk Actor | Execution, operations | Risk event stream / retained target |
+| DRAFT | Risk | event | `CircuitClosed` | `RKC2` | Risk Actor | Execution, operations | Risk event stream / retained target |
+| DRAFT | Risk | latest view | `RiskLatestView` | `RXV2` | Risk Actor | Execution preflight, operations | KSS1 mmap / one writer |
+| DRAFT | Execution | command | `SubmitExecutionIntent` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / no unsafe retry |
+| DRAFT | Execution | command result | `CommandAccepted` | `control.openapi.yaml` | Execution Actor | Strategy application | UDS HTTP/JSON response |
+| DRAFT | Execution | command | `CancelOrder` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / delivery certainty required |
+| DRAFT | Execution | command | `ReplaceOrder` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / delivery certainty required |
+| DRAFT | Execution | command | `ReconcileExecution` | `control.openapi.yaml` | operations/Execution application | Execution application | UDS HTTP/JSON / bounded retry |
+| DRAFT | Execution | event | `IntentAccepted` | `EIA2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
+| DRAFT | Execution | event | `IntentRejected` | `EIR2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
+| DRAFT | Execution | event | `PlanCreated` | `EPV2` | Execution Actor | Strategy Execution application, audit | Execution event stream / retained target |
+| DRAFT | Execution | event | `OrderSubmitted` | `EOS2` | Execution Actor | Strategy, audit | Execution event stream / retained target |
+| DRAFT | Execution | event | `OrderAccepted` | `EOA2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
+| DRAFT | Execution | event | `OrderRejected` | `EOR2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
+| DRAFT | Execution | event | `OrderCanceled` | `EOC2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
+| DRAFT | Execution | event | `OrderExpired` | `EOX2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |
+| DRAFT | Execution | event | `FillRecorded` | `EFV2` | Execution Actor | Account settlement, Strategy | Execution event stream / retained target |
+| DRAFT | Execution | event | `ReconciliationRequired` | `EXV2` | Execution Actor | operations, Strategy | Execution event stream / retained target |
+| DRAFT | Execution | active view | `ActiveIntentsView` | `ECI2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
+| DRAFT | Execution | active view | `ActiveOrdersView` | `ECO2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
+| DRAFT | System | current view | `SystemHealthCurrentView` | `SHV2` | System monitor | operations | KSS1 mmap / one writer |
+| DRAFT | System | current view | `AlertsCurrentView` | `SAV2` | System monitor | operations | KSS1 mmap / one writer |
 
 ## Registry-wide bounds
 
-- Event roots contain one fact, except `ReferenceChanged` and `AccountChanged`,
-  whose change vectors represent one atomic owner transition and are bounded to
-  1,024 variants by adapters.
+- Event roots contain one fact. Account transitions remain bounded atomic
+  change vectors; Reference uses one entity per event root.
 - Market current-view row vectors are bounded by the configured subscription
   universe and must fit the configured KSS1 slot. Publication fails explicitly
   on overflow.
@@ -60,9 +122,12 @@ complete mmap contract.
 
 | Root(s) | Logical key | Cardinality per event | Time/freshness | Recovery |
 | --- | --- | --- | --- | --- |
-| `ReferenceChanged` | one committed catalog revision | 1-1,024 atomic changes | revision effective immediately on commit | retained target by catalog writer stream |
-| Market observation events | one observation | exactly one fact | consumer applies kind-specific maximum source/receive age | ephemeral fail-closed initially |
-| `AccountChanged` | account ID + segment key | 1-1,024 atomic changes | observed time in values; owner transition time in metadata | retained target per account stream |
+| Reference upsert/update events | one canonical entity record | exactly one entity | catalog revision effective immediately on commit | retained target by catalog writer stream |
+| Market observation events | one observation | exactly one fact | consumer applies kind-specific maximum source/receive age | ephemeral fail-closed initially; v2.1 requires retained cursor or owner resync |
+| `OrderBookSnapshotReceived` | `(source_id, market_id)` | exactly one provider snapshot | source/receive time and snapshot sequence | owner resync after gap |
+| `OrderBookDeltaReceived` | `(source_id, market_id)` | exactly one contiguous provider range | source/receive time and first/last sequence | owner resync after gap |
+| `OrderBookResyncRequired` | `(source_id, market_id)` | exactly one gap fact | emitted when the current book is no longer trusted | explicit snapshot resync |
+| Account change roots | one balance, position, valuation, status, or observed-order transition | exactly one fact | provider evidence is optional; owner transition time is in metadata | retained target per account stream |
 | Risk events | one decision, reservation transition, or circuit transition | exactly one fact | decision/transition time must be nonzero | retained target per Risk Actor stream |
 | Execution events | one intent, plan, order, fill, or reconciliation fact | exactly one fact | source fill time is distinct from owner record time | retained target per Execution Actor stream |
 
@@ -79,13 +144,7 @@ complete mmap contract.
 
 | Root | View key semantics | Population bound | Freshness |
 | --- | --- | --- | --- |
-| `QuoteCurrentView` | configured Market quote scope | at most one latest quote per source + market | Strategy policy compares source/receive/as-of time |
-| `BarCurrentView` | configured Market bar kind/window scope | at most one latest completed bar per source + market + window definition | only completed bars; Strategy policy checks window end |
-| `GreeksCurrentView` | configured Market Greeks scope | at most one latest observation per source + market | Strategy policy checks source/receive/as-of time |
-| `AccountCurrentView` | Account Actor scope | one row per configured account segment | live preflight rejects stale/unknown freshness |
-| `ObservedOrdersCurrentView` | Account Actor reconciliation scope | configured maximum provider-observed open orders | observation age is explicit; not Execution truth |
-| `RiskCurrentView` | Risk Actor scope | configured policies + live reservations + circuits | policy generation/as-of checked by Execution preflight |
-| `ActiveIntentsCurrentView` | Execution Actor scope | non-terminal intents only | terminal intent history is queried, not retained in mmap |
-| `ActiveOrdersCurrentView` | Execution Actor scope | non-terminal orders only | terminal order history is queried, not retained in mmap |
-| `SystemHealthCurrentView` | workspace System monitor | configured Actors and connections | operational freshness only |
-| `AlertsCurrentView` | workspace System monitor | configured active/acknowledged alerts | resolved alert history is queried |
+| `QuoteLatestView` | one `(source_id, market_id)` quote identity | exactly one latest quote | Strategy policy compares source/receive/as-of time |
+| `BarWindowView` | configured Market bar kind/window scope | bounded completed-bar window per source + market + window definition | only completed bars; Strategy policy checks window end |
+| `GreeksLatestView` | one `(source_id, market_id)` Greeks identity | exactly one latest value | Strategy policy checks source/receive/as-of time |
+| `OrderBookLatestView` | one `(source_id, market_id, instrument_id)` order-book identity | exactly one latest book | `synchronized` must be true for execution use |

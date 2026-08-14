@@ -1,0 +1,6 @@
+include "../../common/metadata.fbs";
+include "../types/mark_price.fbs";
+namespace kairos.market.v2;
+table MarkPriceUpdated { metadata:kairos.common.v2.EventMetadata (required); mark_price:MarkPrice (required); }
+root_type MarkPriceUpdated;
+file_identifier "MMP2";

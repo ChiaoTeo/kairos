@@ -1,0 +1,17 @@
+include "../../common/metadata.fbs";
+include "../types/greeks.fbs";
+
+namespace kairos.market.v2;
+
+table LatestGreeks {
+  value:Greeks (required);
+  source_event_id:string (required);
+}
+
+table GreeksLatestView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  greeks:LatestGreeks (required);
+}
+
+root_type GreeksLatestView;
+file_identifier "MLG2";

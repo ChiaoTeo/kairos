@@ -1,26 +1,33 @@
 # Kairos wire contract v2 semantic charter
 
-Status: semantic baseline with compile-validated draft schemas. No v2
-FlatBuffers root is considered published until it satisfies this document,
-enters the root registry as active, and has a real publisher and consumer.
+Status: semantic baseline with compile-validated draft schemas. Market v2
+bindings are generated for contract migration, but no v2 root is considered
+published until it satisfies this document, enters the root registry as active,
+and has a real publisher and consumer.
 
 This document is authoritative for v2 wire semantics. It deliberately defines
 meaning before field layout. Concrete schemas continue to live under the
-owning business namespace, for example `schemas/execution/v2/`; this directory
+owning business namespace, for example `schemas/v2/execution/`; this directory
 does not introduce a `kairos.v2` business namespace.
 
-V2 is not a field-for-field cleanup of v1. It is a new set of contracts derived
-from current business ownership and real cross-process use cases. V1 remains a
-migration boundary and must not be silently reinterpreted to have v2 meaning.
+V2 is the only active Kairos wire contract. It is designed from current business
+ownership and real cross-process use cases, not as a compatibility projection.
 
-Concrete draft roots are indexed in
-[`registry.md`](./registry.md). Every v1 root has an explicit replace, split,
-query/dataset, defer, or retire decision in
-[`v1-disposition.md`](./v1-disposition.md).
-The per-owner mmap files, discovery manifest, sharding, capacity, publication,
-and file-epoch rules are defined in
-[`mmap-contract.md`](./mmap-contract.md), with a machine-readable discovery
-contract in [`mmap-manifest.schema.json`](./mmap-manifest.schema.json).
+Concrete roots are indexed in [`registry.md`](./registry.md). A root is active
+only when it has an admitted owner, publisher or caller, consumer, transport
+profile, and Rust/Python mapping tests.
+Market's user-facing UDS control surface is described separately by
+[`schemas/v2/market/control.openapi.yaml`](./market/control.openapi.yaml).
+OpenAPI/JSON is the control-plane contract; FlatBuffers roots remain the
+stream and current-view payload contracts. Command is therefore a semantic
+operation, not a common FlatBuffers wire shape. Shared REST components live in
+[`schemas/v2/common/control.openapi.yaml`](./common/control.openapi.yaml).
+The shared control contract owns reusable request metadata, transport errors,
+command admission, and the health response envelope. Health status values and
+business metrics remain owner-specific until all processes expose one lifecycle
+vocabulary.
+The per-owner mmap files, resource discovery, sharding, capacity, publication,
+and file-epoch rules are defined in [`mmap-contract.md`](./mmap-contract.md).
 
 ## 1. Goals and non-goals
 
@@ -41,7 +48,7 @@ V2 does not attempt to:
 - create a global event union, global schema version, or global state owner;
 - replace Reference point-in-time queries or historical datasets with mmap;
 - provide transparent event recovery through a current-state snapshot;
-- preserve unused v1 roots merely because generated code already exists.
+- preserve unused roots merely because generated code already exists.
 
 ## 2. Contract admission rule
 
@@ -210,7 +217,7 @@ Every current-view root contains required `ViewMetadata`:
 | Field | Requirement | Meaning |
 | --- | --- | --- |
 | `snapshot_id` | required | Unique identity for this publication |
-| `resource_id` | required | Stable logical mmap resource identity from the resource manifest |
+| `resource_id` | required | Stable logical mmap resource identity from the typed runtime resource key |
 | `resource_epoch` | required, greater than zero | Immutable file/capacity/schema epoch for this resource |
 | `view_key` | required | Canonical key naming the access pattern and scope |
 | `owner_id` | required | Business Actor that owns the state |
@@ -359,23 +366,29 @@ another real caller is demonstrated.
 
 ### Reference
 
-- `ReferenceChanged`: structured lifecycle notification carrying catalog
-  revision and affected canonical identities; no embedded JSON record.
+- Reference entity events such as `InstrumentUpserted`, `InstrumentUpdated`,
+  `ListingUpserted`, `ListingUpdated`, `MarketUpserted`, and `MarketUpdated`
+  carry one entity fact and catalog revision; no embedded JSON record.
 - Current/reference history remains a point-in-time SQLite query contract.
 
 ### Market
 
-- `QuoteObserved`
-- `TradeObserved`
+- `QuoteUpdated`
+- `TradeOccurred`
 - `BarCompleted`
-- `GreeksObserved`
+- `GreeksUpdated`
 - current Quote, completed Bar, and Greeks views only where the Strategy
   bootstrap reader requires them
 
-Order-book roots migrate when their existing transport consumer is promoted to
-a public application caller and included in v2 parity tests. Rate, ticker,
-mark/index price, funding, open interest, instrument status, warm-up history,
-and subscription views are not automatically admitted by their v1 existence.
+Order-book roots are admitted as a complete snapshot/delta/resync slice:
+`OrderBookSnapshotReceived`, `OrderBookDeltaReceived`,
+`OrderBookResyncRequired`, and `OrderBookLatestView`. The latest view is
+usable only when its `synchronized` value is true. `MarketFreshnessLatestView`
+is also admitted because Execution and Strategy need an owner-provided
+freshness decision. Rate, ticker, mark/index price, funding, open interest,
+instrument status, and warm-up history are not automatically admitted merely because a provider exposes them. Subscription lifecycle is represented by the synchronous Market
+control response; it is not a Market data event.
+and the OpenAPI control surface; a subscription mmap view remains deferred.
 
 Market observation roots require canonical `market_id`, `instrument_id`,
 `source_id`, source observation time, and the values specific to that fact.
@@ -384,12 +397,20 @@ would be a different fact.
 
 ### Account
 
-- `AccountChanged`: an atomic union batch of typed balance, position,
-  valuation, freshness, status, and account-observed-order variants
+- Account change roots: one-fact `BalanceUpserted`/`BalanceRemoved`,
+  `PositionUpserted`/`PositionRemoved`, `ValuationChanged`,
+  `AccountStatusChanged`, and `ObservedOrderUpserted`/`ObservedOrderRemoved`;
+  optional provider provenance explains the Binance or IBKR fact being
+  normalized
 - `AccountCurrentView`: balances, collateral, positions, valuation and account
   status/freshness
-- account-observed orders use a separately named view or typed section only
-  when a current consumer requires them
+- `ObservedOrdersCurrentView`: provider-observed current orders, separate from
+  the Execution order lifecycle
+
+Binance and IBKR provider updates are often partial. Account merges those
+updates before publishing a current view; a partial provider message is not a
+partial `AccountCurrentView`. Optional Decimal fields distinguish null
+(unreported/not applicable) from an explicitly reported zero.
 
 Execution orders and fills never appear in the Account view. Account events
 carry settlement correlation to Execution fill/order identifiers when the
@@ -397,10 +418,12 @@ change was caused by execution.
 
 ### Risk
 
-- `AuthorizeAndReserve` command with one atomic decision/reservation result
-- idempotent `ConsumeReservation` and `ReleaseReservation` cleanup commands
-- `RiskDecisionMade`, `ReservationChanged`, and `CircuitChanged` facts
-- `RiskCurrentView` containing policy version, structured policy scopes,
+- `AuthorizeAndReserve`, `ConsumeReservation`, and `ReleaseReservation`
+  commands in the Risk OpenAPI control contract; authorization returns one
+  atomic decision/reservation result synchronously
+- `RiskDecisionMade`, explicit reservation transition facts, and explicit
+  circuit transition facts
+- `RiskLatestView` containing policy version, structured policy scopes,
   limits, allocations, reservations, and circuits
 
 The wire representation preserves every allocation and scope. It never derives
@@ -409,11 +432,15 @@ and never selects the first allocation as a reservation summary.
 
 ### Execution
 
-- `SubmitExecutionIntent` command and typed accepted/rejected result
+- `SubmitExecutionIntent`, `CancelOrder`, `ReplaceOrder`, and
+  `ReconcileExecution` commands; command results describe admission only
+- commands use [`schemas/v2/execution/control.openapi.yaml`](./execution/control.openapi.yaml)
+  over UDS HTTP/JSON; FlatBuffers is reserved for events and active views
 - the accepted intent supports current single-leg and multi-leg semantics,
   including intent type, legs, completion policy, failure policy, deadline,
   execution options, and optional hedge policy
-- `IntentLifecycleChanged`, `PlanCreated`, `OrderLifecycleChanged`,
+- `IntentAccepted`, `IntentRejected`, `PlanCreated`, `OrderSubmitted`,
+  `OrderAccepted`, `OrderRejected`, `OrderCanceled`, `OrderExpired`,
   `FillRecorded`, and `ReconciliationRequired` facts
 - separate bounded current views for active intents/plans and active orders;
   terminal history is queried rather than retained in mmap
@@ -477,95 +504,27 @@ value.
 Rust and Python adapters map immediately to owned contract/application values.
 Generated table lifetimes and backing buffers do not cross the adapter.
 
-## 15. Compatibility policy
+## 15. Compatibility and evolution policy
 
-For each published v2 root:
+V2 is the only active Kairos wire contract. Publishers and consumers do not
+translate, dual-publish, or conditionally decode retired contract shapes.
 
-- namespace is the owning `kairos.<business>.v2` namespace;
-- file identifier is unique repository-wide and never reused;
+For each published root:
+
+- the namespace is the owning kairos.<business>.v2 namespace;
+- the file identifier is unique repository-wide and never reused;
 - field ordinals are append-only;
-- existing field meaning, requiredness, default, units, and identity scope do
+- existing field meaning, requiredness, defaults, units, and identity scope do
   not change;
-- fields are deprecated before removal and are not repurposed;
-- a semantic breaking change creates a new root/file identifier, even if
-  FlatBuffers could technically decode it;
-- v1 and v2 may run side by side through explicit translators;
-- a publisher emits one semantic version per publication path; it does not
-  conditionally reinterpret the same bytes for different consumers.
+- a semantic breaking change creates a new root and file identifier;
+- malformed, unknown, or wrong-root messages fail closed.
 
-The repository must retain a machine-readable baseline of every published v2
-schema and run FlatBuffers conformance checks or an equivalent ordinal/default
-compatibility check in CI.
+Every active root requires Rust encode/decode coverage, Python decoding of
+Rust-produced bytes, wrong-root rejection, semantic validation failures, and
+live/replay mapping parity at the public application boundary.
 
-Every active v2 root requires:
-
-1. Rust encode/decode round trip;
-2. Rust-produced golden bytes decoded by Python;
-3. file-identifier and wrong-root rejection;
-4. semantic validation failure fixtures;
-5. old-writer/new-reader additive compatibility fixture;
-6. stream continuity or mmap stable-read tests as applicable;
-7. live/replay mapping parity at the public application boundary.
-
-## 16. Migration policy
-
-Migration is one vertical business slice at a time. A slice is complete only
-when the v2 path is active, observed, and the equivalent v1 path is removed.
-
-The initial disposition of the most important v1 contracts is:
-
-| V1 contract | V2 disposition |
-| --- | --- |
-| `MessageHeader` | Replaced by shape-specific command/event metadata; no generic timestamp duplication |
-| `SnapshotHeader` | Replaced by `ViewMetadata`; removes ambiguous `version` and any cursor interpretation |
-| Market per-kind event roots | Migrated individually, beginning with Quote; unsupported kinds are not carried forward automatically |
-| `PMC1` omnibus Market current view | Split only along demonstrated bootstrap access patterns |
-| `PMH1` Market history mmap | Replaced by bounded query/dataset semantics unless a measured mmap caller is demonstrated |
-| `ACE1` Account event | Replaced by typed variants; no string `kind`/optional-payload combinations |
-| `AAC1` Account current view | Retains Account-owned state; Execution lifecycle is excluded and account-observed orders are explicitly named |
-| `OIR1` single-order intent | Replaced by `SubmitExecutionIntent`, which represents the current intent/leg/policy model losslessly |
-| `EXE1` Execution event | Split into typed lifecycle facts with intent/plan/leg/order/fill correlation |
-| `PIJ1` intent projection | Moves under Execution ownership; there is no v2 Intent owner |
-| `RAR3` authorization plus `RRD1` decision | Replaced by one authoritative authorize-and-reserve command/result semantic operation |
-| `RKE1` Risk event | Split into typed decision, reservation, and circuit facts |
-| `PRK1` Risk snapshot | Replaced by a lossless structured-scope Risk current view |
-| Reference catalog FlatBuffers types | Not used as a second current-state catalog; Reference SQLite remains authoritative |
-| System projections | Reintroduced only for concrete operational consumers and never as business truth |
-
-### Phase 0: freeze semantics
-
-- Treat this document as the admission gate.
-- Add a registry entry before adding a concrete v2 root.
-- Do not add fields or roots to v1 to imitate v2, except a critical compatible
-  production fix.
-
-### Phase 1: prove the common boundary
-
-- Implement v2 common decimal, event metadata, and view metadata.
-- Migrate one Market fact (`QuoteObserved`) end to end.
-- Prove Rust/Python/live/replay parity and fail-closed gap behavior.
-
-### Phase 2: prove the authoritative command chain
-
-- Migrate `SubmitExecutionIntent` and `AuthorizeAndReserve`.
-- Prove idempotency and delivery-unknown handling.
-- Migrate order/fill/account settlement facts with correlation and causation.
-
-### Phase 3: migrate current views
-
-- Add only the bootstrap/current views used by the migrated slice.
-- Record view key, upper size bound, freshness policy, and reader.
-- Keep event recovery independent from snapshot reads.
-
-### Phase 4: retire each v1 slice
-
-- Stop dual publication for that slice.
-- Remove its v1 decoder, generated bindings, mapper, and tests.
-- Retain only compatibility fixtures required for supported persisted data.
-
-Dual publication is temporary and occurs at the owner contract adapter, not by
-making application/domain code understand both schema versions.
-
+v2 is a wire namespace, not a migration mode. Future breaking changes create
+a new explicit contract version; they do not reintroduce a retired contract.
 ## 17. Root registry requirements
 
 Before a draft `.fbs` root enters the production generation script, its
@@ -586,7 +545,7 @@ file identifier:
 Rust adapter:
 Python adapter:
 golden fixture:
-v1 replacement:
+superseded contract:
 retirement condition:
 ```
 

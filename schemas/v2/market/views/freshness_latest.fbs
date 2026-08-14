@@ -1,0 +1,33 @@
+include "../../common/metadata.fbs";
+
+namespace kairos.market.v2;
+
+enum FreshnessStatus:ubyte {
+  UNSPECIFIED = 0,
+  UNKNOWN = 1,
+  WARMING_UP = 2,
+  CURRENT = 3,
+  STALE = 4,
+  DEGRADED = 5,
+  DISCONNECTED = 6,
+  RESYNC_REQUIRED = 7
+}
+
+table FreshnessEntry {
+  source_id:string (required);
+  market_id:string (required);
+  data_kind:string (required);
+  last_event_time_unix_nanos:ulong;
+  last_received_time_unix_nanos:ulong;
+  age_nanos:ulong;
+  event_sequence:ulong;
+  status:FreshnessStatus = UNSPECIFIED;
+}
+
+table MarketFreshnessLatestView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  entry:FreshnessEntry (required);
+}
+
+root_type MarketFreshnessLatestView;
+file_identifier "MLF2";

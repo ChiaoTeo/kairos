@@ -1,0 +1,10 @@
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table Entity {
+  entity_id:string (required);
+  entity_type:string (required);
+  name:string (required);
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+}

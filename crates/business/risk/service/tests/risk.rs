@@ -1,6 +1,6 @@
-use kairos_protocol::generated::kairos::risk::v_1::{
-    risk_event_message_buffer_has_identifier, risk_snapshot_buffer_has_identifier,
-    root_as_risk_event_message, root_as_risk_snapshot,
+use kairos_protocol::generated::kairos::risk::v_2::{
+    reservation_reserved_buffer_has_identifier, risk_latest_view_buffer_has_identifier,
+    root_as_reservation_reserved, root_as_risk_latest_view,
 };
 use kairos_risk::composition::{
     compose_risk_application, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
@@ -165,13 +165,12 @@ fn current_view_and_reservation_event_use_independent_writers() {
     let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
     writer.publish(&snapshot).unwrap();
     let payload = writer.last_payload.unwrap();
-    assert!(risk_snapshot_buffer_has_identifier(&payload));
+    assert!(risk_latest_view_buffer_has_identifier(&payload));
     assert_eq!(
-        root_as_risk_snapshot(&payload)
+        root_as_risk_latest_view(&payload)
             .unwrap()
-            .payload()
-            .budgets()
-            .unwrap()
+            .state()
+            .limits()
             .len(),
         1
     );
@@ -186,12 +185,13 @@ fn current_view_and_reservation_event_use_independent_writers() {
     let mut event_writer = FlatbuffersRiskEventWriter::new("risk");
     event_writer.publish(&event).unwrap();
     let payload = event_writer.last_payload.unwrap();
-    assert!(risk_event_message_buffer_has_identifier(&payload));
+    assert!(reservation_reserved_buffer_has_identifier(&payload));
     assert_eq!(
-        root_as_risk_event_message(&payload)
+        root_as_reservation_reserved(&payload)
             .unwrap()
+            .reservation()
             .reservation_id(),
-        Some("reservation:order")
+        "reservation:order"
     );
 }
 
@@ -211,10 +211,10 @@ fn risk_event_preserves_launch_instance_identity() {
     );
     writer.publish(app.pending_event().unwrap()).unwrap();
     let payload = writer.last_payload.unwrap();
-    let header = root_as_risk_event_message(&payload).unwrap().header();
-    assert_eq!(header.workspace_id(), Some("workspace"));
-    assert_eq!(header.launch_id(), Some("launch"));
-    assert_eq!(header.instance_id(), Some("instance"));
+    let metadata = root_as_reservation_reserved(&payload).unwrap().metadata();
+    assert_eq!(metadata.workspace_id(), "workspace");
+    assert_eq!(metadata.launch_id(), Some("launch"));
+    assert_eq!(metadata.instance_id(), Some("instance"));
 }
 
 #[test]
@@ -385,9 +385,8 @@ fn circuit_state_is_published_in_the_risk_current_view() {
     let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
     writer.publish(&snapshot).unwrap();
     let payload = writer.last_payload.unwrap();
-    let root = root_as_risk_snapshot(&payload).unwrap();
-    assert_eq!(root.payload().circuit_count(), 1);
-    assert_eq!(root.payload().circuits().unwrap().len(), 1);
+    let root = root_as_risk_latest_view(&payload).unwrap();
+    assert_eq!(root.state().circuits().len(), 1);
 }
 
 #[test]

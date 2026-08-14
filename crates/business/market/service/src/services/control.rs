@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use kairos_domain_types::Sequence;
-use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
+use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde_json::{json, Value};
 use std::time::Instant;
 use tokio::net::UnixListener;
@@ -37,11 +37,16 @@ pub(crate) enum EngineCommand {
 fn router(sender: Sender<EngineCommand>) -> Router {
     Router::new()
         .route(HEALTH_PATH, any(market_http_handler))
-        .route(SNAPSHOT_PATH, any(market_http_handler))
         .route(STOP_PATH, any(market_http_handler))
+        .route("/v1/subscriptions", any(market_http_handler))
+        .route(
+            "/v1/subscriptions/{subscription_id}",
+            any(market_http_handler),
+        )
         .route("/v1/subscribe", any(market_http_handler))
         .route("/v1/unsubscribe", any(market_http_handler))
         .route("/v1/recover", any(market_http_handler))
+        .route("/v1/recovery", any(market_http_handler))
         .route("/v1/replay/pause", any(market_http_handler))
         .route("/v1/replay/resume", any(market_http_handler))
         .with_state(sender)
@@ -114,6 +119,12 @@ async fn market_http_handler(
 async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Request) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let delete_command_id = request_header(&request, "x-kairos-command-id");
+    let delete_idempotency_key = request_header(&request, "idempotency-key");
+    let delete_caller_id = request_header(&request, "x-kairos-caller-id");
+    let delete_instance_id = request_header(&request, "x-kairos-instance-id");
+    let delete_launch_id = request_header(&request, "x-kairos-launch-id");
+    let delete_workspace_id = request_header(&request, "x-kairos-workspace-id");
     let body = match to_bytes(
         request.into_body(),
         kairos_workspace::control::MAX_HTTP_BODY_BYTES,
@@ -128,6 +139,25 @@ async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Reque
             )
                 .into_response()
         }
+    };
+    let body = if method == axum::http::Method::DELETE
+        && path.starts_with("/v1/subscriptions/")
+        && body.is_empty()
+    {
+        serde_json::to_vec(&json!({
+            "schema_version": 2,
+            "command_id": delete_command_id,
+            "idempotency_key": delete_idempotency_key,
+            "operation": "market.unsubscribe",
+            "strategy_id": delete_caller_id,
+            "instance_id": delete_instance_id,
+            "launch_id": delete_launch_id,
+            "workspace_id": delete_workspace_id,
+            "payload": {"subscription_id": path.trim_start_matches("/v1/subscriptions/")}
+        }))
+        .unwrap_or_default()
+    } else {
+        body
     };
     let (response_sender, response_receiver) = oneshot::channel();
     if sender
@@ -157,4 +187,13 @@ async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Reque
         )
             .into_response(),
     }
+}
+
+fn request_header(request: &Request, name: &str) -> String {
+    request
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
 }

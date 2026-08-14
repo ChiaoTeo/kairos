@@ -18,6 +18,7 @@ def request_sync(
     body: Mapping[str, Any] | bytes | None = None,
     *,
     timeout: float = 3.0,
+    headers: Mapping[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     payload = _encode_body(body)
     with start_span(
@@ -28,7 +29,7 @@ def request_sync(
         connection.settimeout(timeout)
         connection.connect(str(socket_path))
         with connection:
-            connection.sendall(_request_bytes(method, path, payload))
+            connection.sendall(_request_bytes(method, path, payload, extra_headers=headers))
             status, response_body = _read_response(connection)
     return _decode_json_response(status, response_body)
 
@@ -70,7 +71,13 @@ def _encode_body(body: Mapping[str, Any] | bytes | None) -> bytes:
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
-def _request_bytes(method: str, path: str, payload: bytes) -> bytes:
+def _request_bytes(
+    method: str,
+    path: str,
+    payload: bytes,
+    *,
+    extra_headers: Mapping[str, str] | None = None,
+) -> bytes:
     headers = [
         f"{method.upper()} {path} HTTP/1.1",
         "Host: localhost",
@@ -80,6 +87,8 @@ def _request_bytes(method: str, path: str, payload: bytes) -> bytes:
         headers.extend(
             ("content-type: application/json", f"content-length: {len(payload)}")
         )
+    if extra_headers is not None:
+        headers.extend(f"{name}: {value}" for name, value in extra_headers.items())
     trace_headers: dict[str, str] = {}
     inject_trace_headers(trace_headers)
     headers.extend(f"{name}: {value}" for name, value in trace_headers.items())

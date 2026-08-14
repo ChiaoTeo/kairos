@@ -138,9 +138,9 @@ fn execute_read(
             events.retain(|event| {
                 query.sequence_to.is_none_or(|to| {
                     event
-                        .event_id
-                        .rsplit(':')
-                        .next()
+                        .get("event_id")
+                        .and_then(Value::as_str)
+                        .and_then(|value| value.rsplit(':').next())
                         .and_then(|value| value.parse::<u64>().ok())
                         .is_some_and(|sequence| sequence <= to)
                 })

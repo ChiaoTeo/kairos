@@ -1,0 +1,15 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table IndexPrice {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  spot_index_price:kairos.common.v2.Decimal64;
+  contract_index_price:kairos.common.v2.Decimal64;
+  index_price:kairos.common.v2.Decimal64;
+  funding_rate:kairos.common.v2.Decimal64;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+}

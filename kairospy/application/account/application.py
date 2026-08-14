@@ -83,7 +83,7 @@ class AccountApplication:
         async for record in self._event_source.events(after_sequence=0):
             if AccountId(record.account_id) not in self._projections:
                 continue
-            expected_stream_id = f"account.events:{record.account_id}"
+            expected_stream_id = f"account.events/account:{record.account_id}"
             if record.stream_id != expected_stream_id:
                 raise RuntimeError(
                     "Account event stream identity is invalid: "

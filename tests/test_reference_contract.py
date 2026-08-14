@@ -13,7 +13,7 @@ from kairospy.application.reference import (
     validate_reference_runtime,
 )
 from kairospy.domain_types import MarketId
-from kairospy.infrastructure.contracts.reference_client import ReferenceClient
+from kairospy.infrastructure.contracts.reference import ReferenceClient
 
 
 def _reference_database(path: Path) -> Path:
@@ -72,7 +72,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         client.resolve_market(symbol="BTCUSDT")["instrument_id"]
         == "instrument:spot:BTC"
     )
-    assert all(view["exists"] for view in client.reference_views())
+    assert client.sqlite().watermark().event_sequence == 7
 
 
 def test_reference_application_reads_concrete_sqlite_client(tmp_path: Path) -> None:
@@ -143,14 +143,14 @@ def test_reference_client_reads_lifecycle_events_by_sequence(
 ) -> None:
     observed: dict[str, object] = {}
 
-    def request_sync(socket_path, method, target, *, timeout):
+    def request_sync(socket_path, method, target, body=None, *, timeout):
         observed.update(
             socket_path=socket_path, method=method, target=target, timeout=timeout
         )
         return 200, {"generation": 3, "event_sequence": 7, "events": []}
 
     monkeypatch.setattr(
-        "kairospy.infrastructure.contracts.reference_client.request_sync", request_sync
+        "kairospy.infrastructure.transport.commands.request_sync", request_sync
     )
     socket = tmp_path / "reference.sock"
     result = ReferenceClient(socket_path=socket).events(
@@ -171,13 +171,13 @@ def test_reference_client_scopes_refresh_and_provider_controls(
 ) -> None:
     observed: list[tuple[str, str, float]] = []
 
-    def request_sync(socket_path, method, target, *, timeout):
+    def request_sync(socket_path, method, target, body=None, *, timeout):
         assert socket_path == tmp_path / "reference.sock"
         observed.append((method, target, timeout))
         return 200, {"status": "ok"}
 
     monkeypatch.setattr(
-        "kairospy.infrastructure.contracts.reference_client.request_sync", request_sync
+        "kairospy.infrastructure.transport.commands.request_sync", request_sync
     )
     client = ReferenceClient(socket_path=tmp_path / "reference.sock")
 
@@ -244,9 +244,6 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() 
                 ],
             }
 
-        def reference_views(self):
-            return [{"view": str(index), "exists": True} for index in range(8)]
-
         def catalog(self):
             return {
                 "generation": 3,
@@ -266,7 +263,7 @@ def test_reference_runtime_validation_covers_provider_snapshot_and_event_tail() 
 
     assert result["status"] == "passed"
     assert result["failed_checks"] == []
-    assert len(result["checks"]) == 7
+    assert len(result["checks"]) == 6
 
 
 def test_reference_runtime_validation_reports_missing_provider_and_pending_outbox() -> (
@@ -282,9 +279,6 @@ def test_reference_runtime_validation_reports_missing_provider_and_pending_outbo
                 "outbox_depth": 2,
                 "providers": [],
             }
-
-        def reference_views(self):
-            return []
 
         def catalog(self):
             return {
@@ -316,9 +310,6 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
                 "outbox_depth": 1,
                 "providers": [],
             }
-
-        def reference_views(self):
-            return []
 
         def catalog(self):
             return {

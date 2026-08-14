@@ -1,0 +1,12 @@
+include "../../common/metadata.fbs";
+include "../types/bar.fbs";
+
+namespace kairos.market.v2;
+
+table BarCompleted {
+  metadata:kairos.common.v2.EventMetadata (required);
+  bar:Bar (required);
+}
+
+root_type BarCompleted;
+file_identifier "MBV2";

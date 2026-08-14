@@ -6,7 +6,7 @@ from pathlib import Path
 
 from kairospy.application.workspace import InstanceWorkspace
 from kairospy.application.system.binaries import resolve_binary
-from kairospy.infrastructure.contracts.execution import ExecutionMmapProjection
+from kairospy.infrastructure.contracts.execution import ExecutionProjection
 from kairospy.infrastructure.transport.commands import (
     ExecutionCommandClient,
     UnixJsonCommandClient,
@@ -46,10 +46,7 @@ def build_strategy_access(
         require_limit_orders=policy.require_limit_orders,
         launch_id=identity.launch_id,
     )
-    projection = ExecutionMmapProjection(
-        instance.snapshot("execution", "execution.snapshot"),
-        instance.snapshot("intent", "intent.snapshot"),
-    )
+    projection = ExecutionProjection(instance)
     return ExecutionApplication(
         commands,
         projection,

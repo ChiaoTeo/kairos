@@ -1,6 +1,0 @@
-include "../../common/v1/header.fbs";
-include "data.fbs";
-namespace kairos.market.v1;
-table IndexPriceMessage { header: kairos.common.v1.MessageHeader (required); payload: IndexPrice (required); }
-root_type IndexPriceMessage;
-file_identifier "MIP1";

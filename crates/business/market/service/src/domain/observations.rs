@@ -160,17 +160,6 @@ pub struct OpenInterest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct InstrumentStatus {
-    pub market_id: MarketId,
-    pub instrument_id: InstrumentId,
-    pub status: kairos_domain_types::ReferenceStatus,
-    pub reason: Option<String>,
-    pub effective_at_unix_nanos: Option<UnixNanos>,
-    pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MarketObservation {
     Quote(Quote),
     Trade(Trade),
@@ -184,7 +173,6 @@ pub enum MarketObservation {
     IndexPrice(IndexPrice),
     FundingRate(FundingRate),
     OpenInterest(OpenInterest),
-    InstrumentStatus(InstrumentStatus),
 }
 
 impl MarketObservation {
@@ -213,11 +201,6 @@ impl MarketObservation {
                     return Err("rate basis is required".into());
                 }
             }
-            Self::InstrumentStatus(value)
-                if value.status == kairos_domain_types::ReferenceStatus::Unknown =>
-            {
-                return Err("instrument status is required".into());
-            }
             _ => {}
         }
         Ok(())
@@ -237,7 +220,6 @@ impl MarketObservation {
             Self::IndexPrice(value) => &value.instrument_id,
             Self::FundingRate(value) => &value.instrument_id,
             Self::OpenInterest(value) => &value.instrument_id,
-            Self::InstrumentStatus(value) => &value.instrument_id,
         }
     }
 
@@ -255,7 +237,6 @@ impl MarketObservation {
             Self::IndexPrice(value) => &value.market_id,
             Self::FundingRate(value) => &value.market_id,
             Self::OpenInterest(value) => &value.market_id,
-            Self::InstrumentStatus(value) => &value.market_id,
         }
     }
 
@@ -273,7 +254,6 @@ impl MarketObservation {
             Self::IndexPrice(value) => value.observed_at_unix_nanos,
             Self::FundingRate(value) => value.observed_at_unix_nanos,
             Self::OpenInterest(value) => value.observed_at_unix_nanos,
-            Self::InstrumentStatus(value) => value.observed_at_unix_nanos,
         }
     }
 
@@ -291,7 +271,6 @@ impl MarketObservation {
             Self::IndexPrice(_) => "index_price",
             Self::FundingRate(_) => "funding_rate",
             Self::OpenInterest(_) => "open_interest",
-            Self::InstrumentStatus(_) => "instrument_status",
         }
     }
 
@@ -331,7 +310,6 @@ impl MarketObservation {
             Self::IndexPrice(value) => &value.source_id,
             Self::FundingRate(value) => &value.source_id,
             Self::OpenInterest(value) => &value.source_id,
-            Self::InstrumentStatus(value) => &value.source_id,
         }
     }
 }

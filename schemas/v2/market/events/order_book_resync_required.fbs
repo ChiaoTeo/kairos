@@ -1,0 +1,15 @@
+include "../../common/metadata.fbs";
+include "../types/order_book.fbs";
+
+namespace kairos.market.v2;
+
+table OrderBookResyncRequired {
+  metadata:kairos.common.v2.EventMetadata (required);
+  identity:OrderBookIdentity (required);
+  expected_sequence:ulong;
+  observed_sequence:ulong;
+  reason:string (required);
+}
+
+root_type OrderBookResyncRequired;
+file_identifier "MOR2";

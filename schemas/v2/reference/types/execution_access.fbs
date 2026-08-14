@@ -1,0 +1,20 @@
+include "common.fbs";
+
+namespace kairos.reference.v2;
+
+table ExecutionAccess {
+  access_id:string (required);
+  routing_mode:string;
+  instrument_id:string;
+  listing_id:string;
+  market_id:string;
+  destination_market_id:string;
+  broker_id:string;
+  provider_id:string (required);
+  product_family:string (required);
+  provider_symbol:string (required);
+  settlement_asset_id:string;
+  status:ReferenceLifecycleStatus = UNSPECIFIED;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}

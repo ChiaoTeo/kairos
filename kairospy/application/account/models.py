@@ -58,6 +58,19 @@ class Position:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedOrder:
+    account_id: AccountId
+    segment_key: SegmentKey
+    order_id: str
+    remote_order_id: str | None
+    instrument: InstrumentRef
+    market_id: str
+    quantity: Decimal
+    filled_quantity: Decimal
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
 class EquityChange:
     account_id: AccountId
     segment_key: SegmentKey

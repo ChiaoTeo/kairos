@@ -1,0 +1,19 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.market.v2;
+
+table Greeks {
+  market_id:string (required);
+  instrument_id:string (required);
+  source_id:string (required);
+  expiry_unix_nanos:ulong = null;
+  strike:kairos.common.v2.Decimal64;
+  delta:kairos.common.v2.Decimal64;
+  gamma:kairos.common.v2.Decimal64;
+  vega:kairos.common.v2.Decimal64;
+  theta:kairos.common.v2.Decimal64;
+  implied_volatility:kairos.common.v2.Decimal64;
+  source_observed_at_unix_nanos:ulong;
+  received_at_unix_nanos:ulong;
+  derivation_id:string;
+}

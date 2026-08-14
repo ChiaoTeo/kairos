@@ -1,0 +1,44 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.risk.v2;
+
+enum Metric:ubyte {
+  UNSPECIFIED = 0,
+  NOTIONAL = 1,
+  MARGIN = 2,
+  GROSS_EXPOSURE = 3,
+  NET_EXPOSURE = 4,
+  TURNOVER = 5,
+  ORDER_RATE = 6,
+  DAILY_LOSS = 7,
+  DRAWDOWN = 8,
+  LEVERAGE = 9,
+  PRICE_DEVIATION = 10,
+  STRESS_LOSS = 11
+}
+
+enum EnforcementMode:ubyte {
+  UNSPECIFIED = 0,
+  REJECT = 1,
+  WARN = 2,
+  OBSERVE = 3
+}
+
+table PolicyScope {
+  account_id:string;
+  strategy_id:string;
+  instrument_id:string;
+  exchange_id:string;
+}
+
+table RiskPolicy {
+  policy_id:string (required);
+  version:ulong;
+  scope:PolicyScope (required);
+  metric:Metric = UNSPECIFIED;
+  limit:kairos.common.v2.Decimal64 (required);
+  enforcement:EnforcementMode = UNSPECIFIED;
+  valid_from_unix_nanos:ulong;
+  valid_until_unix_nanos:ulong = null;
+  window_nanos:ulong = null;
+}

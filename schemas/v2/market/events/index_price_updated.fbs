@@ -1,0 +1,8 @@
+include "../../common/metadata.fbs";
+include "../types/index_price.fbs";
+
+namespace kairos.market.v2;
+
+table IndexPriceUpdated { metadata:kairos.common.v2.EventMetadata (required); index_price:IndexPrice (required); }
+root_type IndexPriceUpdated;
+file_identifier "MIP2";

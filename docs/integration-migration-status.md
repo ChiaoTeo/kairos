@@ -22,6 +22,10 @@
 - focused SQLite round-trip、Market recovery、Execution watermark、Python Reference contract、
   Aeron change-event 和百万行有界读取验收通过；尚待把 refresh 期间的完整 canonical candidate
   与 Massive 完成页合并替换为 SQLite source-fact 分页 promotion，才能满足写端全程有界内存目标。
+- Reference v2 contract 已按 Market 的 contract 形状收敛为 typed event roots + direct SQLite
+  reader；Rust/Python 均提供 control、event decode/stream 和 SQLite reader 能力，Reference
+  不提供 mmap/shared-memory view；旧 Python client 入口已删除，调用方统一使用
+  `kairospy.infrastructure.contracts.reference`。
 
 ## 当前基线
 

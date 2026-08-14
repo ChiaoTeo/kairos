@@ -21,14 +21,14 @@ pub fn compose_risk_application(
 }
 
 pub struct FlatbuffersRiskSnapshotWriter {
-    inner: kairos_risk_contract::encoding::FlatbuffersRiskSnapshotWriter,
+    inner: kairos_risk_contract::FlatbuffersRiskSnapshotWriter,
     pub last_payload: Option<Vec<u8>>,
 }
 
 impl FlatbuffersRiskSnapshotWriter {
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
-            inner: kairos_risk_contract::encoding::FlatbuffersRiskSnapshotWriter::new(actor_id),
+            inner: kairos_risk_contract::FlatbuffersRiskSnapshotWriter::new(actor_id),
             last_payload: None,
         }
     }
@@ -41,16 +41,16 @@ impl FlatbuffersRiskSnapshotWriter {
 }
 
 pub struct FlatbuffersRiskEventWriter {
-    inner: kairos_risk_contract::encoding::FlatbuffersRiskEventWriter,
+    inner: kairos_risk_contract::FlatbuffersRiskEventWriter,
     pub last_payload: Option<Vec<u8>>,
 }
 
 pub struct MmapRiskSnapshotPublisher {
-    inner: kairos_risk_contract::encoding::MmapRiskSnapshotPublisher,
+    inner: kairos_risk_contract::MmapRiskSnapshotPublisher,
 }
 
 pub struct AeronRiskEventPublisher {
-    inner: kairos_risk_contract::encoding::RiskAeronEventPublisher,
+    inner: kairos_risk_contract::RiskAeronEventPublisher,
 }
 
 impl AeronRiskEventPublisher {
@@ -62,7 +62,7 @@ impl AeronRiskEventPublisher {
         identity: kairos_protocol::InstanceIdentity,
     ) -> Result<Self, String> {
         Ok(Self {
-            inner: kairos_risk_contract::encoding::RiskAeronEventPublisher::connect(
+            inner: kairos_risk_contract::RiskAeronEventPublisher::connect(
                 aeron_dir, channel, stream_id, actor_id, identity,
             )
             .map_err(|error| error.to_string())?,
@@ -91,7 +91,7 @@ impl MmapRiskSnapshotPublisher {
         actor_id: impl Into<String>,
     ) -> Result<Self, String> {
         Ok(Self {
-            inner: kairos_risk_contract::encoding::MmapRiskSnapshotPublisher::create(
+            inner: kairos_risk_contract::MmapRiskSnapshotPublisher::create(
                 path, slot_size, actor_id,
             )
             .map_err(|error| error.to_string())?,
@@ -108,7 +108,7 @@ impl MmapRiskSnapshotPublisher {
 impl FlatbuffersRiskEventWriter {
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
-            inner: kairos_risk_contract::encoding::FlatbuffersRiskEventWriter::new(actor_id),
+            inner: kairos_risk_contract::FlatbuffersRiskEventWriter::new(actor_id),
             last_payload: None,
         }
     }
@@ -118,7 +118,7 @@ impl FlatbuffersRiskEventWriter {
         identity: kairos_protocol::InstanceIdentity,
     ) -> Self {
         Self {
-            inner: kairos_risk_contract::encoding::FlatbuffersRiskEventWriter::new_with_identity(
+            inner: kairos_risk_contract::FlatbuffersRiskEventWriter::new_with_identity(
                 actor_id, identity,
             ),
             last_payload: None,
@@ -271,10 +271,17 @@ fn risk_contract_reason(value: &crate::ReasonCode) -> kairos_risk_contract::Reas
     }
 }
 
-fn risk_contract_decision(value: &crate::RiskDecision) -> kairos_risk_contract::RiskDecision {
+fn risk_contract_decision(
+    value: &crate::RiskDecision,
+    account_id: &kairos_domain_types::AccountId,
+    strategy_id: &kairos_domain_types::StrategyId,
+) -> kairos_risk_contract::RiskDecision {
     kairos_risk_contract::RiskDecision {
         decision_id: value.decision_id.to_string(),
         request_id: value.request_id.to_string(),
+        account_id: account_id.to_string(),
+        strategy_id: strategy_id.to_string(),
+        instrument_id: String::new(),
         allowed: value.allowed,
         degraded: value.degraded,
         reason_codes: value
@@ -347,7 +354,7 @@ fn risk_contract_event(value: &crate::RiskEvent) -> kairos_risk_contract::RiskEv
             strategy_id,
             event_sequence,
         } => kairos_risk_contract::RiskEvent::DecisionEvaluated {
-            decision: risk_contract_decision(decision),
+            decision: risk_contract_decision(decision, account_id, strategy_id),
             account_id: account_id.to_string(),
             strategy_id: strategy_id.to_string(),
             event_sequence: event_sequence.get(),

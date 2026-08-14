@@ -29,7 +29,7 @@ jobs:
 
       - name: Verify generated contract code
         run: |
-          ./scripts/generate_flatbuffers.sh
+          ./scripts/generate/generate_flatbuffers.sh
           git diff --exit-code -- kairospy/infrastructure/transport/generated crates/kairos-protocol/src/generated
 
       - name: Run Clippy
@@ -48,10 +48,10 @@ jobs:
         run: git diff --check
 
       - name: Check domain architecture
-        run: python3 scripts/check_domain_architecture.py
+        run: python3 scripts/check/check_domain_architecture.py
 
       - name: Check async HTTP boundaries
-        run: python3 scripts/check_async_boundaries.py
+        run: python3 scripts/check/check_async_boundaries.py
 
   observability:
     name: Cross-language OpenTelemetry verification

@@ -1,0 +1,16 @@
+include "../../../common/metadata.fbs";
+include "../../types/provenance.fbs";
+include "../../types/valuation.fbs";
+
+namespace kairos.account.v2;
+
+table ValuationChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  valuation:AccountValuation (required);
+  provenance:AccountFactProvenance;
+}
+
+root_type ValuationChanged;
+file_identifier "AVC2";

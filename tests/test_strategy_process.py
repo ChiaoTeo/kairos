@@ -163,11 +163,8 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
         instance_id="run-1",
         mode="backtest",
     )
-    assert (
-        composition.application.context.market._snapshots.path
-        == workspace.paths.instance_snapshot(
-            "backtest", "launch", "run-1", "market", "market.snapshot"
-        )
+    assert composition.application.context.market._snapshots.path == (
+        instance.root / "snapshots" / "v2" / "market" / "market-shared"
     )
     assert (
         composition.application.context.execution._commands.client.socket_path

@@ -4,7 +4,7 @@ from decimal import Decimal
 import time
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from kairospy.strategy import CommandHandle, CommandEnvelope
 from kairospy.application.execution import (
@@ -39,13 +39,59 @@ class UnixJsonCommandClient:
     ) -> tuple[int, dict[str, Any]]:
         return request_sync(self.socket_path, method, path, body, timeout=self.timeout)
 
+    def request_with_headers(
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, object] | None = None,
+        *,
+        headers: Mapping[str, str],
+    ) -> tuple[int, dict[str, Any]]:
+        return request_sync(
+            self.socket_path,
+            method,
+            path,
+            body,
+            timeout=self.timeout,
+            headers=headers,
+        )
+
 
 class MarketCommandClient:
     def __init__(
-        self, client: UnixJsonCommandClient, *, launch_id: str | None = None
+        self,
+        client: UnixJsonCommandClient,
+        *,
+        launch_id: str | None = None,
+        workspace_id: str = "workspace",
+        market_runtime_id: str = "market",
     ) -> None:
         self.client = client
         self.launch_id = launch_id
+        self.workspace_id = workspace_id
+        self.market_runtime_id = market_runtime_id
+
+    def _scope(self, strategy_id: str, instance_id: str) -> dict[str, str]:
+        scope = {
+            "caller_id": strategy_id,
+            "workspace_id": self.workspace_id,
+            "market_runtime_id": self.market_runtime_id,
+        }
+        if self.launch_id is not None:
+            scope["launch_id"] = self.launch_id
+        if instance_id:
+            scope["instance_id"] = instance_id
+        return scope
+
+    def _envelope(
+        self, request_id: str, strategy_id: str, instance_id: str
+    ) -> dict[str, object]:
+        return {
+            "command_id": request_id,
+            "idempotency_key": request_id,
+            "scope": self._scope(strategy_id, instance_id),
+            "requested_at_unix_nanos": time.time_ns(),
+        }
 
     def subscribe(
         self,
@@ -55,24 +101,19 @@ class MarketCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        envelope = CommandEnvelope(
-            command_id=request_id,
-            operation="market.subscribe",
-            strategy_id=strategy_id,
-            instance_id=instance_id,
-            launch_id=self.launch_id,
-            payload={
+        body = self._envelope(request_id, strategy_id, instance_id)
+        body.update(
+            {
                 "subject": request.subject,
                 "selectors": list(request.selectors),
                 "exchange": request.exchange,
                 "market_type": request.market_type,
                 "asset_type": request.asset_type,
-                "identity": request.identity,
                 "params": dict(request.params),
                 "dynamic": request.dynamic,
-            },
+            }
         )
-        status, value = self.client.request("POST", "/v1/subscribe", envelope.as_dict())
+        status, value = self.client.request("POST", "/v1/subscriptions", body)
         return _handle(request_id, status, value)
 
     def unsubscribe(
@@ -92,17 +133,26 @@ class MarketCommandClient:
         subscription_id = (
             subscription if isinstance(subscription, str) else str(subscription)
         )
-        envelope = CommandEnvelope(
-            command_id=request_id,
-            operation="market.unsubscribe",
-            strategy_id=strategy_id,
-            instance_id=instance_id,
-            launch_id=self.launch_id,
-            payload={"subscription_id": subscription_id},
-        )
-        status, value = self.client.request(
-            "POST", "/v1/unsubscribe", envelope.as_dict()
-        )
+        path = f"/v1/subscriptions/{quote(subscription_id, safe='')}"
+        headers = {
+            "x-kairos-command-id": request_id,
+            "idempotency-key": request_id,
+            "x-kairos-caller-id": strategy_id,
+            "x-kairos-workspace-id": self.workspace_id,
+            "x-kairos-instance-id": instance_id,
+        }
+        if self.launch_id is not None:
+            headers["x-kairos-launch-id"] = self.launch_id
+        if hasattr(self.client, "request_with_headers"):
+            status, value = self.client.request_with_headers(
+                "DELETE", path, None, headers=headers
+            )
+        else:
+            # Test doubles and older adapters can still exercise the v2 body
+            # shape; the production Unix client uses the OpenAPI headers.
+            body = self._envelope(request_id, strategy_id, instance_id)
+            body["subscription_id"] = subscription_id
+            status, value = self.client.request("DELETE", path, body)
         return _handle(request_id, status, value)
 
     def release_owner(
@@ -112,16 +162,9 @@ class MarketCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        envelope = CommandEnvelope(
-            command_id=request_id,
-            operation="market.release_owner",
-            strategy_id=strategy_id,
-            instance_id=instance_id,
-            launch_id=self.launch_id,
-            payload={},
-        )
+        body = self._envelope(request_id, strategy_id, instance_id)
         status, value = self.client.request(
-            "POST", "/v1/subscriptions/release-owner", envelope.as_dict()
+            "POST", "/v1/subscriptions/release-owner", body
         )
         return _handle(request_id, status, value)
 
@@ -143,6 +186,23 @@ class ExecutionCommandClient:
         self.max_order_notional = max_order_notional
         self.require_limit_orders = require_limit_orders
         self.launch_id = launch_id
+
+    def _submit_v2_intent(self, envelope: Mapping[str, object]) -> tuple[int, dict[str, Any]]:
+        payload = envelope.get("payload")
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("intent"), Mapping):
+            return 422, {"error": "execution intent payload is required"}
+        return self.client.request(
+            "POST",
+            "/v1/intents",
+            {
+                "command_id": envelope.get("command_id"),
+                "idempotency_key": envelope.get("idempotency_key")
+                or envelope.get("command_id"),
+                "caller_id": envelope.get("strategy_id"),
+                "workspace_id": "workspace",
+                "intent": dict(payload["intent"]),
+            },
+        )
 
     def target_position(
         self,
@@ -196,6 +256,7 @@ class ExecutionCommandClient:
                     "account_ids": account_ids,
                     "segment_key": request.segment_key,
                     "instrument_id": request.instrument_id,
+                    "execution_access_id": request.execution_access_id,
                     "intent_type": "TargetPosition",
                     "target_quantity": _decimal(request.quantity),
                     "limit_price": None
@@ -209,9 +270,7 @@ class ExecutionCommandClient:
                 }
             },
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/submit", envelope.as_dict()
-        )
+        status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
 
     def submit_order(
@@ -228,13 +287,26 @@ class ExecutionCommandClient:
                 "rejected",
                 error="launch live trading is disabled by safety policy",
             )
-        body = _direct_order_body(
+        order = _direct_order_body(
             request,
             order_id=request.request_id or request_id,
             default_segment=self.default_segment,
         )
-        body["strategy_id"] = strategy_id
-        status, value = self.client.request("POST", "/v1/submit", body)
+        intent = _single_order_intent(
+            order,
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            launch_id=self.launch_id,
+            request_id=request_id,
+        )
+        status, value = self._submit_v2_intent(
+            {
+                "command_id": request_id,
+                "idempotency_key": request_id,
+                "strategy_id": strategy_id,
+                "payload": {"intent": intent},
+            }
+        )
         return _handle(request_id, status, value)
 
     def cancel_intent(
@@ -261,7 +333,9 @@ class ExecutionCommandClient:
         request_id: str,
     ) -> CommandHandle:
         status, value = self.client.request(
-            "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
+            "DELETE",
+            f"/v1/orders/{quote(order_id, safe='')}",
+            {"reason": reason},
         )
         return _handle(request_id, status, value)
 
@@ -274,25 +348,15 @@ class ExecutionCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        status, value = self.client.request("GET", "/v1/orders")
-        if status >= 400:
-            return _handle(request_id, status, value)
-        orders = value.get("orders", ())
-        original = next(
-            (
-                item
-                for item in orders
-                if isinstance(item, Mapping) and item.get("order_id") == order_id
-            ),
-            None,
-        )
-        if original is None:
-            return CommandHandle(request_id, "rejected", error="order not found")
-        replacement = _replacement_body(
-            original, request, request_id=request.request_id or request_id
-        )
+        body: dict[str, object] = {"reason": request.reason}
+        if request.quantity is not None:
+            body["quantity"] = _decimal(request.quantity)
+        if request.limit_price is not None:
+            body["limit_price"] = _decimal(request.limit_price)
+        if request.time_in_force is not None:
+            body["options"] = {"time_in_force": request.time_in_force.value.upper()}
         status, value = self.client.request(
-            "POST", "/v1/replace", {"order_id": order_id, "replacement": replacement}
+            "PATCH", f"/v1/orders/{quote(order_id, safe='')}", body
         )
         return _handle(request_id, status, value)
 
@@ -324,7 +388,9 @@ class ExecutionCommandClient:
             if not isinstance(order_id, str):
                 continue
             cancel_status, cancel_value = self.client.request(
-                "POST", "/v1/cancel", {"order_id": order_id, "reason": reason}
+                "DELETE",
+                f"/v1/orders/{quote(order_id, safe='')}",
+                {"reason": reason},
             )
             if cancel_status >= 400:
                 return _handle(request_id, cancel_status, cancel_value)
@@ -366,6 +432,7 @@ class ExecutionCommandClient:
                     "segment_key": leg.segment_key,
                     "instrument_id": leg.instrument_id,
                     "market_id": None,
+                    "execution_access_id": leg.execution_access_id,
                     "side": leg.side.capitalize(),
                     "quantity": _decimal(leg.quantity),
                     "limit_price": None
@@ -409,9 +476,7 @@ class ExecutionCommandClient:
             launch_id=self.launch_id,
             payload={"intent": body},
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/submit", envelope.as_dict()
-        )
+        status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
 
     def option_spread(
@@ -442,6 +507,7 @@ class ExecutionCommandClient:
             "instance_id": instance_id,
             "instrument_id": request.short_leg.instrument_id,
             "market_id": request.short_leg.market_id,
+            "execution_access_id": request.short_leg.execution_access_id,
             "account_ids": [request.account_id],
             "segment_key": "options",
             "target_quantity": "0",
@@ -470,9 +536,7 @@ class ExecutionCommandClient:
             launch_id=self.launch_id,
             payload={"intent": body},
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/submit", envelope.as_dict()
-        )
+        status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
 
     def portfolio_rebalance(
@@ -509,6 +573,7 @@ class ExecutionCommandClient:
                     "segment_key": target.segment_key,
                     "instrument_id": target.instrument_id,
                     "market_id": None,
+                    "execution_access_id": target.execution_access_id,
                     "side": "Buy",
                     "quantity": _decimal(target.quantity),
                     "limit_price": None
@@ -549,9 +614,7 @@ class ExecutionCommandClient:
             launch_id=self.launch_id,
             payload={"intent": body},
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/submit", envelope.as_dict()
-        )
+        status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
 
     def quote_provisioning(
@@ -600,6 +663,7 @@ class ExecutionCommandClient:
                     "segment_key": request.segment_key,
                     "instrument_id": request.instrument_id,
                     "market_id": request.market_id,
+                    "execution_access_id": request.execution_access_id,
                     "side": "Buy",
                     "quantity": _decimal(request.bid_quantity),
                     "limit_price": _decimal(request.bid_price),
@@ -615,6 +679,7 @@ class ExecutionCommandClient:
                     "segment_key": request.segment_key,
                     "instrument_id": request.instrument_id,
                     "market_id": request.market_id,
+                    "execution_access_id": request.execution_access_id,
                     "side": "Sell",
                     "quantity": _decimal(request.ask_quantity),
                     "limit_price": _decimal(request.ask_price),
@@ -637,9 +702,7 @@ class ExecutionCommandClient:
             launch_id=self.launch_id,
             payload={"intent": body},
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/submit", envelope.as_dict()
-        )
+        status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
 
     def refresh_quote(
@@ -712,6 +775,40 @@ def _direct_order_body(
     }
 
 
+def _single_order_intent(
+    order: Mapping[str, object],
+    *,
+    strategy_id: str,
+    instance_id: str,
+    launch_id: str | None,
+    request_id: str,
+) -> dict[str, object]:
+    return {
+        "intent_id": f"{strategy_id}:intent:{request_id}",
+        "strategy_id": strategy_id,
+        "launch_id": launch_id or "",
+        "instance_id": instance_id,
+        "intent_type": "SingleOrder",
+        "completion_policy": "AllLegsSatisfied",
+        "failure_policy": "CancelRemaining",
+        "reason": "",
+        "legs": [
+            {
+                "leg_id": f"{request_id}:leg",
+                "account_id": order["account_id"],
+                "segment_key": order["segment_key"],
+                "instrument_id": order["instrument_id"],
+                "market_id": order.get("market_id") or order["instrument_id"],
+                "side": str(order["side"]).lower(),
+                "quantity": order["quantity"],
+                "quantity_semantics": "order_quantity",
+                "limit_price": order.get("limit_price"),
+                "options": order.get("options") or {},
+            }
+        ],
+    }
+
+
 def _option_spread_leg(leg: Any) -> dict[str, object]:
     return {
         "leg_id": leg.leg_id,
@@ -719,6 +816,7 @@ def _option_spread_leg(leg: Any) -> dict[str, object]:
         "segment_key": "options",
         "instrument_id": leg.instrument_id,
         "market_id": leg.market_id,
+        "execution_access_id": leg.execution_access_id,
         "side": leg.side,
         "quantity": _decimal(leg.quantity),
         "limit_price": None if leg.limit_price is None else _decimal(leg.limit_price),

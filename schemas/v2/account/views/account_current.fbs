@@ -1,0 +1,16 @@
+include "../../common/metadata.fbs";
+include "../types/segment.fbs";
+
+namespace kairos.account.v2;
+
+table AccountCurrentView {
+  metadata:kairos.common.v2.ViewMetadata (required);
+  account_id:string (required);
+  // Contains Actor-merged state. Provider messages may be partial, but this
+  // root is published as a complete image only when metadata.completeness is
+  // COMPLETE.
+  segments:[AccountSegmentState] (required);
+}
+
+root_type AccountCurrentView;
+file_identifier "AAV2";
