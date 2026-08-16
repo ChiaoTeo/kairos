@@ -1,6 +1,6 @@
 //! Provider-native Market source composition.
 //!
-//! This layer translates typed Workspace bindings into concrete Integration
+//! This layer translates typed Market-owned bindings into concrete Integration
 //! capabilities. Provider selection ends here and never enters the Actor or
 //! server binary.
 
@@ -11,7 +11,7 @@ mod okx;
 
 use std::path::Path;
 
-use kairos_workspace::WorkspaceMarketSourceBinding;
+use super::config::MarketSourceBinding;
 
 use crate::MarketApplication;
 
@@ -19,19 +19,19 @@ pub(super) fn attach_configured(
     application: &mut MarketApplication,
     credentials_root: &Path,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
     match binding {
-        WorkspaceMarketSourceBinding::BinanceSpot { .. }
-        | WorkspaceMarketSourceBinding::BinanceEquity { .. }
-        | WorkspaceMarketSourceBinding::BinanceDerivatives { .. } => {
+        MarketSourceBinding::BinanceSpot { .. }
+        | MarketSourceBinding::BinanceEquity { .. }
+        | MarketSourceBinding::BinanceDerivatives { .. } => {
             binance::attach(application, credentials_root, source_id, binding)
         }
-        WorkspaceMarketSourceBinding::Massive { .. } => {
+        MarketSourceBinding::Massive { .. } => {
             massive::attach(application, credentials_root, source_id, binding)
         }
-        WorkspaceMarketSourceBinding::Okx { .. } => okx::attach(application, source_id, binding),
-        WorkspaceMarketSourceBinding::Hyperliquid { .. } => {
+        MarketSourceBinding::Okx { .. } => okx::attach(application, source_id, binding),
+        MarketSourceBinding::Hyperliquid { .. } => {
             hyperliquid::attach(application, source_id, binding)
         }
     }

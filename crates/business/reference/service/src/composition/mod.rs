@@ -1,6 +1,11 @@
 //! Composition shared by the one-shot CLI and the long-running server.
 
+mod config;
 mod datasets;
+
+pub use config::{
+    ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
+};
 
 pub use datasets::{
     prepare_massive_cash_dividends, prepare_massive_option_contract_snapshot,
@@ -205,16 +210,15 @@ pub fn default_endpoint(provider: &str) -> &'static str {
         "binance-coinm-futures" | "binance-coinm-futures-rest" => {
             "https://dapi.binance.com/dapi/v1/exchangeInfo"
         }
-        "okx-spot" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
-        | "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
-            "https://www.okx.com"
-        }
+        "okx-spot" | "okx-margin" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
+        | "okx-spot-rest" | "okx-margin-rest" | "okx-swap-rest" | "okx-futures-rest"
+        | "okx-options-rest" => "https://www.okx.com",
         "massive"
         | "massive-equity"
         | "massive-equity-websocket"
         | "massive-options"
         | "massive-options-websocket" => "http://api.massiveprivateserver.site",
-        _ => "https://api.binance.com/api/v3/exchangeInfo",
+        _ => "",
     }
 }
 
@@ -233,24 +237,66 @@ async fn build_default_source(
         .map(kairos_workspace::workspace::Workspace::open)
         .transpose()
         .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
-    let reference = workspace.as_ref().map(|value| value.reference_config());
+    let reference = workspace
+        .as_ref()
+        .map(ReferenceConfig::load)
+        .transpose()
+        .map_err(crate::domain::ReferenceError::Provider)?;
+    let reference = reference.as_ref();
 
-    let mut sources = vec![
-        ConfiguredProviderSource::BinanceSpot(BinanceSpotSource::new(default_endpoint(
-            "binance-spot",
-        ))?),
-        ConfiguredProviderSource::BinanceDerivatives(BinanceDerivativesSource::new(
-            BinanceInstrumentType::UsdMFutures,
-            default_endpoint("binance-usdm-futures"),
-        )?),
-        ConfiguredProviderSource::BinanceDerivatives(BinanceDerivativesSource::new(
-            BinanceInstrumentType::CoinMFutures,
-            default_endpoint("binance-coinm-futures"),
-        )?),
-    ];
-    if product_enabled_or_default(reference, "binance", "options", true) {
+    let mut sources = Vec::new();
+    if !provider_disabled(reference, "binance")
+        && product_enabled_or_default(reference, "binance", "spot", true)
+    {
+        sources.push(ConfiguredProviderSource::BinanceSpot(
+            BinanceSpotSource::new(product_endpoint(
+                reference,
+                "binance",
+                "spot",
+                default_endpoint("binance-spot"),
+            ))?,
+        ));
+    }
+    if !provider_disabled(reference, "binance")
+        && product_enabled_or_default(reference, "binance", "usd-m-futures", true)
+    {
+        sources.push(ConfiguredProviderSource::BinanceDerivatives(
+            BinanceDerivativesSource::new(
+                BinanceInstrumentType::UsdMFutures,
+                product_endpoint(
+                    reference,
+                    "binance",
+                    "usd-m-futures",
+                    default_endpoint("binance-usdm-futures"),
+                ),
+            )?,
+        ));
+    }
+    if !provider_disabled(reference, "binance")
+        && product_enabled_or_default(reference, "binance", "coin-m-futures", true)
+    {
+        sources.push(ConfiguredProviderSource::BinanceDerivatives(
+            BinanceDerivativesSource::new(
+                BinanceInstrumentType::CoinMFutures,
+                product_endpoint(
+                    reference,
+                    "binance",
+                    "coin-m-futures",
+                    default_endpoint("binance-coinm-futures"),
+                ),
+            )?,
+        ));
+    }
+    if !provider_disabled(reference, "binance")
+        && product_enabled_or_default(reference, "binance", "options", true)
+    {
         sources.push(ConfiguredProviderSource::BinanceOptions(
-            BinanceOptionsSource::new(default_endpoint("binance-options"))?,
+            BinanceOptionsSource::new(product_endpoint(
+                reference,
+                "binance",
+                "options",
+                default_endpoint("binance-options"),
+            ))?,
         ));
     }
 
@@ -259,31 +305,43 @@ async fn build_default_source(
         .as_ref()
         .map(|root| root.join("credentials"));
     if !provider_disabled(reference, "okx") {
-        sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
-            "okx-spot",
-            OkxInstrumentType::Spot,
-            default_endpoint("okx-spot"),
-        )?));
-        sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
-            "okx-swap",
-            OkxInstrumentType::Swap,
-            default_endpoint("okx-swap"),
-        )?));
-        sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
-            "okx-futures",
-            OkxInstrumentType::Futures,
-            default_endpoint("okx-futures"),
-        )?));
-        sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
-            "okx-options",
-            OkxInstrumentType::Option,
-            default_endpoint("okx-options"),
-        )?));
+        for (product, source_id, instrument_type) in [
+            ("spot", "okx-spot", OkxInstrumentType::Spot),
+            ("margin", "okx-margin", OkxInstrumentType::Margin),
+            ("swap", "okx-swap", OkxInstrumentType::Swap),
+            ("futures", "okx-futures", OkxInstrumentType::Futures),
+            ("options", "okx-options", OkxInstrumentType::Option),
+        ] {
+            if product_enabled_or_default(reference, "okx", product, true) {
+                sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
+                    source_id,
+                    instrument_type,
+                    product_endpoint(reference, "okx", product, default_endpoint(source_id)),
+                )?));
+            }
+        }
     }
     if !provider_disabled(reference, "hyperliquid") {
-        sources.push(ConfiguredProviderSource::Hyperliquid(
-            HyperliquidSource::new(default_endpoint("hyperliquid"))?,
-        ));
+        if product_enabled_or_default(reference, "hyperliquid", "perpetual", true) {
+            sources.push(ConfiguredProviderSource::Hyperliquid(
+                HyperliquidSource::new(product_endpoint(
+                    reference,
+                    "hyperliquid",
+                    "perpetual",
+                    default_endpoint("hyperliquid"),
+                ))?,
+            ));
+        }
+        if product_enabled_or_default(reference, "hyperliquid", "spot", true) {
+            sources.push(ConfiguredProviderSource::Hyperliquid(
+                HyperliquidSource::spot(product_endpoint(
+                    reference,
+                    "hyperliquid",
+                    "spot",
+                    default_endpoint("hyperliquid"),
+                ))?,
+            ));
+        }
     }
 
     let massive_credential = credentials_root.as_deref().and_then(|root| {
@@ -406,51 +464,53 @@ fn configured_provider(id: &str, name: &str) -> crate::domain::Entity {
 }
 
 fn provider_config<'a>(
-    reference: Option<&'a kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    reference: Option<&'a ReferenceConfig>,
     provider: &str,
-) -> Option<&'a kairos_workspace::workspace::WorkspaceReferenceProviderConfig> {
+) -> Option<&'a ReferenceProviderConfig> {
     reference.and_then(|value| value.providers.get(provider))
 }
 
-fn provider_enabled(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
-    provider: &str,
-) -> bool {
+fn provider_enabled(reference: Option<&ReferenceConfig>, provider: &str) -> bool {
     provider_config(reference, provider)
         .and_then(|value| value.enabled)
         .unwrap_or(false)
 }
 
-fn provider_disabled(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
-    provider: &str,
-) -> bool {
+fn provider_disabled(reference: Option<&ReferenceConfig>, provider: &str) -> bool {
     provider_config(reference, provider).and_then(|value| value.enabled) == Some(false)
 }
 
-fn provider_endpoint(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
-    provider: &str,
-    default: &str,
-) -> String {
+fn provider_endpoint(reference: Option<&ReferenceConfig>, provider: &str, default: &str) -> String {
     provider_config(reference, provider)
         .and_then(|value| value.endpoint.clone())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| default.to_owned())
 }
 
-fn product_config<'a>(
-    reference: Option<&'a kairos_workspace::workspace::WorkspaceReferenceConfig>,
+fn product_endpoint(
+    reference: Option<&ReferenceConfig>,
     provider: &str,
     product: &str,
-) -> Option<&'a kairos_workspace::workspace::WorkspaceReferenceProductConfig> {
+    default: &str,
+) -> String {
+    product_config(reference, provider, product)
+        .and_then(|value| value.endpoint.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| provider_endpoint(reference, provider, default))
+}
+
+fn product_config<'a>(
+    reference: Option<&'a ReferenceConfig>,
+    provider: &str,
+    product: &str,
+) -> Option<&'a ReferenceProductConfig> {
     reference
         .and_then(|value| value.products.get(provider))
         .and_then(|value| value.get(product))
 }
 
 fn product_enabled_or_default(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    reference: Option<&ReferenceConfig>,
     provider: &str,
     product: &str,
     default: bool,
@@ -460,11 +520,7 @@ fn product_enabled_or_default(
         .unwrap_or(default)
 }
 
-fn product_enabled(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
-    provider: &str,
-    product: &str,
-) -> bool {
+fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product: &str) -> bool {
     product_config(reference, provider, product)
         .and_then(|value| value.enabled)
         .unwrap_or(false)
@@ -601,8 +657,19 @@ impl ReferenceEventWriter {
                         instrument_id: record.instrument_id,
                         listing_id: record.listing_id,
                         exchange_id: record.exchange_id,
-                        market_type: record.market_type,
-                        asset_type: record.asset_type,
+                        market_type: kairos_domain_types::ProviderProductCode::new(
+                            record.market_type,
+                        )
+                        .map_err(|error| {
+                            crate::domain::ReferenceError::Publication(error.to_string())
+                        })?,
+                        asset_type: record
+                            .asset_type
+                            .map(|value| value.parse::<kairos_domain_types::AssetClass>())
+                            .transpose()
+                            .map_err(|error| {
+                                crate::domain::ReferenceError::Publication(error.to_string())
+                            })?,
                         underlying_instrument_id: record.underlying_instrument_id,
                         source_symbol: record.source_symbol,
                         base_asset_id: record.base_asset_id,

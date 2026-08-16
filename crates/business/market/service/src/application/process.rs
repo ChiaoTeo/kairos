@@ -9,7 +9,7 @@ use crate::services::event_publication::{EventFanout, EventPublication};
 use crate::services::reference::{resolve_market, resolve_option_markets};
 use crate::services::reference_projection::ReferenceProjection;
 use crate::services::sources::SourceActivator;
-use crate::{MarketDescriptor, SubscriptionId};
+use crate::SubscriptionId;
 use kairos_domain_types::Sequence;
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
@@ -972,16 +972,23 @@ impl MarketActorTask {
                 Ok(value) => value,
                 Err(error) => return (422, json!({"error": error.to_string()})),
             };
+            let asset_type = match request
+                .asset_type
+                .as_deref()
+                .map(str::parse::<kairos_domain_types::AssetClass>)
+                .transpose()
+            {
+                Ok(value) => value,
+                Err(error) => return (422, json!({"error": error.to_string()})),
+            };
             let query = crate::MarketSelectionQuery {
                 exchange_id: Some(exchange_id),
-                market_type: Some(market_type),
-                asset_type: request.asset_type.clone(),
-                underlying_instrument_id: markets[0].underlying_instrument_id.as_deref().map(
-                    |value| {
-                        kairos_domain_types::InstrumentId::new(value)
-                            .expect("valid underlying instrument id")
-                    },
+                market_type: Some(
+                    kairos_domain_types::ProviderProductCode::new(market_type)
+                        .expect("validated Reference market type"),
                 ),
+                asset_type,
+                underlying_instrument_id: markets[0].underlying_instrument_id.clone(),
                 active_only: true,
                 ..Default::default()
             };
@@ -1049,34 +1056,39 @@ impl MarketActorTask {
                 request.asset_type.as_deref(),
                 &source_symbol,
             ),
-            _ => {
-                let Some(market_id) = request.params.get("market_id").and_then(Value::as_str)
-                else {
-                    return (
-                        422,
-                        json!({"error":"market_id is required when Reference is unavailable"}),
-                    );
-                };
-                let Some(instrument_id) =
-                    request.params.get("instrument_id").and_then(Value::as_str)
-                else {
-                    return (
-                        422,
-                        json!({"error":"instrument_id is required when Reference is unavailable"}),
-                    );
-                };
-                MarketDescriptor::new(
-                    market_id,
-                    instrument_id,
-                    exchange,
-                    market_type,
-                    source_symbol,
-                )
-                .map(|mut descriptor| {
-                    descriptor.asset_type = request.asset_type.clone();
-                    descriptor
+            _ if self.application.has_replay_source() => {
+                let market_id = request
+                    .params
+                    .get("market_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "replay subscription requires params.market_id".to_string());
+                let instrument_id = request
+                    .params
+                    .get("instrument_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "replay subscription requires params.instrument_id".to_string());
+                market_id.and_then(|market_id| {
+                    instrument_id.and_then(|instrument_id| {
+                        let mut descriptor = crate::MarketDescriptor::new(
+                            market_id,
+                            instrument_id,
+                            exchange.clone(),
+                            market_type.clone(),
+                            source_symbol.clone(),
+                        )?;
+                        descriptor.asset_type = request
+                            .asset_type
+                            .as_deref()
+                            .map(str::parse::<kairos_domain_types::AssetClass>)
+                            .transpose()
+                            .map_err(|error| error.to_string())?;
+                        descriptor.with_source("replay")
+                    })
                 })
             }
+            _ => Err(
+                "Reference snapshot is not ready; explicit market-data access is required".into(),
+            ),
         };
         let descriptor = match descriptor_result {
             Ok(value) => value,
@@ -1324,7 +1336,7 @@ mod tests {
     use crate::services::event_wire_v2::encode_event;
     use crate::{MarketApplication, MarketEvent, OrderBook, PriceLevel};
     use kairos_protocol::InstanceIdentity;
-    use kairos_reference_contract::ReferenceMarket;
+    use kairos_reference_contract::{MarketDataAccess, ReferenceMarket};
     use serde_json::json;
     use std::collections::VecDeque;
     use std::time::Duration;
@@ -1549,8 +1561,20 @@ mod tests {
     #[tokio::test]
     async fn owner_release_is_scoped_idempotent_and_enforced_by_unsubscribe() {
         let root = tempfile::tempdir().unwrap();
+        let mut application = MarketApplication::new("test-market", 10).unwrap();
+        crate::composition::attach_replay_source_with_policy(
+            &mut application,
+            std::iter::empty::<MarketObservation>(),
+            None,
+            None,
+            root.path().join("owner-checkpoint.json"),
+            crate::composition::MarketReplayClock::Maximum,
+            1,
+            true,
+        )
+        .unwrap();
         let mut process = MarketProcess::new(
-            MarketApplication::new("test-market", 10).unwrap(),
+            application,
             NullPublisher,
             root.path().join("market.sock"),
             root.path().join("market.events.sock"),
@@ -1627,7 +1651,13 @@ mod tests {
             .handle_request("POST", "/v1/subscriptions/release-owner", &release)
             .await;
         assert_eq!(released.status, 200);
-        assert_eq!(released.payload["removed_subscription_ids"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            released.payload["removed_subscription_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         let subscriptions = process.actor_task.application.snapshot().subscriptions;
         assert_eq!(subscriptions.len(), 1);
         assert_eq!(subscriptions[0].id.0, "subscription-b");
@@ -1638,7 +1668,13 @@ mod tests {
             .handle_request("POST", "/v1/subscriptions/release-owner", &repeated)
             .await;
         assert_eq!(released.status, 200);
-        assert_eq!(released.payload["removed_subscription_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            released.payload["removed_subscription_ids"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -1868,6 +1904,31 @@ mod tests {
                     &market.status,
                     effective_to,
                     payload
+                ],
+            )
+            .unwrap();
+        let access = MarketDataAccess {
+            access_id: "market-data-access:binance:spot:btcusdt".into(),
+            market_id: market.market_id.clone(),
+            provider_id: "binance".into(),
+            provider_product: "spot".into(),
+            provider_symbol: "BTCUSDT".into(),
+            status: "active".into(),
+            effective_from_unix_nanos: 0,
+            effective_to_unix_nanos: None,
+        };
+        connection
+            .execute(
+                "INSERT INTO reference_market_data_accesses_current VALUES(?,?,?,?,?,?,?,?)",
+                rusqlite::params![
+                    &access.access_id,
+                    &access.market_id,
+                    &access.provider_id,
+                    &access.provider_product,
+                    &access.provider_symbol,
+                    &access.status,
+                    access.effective_to_unix_nanos.map(|value| value as i64),
+                    serde_json::to_string(&access).unwrap(),
                 ],
             )
             .unwrap();

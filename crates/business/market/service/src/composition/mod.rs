@@ -8,12 +8,11 @@ use kairos_integration::participants::massive::{
     MarketType as MassiveMarketType, MassiveConnection, MassiveConnectionConfig,
 };
 use kairos_integration::participants::okx::{
-    InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig,
+    InstrumentType as OkxProviderInstrumentType, OkxConnection, OkxConnectionConfig,
 };
-use kairos_workspace::{
-    Workspace, WorkspaceBinanceDerivativeProduct, WorkspaceBinanceSpotTransport,
-    WorkspaceMarketSourceBinding, WorkspaceMarketSourceBinding as Binding,
-};
+use kairos_workspace::Workspace;
+
+use self::config::{MarketConfig, MarketSourceBinding as Binding};
 
 use crate::domain::source::{SourceDescriptor, SourceId};
 use crate::services::sources::{
@@ -30,8 +29,10 @@ mod sources;
 mod v2_publisher;
 
 pub use config::{
-    MarketProcessRequest, MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile,
-    MarketRuntimeScope,
+    BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
+    HyperliquidMarketType, MarketConfig as MarketCompositionConfig, MarketProcessRequest,
+    MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile, MarketRuntimeScope,
+    MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType, PublicMarketTransport,
 };
 pub use diagnostic::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
@@ -45,17 +46,17 @@ pub use reference::AeronReferenceChangeSource;
 ///
 /// The activator contains only immutable workspace/configuration facts. The
 /// active source map and all subscription state remain owned by MarketActor.
-pub(crate) struct WorkspaceMarketSourceActivator {
+pub(crate) struct ConfiguredMarketSourceActivator {
     workspace: Workspace,
 }
 
-impl WorkspaceMarketSourceActivator {
+impl ConfiguredMarketSourceActivator {
     pub(crate) fn new(workspace: Workspace) -> Self {
         Self { workspace }
     }
 }
 
-impl SourceActivator for WorkspaceMarketSourceActivator {
+impl SourceActivator for ConfiguredMarketSourceActivator {
     fn activate<'a>(
         &'a mut self,
         market: &'a crate::MarketDescriptor,
@@ -77,13 +78,12 @@ fn activate_workspace_source(
     let credentials_root = workspace
         .child(&["credentials"])
         .map_err(|error| error.to_string())?;
-    let configured_route_exists = workspace
-        .market_config()
+    let market_config = MarketConfig::load(&workspace)?;
+    let configured_route_exists = market_config
         .sources
         .values()
         .any(|binding| binding_matches_market(binding, &market));
-    let mut candidates = workspace
-        .market_config()
+    let mut candidates = market_config
         .sources
         .iter()
         .filter(|(id, binding)| {
@@ -103,14 +103,20 @@ fn activate_workspace_source(
     if candidates.is_empty()
         && !configured_route_exists
         && market.source_id.is_none()
-        && market_exchange(&market).eq_ignore_ascii_case("binance")
-        && market.market_type.eq_ignore_ascii_case("spot")
+        && market
+            .market_data_provider_id
+            .as_ref()
+            .is_some_and(|value| value == "binance")
+        && market
+            .market_data_provider_product
+            .as_ref()
+            .is_some_and(|value| value == "spot")
     {
         candidates.push((
             "binance-spot".into(),
             Binding::BinanceSpot {
                 enabled: true,
-                transport: WorkspaceBinanceSpotTransport::Websocket,
+                transport: BinanceSpotTransport::Websocket,
                 endpoint: None,
                 snapshot_interval_ms: 1_000,
             },
@@ -144,72 +150,54 @@ fn activate_workspace_source(
     staging.take_source_handle(&SourceId::new(source_id.clone())?)
 }
 
-fn binding_matches_market(
-    binding: &WorkspaceMarketSourceBinding,
-    market: &crate::MarketDescriptor,
-) -> bool {
-    let exchange = market_exchange(market);
-    let market_type = market.market_type.as_str();
-    let asset_type = market.asset_type.as_deref();
-    match binding {
-        WorkspaceMarketSourceBinding::BinanceSpot { .. } => {
-            exchange.eq_ignore_ascii_case("binance")
-                && market_type.eq_ignore_ascii_case("spot")
-                && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("crypto"))
-        }
-        WorkspaceMarketSourceBinding::BinanceEquity { .. } => {
-            exchange.eq_ignore_ascii_case("binance")
-                && market_type.eq_ignore_ascii_case("equity")
-                && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("equity"))
-        }
-        WorkspaceMarketSourceBinding::BinanceDerivatives { product, .. } => {
-            let expected = match product {
-                WorkspaceBinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
-                WorkspaceBinanceDerivativeProduct::CoinMFutures => "coin-m-futures",
-                WorkspaceBinanceDerivativeProduct::Options => "options",
-            };
-            exchange.eq_ignore_ascii_case("binance")
-                && market_type.eq_ignore_ascii_case(expected)
-                && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("crypto"))
-        }
-        WorkspaceMarketSourceBinding::Massive { product, .. } => {
-            exchange.eq_ignore_ascii_case("massive")
-                && market_type.eq_ignore_ascii_case(match product {
-                    kairos_workspace::WorkspaceMassiveMarketProduct::Equity => "equity",
-                    kairos_workspace::WorkspaceMassiveMarketProduct::Options => "options",
-                })
-                && asset_type.is_none_or(|value| value.eq_ignore_ascii_case("equity"))
-        }
-        WorkspaceMarketSourceBinding::Okx {
+fn binding_matches_market(binding: &MarketSourceBinding, market: &crate::MarketDescriptor) -> bool {
+    let Some(provider) = market.market_data_provider_id.as_ref() else {
+        return false;
+    };
+    let Some(provider_product) = market.market_data_provider_product.as_ref() else {
+        return false;
+    };
+    let (expected_provider, expected_product) = match binding {
+        MarketSourceBinding::BinanceSpot { .. } => ("binance", "spot"),
+        MarketSourceBinding::BinanceEquity { .. } => ("binance", "equity"),
+        MarketSourceBinding::BinanceDerivatives { product, .. } => (
+            "binance",
+            match product {
+                BinanceDerivativeProduct::UsdMFutures => "usd-m-futures",
+                BinanceDerivativeProduct::CoinMFutures => "coin-m-futures",
+                BinanceDerivativeProduct::Options => "options",
+            },
+        ),
+        MarketSourceBinding::Massive { product, .. } => (
+            "massive",
+            match product {
+                config::MassiveMarketProduct::Equity => "equity",
+                config::MassiveMarketProduct::Options => "options",
+            },
+        ),
+        MarketSourceBinding::Okx {
             instrument_type, ..
-        } => {
-            exchange.eq_ignore_ascii_case("okx")
-                && market_type.eq_ignore_ascii_case(match instrument_type {
-                    kairos_workspace::WorkspaceOkxInstrumentType::Spot => "spot",
-                    kairos_workspace::WorkspaceOkxInstrumentType::Swap => "swap",
-                    kairos_workspace::WorkspaceOkxInstrumentType::Futures => "futures",
-                    kairos_workspace::WorkspaceOkxInstrumentType::Options => "options",
-                })
-        }
-        WorkspaceMarketSourceBinding::Hyperliquid {
+        } => (
+            "okx",
+            match instrument_type {
+                config::OkxInstrumentType::Spot => "spot",
+                config::OkxInstrumentType::Swap => "swap",
+                config::OkxInstrumentType::Futures => "futures",
+                config::OkxInstrumentType::Options => "options",
+            },
+        ),
+        MarketSourceBinding::Hyperliquid {
             market_type: configured,
             ..
-        } => {
-            exchange.eq_ignore_ascii_case("hyperliquid")
-                && market_type.eq_ignore_ascii_case(match configured {
-                    kairos_workspace::WorkspaceHyperliquidMarketType::Spot => "spot",
-                    kairos_workspace::WorkspaceHyperliquidMarketType::Perpetual => "perpetual",
-                })
-        }
-    }
-}
-
-fn market_exchange(market: &crate::MarketDescriptor) -> &str {
-    market
-        .exchange_id
-        .as_str()
-        .strip_prefix("exchange:")
-        .unwrap_or(market.exchange_id.as_str())
+        } => (
+            "hyperliquid",
+            match configured {
+                config::HyperliquidMarketType::Spot => "spot",
+                config::HyperliquidMarketType::Perpetual => "perpetual",
+            },
+        ),
+    };
+    provider == expected_provider && provider_product == expected_product
 }
 
 /// Market-owned source routing classification. Provider adapters map this to
@@ -227,7 +215,7 @@ fn attach_configured_market_source(
     runtime: &mut MarketApplication,
     credentials_root: &std::path::Path,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
     sources::attach_configured(runtime, credentials_root, source_id, binding)
 }
@@ -253,7 +241,7 @@ pub fn default_endpoint(provider: &str) -> &'static str {
         "massive-options-websocket" => "http://socket.massiveprivateserver.site/options",
         "hyperliquid-info" => "https://api.hyperliquid.xyz/info",
         "hyperliquid-websocket" => "wss://api.hyperliquid.xyz/ws",
-        _ => "https://api.binance.com",
+        _ => "",
     }
 }
 
@@ -268,6 +256,11 @@ mod tests {
             default_endpoint("binance-spot-websocket"),
             "wss://stream.binance.com:9443/ws"
         );
+    }
+
+    #[test]
+    fn unknown_endpoint_key_never_falls_back_to_binance() {
+        assert_eq!(default_endpoint("future-provider"), "");
     }
 }
 
@@ -339,7 +332,7 @@ pub fn attach_okx_snapshot_source(
     source_id: &str,
     market_type: &str,
     asset_type: &str,
-    instrument_type: OkxInstrumentType,
+    instrument_type: OkxProviderInstrumentType,
     endpoint: impl Into<String>,
     interval: std::time::Duration,
 ) -> Result<(), String> {

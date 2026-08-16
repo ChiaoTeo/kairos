@@ -14,7 +14,9 @@ pub fn resolve_market(
         .filter(|market| {
             exchange_matches(market.exchange_id.as_str(), exchange_id)
                 && market.market_type == market_type
-                && asset_type.is_none_or(|value| market.asset_type.as_deref() == Some(value))
+                && asset_type.is_none_or(|value| {
+                    market.asset_type.map(|class| class.as_str()) == Some(value)
+                })
                 && market.source_symbol.eq_ignore_ascii_case(source_symbol)
                 && market.is_active()
         })
@@ -59,7 +61,9 @@ pub fn resolve_option_markets(
         .filter(|market| {
             market.market_type == "options"
                 && exchange_matches(market.exchange_id.as_str(), exchange_id)
-                && asset_type.is_none_or(|value| market.asset_type.as_deref() == Some(value))
+                && asset_type.is_none_or(|value| {
+                    market.asset_type.map(|class| class.as_str()) == Some(value)
+                })
                 && market.underlying_instrument_id.as_deref() == Some(underlying_id)
                 && market.is_active()
         })

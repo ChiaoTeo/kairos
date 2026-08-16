@@ -4,16 +4,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::join_all;
+use kairos_domain_types::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
 use kairos_integration::application::capabilities::reference::{
     AsyncInstrumentCatalogConnection, ExternalInstrument, ExternalInstrumentCatalog,
     ExternalInstrumentKind,
 };
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinanceEquityInstrumentCatalog,
-    BinanceQuotaAllocation, InstrumentType as BinanceInstrumentType,
+    BinanceCoinMConnection, BinanceEquityInstrumentCatalog, BinanceFuturesConnectionConfig,
+    BinanceOptionsConnection, BinanceOptionsConnectionConfig, BinanceQuotaAllocation,
+    BinanceSpotConnection, BinanceSpotConnectionConfig, BinanceUsdMConnection,
+    InstrumentType as BinanceInstrumentType,
 };
 use kairos_integration::participants::hyperliquid::{
-    HyperliquidConnection, HyperliquidConnectionConfig,
+    HyperliquidConnection, HyperliquidConnectionConfig, HyperliquidInstrumentProduct,
 };
 use kairos_integration::participants::massive::{
     InstrumentQuery as MassiveInstrumentQuery, MassiveConnection, MassiveConnectionConfig,
@@ -212,6 +215,8 @@ pub struct MassiveEquitySource<P> {
 }
 
 pub struct HyperliquidSource {
+    id: String,
+    product: HyperliquidInstrumentProduct,
     connection: kairos_integration::participants::hyperliquid::HyperliquidInstrumentCatalog,
 }
 
@@ -973,6 +978,9 @@ fn tag_catalog_source(catalog: &mut ProviderCatalog, source_id: &str) {
     for value in &mut catalog.execution_accesses {
         value.source_id = Some(source_id.clone());
     }
+    for value in &mut catalog.market_data_accesses {
+        value.source_id = Some(source_id.clone());
+    }
 }
 
 fn reconcile_canonical_instruments(values: &mut Vec<Instrument>) -> ReferenceResult<()> {
@@ -1003,6 +1011,7 @@ fn merge_provider_catalog_views<'a>(
     let mut markets = BTreeMap::new();
     let mut financial_products = BTreeMap::new();
     let mut execution_accesses = BTreeMap::new();
+    let mut market_data_accesses = BTreeMap::new();
     let mut conflicts = Vec::new();
     let mut reconciled_instruments = 0usize;
 
@@ -1070,6 +1079,14 @@ fn merge_provider_catalog_views<'a>(
                 conflicts.push(format!("execution_access:{}", value.access_id));
             }
         }
+        for value in &catalog.market_data_accesses {
+            if market_data_accesses
+                .insert(value.access_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("market_data_access:{}", value.access_id));
+            }
+        }
     }
     if !conflicts.is_empty() {
         let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
@@ -1095,7 +1112,7 @@ fn merge_provider_catalog_views<'a>(
         markets: markets.into_values().collect(),
         financial_products: financial_products.into_values().collect(),
         execution_accesses: execution_accesses.into_values().collect(),
-        market_data_accesses: Vec::new(),
+        market_data_accesses: market_data_accesses.into_values().collect(),
     })
 }
 
@@ -1117,9 +1134,6 @@ fn merge_canonical_instrument(
         }
         if left.instrument_type != right.instrument_type {
             fields.push("instrument_type");
-        }
-        if left.product_family != right.product_family {
-            fields.push("product_family");
         }
         if left.primary_currency_asset_id != right.primary_currency_asset_id {
             fields.push("primary_currency_asset_id");
@@ -1182,8 +1196,7 @@ fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> b
     catalog.instruments.iter().all(|value| {
         let id = value.instrument_id.as_str();
         if let Some(base) = id.strip_prefix("instrument:spot:") {
-            return value.instrument_type == "spot"
-                && value.product_family.as_deref() == Some("spot")
+            return value.instrument_type == InstrumentKind::Spot
                 && value.symbol.as_str() == base
                 && value
                     .primary_currency_asset_id
@@ -1208,8 +1221,7 @@ fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> b
             || canonical_tail.split(':').nth(1).is_some_and(|expiry| {
                 expiry.len() == 8 && expiry.chars().all(|ch| ch.is_ascii_digit())
             });
-        value.instrument_type == family
-            && value.product_family.as_deref() == Some(family)
+        value.instrument_type.as_str() == family
             && value.symbol.as_str() == symbol
             && expiry_is_compact
     })
@@ -1380,18 +1392,22 @@ impl ReferenceSource for OkxSource {
 
 impl BinanceSpotSource {
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
+        let config = binance_spot_public_config(endpoint)?;
         Ok(Self {
-            connection: binance_public_connection(endpoint)?
-                .instrument_catalog(BinanceInstrumentType::Spot),
+            connection: BinanceSpotConnection::connect(config)
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                .instrument_catalog(),
         })
     }
 }
 
 impl BinanceOptionsSource {
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
+        let config = binance_options_public_config(endpoint)?;
         Ok(Self {
-            connection: binance_public_connection(endpoint)?
-                .instrument_catalog(BinanceInstrumentType::Option),
+            connection: BinanceOptionsConnection::connect(config)
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                .instrument_catalog(),
         })
     }
 }
@@ -1401,7 +1417,8 @@ impl BinanceEquitySource {
         endpoint: impl Into<String>,
         api_key: secrecy::SecretString,
     ) -> ReferenceResult<Self> {
-        let provider = binance_public_connection(endpoint)?;
+        let provider = BinanceSpotConnection::connect(binance_spot_public_config(endpoint)?)
+            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         Ok(Self {
             connection: provider.equity_instrument_catalog(api_key),
         })
@@ -1422,15 +1439,26 @@ impl BinanceDerivativesSource {
                 ))
             }
         };
+        let config = binance_futures_public_config(endpoint)?;
         Ok(Self {
             id,
             instrument_type,
-            connection: binance_public_connection(endpoint)?.instrument_catalog(instrument_type),
+            connection: match instrument_type {
+                BinanceInstrumentType::UsdMFutures => {
+                    BinanceUsdMConnection::connect(config.clone())
+                        .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                        .instrument_catalog()
+                }
+                BinanceInstrumentType::CoinMFutures => BinanceCoinMConnection::connect(config)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .instrument_catalog(),
+                _ => unreachable!("validated Binance derivatives instrument type"),
+            },
         })
     }
 }
 
-fn binance_public_connection(endpoint: impl Into<String>) -> ReferenceResult<BinanceConnection> {
+fn binance_public_base_url(endpoint: impl Into<String>) -> String {
     let endpoint = endpoint.into();
     let trimmed = endpoint.trim_end_matches('/');
     let base_url = trimmed
@@ -1440,16 +1468,49 @@ fn binance_public_connection(endpoint: impl Into<String>) -> ReferenceResult<Bin
         .or_else(|| trimmed.strip_suffix("/eapi/v1/exchangeInfo"))
         .unwrap_or(trimmed)
         .to_owned();
-    BinanceConnection::connect(BinanceConnectionConfig {
+    base_url
+}
+
+fn binance_spot_public_config(
+    endpoint: impl Into<String>,
+) -> ReferenceResult<BinanceSpotConnectionConfig> {
+    Ok(BinanceSpotConnectionConfig {
         environment: "public".into(),
-        rest_base_url: base_url,
+        rest_base_url: binance_public_base_url(endpoint),
         quota: BinanceQuotaAllocation {
             request_weight_per_minute: 1_200,
             cancel_reserve_weight: 0,
         },
         shared_quota: None,
     })
-    .map_err(|error| ReferenceError::Provider(error.to_string()))
+}
+
+fn binance_futures_public_config(
+    endpoint: impl Into<String>,
+) -> ReferenceResult<BinanceFuturesConnectionConfig> {
+    Ok(BinanceFuturesConnectionConfig {
+        environment: "public".into(),
+        rest_base_url: binance_public_base_url(endpoint),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_200,
+            cancel_reserve_weight: 0,
+        },
+        shared_quota: None,
+    })
+}
+
+fn binance_options_public_config(
+    endpoint: impl Into<String>,
+) -> ReferenceResult<BinanceOptionsConnectionConfig> {
+    Ok(BinanceOptionsConnectionConfig {
+        environment: "public".into(),
+        rest_base_url: binance_public_base_url(endpoint),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_200,
+            cancel_reserve_weight: 0,
+        },
+        shared_quota: None,
+    })
 }
 
 impl<P: ProviderSyncStore> MassiveOptionsCoverageSource<P> {
@@ -1665,13 +1726,35 @@ fn massive_public_connection(
 
 impl HyperliquidSource {
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
+        Self::for_product(endpoint, HyperliquidInstrumentProduct::Perpetual)
+    }
+
+    pub fn spot(endpoint: impl Into<String>) -> ReferenceResult<Self> {
+        Self::for_product(endpoint, HyperliquidInstrumentProduct::Spot)
+    }
+
+    fn for_product(
+        endpoint: impl Into<String>,
+        product: HyperliquidInstrumentProduct,
+    ) -> ReferenceResult<Self> {
         let provider = HyperliquidConnection::connect(HyperliquidConnectionConfig {
             environment: "public".into(),
             info_endpoint: endpoint.into(),
         })
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        let connection = provider.instrument_catalog();
-        Ok(Self { connection })
+        let (id, connection) = match product {
+            HyperliquidInstrumentProduct::Perpetual => {
+                ("hyperliquid-perpetual", provider.instrument_catalog())
+            }
+            HyperliquidInstrumentProduct::Spot => {
+                ("hyperliquid-spot", provider.spot_instrument_catalog())
+            }
+        };
+        Ok(Self {
+            id: id.into(),
+            product,
+            connection,
+        })
     }
 }
 
@@ -1942,7 +2025,7 @@ impl<P: ProviderSyncStore> ReferenceSource for MassiveEquitySource<P> {
 
 impl ReferenceSource for HyperliquidSource {
     fn source_id(&self) -> &str {
-        "hyperliquid"
+        &self.id
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
@@ -1951,12 +2034,13 @@ impl ReferenceSource for HyperliquidSource {
             .fetch_instruments()
             .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        hyperliquid_provider_catalog(facts)
+        hyperliquid_provider_catalog(facts, self.product)
     }
 }
 
 fn hyperliquid_provider_catalog(
     facts: ExternalInstrumentCatalog,
+    product: HyperliquidInstrumentProduct,
 ) -> ReferenceResult<ProviderCatalog> {
     if facts.participant.id.as_str() != "hyperliquid" {
         return Err(ReferenceError::Provider(format!(
@@ -1975,7 +2059,17 @@ fn hyperliquid_provider_catalog(
         ..Default::default()
     };
     for value in facts.instruments {
-        if value.kind != ExternalInstrumentKind::Perpetual {
+        let (expected_kind, instrument_kind, family) = match product {
+            HyperliquidInstrumentProduct::Perpetual => (
+                ExternalInstrumentKind::Perpetual,
+                InstrumentKind::Perpetual,
+                "perpetual",
+            ),
+            HyperliquidInstrumentProduct::Spot => {
+                (ExternalInstrumentKind::Spot, InstrumentKind::Spot, "spot")
+            }
+        };
+        if value.kind != expected_kind {
             return Err(ReferenceError::Provider(format!(
                 "unsupported Hyperliquid instrument kind: {:?}",
                 value.kind
@@ -1998,15 +2092,21 @@ fn hyperliquid_provider_catalog(
             catalog.assets.push(Asset {
                 asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
                 code: code.clone(),
-                asset_class: "crypto".into(),
+                asset_class: AssetClass::Crypto,
                 status: "active".into(),
                 ..Asset::default()
             });
         }
-        let instrument_id =
-            kairos_domain_types::InstrumentId::new(format!("instrument:perpetual:{base}-{quote}"))?;
+        let instrument_id = match product {
+            HyperliquidInstrumentProduct::Perpetual => kairos_domain_types::InstrumentId::new(
+                format!("instrument:perpetual:{base}-{quote}"),
+            )?,
+            HyperliquidInstrumentProduct::Spot => {
+                kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?
+            }
+        };
         let listing_id = kairos_domain_types::ListingId::new(format!(
-            "listing:hyperliquid:perpetual:{base}:{quote}"
+            "listing:hyperliquid:{family}:{base}:{quote}"
         ))?;
         let exchange_id = kairos_domain_types::Exchange::new("exchange:hyperliquid")?;
         let status: kairos_domain_types::ReferenceStatus =
@@ -2014,10 +2114,9 @@ fn hyperliquid_provider_catalog(
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
             symbol: kairos_domain_types::Symbol::new(format!("{base}-{quote}"))?,
-            instrument_type: "perpetual".into(),
-            product_family: Some("perpetual".into()),
+            instrument_type: instrument_kind,
             primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
-                "asset:crypto:{quote}"
+                "asset:crypto:{base}"
             ))?),
             status,
             ..Instrument::default()
@@ -2033,14 +2132,14 @@ fn hyperliquid_provider_catalog(
         });
         catalog.markets.push(Market {
             market_id: kairos_domain_types::MarketId::new(format!(
-                "market:hyperliquid:perpetual:{source_symbol}"
+                "market:hyperliquid:{family}:{source_symbol}"
             ))?,
-            market_key: format!("hyperliquid.perpetual.{source_symbol}"),
+            market_key: format!("hyperliquid.{family}.{source_symbol}"),
             instrument_id: instrument_id.clone(),
             listing_id: listing_id.clone(),
             exchange_id,
-            market_type: "perpetual".into(),
-            asset_type: Some("crypto".into()),
+            market_type: ProviderProductCode::new(family)?,
+            asset_type: Some(AssetClass::Crypto),
             source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
             base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
                 "asset:crypto:{base}"
@@ -2066,6 +2165,7 @@ fn hyperliquid_provider_catalog(
     catalog
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
+    populate_market_data_accesses(&mut catalog, "hyperliquid")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -2115,6 +2215,7 @@ fn massive_provider_catalog(facts: ExternalInstrumentCatalog) -> ReferenceResult
     catalog
         .markets
         .dedup_by(|left, right| left.market_id == right.market_id);
+    populate_market_data_accesses(&mut catalog, "massive")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -2139,12 +2240,11 @@ fn append_massive_instrument(
         .unwrap_or_else(|| "USD".into());
     let status: kairos_domain_types::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
-    let (family, canonical_family, instrument_id, symbol, underlying_id) = match value.kind {
+    let (family, instrument_id, symbol, underlying_id) = match value.kind {
         ExternalInstrumentKind::Equity => {
             let ticker = source_symbol.clone();
             ensure_massive_underlying(catalog, &ticker, &quote, &exchange_id, status)?;
             (
-                "equity",
                 "equity",
                 format!("instrument:equity:US:{ticker}:common"),
                 ticker,
@@ -2181,7 +2281,6 @@ fn append_massive_instrument(
             };
             (
                 "options",
-                "option",
                 format!("instrument:option:{underlying}:{expiry}:{strike}:{right}"),
                 format!("{underlying}-{expiry}-{strike}-{right}"),
                 Some(kairos_domain_types::InstrumentId::new(format!(
@@ -2210,8 +2309,7 @@ fn append_massive_instrument(
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_domain_types::Symbol::new(symbol)?,
-        instrument_type: canonical_family.into(),
-        product_family: Some(canonical_family.into()),
+        instrument_type: canonical_instrument_kind(value.kind)?,
         issuer_id: (family == "equity").then(|| {
             kairos_domain_types::IssuerId::new(format!("issuer:US:{source_symbol}"))
                 .expect("validated Massive issuer")
@@ -2248,8 +2346,8 @@ fn append_massive_instrument(
         instrument_id,
         listing_id,
         exchange_id: exchange,
-        market_type: family.into(),
-        asset_type: Some("equity".into()),
+        market_type: ProviderProductCode::new(family)?,
+        asset_type: Some(AssetClass::Equity),
         source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
         base_asset_id: value.underlying.as_ref().map(|underlying| {
             kairos_domain_types::AssetId::new(format!(
@@ -2288,14 +2386,14 @@ fn ensure_massive_underlying(
     catalog.assets.push(Asset {
         asset_id: equity_asset.clone(),
         code: ticker.into(),
-        asset_class: "equity".into(),
+        asset_class: AssetClass::Equity,
         status: "active".into(),
         ..Asset::default()
     });
     catalog.assets.push(Asset {
         asset_id: fiat_asset.clone(),
         code: quote.into(),
-        asset_class: "fiat".into(),
+        asset_class: AssetClass::Fiat,
         status: "active".into(),
         ..Asset::default()
     });
@@ -2315,8 +2413,7 @@ fn ensure_massive_underlying(
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_domain_types::Symbol::new(ticker.to_owned())?,
-        instrument_type: "equity".into(),
-        product_family: Some("equity".into()),
+        instrument_type: InstrumentKind::Equity,
         issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
             "issuer:US:{ticker}"
         ))?),
@@ -2342,8 +2439,8 @@ fn ensure_massive_underlying(
         instrument_id,
         listing_id,
         exchange_id: exchange,
-        market_type: "equity".into(),
-        asset_type: Some("equity".into()),
+        market_type: ProviderProductCode::new("equity")?,
+        asset_type: Some(AssetClass::Equity),
         source_symbol: kairos_domain_types::Symbol::new(ticker.to_owned())?,
         base_asset_id: Some(equity_asset),
         quote_asset_id: Some(fiat_asset),
@@ -2427,15 +2524,14 @@ fn binance_equity_provider_catalog(
         catalog.assets.push(Asset {
             asset_id: equity_asset.clone(),
             code: symbol.clone(),
-            asset_class: "equity".into(),
+            asset_class: AssetClass::Equity,
             status,
             ..Asset::default()
         });
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
             symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
-            instrument_type: "equity".into(),
-            product_family: Some("equity".into()),
+            instrument_type: InstrumentKind::Equity,
             issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
                 "issuer:US:{symbol}"
             ))?),
@@ -2458,8 +2554,8 @@ fn binance_equity_provider_catalog(
             instrument_id: instrument_id.clone(),
             listing_id: listing_id.clone(),
             exchange_id: exchange_id.clone(),
-            market_type: "equity".into(),
-            asset_type: Some("equity".into()),
+            market_type: ProviderProductCode::new("equity")?,
+            asset_type: Some(AssetClass::Equity),
             source_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
             base_asset_id: Some(equity_asset),
             status,
@@ -2480,8 +2576,8 @@ fn binance_equity_provider_catalog(
             market_id: Some(market_id),
             destination_market_id: None,
             broker_id: None,
-            provider_id: "binance".into(),
-            product_family: "equity".into(),
+            provider_id: ProviderId::new("binance")?,
+            provider_product: ProviderProductCode::new("equity")?,
             provider_symbol: value.source_symbol,
             settlement_asset_id: None,
             status,
@@ -2490,6 +2586,7 @@ fn binance_equity_provider_catalog(
             source_id: None,
         });
     }
+    populate_market_data_accesses(&mut catalog, "binance")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -2524,6 +2621,8 @@ fn binance_provider_catalog(
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
     reconcile_canonical_instruments(&mut catalog.instruments)?;
+    populate_execution_accesses(&mut catalog, "binance")?;
+    populate_market_data_accesses(&mut catalog, "binance")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -2558,7 +2657,7 @@ fn append_binance_instrument(
         catalog.assets.push(Asset {
             asset_id: kairos_domain_types::AssetId::new(format!("asset:{asset_class}:{code}"))?,
             code: code.clone(),
-            asset_class: asset_class.into(),
+            asset_class: AssetClass::parse_known(asset_class)?,
             status: "active".into(),
             ..Asset::default()
         });
@@ -2604,8 +2703,7 @@ fn append_binance_instrument(
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
                         symbol: kairos_domain_types::Symbol::new(base.clone())?,
-                        instrument_type: "equity".into(),
-                        product_family: Some("equity".into()),
+                        instrument_type: InstrumentKind::Equity,
                         issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
                             "issuer:US:{base}"
                         ))?),
@@ -2659,8 +2757,7 @@ fn append_binance_instrument(
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
                         symbol: kairos_domain_types::Symbol::new(base.clone())?,
-                        instrument_type: "spot".into(),
-                        product_family: Some("spot".into()),
+                        instrument_type: InstrumentKind::Spot,
                         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
                             format!("asset:crypto:{base}"),
                         )?),
@@ -2714,8 +2811,7 @@ fn append_binance_instrument(
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
-        instrument_type: canonical_family.into(),
-        product_family: Some(canonical_family.into()),
+        instrument_type: canonical_instrument_kind(value.kind)?,
         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
@@ -2752,15 +2848,12 @@ fn append_binance_instrument(
         instrument_id,
         listing_id,
         exchange_id,
-        market_type: family.into(),
-        asset_type: Some(
-            if value.kind == ExternalInstrumentKind::EquityPerpetual {
-                "equity"
-            } else {
-                "crypto"
-            }
-            .into(),
-        ),
+        market_type: ProviderProductCode::new(family)?,
+        asset_type: Some(if value.kind == ExternalInstrumentKind::EquityPerpetual {
+            AssetClass::Equity
+        } else {
+            AssetClass::Crypto
+        }),
         source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
         base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
             "asset:{}:{base}",
@@ -2816,6 +2909,8 @@ fn okx_provider_catalog(facts: ExternalInstrumentCatalog) -> ReferenceResult<Pro
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
     reconcile_canonical_instruments(&mut catalog.instruments)?;
+    populate_execution_accesses(&mut catalog, "okx")?;
+    populate_market_data_accesses(&mut catalog, "okx")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -2842,9 +2937,9 @@ fn append_okx_instrument(
             ),
             ExternalInstrumentKind::Margin => (
                 "margin",
-                "margin",
-                format!("instrument:margin:{base}-{quote}"),
-                format!("{base}-{quote}"),
+                "spot",
+                format!("instrument:spot:{base}"),
+                base.clone(),
                 None,
             ),
             ExternalInstrumentKind::Perpetual => (
@@ -2883,8 +2978,7 @@ fn append_okx_instrument(
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
                         symbol: kairos_domain_types::Symbol::new(base.clone())?,
-                        instrument_type: "spot".into(),
-                        product_family: Some("spot".into()),
+                        instrument_type: InstrumentKind::Spot,
                         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
                             format!("asset:crypto:{base}"),
                         )?),
@@ -2908,7 +3002,7 @@ fn append_okx_instrument(
         catalog.assets.push(Asset {
             asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
             code: code.clone(),
-            asset_class: "crypto".into(),
+            asset_class: AssetClass::Crypto,
             status: "active".into(),
             ..Asset::default()
         });
@@ -2927,8 +3021,7 @@ fn append_okx_instrument(
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
-        instrument_type: canonical_family.into(),
-        product_family: Some(canonical_family.into()),
+        instrument_type: canonical_instrument_kind(value.kind)?,
         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
@@ -2965,8 +3058,8 @@ fn append_okx_instrument(
         instrument_id,
         listing_id,
         exchange_id,
-        market_type: family.into(),
-        asset_type: Some("crypto".into()),
+        market_type: ProviderProductCode::new(family)?,
+        asset_type: Some(AssetClass::Crypto),
         source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
         base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
             "asset:crypto:{base}"
@@ -3037,6 +3130,83 @@ fn canonical_expiry(value: Option<kairos_domain_types::UnixNanos>) -> ReferenceR
     Ok(date.format("%Y%m%d").to_string())
 }
 
+/// The single Reference-owned conversion from normalized Integration facts to
+/// canonical economic lifecycle. Provider access/trading modes deliberately do
+/// not become instrument kinds.
+fn canonical_instrument_kind(kind: ExternalInstrumentKind) -> ReferenceResult<InstrumentKind> {
+    match kind {
+        ExternalInstrumentKind::Equity => Ok(InstrumentKind::Equity),
+        ExternalInstrumentKind::Spot | ExternalInstrumentKind::Margin => Ok(InstrumentKind::Spot),
+        ExternalInstrumentKind::Perpetual | ExternalInstrumentKind::EquityPerpetual => {
+            Ok(InstrumentKind::Perpetual)
+        }
+        ExternalInstrumentKind::Future => Ok(InstrumentKind::Future),
+        ExternalInstrumentKind::Option => Ok(InstrumentKind::Option),
+    }
+}
+
+fn populate_market_data_accesses(
+    catalog: &mut ProviderCatalog,
+    provider: &str,
+) -> ReferenceResult<()> {
+    let provider_id = ProviderId::new(provider)?;
+    for market in &catalog.markets {
+        catalog
+            .market_data_accesses
+            .push(crate::domain::MarketDataAccess {
+                source_id: None,
+                access_id: format!(
+                    "market-data-access:{provider}:{}:{}",
+                    market.market_type,
+                    market.source_symbol.as_str().to_ascii_lowercase()
+                ),
+                market_id: market.market_id.clone(),
+                provider_id: provider_id.clone(),
+                provider_product: market.market_type.clone(),
+                provider_symbol: kairos_domain_types::ProviderSymbol::new(
+                    market.source_symbol.as_str(),
+                )?,
+                status: market.status,
+                effective_from_unix_nanos: market.effective_from_unix_nanos,
+                effective_to_unix_nanos: market.effective_to_unix_nanos,
+            });
+    }
+    Ok(())
+}
+
+fn populate_execution_accesses(
+    catalog: &mut ProviderCatalog,
+    provider: &str,
+) -> ReferenceResult<()> {
+    let provider_id = ProviderId::new(provider)?;
+    for market in &catalog.markets {
+        catalog.execution_accesses.push(ExecutionAccess {
+            source_id: None,
+            access_id: kairos_domain_types::ExecutionAccessId::new(format!(
+                "execution-access:{provider}:{}:{}",
+                market.market_type,
+                market.source_symbol.as_str().to_ascii_lowercase()
+            ))?,
+            routing_mode: "direct".into(),
+            instrument_id: Some(market.instrument_id.clone()),
+            listing_id: Some(market.listing_id.clone()),
+            market_id: Some(market.market_id.clone()),
+            destination_market_id: None,
+            broker_id: None,
+            provider_id: provider_id.clone(),
+            provider_product: market.market_type.clone(),
+            provider_symbol: kairos_domain_types::ProviderSymbol::new(
+                market.source_symbol.as_str(),
+            )?,
+            settlement_asset_id: None,
+            status: market.status,
+            effective_from_unix_nanos: market.effective_from_unix_nanos,
+            effective_to_unix_nanos: market.effective_to_unix_nanos,
+        });
+    }
+    Ok(())
+}
+
 fn merge_provider_catalog(
     previous: Option<ProviderCatalog>,
     incoming: ProviderCatalog,
@@ -3103,12 +3273,15 @@ mod tests {
     use crate::services::actor::ReferenceActor;
     use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::services::store::ProviderSyncStore;
-    use kairos_domain_types::{Currency, InstrumentId, MarketId, ProviderSymbol, Symbol};
+    use kairos_domain_types::{
+        AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, ProviderSymbol, Symbol,
+    };
     use kairos_integration::application::capabilities::reference::{
         ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
     };
     use kairos_integration::application::{ParticipantKind, ParticipantRef};
     use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
+    use kairos_integration::participants::hyperliquid::HyperliquidInstrumentProduct;
     use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -3691,7 +3864,7 @@ mod tests {
         .unwrap();
         let market = &catalog.markets[0];
         assert_eq!(market.market_id, "market:binance:usd-m-futures:AAPLUSDT");
-        assert_eq!(market.asset_type.as_deref(), Some("equity"));
+        assert_eq!(market.asset_type, Some(AssetClass::Equity));
         assert_eq!(
             market.underlying_instrument_id.as_deref(),
             Some("instrument:equity:US:AAPL:common")
@@ -3744,7 +3917,7 @@ mod tests {
             "instrument:equity:US:AAPL:common"
         );
         assert_eq!(catalog.markets[0].market_id, "market:binance:equity:AAPL");
-        assert_eq!(catalog.markets[0].asset_type.as_deref(), Some("equity"));
+        assert_eq!(catalog.markets[0].asset_type, Some(AssetClass::Equity));
         assert_eq!(catalog.execution_accesses[0].provider_id, "binance");
         assert_eq!(catalog.execution_accesses[0].provider_symbol, "AAPL");
     }
@@ -3802,29 +3975,32 @@ mod tests {
 
     #[test]
     fn hyperliquid_provider_facts_receive_canonical_identity_only_in_reference() {
-        let catalog = hyperliquid_provider_catalog(ExternalInstrumentCatalog {
-            participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
-            instruments: vec![ExternalInstrument {
-                source_symbol: ProviderSymbol::new("BTC").unwrap(),
-                source_venue: None,
-                kind: ExternalInstrumentKind::Perpetual,
-                base_currency: Some(Currency::new("BTC").unwrap()),
-                quote_currency: Some(Currency::new("USDC").unwrap()),
-                settlement_currency: Some(Currency::new("USDC").unwrap()),
-                underlying: None,
-                expiry_unix_nanos: None,
-                strike: None,
-                option_right: None,
-                active: true,
-                price_tick: None,
-                quantity_tick: None,
-                minimum_quantity: None,
-                minimum_notional: None,
-                contract_value: None,
-                price_precision: None,
-                quantity_precision: Some(5),
-            }],
-        })
+        let catalog = hyperliquid_provider_catalog(
+            ExternalInstrumentCatalog {
+                participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
+                instruments: vec![ExternalInstrument {
+                    source_symbol: ProviderSymbol::new("BTC").unwrap(),
+                    source_venue: None,
+                    kind: ExternalInstrumentKind::Perpetual,
+                    base_currency: Some(Currency::new("BTC").unwrap()),
+                    quote_currency: Some(Currency::new("USDC").unwrap()),
+                    settlement_currency: Some(Currency::new("USDC").unwrap()),
+                    underlying: None,
+                    expiry_unix_nanos: None,
+                    strike: None,
+                    option_right: None,
+                    active: true,
+                    price_tick: None,
+                    quantity_tick: None,
+                    minimum_quantity: None,
+                    minimum_notional: None,
+                    contract_value: None,
+                    price_precision: None,
+                    quantity_precision: Some(5),
+                }],
+            },
+            HyperliquidInstrumentProduct::Perpetual,
+        )
         .unwrap();
         assert_eq!(
             catalog.instruments[0].instrument_id,
@@ -3838,6 +4014,41 @@ mod tests {
             catalog.markets[0].quote_asset_id.as_deref(),
             Some("asset:crypto:USDC")
         );
+    }
+
+    #[test]
+    fn hyperliquid_spot_and_perpetual_have_distinct_provider_products() {
+        let catalog = hyperliquid_provider_catalog(
+            ExternalInstrumentCatalog {
+                participant: ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid").unwrap(),
+                instruments: vec![ExternalInstrument {
+                    source_symbol: ProviderSymbol::new("PURR/USDC").unwrap(),
+                    source_venue: None,
+                    kind: ExternalInstrumentKind::Spot,
+                    base_currency: Some(Currency::new("PURR").unwrap()),
+                    quote_currency: Some(Currency::new("USDC").unwrap()),
+                    settlement_currency: None,
+                    underlying: None,
+                    expiry_unix_nanos: None,
+                    strike: None,
+                    option_right: None,
+                    active: true,
+                    price_tick: None,
+                    quantity_tick: None,
+                    minimum_quantity: None,
+                    minimum_notional: None,
+                    contract_value: None,
+                    price_precision: None,
+                    quantity_precision: Some(0),
+                }],
+            },
+            HyperliquidInstrumentProduct::Spot,
+        )
+        .unwrap();
+        assert_eq!(catalog.instruments[0].instrument_id, "instrument:spot:PURR");
+        assert_eq!(catalog.markets[0].market_type, "spot");
+        assert_eq!(catalog.market_data_accesses[0].provider_product, "spot");
+        assert_eq!(catalog.market_data_accesses[0].provider_symbol, "PURR/USDC");
     }
 
     #[tokio::test]
@@ -4041,8 +4252,7 @@ mod tests {
         let instrument = |status| Instrument {
             instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
             symbol: Symbol::new("BTC").unwrap(),
-            instrument_type: "spot".into(),
-            product_family: Some("spot".into()),
+            instrument_type: InstrumentKind::Spot,
             primary_currency_asset_id: Some(
                 kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
             ),
@@ -4079,8 +4289,7 @@ mod tests {
         let canonical = Instrument {
             instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
             symbol: Symbol::new("BTC").unwrap(),
-            instrument_type: "spot".into(),
-            product_family: Some("spot".into()),
+            instrument_type: InstrumentKind::Spot,
             primary_currency_asset_id: Some(
                 kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
             ),
@@ -4234,6 +4443,41 @@ mod tests {
         );
         assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.1"));
         assert_eq!(catalog.markets[0].contract_size.as_deref(), Some("0.01"));
+    }
+
+    #[tokio::test]
+    async fn okx_margin_is_spot_identity_with_explicit_margin_access() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length])
+                .starts_with("GET /api/v5/public/instruments?instType=MARGIN "));
+            let body = r#"{"code":"0","data":[{"instId":"BTC-USDT","baseCcy":"BTC","quoteCcy":"USDT","state":"live","tickSz":"0.1","lotSz":"0.001","minSz":"0.001"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut source = OkxSource::new(
+            "okx-margin",
+            OkxInstrumentType::Margin,
+            format!("http://{address}"),
+        )
+        .unwrap();
+
+        let catalog = source.fetch_catalog().await.unwrap();
+        server.join().unwrap();
+
+        assert_eq!(catalog.instruments[0].instrument_id, "instrument:spot:BTC");
+        assert_eq!(catalog.instruments[0].instrument_type, InstrumentKind::Spot);
+        assert_eq!(catalog.markets[0].market_type, "margin");
+        assert_eq!(catalog.execution_accesses[0].provider_product, "margin");
+        assert_eq!(catalog.market_data_accesses[0].provider_product, "margin");
     }
 
     #[tokio::test]

@@ -9,12 +9,101 @@ use crate::services::sources::load_actor_checkpoint;
 use crate::{MarketApplication, MarketDescriptor, MarketProcess, SubscriptionId};
 
 use super::{
-    attach_replay_source_with_policy, MarketProcessRequest, MarketRuntimeProfile,
-    MarketRuntimeScope, MmapMarketSnapshotPublisher, WorkspaceMarketSourceActivator,
+    attach_replay_source_with_policy, ConfiguredMarketSourceActivator, MarketCompositionConfig,
+    MarketProcessRequest, MarketRuntimeProfile, MarketRuntimeScope, MmapMarketSnapshotPublisher,
 };
 
 const SNAPSHOT_SLOT_SIZE: usize = 4_194_304;
 const MAX_DYNAMIC_MEMBERS: usize = 10_000;
+
+fn collection_market_descriptor(
+    reference_database: &std::path::Path,
+    name: &str,
+    collection: &super::config::MarketCollectionConfig,
+) -> Result<MarketDescriptor, MarketStartupError> {
+    let market_id = collection.market_id.as_deref().ok_or_else(|| {
+        MarketStartupError::new(format!(
+            "Market collection {name} requires canonical market_id"
+        ))
+    })?;
+    let reader = kairos_reference_contract::ReferenceSqliteReader::open(reference_database)
+        .map_err(MarketStartupError::new)?;
+    let market = reader
+        .market(market_id)
+        .map_err(MarketStartupError::new)?
+        .ok_or_else(|| {
+            MarketStartupError::new(format!(
+                "Market collection {name} references missing market {market_id}"
+            ))
+        })?;
+    let accesses = reader
+        .market_data_accesses(&kairos_reference_contract::SqliteMarketDataAccessQuery {
+            market_id: Some(market_id.to_owned()),
+            statuses: vec!["active".into(), "trading".into()],
+            limit: 100,
+            ..Default::default()
+        })
+        .map_err(MarketStartupError::new)?;
+    let selected = accesses
+        .iter()
+        .filter(|access| {
+            collection
+                .market_data_access_id
+                .as_deref()
+                .is_none_or(|id| id == access.access_id)
+        })
+        .collect::<Vec<_>>();
+    let access = match selected.as_slice() {
+        [access] => *access,
+        [] => {
+            return Err(MarketStartupError::new(format!(
+                "Market collection {name} has no selected market-data access"
+            )))
+        }
+        _ => {
+            return Err(MarketStartupError::new(format!(
+                "Market collection {name} has ambiguous market-data accesses"
+            )))
+        }
+    };
+    let mut descriptor = MarketDescriptor::new(
+        market.market_id,
+        market.instrument_id,
+        market.exchange_id,
+        market.market_type,
+        market.source_symbol,
+    )
+    .map_err(MarketStartupError::new)?;
+    descriptor.asset_type = market
+        .asset_type
+        .map(|value| value.parse())
+        .transpose()
+        .map_err(MarketStartupError::new)?;
+    descriptor.underlying_instrument_id = market
+        .underlying_instrument_id
+        .map(kairos_domain_types::InstrumentId::new)
+        .transpose()
+        .map_err(MarketStartupError::new)?;
+    descriptor.market_data_access_id = Some(access.access_id.clone());
+    descriptor.market_data_provider_id = Some(
+        kairos_domain_types::ProviderId::new(access.provider_id.clone())
+            .map_err(MarketStartupError::new)?,
+    );
+    descriptor.market_data_provider_product = Some(
+        kairos_domain_types::ProviderProductCode::new(access.provider_product.clone())
+            .map_err(MarketStartupError::new)?,
+    );
+    descriptor.provider_symbol = Some(
+        kairos_domain_types::ProviderSymbol::new(access.provider_symbol.clone())
+            .map_err(MarketStartupError::new)?,
+    );
+    if let Some(source_id) = &collection.source_id {
+        descriptor = descriptor
+            .with_source(source_id.clone())
+            .map_err(MarketStartupError::new)?;
+    }
+    Ok(descriptor)
+}
 
 #[derive(Debug)]
 pub struct MarketStartupError(String);
@@ -165,7 +254,9 @@ pub async fn build_market_process(
 
     let mut history_specs = Vec::new();
     if profile.scope != MarketRuntimeScope::Replay {
-        for (name, collection) in &workspace.market_config().collections {
+        let market_config =
+            MarketCompositionConfig::load(&workspace).map_err(MarketStartupError::new)?;
+        for (name, collection) in &market_config.collections {
             if !collection.enabled {
                 continue;
             }
@@ -185,34 +276,7 @@ pub async fn build_market_process(
                     "Market collection {name} queue_capacity must be positive"
                 )));
             }
-            let market_id = collection.market_id.clone().ok_or_else(|| {
-                MarketStartupError::new(format!(
-                    "Market collection {name} requires canonical market_id"
-                ))
-            })?;
-            let instrument_id = collection.instrument_id.clone().ok_or_else(|| {
-                MarketStartupError::new(format!(
-                    "Market collection {name} requires canonical instrument_id"
-                ))
-            })?;
-            let exchange = collection.exchange.as_deref().unwrap_or("unknown");
-            let market_type = collection.market_type.as_deref().unwrap_or("unknown");
-            let source_symbol = collection.subject.as_str();
-            let mut descriptor = MarketDescriptor::new(
-                market_id,
-                instrument_id,
-                exchange,
-                market_type,
-                source_symbol,
-            )
-            .map_err(MarketStartupError::new)?;
-            descriptor.asset_type = collection.asset_type.clone();
-            descriptor.market_data_access_id = collection.market_data_access_id.clone();
-            if let Some(source_id) = &collection.source_id {
-                descriptor = descriptor
-                    .with_source(source_id.clone())
-                    .map_err(MarketStartupError::new)?;
-            }
+            let descriptor = collection_market_descriptor(&reference_database, name, collection)?;
             let subscription_id = SubscriptionId::new(format!("collection:{name}"))
                 .map_err(MarketStartupError::new)?;
             let owner_id = format!("collection:{name}");
@@ -237,7 +301,7 @@ pub async fn build_market_process(
             });
         }
         if !history_specs.is_empty() {
-            let mut activator = WorkspaceMarketSourceActivator::new(workspace.clone());
+            let mut activator = ConfiguredMarketSourceActivator::new(workspace.clone());
             application
                 .activate_sources_for_subscriptions(&mut activator)
                 .await
@@ -272,7 +336,7 @@ pub async fn build_market_process(
         identity,
         settings,
         (profile.scope != MarketRuntimeScope::Replay)
-            .then(|| Box::new(WorkspaceMarketSourceActivator::new(workspace.clone())) as Box<_>),
+            .then(|| Box::new(ConfiguredMarketSourceActivator::new(workspace.clone())) as Box<_>),
     )
     .map_err(MarketStartupError::new)?;
     if !history_specs.is_empty() {

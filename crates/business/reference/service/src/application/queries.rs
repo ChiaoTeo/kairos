@@ -148,11 +148,11 @@ impl MarketQuery {
             || self
                 .market_type
                 .as_deref()
-                .is_some_and(|value| value != market.market_type)
+                .is_some_and(|value| value != market.market_type.as_str())
             || self
                 .asset_type
                 .as_deref()
-                .is_some_and(|value| market.asset_type.as_deref() != Some(value))
+                .is_some_and(|value| market.asset_type.map(|class| class.as_str()) != Some(value))
             || self.source_symbol.as_deref().is_some_and(|value| {
                 !value
                     .to_string()

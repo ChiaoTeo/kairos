@@ -126,14 +126,14 @@ fn provider_catalog() -> ProviderCatalog {
                 asset_id: asset_id("asset:BTC"),
                 code: "BTC".into(),
                 name: Some("Bitcoin".into()),
-                asset_class: "crypto".into(),
+                asset_class: kairos_domain_types::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             },
             Asset {
                 asset_id: asset_id("asset:USDT"),
                 code: "USDT".into(),
-                asset_class: "crypto".into(),
+                asset_class: kairos_domain_types::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             },
@@ -142,8 +142,7 @@ fn provider_catalog() -> ProviderCatalog {
             instrument_id: instrument_id("instrument:spot:BTC"),
             symbol: symbol("BTC"),
             name: Some("BTC spot instrument".into()),
-            instrument_type: "spot".into(),
-            product_family: Some("spot".into()),
+            instrument_type: kairos_domain_types::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         }],
@@ -162,8 +161,8 @@ fn provider_catalog() -> ProviderCatalog {
             instrument_id: instrument_id("instrument:spot:BTC"),
             listing_id: listing_id("listing:binance:spot:BTC:USDT"),
             exchange_id: Exchange::new("exchange:binance").unwrap(),
-            market_type: "spot".into(),
-            asset_type: Some("crypto".into()),
+            market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
+            asset_type: Some(kairos_domain_types::AssetClass::Crypto),
             source_symbol: symbol("BTCUSDT"),
             base_asset_id: Some(asset_id("asset:BTC")),
             quote_asset_id: Some(asset_id("asset:USDT")),
@@ -309,7 +308,7 @@ async fn failed_administrative_commit_does_not_advance_in_memory_catalog() {
         .upsert_asset(Asset {
             asset_id: asset_id("asset:SOL"),
             code: "SOL".into(),
-            asset_class: "crypto".into(),
+            asset_class: kairos_domain_types::AssetClass::Crypto,
             status: "active".into(),
             ..Default::default()
         })
@@ -328,7 +327,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
         .upsert_asset(Asset {
             asset_id: asset_id("asset:sol"),
             code: "SOL".into(),
-            asset_class: "crypto".into(),
+            asset_class: kairos_domain_types::AssetClass::Crypto,
             status: "active".into(),
             ..Default::default()
         })
@@ -354,7 +353,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
         .upsert_instrument(Instrument {
             instrument_id: instrument_id("instrument:spot:ETH"),
             symbol: symbol("ETH/USDT"),
-            instrument_type: "spot".into(),
+            instrument_type: kairos_domain_types::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         })
@@ -424,7 +423,7 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id("instrument:equity:SPY"),
         symbol: symbol("SPY"),
-        instrument_type: "equity".into(),
+        instrument_type: kairos_domain_types::InstrumentKind::Equity,
         status: "active".into(),
         ..Default::default()
     });

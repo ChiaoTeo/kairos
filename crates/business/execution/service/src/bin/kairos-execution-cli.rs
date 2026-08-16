@@ -1,19 +1,23 @@
 use clap::{Args, Parser, Subcommand};
-use kairos_domain_types::{AccountId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey};
+use kairos_domain_types::{
+    AccountId, ExecutionAccessId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
+};
 use kairos_execution::{
     application::{
         BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
         ExecutionFillReport, ExecutionOrderOptions, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
     },
     composition::{
-        compose_direct_execution_connections, ExecutionConnectionOptions, SqlxExecutionStore,
+        compose_direct_execution_connections, load_reference_execution_accesses,
+        ExecutionConnectionOptions, SqlxExecutionStore,
     },
-    credentials::load_workspace_credential,
     domain::{OrderSide, OrderType},
     ExecutionApplication,
 };
+use kairos_integration::application::credential::load_workspace_credential;
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
+use secrecy::ExposeSecret;
 use std::str::FromStr;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -64,13 +68,16 @@ struct ConnectionArgs {
     provider: String,
     #[arg(long, global = true, default_value = "spot")]
     product: String,
-    #[arg(long, global = true, env = "BINANCE_API_KEY", default_value = "")]
+    /// OKX order/account mode, independent from its venue product.
+    #[arg(long, global = true)]
+    trading_mode: Option<String>,
+    #[arg(long, global = true, default_value = "")]
     api_key: String,
-    #[arg(long, global = true, env = "BINANCE_API_SECRET", default_value = "")]
+    #[arg(long, global = true, default_value = "")]
     secret: String,
     #[arg(long, global = true)]
     credential_id: Option<String>,
-    #[arg(long, global = true, env = "OKX_PASSPHRASE", default_value = "")]
+    #[arg(long, global = true, default_value = "")]
     passphrase: String,
     #[arg(long, global = true, default_value = "")]
     base_url: String,
@@ -105,8 +112,12 @@ impl ConnectionArgs {
         &self,
         workspace: &Workspace,
     ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
-        let stored =
-            load_workspace_credential(workspace, &self.provider, self.credential_id.as_deref())?;
+        let credentials_root = workspace.child(&["credentials"])?;
+        let stored = load_workspace_credential(
+            &credentials_root,
+            &self.provider,
+            self.credential_id.as_deref(),
+        )?;
         let (default_base_url, default_websocket_url) =
             provider_endpoints(&self.provider, &self.product);
         Ok(ExecutionConnectionOptions {
@@ -116,6 +127,7 @@ impl ConnectionArgs {
             segment_key: self.segment_key.clone(),
             provider: self.provider.clone(),
             product: self.product.clone(),
+            trading_mode: self.trading_mode.clone(),
             api_key: if self.api_key.is_empty() {
                 stored
                     .as_ref()
@@ -128,7 +140,7 @@ impl ConnectionArgs {
             secret: if self.secret.is_empty() {
                 stored
                     .as_ref()
-                    .map(|value| value.secret.clone())
+                    .map(|value| value.secret.expose_secret().to_owned())
                     .unwrap_or_default()
             } else {
                 self.secret.clone()
@@ -179,24 +191,24 @@ fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static 
         provider.trim().to_ascii_lowercase().as_str(),
         product.trim().to_ascii_lowercase().as_str(),
     ) {
-        ("binance", "usd-m-futures" | "swap") => {
-            ("https://fapi.binance.com", "wss://fstream.binance.com")
-        }
-        ("binance", "coin-m-futures" | "futures") => {
-            ("https://dapi.binance.com", "wss://dstream.binance.com")
-        }
+        ("binance", "spot") => (
+            "https://api.binance.com",
+            "wss://ws-api.binance.com:443/ws-api/v3",
+        ),
+        ("binance", "usd-m-futures") => ("https://fapi.binance.com", "wss://fstream.binance.com"),
+        ("binance", "coin-m-futures") => ("https://dapi.binance.com", "wss://dstream.binance.com"),
         ("binance", "options" | "option") => (
             "https://eapi.binance.com",
             "wss://nbstream.binance.com/eoptions/private/stream",
         ),
-        ("binance", "cross-margin" | "margin" | "isolated-margin") => {
+        ("binance", "cross-margin" | "isolated-margin") => {
             ("https://api.binance.com", "wss://stream.binance.com:9443")
         }
-        ("okx" | "okex", _) => ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private"),
-        _ => (
-            "https://api.binance.com",
-            "wss://ws-api.binance.com:443/ws-api/v3",
-        ),
+        ("okx" | "okex", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
+            ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private")
+        }
+        ("simulated" | "paper", _) | ("ibkr", "spot" | "equity") => ("", ""),
+        _ => ("", ""),
     }
 }
 
@@ -325,6 +337,8 @@ struct SubmitArgs {
     #[arg(long)]
     market_id: Option<String>,
     #[arg(long)]
+    execution_access_id: String,
+    #[arg(long)]
     dry_run: bool,
     #[arg(long)]
     time_in_force: Option<String>,
@@ -379,13 +393,25 @@ fn run_direct_with_options(
         execution_stream,
         Some(Box::new(SqlxExecutionStore::new(path)?)),
     )?;
-    application.configure_live_trading(
-        !matches!(
-            options.provider.trim().to_ascii_lowercase().as_str(),
-            "simulated" | "paper"
-        ),
-        confirm_live,
+    let simulated = matches!(
+        options.provider.trim().to_ascii_lowercase().as_str(),
+        "simulated" | "paper"
     );
+    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
+    if reference_database.exists() {
+        for (access_id, provider_instrument) in
+            load_reference_execution_accesses(&reference_database)?
+        {
+            application.configure_execution_access(access_id, provider_instrument);
+        }
+    } else if !simulated {
+        return Err(format!(
+            "live Execution requires Reference execution accesses: {}",
+            reference_database.display()
+        )
+        .into());
+    }
+    application.configure_live_trading(!simulated, confirm_live);
     let value = match command {
         Command::Snapshot => serde_json::to_value(application.snapshot())?,
         Command::Orders { account_id } => {
@@ -536,7 +562,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
         segment_key: SegmentKey::new(args.segment_key)?,
         instrument_id: InstrumentId::new(args.instrument_id)?,
         market_id: args.market_id.map(MarketId::new).transpose()?,
-        execution_access_id: None,
+        execution_access_id: Some(ExecutionAccessId::new(args.execution_access_id)?),
         side: parse_side(&args.side)?,
         order_type: parse_order_type(&args.order_type)?,
         quantity: args.quantity.parse()?,

@@ -147,7 +147,7 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let id = SubscriptionId::new("dynamic-1").unwrap();
     let query = MarketSelectionQuery {
         exchange_id: Some(kairos_domain_types::Exchange::new("binance").unwrap()),
-        market_type: Some("spot".into()),
+        market_type: Some(kairos_domain_types::ProviderProductCode::new("spot").unwrap()),
         active_only: true,
         ..Default::default()
     };

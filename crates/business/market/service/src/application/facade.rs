@@ -241,6 +241,11 @@ impl MarketApplication {
             })
     }
 
+    pub(crate) fn has_replay_source(&self) -> bool {
+        let replay_id = SourceId::new("replay").expect("static replay source id");
+        self.actor.attached_sources.contains_key(&replay_id)
+    }
+
     async fn reconcile_source_commands(&mut self) -> Result<(), String> {
         let subscriptions = self.snapshot().subscriptions;
         let mut desired =
@@ -738,8 +743,8 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &MarketDescripto
         })
         && source
             .market_type
-            .as_deref()
-            .is_none_or(|market_type| market_type.eq_ignore_ascii_case(&market.market_type))
+            .as_ref()
+            .is_none_or(|market_type| market_type == &market.market_type)
         && source.asset_type.as_ref().is_none_or(|asset_type| {
             market
                 .asset_type

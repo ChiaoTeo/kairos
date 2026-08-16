@@ -1,6 +1,7 @@
 //! Concrete Account assembly and process-owned contract publishers.
 
 pub mod account;
+pub mod registry;
 mod v2_publisher;
 
 pub use v2_publisher::{

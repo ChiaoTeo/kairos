@@ -139,13 +139,38 @@ fn account_process_separates_live_fills_from_paper_settlement() {
 }
 
 #[test]
-fn account_does_not_own_workspace_registry_implementation() {
+fn account_composition_owns_its_binding_registry() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     assert!(!root.join("src/composition/account_registry.rs").exists());
+    assert!(root.join("src/composition/registry.rs").exists());
     let composition = fs::read_to_string(root.join("src/composition/account.rs"))
         .expect("read account composition");
     assert!(!composition.contains("CredentialStore"));
     assert!(!composition.contains("TradeLockRecord"));
+    let registry = fs::read_to_string(root.join("src/composition/registry.rs"))
+        .expect("read account registry");
+    for provider_environment in ["BINANCE_API_KEY", "BINANCE_API_SECRET", "OKX_API_KEY"] {
+        assert!(
+            !registry.contains(provider_environment),
+            "Integration must own provider credential convention {provider_environment}"
+        );
+    }
+}
+
+#[test]
+fn account_segment_identity_is_independent_from_provider_product() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let composition = fs::read_to_string(root.join("src/composition/account.rs"))
+        .expect("read account composition");
+    let registry = fs::read_to_string(root.join("src/composition/registry.rs"))
+        .expect("read account registry");
+
+    assert!(composition.contains("pub struct AccountSegmentBinding"));
+    assert!(composition.contains("segment.provider_product.clone()"));
+    assert!(composition.contains("pub trading_mode: Option<String>"));
+    assert!(!composition.contains("segment_options.product = segment_key"));
+    assert!(registry.contains("pub segment_products: BTreeMap<String, String>"));
+    assert!(registry.contains("pub segment_trading_modes: BTreeMap<String, String>"));
 }
 
 #[test]
@@ -154,13 +179,13 @@ fn account_has_no_legacy_trade_lock_protocol() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),
     )
     .expect("read account cli");
-    let workspace = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../kairos-workspace/src/account.rs"),
+    let registry = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/composition/registry.rs"),
     )
-    .expect("read workspace account registry");
+    .expect("read Account registry");
     assert!(!cli.contains("TradeLock"));
-    assert!(!workspace.contains("TradeLock"));
-    assert!(!workspace.contains("locks.toml"));
+    assert!(!registry.contains("TradeLock"));
+    assert!(!registry.contains("locks.toml"));
 }
 
 #[test]
@@ -296,6 +321,18 @@ fn binance_derivatives_account_streams_are_native_async_in_production_compositio
     assert!(!native_binance.contains("market_id.split"));
     assert!(!native_binance.contains("blocking_futures_account_stream"));
     assert!(!native_binance.contains("spawn_blocking"));
+    assert!(!composition.contains("\"swap\" | \"usd-m-futures\""));
+    assert!(!composition.contains("\"futures\" | \"coin-m-futures\""));
+}
+
+#[test]
+fn integration_owns_credential_records_and_environment_conventions() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let registry =
+        fs::read_to_string(root.join("composition/registry.rs")).expect("read Account registry");
+    assert!(!registry.contains("struct CredentialRecord"));
+    assert!(!registry.contains("struct CredentialStore"));
+    assert!(!registry.contains("API_KEY\""));
 }
 
 #[test]

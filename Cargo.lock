@@ -1771,6 +1771,7 @@ version = "0.1.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "kairos-domain-types",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",

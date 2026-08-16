@@ -301,7 +301,7 @@ fn encode_asset(
         asset_id: Some(builder.create_string(&record.asset_id)),
         code: Some(builder.create_string(&record.code)),
         name: optional_string(&mut builder, record.name.as_deref()),
-        asset_class: Some(builder.create_string(&record.asset_class)),
+        asset_class: Some(builder.create_string(record.asset_class.as_str())),
         status: status(&record.status)?,
     };
     let asset = fb::Asset::create(&mut builder, &args);
@@ -340,7 +340,7 @@ fn encode_instrument(
     let instrument_id = builder.create_string(&record.instrument_id);
     let symbol = builder.create_string(&record.symbol);
     let name = optional_string(&mut builder, record.name.as_deref());
-    let instrument_type = builder.create_string(&record.instrument_type);
+    let instrument_type = builder.create_string(record.instrument_type.as_str());
     let product_family = optional_string(&mut builder, record.product_family.as_deref());
     let underlying_instrument_id =
         optional_string(&mut builder, record.underlying_instrument_id.as_deref());
@@ -453,11 +453,14 @@ fn encode_market(
     let instrument_id = builder.create_string(&record.instrument_id);
     let listing_id = builder.create_string(&record.listing_id);
     let exchange_id = builder.create_string(&record.exchange_id);
-    let market_type = builder.create_string(&record.market_type);
+    let market_type = builder.create_string(record.market_type.as_str());
     let source_symbol = builder.create_string(&record.source_symbol);
     let base_asset_id = optional_string(&mut builder, record.base_asset_id.as_deref());
     let quote_asset_id = optional_string(&mut builder, record.quote_asset_id.as_deref());
-    let asset_type = optional_string(&mut builder, record.asset_type.as_deref());
+    let asset_type = optional_string(
+        &mut builder,
+        record.asset_type.as_ref().map(|value| value.as_str()),
+    );
     let underlying_instrument_id =
         optional_string(&mut builder, record.underlying_instrument_id.as_deref());
     let market_args = fb::MarketArgs {
@@ -528,7 +531,7 @@ fn encode_execution_access(
         ),
         broker_id: optional_string(&mut builder, record.broker_id.as_deref()),
         provider_id: Some(builder.create_string(&record.provider_id)),
-        product_family: Some(builder.create_string(&record.product_family)),
+        product_family: Some(builder.create_string(&record.provider_product)),
         provider_symbol: Some(builder.create_string(&record.provider_symbol)),
         settlement_asset_id: optional_string(&mut builder, record.settlement_asset_id.as_deref()),
         status: status(&record.status)?,
@@ -572,7 +575,7 @@ fn encode_market_data_access(
         access_id: Some(builder.create_string(&record.access_id)),
         market_id: Some(builder.create_string(&record.market_id)),
         provider_id: Some(builder.create_string(&record.provider_id)),
-        product_family: Some(builder.create_string(&record.product_family)),
+        product_family: Some(builder.create_string(&record.provider_product)),
         provider_symbol: Some(builder.create_string(&record.provider_symbol)),
         status: status(&record.status)?,
         effective_from_unix_nanos: record.effective_from_unix_nanos,

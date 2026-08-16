@@ -2,14 +2,39 @@
 
 ## Status
 
-- Status: proposed
+- Status: implemented; final repository verification recorded below
 - Scope: Workspace, Reference, Market, Account, Execution, Integration
-- Primary problem: provider-native vocabulary, canonical business taxonomy,
-  route identity, and configuration representation are currently mixed across
+- Primary problem addressed: provider-native vocabulary, canonical business
+  taxonomy, route identity, and configuration representation were mixed across
   module boundaries.
 - Migration policy: migrate one business slice at a time, preserve explicit
   compatibility only at configuration and wire boundaries, and remove each old
   path when its replacement passes the exit criteria.
+
+## Implementation result
+
+Last updated: 2026-08-16.
+
+- Slices 0 through 6 are implemented. The provider matrix and resolved gaps
+  are recorded in `docs/domain-provider-taxonomy.md`.
+- Execution matches exact participant-scoped access discriminators. OKX keeps
+  venue product and `TradingMode` independent and requires an explicit mode
+  for margin and derivative routes. `RouteProduct` and wildcard matching are
+  removed.
+- Reference owns typed `InstrumentKind` and `AssetClass` normalization and
+  opaque `ProviderId`/`ProviderProductCode` access facts. Its redundant domain
+  `Instrument.product_family` field is removed.
+- Market activates sources only from one explicit `MarketDataAccess`; live
+  missing or ambiguous access fails closed, while replay remains
+  provider-neutral.
+- Account owns its registry and explicit segment-to-provider-product/trading
+  mode bindings; Integration owns credentials and provider environment
+  conventions.
+- Reference and Market own their configuration DTOs. Workspace now owns only
+  system paths, lifecycle/resources, manifest identity, and generic section
+  loading.
+- Hyperliquid Spot and OKX Margin Reference coverage are implemented. OKX
+  Margin produces canonical Spot identity plus explicit `margin` access.
 
 ## Summary
 
@@ -39,7 +64,10 @@ The target design separates four kinds of knowledge:
 This work must not introduce a universal product enum. Types should be shared
 only when their semantic meaning is genuinely identical across modules.
 
-## Evidence in the current code
+## Original baseline evidence (resolved by this migration)
+
+This section is retained as the pre-migration diagnosis. Statements using
+“currently” describe the original baseline, not the implemented state above.
 
 ### Provider knowledge in Workspace
 
@@ -591,10 +619,9 @@ rg -n '"swap".*"usd-m-futures"|"futures".*"coin-m-futures"' crates/business
 rg -n "kairos_workspace::account" crates
 ```
 
-## Deletion checklist
+## Completed deletion checklist
 
-The migration is incomplete until obsolete concepts are removed. Expected
-deletions include, subject to caller verification:
+The following obsolete concepts and ownership paths were removed:
 
 - `WorkspaceOkxInstrumentType`;
 - `WorkspaceBinanceDerivativeProduct` and provider transport enums;
@@ -605,45 +632,69 @@ deletions include, subject to caller verification:
 - duplicate Account and Execution product alias parsers;
 - the current `RouteProduct` variants that encode provider settlement
   products as cross-provider concepts;
-- redundant Reference `instrument_type`/`product_family` fields;
+- redundant Reference domain `Instrument.product_family` field;
 - string-based source matching paths replaced by explicit access IDs.
 
-Do not retain aliases or compatibility types merely to preserve the old file
-layout. A compatibility path must have a current external caller and a defined
-removal milestone.
+- `crates/business/execution/service/src/credentials.rs`;
+- `crates/kairos-workspace/src/account.rs` and business-owned Workspace path
+  helpers.
 
-## Decisions required before implementation
+The v2 FlatBuffers/SQLite field named `product_family` is intentionally kept
+as a compatibility boundary. Domain and contract APIs call the fact
+`provider_product`; serialization maps it to the old field name. The nullable
+legacy instrument product-family slot is read for compatibility and new writes
+leave it empty.
 
-The following decisions should be recorded before Slice 2:
+## Implemented decisions
 
-1. Does canonical `InstrumentKind::Spot` represent an asset, a pair, or a
-   tradable spot instrument in Kairos?
-2. Is `Market.market_type` intended to be canonical or venue-native?
-3. Does `product_family` carry any fact not already represented by instrument
-   kind, settlement asset, expiry, and provider access?
-4. Which module owns reusable participant identity: Integration only, or a
-   genuinely shared domain type?
-5. Are persisted Reference enum values versioned through the current v2
-   contract or a new schema version?
-6. Which legacy configuration aliases must remain temporarily supported?
+Decisions recorded on 2026-08-16:
 
-These are semantic decisions, not naming decisions. Implementation should not
-begin by renaming enums before their invariants and callers are identified.
+1. `InstrumentKind::Spot` means a canonical tradable spot instrument. Margin
+   is an access/account mode over a spot instrument, never an instrument kind.
+2. The existing persisted `Market.market_type` value is venue-native. In
+   domain code it is represented by opaque `ProviderProductCode`; the legacy
+   field/column name remains temporarily at the SQLite and v2 wire boundary.
+3. `Instrument.product_family` carries no independent fact in any supported
+   normalizer and is removed from domain state. Its nullable persisted/wire
+   slot is read only for compatibility and newly written as null.
+4. Reusable opaque participant identity is `ProviderId` in
+   `kairos-domain-types`; Integration retains its richer `ParticipantRef` and
+   composition performs the explicit conversion.
+5. Canonical enum spellings continue through the current string-backed v2
+   schema so older readers remain compatible. Persistence decoding validates
+   every spelling immediately; a future binary enum change requires a new
+   schema version.
+6. Provider aliases remain only where they are genuine provider-local input
+   compatibility (`okex` and singular/plural option spelling); cross-provider
+   aliases and unknown-provider defaults are removed.
+7. `SegmentKey` remains opaque. Account persists an explicit mapping from
+   segment key to provider product, and Execution route configuration carries
+   provider product directly.
+8. OKX Execution configuration carries `product` and `trading_mode`
+   independently. Spot defaults only to Cash; margin and derivatives require
+   an explicit Cross or Isolated mode.
 
-## Recommended first implementation change
+## External provider evidence
 
-Start with the Execution route slice, because it contains the clearest
-incorrect equivalence and can be changed without first moving every Workspace
-configuration type.
+Hyperliquid Spot support uses the provider's documented
+`spotMetaAndAssetCtxs` info request and keeps it separate from the perpetual
+`metaAndAssetCtxs` catalog:
 
-The first change should:
+- <https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/spot>
 
-1. add characterization tests for existing Binance and OKX routes;
-2. introduce explicit participant-native route descriptors in Execution
-   composition;
-3. make routing compare those descriptors without parsing aliases;
-4. remove `swap -> UsdMFutures` and `futures -> CoinMFutures`;
-5. delete the obsolete alias matcher after all route callers migrate.
+## Verification record
 
-After that boundary is safe, introduce the Reference canonical taxonomy and
-then move Market and Workspace configuration one slice at a time.
+Verified on 2026-08-16:
+
+- `cargo test --workspace`: passed. Three explicitly ignored tests remain: two
+  million-row acceptance tests and one live Binance credential/network test.
+- `uv run pytest -q`: 346 passed, 8 skipped.
+- `cargo fmt --all -- --check`: passed.
+- `git diff --check`: passed.
+- Static ownership scans found no Workspace provider/business type, no
+  cross-provider product alias, no `kairos_workspace::account` caller, no
+  business-owned provider environment convention, and no cross-module import
+  from another business module's `services/`.
+
+Remaining raw strings are intentional boundaries: v2/SQLite compatibility,
+CLI/control DTOs, Account JSON persistence, and provider-local configuration.

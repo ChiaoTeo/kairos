@@ -7,15 +7,15 @@ use kairos_account::application::{AccountMarketProfileRequest, ReconcileAccount,
 use kairos_account::composition::account::{
     compose_binance_async_account_application, compose_blocking_account_application_for_segments,
     compose_ibkr_async_account_application, compose_okx_async_account_application,
-    inspect_account_credential, AccountOptions,
+    default_rest_endpoint, inspect_account_credential, AccountOptions, AccountSegmentBinding,
+};
+use kairos_account::composition::registry::{
+    AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use kairos_account::domain::{AccountFill, AccountId, AccountModel, SegmentKey};
 use kairos_domain_types::{MarketId, Symbol};
+use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
 use kairos_integration::application::ExternalAccountCredentialProfile;
-use kairos_workspace::account::{
-    AccountBindingRecord, AccountCredentialBinding, AccountRegistry, CredentialRecord,
-    CredentialStore,
-};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
 
@@ -73,15 +73,17 @@ struct ConnectionArgs {
     provider: String,
     #[arg(long, default_value = "spot")]
     product: String,
-    #[arg(long, env = "BINANCE_API_KEY")]
+    #[arg(long)]
+    trading_mode: Option<String>,
+    #[arg(long)]
     api_key: Option<String>,
-    #[arg(long, env = "BINANCE_API_SECRET")]
+    #[arg(long)]
     secret: Option<String>,
     #[arg(long)]
     credential_id: Option<String>,
-    #[arg(long, env = "OKX_PASSPHRASE", default_value = "")]
+    #[arg(long, default_value = "")]
     passphrase: String,
-    #[arg(long, default_value = "https://api.binance.com")]
+    #[arg(long, default_value = "")]
     base_url: String,
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -133,6 +135,10 @@ enum Command {
         environment: String,
         #[arg(long, default_value = "spot")]
         segment: String,
+        #[arg(long, default_value = "spot")]
+        product: String,
+        #[arg(long)]
+        trading_mode: Option<String>,
         #[arg(long)]
         account_model: Option<String>,
         #[arg(long)]
@@ -153,6 +159,10 @@ enum Command {
         environment: Option<String>,
         #[arg(long)]
         segment: Option<String>,
+        #[arg(long)]
+        product: Option<String>,
+        #[arg(long)]
+        trading_mode: Option<String>,
         #[arg(long)]
         account_model: Option<String>,
         #[arg(long)]
@@ -477,6 +487,8 @@ async fn run_direct(
             provider,
             environment,
             segment,
+            product,
+            trading_mode,
             account_model,
             exchange,
             fields,
@@ -491,6 +503,11 @@ async fn run_direct(
                 remote_identity: None,
                 permissions: BTreeMap::new(),
                 segments: vec![segment.clone()],
+                segment_products: BTreeMap::from([(segment.clone(), product.clone())]),
+                segment_trading_modes: trading_mode
+                    .as_ref()
+                    .map(|value| BTreeMap::from([(segment.clone(), value.clone())]))
+                    .unwrap_or_default(),
                 account_model: account_model.clone(),
                 credential_id: None,
                 credentials: Vec::new(),
@@ -511,6 +528,8 @@ async fn run_direct(
             alias,
             environment,
             segment,
+            product,
+            trading_mode,
             account_model,
             credential_id,
             credential_role,
@@ -540,6 +559,28 @@ async fn run_direct(
             }
             if let Some(value) = segment {
                 record.segments = vec![value.clone()];
+                let provider_product = product
+                    .clone()
+                    .ok_or("--product is required when changing --segment")?;
+                record.segment_products = BTreeMap::from([(value.clone(), provider_product)]);
+                record.segment_trading_modes.clear();
+            } else if let Some(value) = product {
+                let segment_key = record
+                    .segments
+                    .first()
+                    .cloned()
+                    .ok_or("account has no segment to assign the product")?;
+                record.segment_products.insert(segment_key, value.clone());
+            }
+            if let Some(value) = trading_mode {
+                let segment_key = record
+                    .segments
+                    .first()
+                    .cloned()
+                    .ok_or("account has no segment to assign the trading mode")?;
+                record
+                    .segment_trading_modes
+                    .insert(segment_key, value.clone());
             }
             if account_model.is_some() {
                 record.account_model = account_model.clone();
@@ -586,6 +627,8 @@ async fn run_direct(
                 remote_identity: None,
                 permissions: BTreeMap::new(),
                 segments: vec![segment.clone()],
+                segment_products: BTreeMap::from([(segment.clone(), "paper".into())]),
+                segment_trading_modes: BTreeMap::new(),
                 account_model: account_model.clone(),
                 credential_id: None,
                 credentials: Vec::new(),
@@ -868,7 +911,13 @@ async fn run_direct(
         .unwrap_or_else(|| args.connection.provider.clone());
     let product = account_record
         .as_ref()
-        .and_then(|record| record.segments.first().cloned())
+        .and_then(|record| {
+            record
+                .segments
+                .first()
+                .and_then(|segment| record.product_for_segment(segment))
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| args.connection.product.clone());
     let environment = account_record
         .as_ref()
@@ -896,7 +945,7 @@ async fn run_direct(
             .api_key
             .clone()
             .or_else(|| credential.and_then(|record| record.api_key_value()))
-            .ok_or("--api-key, --credential-id, or BINANCE_API_KEY is required")?
+            .ok_or("an API key is required; provide --api-key or an Integration credential")?
     };
     let secret = if paper {
         String::new()
@@ -905,7 +954,7 @@ async fn run_direct(
             .secret
             .clone()
             .or_else(|| credential.and_then(|record| record.secret_value()))
-            .ok_or("--secret, --credential-id, or BINANCE_API_SECRET is required")?
+            .ok_or("an API secret is required; provide --secret or an Integration credential")?
     };
     let passphrase = if args.connection.passphrase.is_empty() {
         credential
@@ -914,13 +963,18 @@ async fn run_direct(
     } else {
         args.connection.passphrase.clone()
     };
+    let base_url = if args.connection.base_url.trim().is_empty() {
+        default_rest_endpoint(&provider, &product)?.to_owned()
+    } else {
+        args.connection.base_url.clone()
+    };
     let options = AccountOptions {
         provider,
         product,
         api_key: api_key.into(),
         secret: secret.into(),
         passphrase: passphrase.into(),
-        base_url: args.connection.base_url.clone(),
+        base_url,
         account_id: account_id.clone(),
         segment: selected_segment.clone(),
         environment,
@@ -940,17 +994,42 @@ async fn run_direct(
         reference_database: Some(workspace.child(&["reference", "reference.sqlite"])?),
     };
     let state = workspace.child(&["state", "account", "account-state.json"])?;
-    let configured_segments = registry
+    let configured_segment_keys = registry
         .accounts
         .iter()
         .find(|record| record.account_id == account_id)
         .map(|record| record.segments.clone())
         .filter(|segments| !segments.is_empty())
         .unwrap_or_else(|| vec![selected_segment.clone()]);
+    let configured_segments = if let Some(record) = account_record.as_ref() {
+        configured_segment_keys
+            .iter()
+            .map(|segment_key| {
+                record
+                    .product_for_segment(segment_key)
+                    .map(|product| {
+                        let binding = AccountSegmentBinding::new(segment_key, product);
+                        record
+                            .segment_trading_modes
+                            .get(segment_key)
+                            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))
+                    })
+                    .ok_or_else(|| format!("account segment {segment_key} has no provider product"))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let binding = AccountSegmentBinding::new(&selected_segment, &options.product);
+        vec![args
+            .connection
+            .trading_mode
+            .as_ref()
+            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))]
+    };
     let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
         && configured_segments.iter().all(|segment| {
             matches!(
                 segment
+                    .provider_product
                     .trim()
                     .to_ascii_lowercase()
                     .replace('_', "-")
@@ -961,8 +1040,6 @@ async fn run_direct(
                     | "isolated-margin"
                     | "usd-m-futures"
                     | "coin-m-futures"
-                    | "swap"
-                    | "futures"
                     | "options"
             )
         });
@@ -1097,7 +1174,7 @@ async fn run_direct(
             "account_id": account_id,
             "provider": options.provider,
             "environment": options.environment,
-            "configured_segments": configured_segments,
+            "configured_segments": configured_segment_keys,
             "account_model": record.as_ref().and_then(|value| value.account_model.clone()),
             "credential_id": record.as_ref().and_then(|value| value.credential_id.clone()),
             "status": record.as_ref().map(|value| value.status.clone()),
@@ -1144,6 +1221,21 @@ async fn run_direct(
                 })
                 .unwrap_or_default(),
             segments: discovered_segments.clone(),
+            segment_products: discovered_segments
+                .iter()
+                .map(|value| (value.clone(), value.clone()))
+                .collect(),
+            segment_trading_modes: args
+                .connection
+                .trading_mode
+                .as_ref()
+                .map(|mode| {
+                    discovered_segments
+                        .iter()
+                        .map(|segment| (segment.clone(), mode.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
             account_model: None,
             credential_id: args.connection.credential_id.clone(),
             credentials: args
@@ -1274,10 +1366,7 @@ fn print_json(value: serde_json::Value) {
 }
 
 fn selected_segment(args: &ConnectionArgs) -> String {
-    if args.segment != "spot" || args.product.eq_ignore_ascii_case("spot") {
-        return args.segment.clone();
-    }
-    args.product.trim().to_ascii_lowercase().replace('-', "_")
+    args.segment.clone()
 }
 
 fn resolve_account_id(
@@ -1345,17 +1434,24 @@ fn credential_probe_options(
             .ok_or("credential has no API secret")?
     };
     let passphrase = credential.passphrase_value().unwrap_or_default();
+    let product = account
+        .segments
+        .first()
+        .and_then(|segment| account.product_for_segment(segment))
+        .map(str::to_owned)
+        .unwrap_or_else(|| args.connection.product.clone());
+    let base_url = if args.connection.base_url.trim().is_empty() {
+        default_rest_endpoint(&account.provider, &product)?.to_owned()
+    } else {
+        args.connection.base_url.clone()
+    };
     Ok(AccountOptions {
         provider: account.provider.clone(),
-        product: account
-            .segments
-            .first()
-            .cloned()
-            .unwrap_or_else(|| args.connection.product.clone()),
+        product,
         api_key: api_key.into(),
         secret: secret.into(),
         passphrase: passphrase.into(),
-        base_url: args.connection.base_url.clone(),
+        base_url,
         account_id: account.account_id.clone(),
         segment: account
             .segments

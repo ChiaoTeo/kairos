@@ -3,6 +3,7 @@
 pub(crate) mod account_events;
 pub(crate) mod async_margin_account_events;
 pub(crate) mod async_margin_order_events;
+pub(crate) mod clock;
 pub(crate) mod equity;
 pub(crate) mod funding;
 pub(crate) mod futures;

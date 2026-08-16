@@ -8,7 +8,7 @@ mod reference;
 pub use config::HyperliquidConnectionConfig;
 pub use connection::HyperliquidConnection;
 pub use market::{HyperliquidLiveMarket, HyperliquidMarketSnapshot};
-pub use reference::HyperliquidInstrumentCatalog;
+pub use reference::{HyperliquidInstrumentCatalog, HyperliquidInstrumentProduct};
 
 pub mod blocking {
     pub use super::reference::blocking::HyperliquidInstrumentCatalog;
@@ -55,6 +55,38 @@ mod tests {
         let facts = catalog.fetch_instruments().await.unwrap();
         server.join().unwrap();
         assert_eq!(facts.instruments[0].source_symbol.as_str(), "BTC");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn spot_catalog_uses_the_provider_native_spot_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length]).contains("spotMetaAndAssetCtxs"));
+            let body = r#"[{"tokens":[{"name":"USDC","szDecimals":8,"index":0},{"name":"PURR","szDecimals":0,"index":1}],"universe":[{"name":"PURR/USDC","tokens":[1,0],"index":0}]},[{"midPx":"0.1"}]]"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let provider = HyperliquidConnection::connect(HyperliquidConnectionConfig {
+            environment: "test".into(),
+            info_endpoint: format!("http://{address}/info"),
+        })
+        .unwrap();
+        let mut catalog = provider.spot_instrument_catalog();
+        let facts = catalog.fetch_instruments().await.unwrap();
+        server.join().unwrap();
+        assert_eq!(facts.instruments[0].source_symbol.as_str(), "PURR/USDC");
+        assert_eq!(
+            facts.instruments[0].kind,
+            crate::application::capabilities::reference::ExternalInstrumentKind::Spot
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

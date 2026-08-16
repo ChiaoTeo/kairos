@@ -1,6 +1,4 @@
-use kairos_workspace::{
-    WorkspaceHyperliquidMarketType, WorkspaceMarketSourceBinding, WorkspacePublicMarketTransport,
-};
+use super::super::config::{HyperliquidMarketType, MarketSourceBinding, PublicMarketTransport};
 
 use crate::MarketApplication;
 
@@ -12,9 +10,9 @@ use super::positive_interval;
 pub(super) fn attach(
     application: &mut MarketApplication,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
-    let WorkspaceMarketSourceBinding::Hyperliquid {
+    let MarketSourceBinding::Hyperliquid {
         market_type,
         transport,
         endpoint,
@@ -27,11 +25,11 @@ pub(super) fn attach(
         ));
     };
     let market_type = match market_type {
-        WorkspaceHyperliquidMarketType::Spot => "spot",
-        WorkspaceHyperliquidMarketType::Perpetual => "perpetual",
+        HyperliquidMarketType::Spot => "spot",
+        HyperliquidMarketType::Perpetual => "perpetual",
     };
     match transport {
-        WorkspacePublicMarketTransport::Websocket => attach_hyperliquid_live_source(
+        PublicMarketTransport::Websocket => attach_hyperliquid_live_source(
             application,
             source_id,
             market_type,
@@ -39,7 +37,7 @@ pub(super) fn attach(
                 .clone()
                 .unwrap_or_else(|| default_endpoint("hyperliquid-websocket").to_owned()),
         ),
-        WorkspacePublicMarketTransport::Rest => attach_hyperliquid_snapshot_source(
+        PublicMarketTransport::Rest => attach_hyperliquid_snapshot_source(
             application,
             source_id,
             market_type,

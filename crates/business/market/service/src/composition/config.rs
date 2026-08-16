@@ -1,10 +1,279 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kairos_workspace::{
-    Workspace, WorkspaceMarketReplayClock, WorkspaceMarketRuntimeProfile as WorkspaceProfile,
-    WorkspaceMarketRuntimeScope,
-};
+use kairos_workspace::Workspace;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct MarketConfig {
+    #[serde(default)]
+    pub sources: BTreeMap<String, MarketSourceBinding>,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, MarketProfileConfig>,
+    #[serde(default)]
+    pub collections: BTreeMap<String, MarketCollectionConfig>,
+    pub default_profile: Option<String>,
+}
+
+impl MarketConfig {
+    pub fn load(workspace: &Workspace) -> Result<Self, String> {
+        workspace
+            .read_section("market")
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MarketCollectionConfig {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    pub subject: String,
+    #[serde(default)]
+    pub market_id: Option<String>,
+    #[serde(default)]
+    pub instrument_id: Option<String>,
+    #[serde(default)]
+    pub market_data_access_id: Option<String>,
+    #[serde(default)]
+    pub selectors: Vec<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub market_type: Option<String>,
+    #[serde(default)]
+    pub asset_type: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default = "default_collection_queue_capacity")]
+    pub queue_capacity: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum MarketSourceBinding {
+    BinanceSpot {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        #[serde(default)]
+        transport: BinanceSpotTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    BinanceEquity {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        credential_id: String,
+        endpoint: Option<String>,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    BinanceDerivatives {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        product: BinanceDerivativeProduct,
+        #[serde(default)]
+        transport: BinanceDerivativeTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    Massive {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        product: MassiveMarketProduct,
+        exchange: String,
+        credential_id: String,
+        endpoint: Option<String>,
+    },
+    Okx {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        instrument_type: OkxInstrumentType,
+        #[serde(default)]
+        transport: PublicMarketTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    Hyperliquid {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        market_type: HyperliquidMarketType,
+        #[serde(default)]
+        transport: PublicMarketTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+}
+
+impl MarketSourceBinding {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::BinanceSpot { enabled, .. }
+            | Self::BinanceEquity { enabled, .. }
+            | Self::BinanceDerivatives { enabled, .. }
+            | Self::Massive { enabled, .. }
+            | Self::Okx { enabled, .. }
+            | Self::Hyperliquid { enabled, .. } => *enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinanceSpotTransport {
+    Rest,
+    #[default]
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinanceDerivativeProduct {
+    UsdMFutures,
+    CoinMFutures,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinanceDerivativeTransport {
+    #[default]
+    Rest,
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MassiveMarketProduct {
+    Equity,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OkxInstrumentType {
+    Spot,
+    Swap,
+    Futures,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HyperliquidMarketType {
+    Spot,
+    Perpetual,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicMarketTransport {
+    Rest,
+    #[default]
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarketRuntimeScopeConfig {
+    Shared,
+    Instance,
+    Replay,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarketReplayClockConfig {
+    #[default]
+    Maximum,
+    EventTime,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MarketReplayConfigDto {
+    #[serde(default)]
+    pub start_unix_nanos: Option<u64>,
+    #[serde(default)]
+    pub end_unix_nanos: Option<u64>,
+    #[serde(default)]
+    pub clock: MarketReplayClockConfig,
+    #[serde(default = "one")]
+    pub speed_multiplier: u32,
+    #[serde(default)]
+    pub start_paused: bool,
+}
+
+impl Default for MarketReplayConfigDto {
+    fn default() -> Self {
+        Self {
+            start_unix_nanos: None,
+            end_unix_nanos: None,
+            clock: MarketReplayClockConfig::Maximum,
+            speed_multiplier: 1,
+            start_paused: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MarketProfileConfig {
+    pub scope: MarketRuntimeScopeConfig,
+    #[serde(default = "default_source_input_capacity")]
+    pub source_input_capacity: usize,
+    #[serde(default = "default_publication_queue_capacity")]
+    pub publication_queue_capacity: usize,
+    #[serde(default = "default_snapshot_interval_ms")]
+    pub snapshot_interval_ms: u64,
+    #[serde(default = "default_freshness_check_interval_ms")]
+    pub freshness_check_interval_ms: u64,
+    #[serde(default = "default_freshness_max_age_ms")]
+    pub freshness_max_age_ms: u64,
+    #[serde(default = "default_reference_recovery_interval_ms")]
+    pub reference_recovery_interval_ms: u64,
+    #[serde(default = "default_shutdown_timeout_ms")]
+    pub shutdown_timeout_ms: u64,
+    #[serde(default)]
+    pub replay: Option<MarketReplayConfigDto>,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+fn one() -> u32 {
+    1
+}
+fn default_source_input_capacity() -> usize {
+    10_000
+}
+fn default_publication_queue_capacity() -> usize {
+    256
+}
+fn default_collection_queue_capacity() -> usize {
+    4_096
+}
+fn default_snapshot_interval_ms() -> u64 {
+    1_000
+}
+fn default_source_snapshot_interval_ms() -> u64 {
+    1_000
+}
+fn default_freshness_check_interval_ms() -> u64 {
+    250
+}
+fn default_freshness_max_age_ms() -> u64 {
+    5_000
+}
+fn default_reference_recovery_interval_ms() -> u64 {
+    500
+}
+fn default_shutdown_timeout_ms() -> u64 {
+    5_000
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketProcessRequest {
@@ -58,7 +327,7 @@ impl MarketRuntimeProfile {
         selector: Option<&str>,
         has_instance: bool,
     ) -> Result<Self, String> {
-        let market = workspace.market_config();
+        let market = MarketConfig::load(workspace)?;
         if market.default_profile.is_none() && market.profiles.is_empty() {
             if has_instance {
                 return Err(
@@ -103,15 +372,15 @@ impl MarketRuntimeProfile {
 
     fn from_workspace(
         name: &str,
-        configured: &WorkspaceProfile,
+        configured: &MarketProfileConfig,
         _workspace: &Workspace,
         has_instance: bool,
     ) -> Result<Self, String> {
         let scope = match configured.scope {
-            WorkspaceMarketRuntimeScope::Shared => MarketRuntimeScope::Shared,
-            WorkspaceMarketRuntimeScope::Instance => MarketRuntimeScope::Instance,
-            WorkspaceMarketRuntimeScope::Replay => MarketRuntimeScope::Replay,
-            WorkspaceMarketRuntimeScope::Diagnostic => MarketRuntimeScope::Diagnostic,
+            MarketRuntimeScopeConfig::Shared => MarketRuntimeScope::Shared,
+            MarketRuntimeScopeConfig::Instance => MarketRuntimeScope::Instance,
+            MarketRuntimeScopeConfig::Replay => MarketRuntimeScope::Replay,
+            MarketRuntimeScopeConfig::Diagnostic => MarketRuntimeScope::Diagnostic,
         };
         match (scope, has_instance) {
             (MarketRuntimeScope::Shared, true) => {
@@ -176,8 +445,8 @@ impl MarketRuntimeProfile {
                     start_unix_nanos: configured.start_unix_nanos,
                     end_unix_nanos: configured.end_unix_nanos,
                     clock: match configured.clock {
-                        WorkspaceMarketReplayClock::Maximum => MarketReplayClock::Maximum,
-                        WorkspaceMarketReplayClock::EventTime => MarketReplayClock::EventTime,
+                        MarketReplayClockConfig::Maximum => MarketReplayClock::Maximum,
+                        MarketReplayClockConfig::EventTime => MarketReplayClock::EventTime,
                     },
                     speed_multiplier: configured.speed_multiplier,
                     start_paused: configured.start_paused,

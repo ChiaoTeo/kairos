@@ -1,4 +1,4 @@
-use kairos_domain_types::{Exchange, MarketId};
+use kairos_domain_types::{AssetClass, Exchange, MarketId, ProviderProductCode};
 use serde::{Deserialize, Serialize};
 
 /// Stable Market-owned identity for one configured external data source.
@@ -30,8 +30,8 @@ impl SourceId {
 pub struct SourceRouteKey {
     pub source_id: Option<String>,
     pub exchange: String,
-    pub market_type: String,
-    pub asset_type: Option<String>,
+    pub market_type: ProviderProductCode,
+    pub asset_type: Option<AssetClass>,
 }
 
 impl SourceRouteKey {
@@ -39,11 +39,8 @@ impl SourceRouteKey {
         Self {
             source_id: market.source_id.clone(),
             exchange: market.exchange_id.to_string().to_ascii_lowercase(),
-            market_type: market.market_type.to_ascii_lowercase(),
-            asset_type: market
-                .asset_type
-                .as_ref()
-                .map(|value| value.to_ascii_lowercase()),
+            market_type: market.market_type.clone(),
+            asset_type: market.asset_type,
         }
     }
 }
@@ -127,8 +124,8 @@ impl SourceEpoch {
 pub struct SourceDescriptor {
     pub id: SourceId,
     pub exchange_id: Option<Exchange>,
-    pub market_type: Option<String>,
-    pub asset_type: Option<String>,
+    pub market_type: Option<ProviderProductCode>,
+    pub asset_type: Option<AssetClass>,
 }
 
 impl SourceDescriptor {
@@ -138,13 +135,12 @@ impl SourceDescriptor {
         market_type: impl Into<String>,
         asset_type: Option<String>,
     ) -> Result<Self, String> {
-        let market_type = market_type.into().trim().to_ascii_lowercase();
-        if market_type.is_empty() {
-            return Err("market source market type is required".into());
-        }
+        let market_type = ProviderProductCode::new(market_type.into().trim().to_ascii_lowercase())
+            .map_err(|error| error.to_string())?;
         let asset_type = asset_type
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty());
+            .map(|value| value.trim().to_ascii_lowercase().parse::<AssetClass>())
+            .transpose()
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             id,
             exchange_id: Some(exchange_id),

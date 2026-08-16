@@ -16,7 +16,7 @@ use crate::application::{
 };
 use crate::services::participants::binance::signing::signed_query;
 use crate::services::participants::binance::spot::runtime::{
-    BinanceSpotProviderRuntime, QuotaAllocation, RequestPriority,
+    BinanceRequestRuntime, QuotaAllocation, RequestPriority,
 };
 use crate::services::transport::http::{AsyncPublicHttpClient, ExchangeError, PublicHttpClient};
 
@@ -28,7 +28,7 @@ pub(crate) struct BinanceOptionsAccountClient {
     secret: String,
     base_url: String,
     clock_offset_millis: Arc<tokio::sync::Mutex<Option<i64>>>,
-    runtime: BinanceSpotProviderRuntime,
+    runtime: BinanceRequestRuntime,
 }
 
 impl BinanceOptionsAccountClient {
@@ -46,7 +46,7 @@ impl BinanceOptionsAccountClient {
             ));
         }
         let http = PublicHttpClient::new("kairos-integration/binance-options-account")?;
-        let runtime = BinanceSpotProviderRuntime::new(
+        let runtime = BinanceRequestRuntime::new(
             http.clone(),
             QuotaAllocation {
                 request_weight_per_minute: 6_000,
@@ -57,7 +57,7 @@ impl BinanceOptionsAccountClient {
     }
 
     pub(crate) fn from_runtime(
-        runtime: BinanceSpotProviderRuntime,
+        runtime: BinanceRequestRuntime,
         api_key: impl Into<String>,
         secret: impl Into<String>,
         base_url: impl Into<String>,
@@ -79,11 +79,6 @@ impl BinanceOptionsAccountClient {
             clock_offset_millis: Arc::new(tokio::sync::Mutex::new(None)),
             runtime,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn shares_runtime_with(&self, runtime: &BinanceSpotProviderRuntime) -> bool {
-        self.runtime.shares_http_worker_with(runtime)
     }
 
     pub(crate) fn request(

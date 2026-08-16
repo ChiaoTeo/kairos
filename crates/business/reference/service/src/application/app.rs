@@ -540,12 +540,12 @@ where
                             && query
                                 .exchange_id
                                 .as_deref()
-                                .is_none_or(|provider| provider == value.provider_id)
+                                .is_none_or(|provider| value.provider_id == provider)
                             && query.matches_text(&[
                                 &value.access_id,
                                 value.market_id.as_deref().unwrap_or_default(),
-                                &value.provider_id,
-                                &value.product_family,
+                                value.provider_id.as_str(),
+                                value.provider_product.as_str(),
                                 &value.provider_symbol,
                             ])
                     })
@@ -564,8 +564,8 @@ where
                             && query.matches_text(&[
                                 &value.access_id,
                                 &value.market_id,
-                                &value.provider_id,
-                                &value.product_family,
+                                value.provider_id.as_str(),
+                                value.provider_product.as_str(),
                                 &value.provider_symbol,
                             ])
                     })

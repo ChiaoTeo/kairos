@@ -18,7 +18,7 @@ cache, execution engine, event bus, and runtime are not used.
 
 ## Kairos mapping and behavior
 
-- `BinancePrincipalConnection` owns the shared credential, clock, HTTP lane,
+- `BinanceSpotPrincipalConnection` owns the shared credential, clock, HTTP lane,
   and quota context.
 - `BinanceMarginPrincipalConnection` projects either Cross or Isolated Margin;
   the connection domain remains provider-native and distinct.

@@ -9,10 +9,26 @@ use crate::services::transport::http::AsyncPublicHttpClient;
 
 use super::connection::map_exchange_error;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HyperliquidInstrumentProduct {
+    Perpetual,
+    Spot,
+}
+
+impl HyperliquidInstrumentProduct {
+    fn request_type(self) -> &'static str {
+        match self {
+            Self::Perpetual => "metaAndAssetCtxs",
+            Self::Spot => "spotMetaAndAssetCtxs",
+        }
+    }
+}
+
 pub struct HyperliquidInstrumentCatalog {
     pub(super) descriptor: ConnectionDescriptor,
     pub(super) endpoint: String,
     pub(super) client: AsyncPublicHttpClient,
+    pub(super) product: HyperliquidInstrumentProduct,
 }
 
 impl HyperliquidInstrumentCatalog {
@@ -25,10 +41,17 @@ impl AsyncInstrumentCatalogConnection for HyperliquidInstrumentCatalog {
     async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let payload = self
             .client
-            .post_query_json_with_headers(&self.endpoint, &[], &json!({"type": "metaAndAssetCtxs"}))
+            .post_query_json_with_headers(
+                &self.endpoint,
+                &[],
+                &json!({"type": self.product.request_type()}),
+            )
             .await
             .map_err(map_exchange_error)?;
-        normalization::normalize(&payload)
+        match self.product {
+            HyperliquidInstrumentProduct::Perpetual => normalization::normalize_perpetual(&payload),
+            HyperliquidInstrumentProduct::Spot => normalization::normalize_spot(&payload),
+        }
     }
 }
 
@@ -42,10 +65,13 @@ pub mod blocking {
     use crate::services::participants::hyperliquid::reference as normalization;
     use crate::services::transport::http::PublicHttpClient;
 
+    use super::HyperliquidInstrumentProduct;
+
     pub struct HyperliquidInstrumentCatalog {
         pub(in crate::application::participants::hyperliquid) descriptor: ConnectionDescriptor,
         pub(in crate::application::participants::hyperliquid) endpoint: String,
         pub(in crate::application::participants::hyperliquid) client: PublicHttpClient,
+        pub(in crate::application::participants::hyperliquid) product: HyperliquidInstrumentProduct,
     }
 
     impl HyperliquidInstrumentCatalog {
@@ -66,10 +92,15 @@ pub mod blocking {
                 .post_query_json_with_headers(
                     &self.endpoint,
                     &[],
-                    &json!({"type": "metaAndAssetCtxs"}),
+                    &json!({"type": self.product.request_type()}),
                 )
                 .map_err(|error| IntegrationError::Transport(error.to_string()))?;
-            normalization::normalize(&payload)
+            match self.product {
+                HyperliquidInstrumentProduct::Perpetual => {
+                    normalization::normalize_perpetual(&payload)
+                }
+                HyperliquidInstrumentProduct::Spot => normalization::normalize_spot(&payload),
+            }
         }
     }
 }

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kairos_account::composition::account::{
     compose_blocking_account_application, compose_blocking_account_application_for_segments,
-    compose_in_memory_account_application, AccountOptions,
+    compose_in_memory_account_application, AccountOptions, AccountSegmentBinding,
 };
 use kairos_account::composition::{empty_snapshot, FlatbuffersAccountPublisher};
 use kairos_account::domain::{
@@ -28,6 +28,10 @@ fn nanos(value: u64) -> kairos_domain_types::UnixNanos {
     kairos_domain_types::UnixNanos::new(value)
 }
 
+fn binding(value: &str) -> AccountSegmentBinding {
+    AccountSegmentBinding::new(value, value)
+}
+
 fn account_id(value: &str) -> kairos_domain_types::AccountId {
     kairos_domain_types::AccountId::new(value).unwrap()
 }
@@ -39,12 +43,13 @@ fn segment_key(value: &str) -> SegmentKey {
 fn symbol(value: &str) -> kairos_domain_types::Symbol {
     kairos_domain_types::Symbol::new(value).unwrap()
 }
+use kairos_account::composition::registry::AccountRegistry;
 use kairos_account::{
     AccountDataQuery, AccountQuery, MarkToMarket, ReconcileAccount, RefreshAccount,
 };
+use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
 use kairos_protocol::generated::kairos::account::v_2::root_as_account_current_view;
 use kairos_protocol::InstanceIdentity;
-use kairos_workspace::account::{AccountRegistry, CredentialRecord, CredentialStore};
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {
@@ -263,7 +268,7 @@ fn paper_account_composition_restores_multiple_configured_segments() {
     };
     let mut composition = compose_blocking_account_application_for_segments(
         &options,
-        &["spot".into(), "margin".into()],
+        &[binding("spot"), binding("margin")],
         Some(directory.path().join("account.json")),
     )
     .unwrap();
@@ -300,7 +305,7 @@ fn account_application_exposes_capabilities_and_fee_queries() {
     };
     let composition = compose_blocking_account_application_for_segments(
         &options,
-        &["spot".into(), "margin".into()],
+        &[binding("spot"), binding("margin")],
         Some(directory.path().join("account.json")),
     )
     .unwrap();

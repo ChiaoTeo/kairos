@@ -24,8 +24,27 @@ pub struct BinancePrincipalOrderQuotaAllocation {
     pub orders_per_day: u32,
 }
 
+/// Spot API-family endpoint and quota configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BinanceConnectionConfig {
+pub struct BinanceSpotConnectionConfig {
+    pub environment: String,
+    pub rest_base_url: String,
+    pub quota: BinanceQuotaAllocation,
+    pub shared_quota: Option<BinanceSharedQuotaConfig>,
+}
+
+/// USD-M or COIN-M Futures API-family endpoint and quota configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BinanceFuturesConnectionConfig {
+    pub environment: String,
+    pub rest_base_url: String,
+    pub quota: BinanceQuotaAllocation,
+    pub shared_quota: Option<BinanceSharedQuotaConfig>,
+}
+
+/// Options API-family endpoint and quota configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BinanceOptionsConnectionConfig {
     pub environment: String,
     pub rest_base_url: String,
     pub quota: BinanceQuotaAllocation,

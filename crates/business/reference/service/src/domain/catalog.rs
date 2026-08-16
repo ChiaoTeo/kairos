@@ -318,7 +318,7 @@ mod tests {
                 instrument_id: instrument_id("instrument:test"),
                 listing_id: listing_id("listing:test"),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                market_type: "spot".into(),
+                market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
                 source_symbol: kairos_domain_types::Symbol::new("TEST").unwrap(),
                 status: status.into(),
                 effective_from_unix_nanos: 1.into(),
@@ -374,14 +374,14 @@ mod tests {
             assets: vec![Asset {
                 asset_id: kairos_domain_types::AssetId::new("asset:BTC").unwrap(),
                 code: "BTC".into(),
-                asset_class: "crypto".into(),
+                asset_class: kairos_domain_types::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             }],
             instruments: vec![Instrument {
                 instrument_id: instrument_id("instrument:option"),
                 symbol: kairos_domain_types::Symbol::new("BTC-OPT").unwrap(),
-                instrument_type: "spot".into(),
+                instrument_type: kairos_domain_types::InstrumentKind::Spot,
                 status: "active".into(),
                 underlying_instrument_id: None,
                 ..Default::default()
@@ -407,7 +407,7 @@ mod tests {
             instruments: vec![Instrument {
                 instrument_id: instrument_id("instrument:option"),
                 symbol: kairos_domain_types::Symbol::new("BTC-OPT").unwrap(),
-                instrument_type: "option".into(),
+                instrument_type: kairos_domain_types::InstrumentKind::Option,
                 status: "active".into(),
                 ..Default::default()
             }],

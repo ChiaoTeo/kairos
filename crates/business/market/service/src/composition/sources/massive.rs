@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use super::super::config::{MarketSourceBinding, MassiveMarketProduct};
 use kairos_integration::application::credential::load_workspace_credential;
-use kairos_workspace::{WorkspaceMarketSourceBinding, WorkspaceMassiveMarketProduct};
 
 use crate::MarketApplication;
 
@@ -11,9 +11,9 @@ pub(super) fn attach(
     application: &mut MarketApplication,
     credentials_root: &Path,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
-    let WorkspaceMarketSourceBinding::Massive {
+    let MarketSourceBinding::Massive {
         product,
         exchange,
         credential_id,
@@ -29,10 +29,10 @@ pub(super) fn attach(
         load_workspace_credential(credentials_root, "massive", Some(credential_id))?
             .ok_or_else(|| format!("market source {source_id} requires a Massive credential"))?;
     let (product, market_type, endpoint_key) = match product {
-        WorkspaceMassiveMarketProduct::Equity => {
+        MassiveMarketProduct::Equity => {
             (MarketProduct::Equity, "equity", "massive-equity-websocket")
         }
-        WorkspaceMassiveMarketProduct::Options => (
+        MassiveMarketProduct::Options => (
             MarketProduct::Options,
             "options",
             "massive-options-websocket",

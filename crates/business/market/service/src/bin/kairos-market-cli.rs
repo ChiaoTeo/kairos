@@ -61,11 +61,13 @@ async fn download(
     let provider = command.provider;
     let workspace = workspace_root.map(Workspace::open).transpose()?;
     let configured_endpoint = workspace.as_ref().and_then(|workspace| {
-        workspace
-            .reference_config()
-            .providers
-            .get(provider.as_str())
-            .and_then(|value| value.endpoint.clone())
+        let reference: toml::Value = workspace.read_section("reference").ok()?;
+        reference
+            .get("providers")?
+            .get(provider.as_str())?
+            .get("endpoint")?
+            .as_str()
+            .map(str::to_owned)
     });
     let endpoint = command
         .endpoint

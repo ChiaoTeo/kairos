@@ -159,7 +159,7 @@ impl AccountInstrumentResolver {
                     .iter()
                     .filter(|value| {
                         value.symbol.eq_ignore_ascii_case(symbol)
-                            && value.instrument_type.eq_ignore_ascii_case("equity")
+                            && value.instrument_type == kairos_domain_types::InstrumentKind::Equity
                             && matches!(value.status.as_str(), "active" | "trading")
                     })
                     .collect::<Vec<_>>();
@@ -1040,7 +1040,7 @@ mod identity_tests {
             vec![kairos_reference_contract::Instrument {
                 instrument_id: "instrument:equity:US:AAPL:common".into(),
                 symbol: "AAPL".into(),
-                instrument_type: "equity".into(),
+                instrument_type: kairos_domain_types::InstrumentKind::Equity,
                 status: "active".into(),
                 ..Default::default()
             }],

@@ -278,8 +278,7 @@ async fn execute(
                         instrument_id: InstrumentId::try_from(args.instrument_id)?,
                         symbol: Symbol::try_from(args.symbol)?,
                         name: args.name,
-                        instrument_type: args.instrument_type,
-                        product_family: args.product_family,
+                        instrument_type: args.instrument_type.parse()?,
                         underlying_instrument_id: args
                             .underlying_instrument_id
                             .map(InstrumentId::try_from)
@@ -402,12 +401,12 @@ async fn prepare_option_contracts(
     workspace: &Workspace,
     args: &PrepareOptionContractsArgs,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    let reference = kairos_reference::composition::ReferenceConfig::load(workspace)?;
     let endpoint = args
         .endpoint
         .clone()
         .or_else(|| {
-            workspace
-                .reference_config()
+            reference
                 .providers
                 .get("massive")
                 .and_then(|value| value.endpoint.clone())
@@ -461,12 +460,12 @@ async fn prepare_dividends(
     workspace: &Workspace,
     args: &PrepareDividendsArgs,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    let reference = kairos_reference::composition::ReferenceConfig::load(workspace)?;
     let endpoint = args
         .endpoint
         .clone()
         .or_else(|| {
-            workspace
-                .reference_config()
+            reference
                 .providers
                 .get("massive")
                 .and_then(|value| value.endpoint.clone())
@@ -530,7 +529,7 @@ async fn assets(
                     asset_id: AssetId::try_from(args.asset_id)?,
                     code: args.code,
                     name: args.name,
-                    asset_class: args.asset_class,
+                    asset_class: args.asset_class.parse()?,
                     status: args.status.into(),
                     ..Default::default()
                 })
@@ -736,8 +735,6 @@ struct AddInstrumentArgs {
     instrument_type: String,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long)]
-    product_family: Option<String>,
     #[arg(long)]
     underlying_instrument_id: Option<String>,
     #[arg(long)]

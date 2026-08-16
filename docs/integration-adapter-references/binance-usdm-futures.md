@@ -30,7 +30,7 @@ adopted.
 | Provider fact | Kairos owner |
 |---|---|
 | REST endpoint, HMAC signing, API-key header | Integration Futures client |
-| Principal credentials and product projection | `BinancePrincipalConnection` / `BinanceFuturesPrincipalConnection` |
+| Principal credentials and product connection | `BinanceUsdMConnection` / `BinanceFuturesPrincipalConnection` |
 | Submit/cancel delivery certainty | `BinanceFuturesOrderEntry` / `CommandOutcome` |
 | Open/history/detail query | `BinanceFuturesOrderQuery` |
 | Listen key, keepalive, bounded WebSocket queue | `BinanceFuturesOrderEvents` |

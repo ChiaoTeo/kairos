@@ -1,8 +1,9 @@
 //! Reference domain entities and provider snapshots.
 
 use kairos_domain_types::{
-    AssetId, Exchange, ExecutionAccessId, Generation, InstrumentId, IssuerId, ListingId, MarketId,
-    ProviderSymbol, Rate, ReferenceStatus, Symbol, UnixNanos,
+    AssetClass, AssetId, Exchange, ExecutionAccessId, Generation, InstrumentId, InstrumentKind,
+    IssuerId, ListingId, MarketId, ProviderId, ProviderProductCode, ProviderSymbol, Rate,
+    ReferenceStatus, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +36,7 @@ pub struct Asset {
     pub asset_id: AssetId,
     pub code: String,
     pub name: Option<String>,
-    pub asset_class: String,
+    pub asset_class: AssetClass,
     pub status: ReferenceStatus,
 }
 
@@ -46,8 +47,7 @@ pub struct Instrument {
     pub instrument_id: InstrumentId,
     pub symbol: Symbol,
     pub name: Option<String>,
-    pub instrument_type: String,
-    pub product_family: Option<String>,
+    pub instrument_type: InstrumentKind,
     #[serde(default)]
     pub issuer_id: Option<IssuerId>,
     #[serde(default)]
@@ -83,9 +83,11 @@ pub struct Market {
     pub instrument_id: InstrumentId,
     pub listing_id: ListingId,
     pub exchange_id: Exchange,
-    pub market_type: String,
+    /// Provider/venue product surface. The legacy field name is retained only
+    /// for persisted/wire compatibility; this is not a canonical market kind.
+    pub market_type: ProviderProductCode,
     #[serde(default)]
-    pub asset_type: Option<String>,
+    pub asset_type: Option<AssetClass>,
     #[serde(default)]
     pub underlying_instrument_id: Option<InstrumentId>,
     pub source_symbol: Symbol,
@@ -174,8 +176,10 @@ pub struct ExecutionAccess {
     pub destination_market_id: Option<MarketId>,
     #[serde(default)]
     pub broker_id: Option<String>,
-    pub provider_id: String,
-    pub product_family: String,
+    pub provider_id: ProviderId,
+    /// Provider-owned request discriminator, not a canonical product family.
+    #[serde(rename = "product_family")]
+    pub provider_product: ProviderProductCode,
     pub provider_symbol: ProviderSymbol,
     pub settlement_asset_id: Option<AssetId>,
     pub status: ReferenceStatus,
@@ -198,8 +202,10 @@ pub struct MarketDataAccess {
     pub source_id: Option<String>,
     pub access_id: String,
     pub market_id: MarketId,
-    pub provider_id: String,
-    pub product_family: String,
+    pub provider_id: ProviderId,
+    /// Provider-owned request discriminator, not a canonical product family.
+    #[serde(rename = "product_family")]
+    pub provider_product: ProviderProductCode,
     pub provider_symbol: ProviderSymbol,
     pub status: ReferenceStatus,
     pub effective_from_unix_nanos: UnixNanos,
@@ -212,8 +218,9 @@ impl Default for MarketDataAccess {
             source_id: None,
             access_id: "market-data-access:default".into(),
             market_id: MarketId::new("market:default").expect("valid market ID"),
-            provider_id: String::new(),
-            product_family: String::new(),
+            provider_id: ProviderId::new("provider:unknown").expect("valid default provider"),
+            provider_product: ProviderProductCode::new("unknown")
+                .expect("valid default provider product"),
             provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
             status: ReferenceStatus::Unknown,
             effective_from_unix_nanos: UnixNanos::default(),
@@ -233,8 +240,9 @@ impl Default for ExecutionAccess {
             market_id: Some(MarketId::new("market:default").expect("valid market ID")),
             destination_market_id: None,
             broker_id: None,
-            provider_id: String::new(),
-            product_family: String::new(),
+            provider_id: ProviderId::new("provider:unknown").expect("valid default provider"),
+            provider_product: ProviderProductCode::new("unknown")
+                .expect("valid default provider product"),
             provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
             settlement_asset_id: None,
             status: ReferenceStatus::Unknown,
@@ -340,10 +348,12 @@ impl ProviderCatalog {
         }
         for asset in &self.assets {
             required(&asset.code, &format!("asset {} code", asset.asset_id))?;
-            required(
-                &asset.asset_class,
-                &format!("asset {} class", asset.asset_id),
-            )?;
+            if asset.asset_class == AssetClass::Unknown {
+                return Err(ReferenceError::Invalid(format!(
+                    "asset {} has unknown canonical class",
+                    asset.asset_id
+                )));
+            }
             required(
                 asset.status.as_str(),
                 &format!("asset {} status", asset.asset_id),
@@ -354,10 +364,12 @@ impl ProviderCatalog {
                 &instrument.symbol,
                 &format!("instrument {} symbol", instrument.instrument_id),
             )?;
-            required(
-                &instrument.instrument_type,
-                &format!("instrument {} type", instrument.instrument_id),
-            )?;
+            if instrument.instrument_type == InstrumentKind::Unknown {
+                return Err(ReferenceError::Invalid(format!(
+                    "instrument {} has unknown canonical kind",
+                    instrument.instrument_id
+                )));
+            }
             required(
                 instrument.status.as_str(),
                 &format!("instrument {} status", instrument.instrument_id),
@@ -366,22 +378,44 @@ impl ProviderCatalog {
                 instrument.strike.as_deref(),
                 &format!("instrument {} strike", instrument.instrument_id),
             )?;
-            if matches!(
-                instrument.instrument_type.to_ascii_lowercase().as_str(),
-                "option" | "options"
-            ) && (instrument.expiry_unix_nanos.is_none()
-                || instrument.strike.is_none()
-                || !matches!(
-                    instrument
-                        .option_right
-                        .as_deref()
-                        .map(|value| value.to_ascii_lowercase())
-                        .as_deref(),
-                    Some("call" | "put" | "c" | "p")
-                ))
+            if instrument.instrument_type == InstrumentKind::Option
+                && (instrument.expiry_unix_nanos.is_none()
+                    || instrument.strike.is_none()
+                    || !matches!(
+                        instrument
+                            .option_right
+                            .as_deref()
+                            .map(|value| value.to_ascii_lowercase())
+                            .as_deref(),
+                        Some("call" | "put" | "c" | "p")
+                    ))
             {
                 return Err(ReferenceError::Invalid(format!(
                     "option instrument {} requires expiry, strike and call/put right",
+                    instrument.instrument_id
+                )));
+            }
+            if instrument.instrument_type == InstrumentKind::Future
+                && instrument.expiry_unix_nanos.is_none()
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "future instrument {} requires expiry",
+                    instrument.instrument_id
+                )));
+            }
+            if instrument.instrument_type == InstrumentKind::Perpetual
+                && instrument.expiry_unix_nanos.is_some()
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "perpetual instrument {} must not have expiry",
+                    instrument.instrument_id
+                )));
+            }
+            if instrument.instrument_type != InstrumentKind::Option
+                && (instrument.strike.is_some() || instrument.option_right.is_some())
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "non-option instrument {} must not have option terms",
                     instrument.instrument_id
                 )));
             }
@@ -458,12 +492,18 @@ impl ProviderCatalog {
             }
         }
         for market in &self.markets {
+            if market.asset_type == Some(AssetClass::Unknown) {
+                return Err(ReferenceError::Invalid(format!(
+                    "market {} has unknown asset class",
+                    market.market_id
+                )));
+            }
             required(
                 &market.market_key,
                 &format!("market {} key", market.market_id),
             )?;
             required(
-                &market.market_type,
+                market.market_type.as_str(),
                 &format!("market {} type", market.market_id),
             )?;
             required(
@@ -575,11 +615,11 @@ impl ProviderCatalog {
                 )));
             }
             required(
-                &access.provider_id,
+                access.provider_id.as_str(),
                 &format!("execution access {} provider", access.access_id),
             )?;
             required(
-                &access.product_family,
+                access.provider_product.as_str(),
                 &format!("execution access {} product family", access.access_id),
             )?;
             required(
@@ -657,11 +697,11 @@ impl ProviderCatalog {
         }
         for access in &self.market_data_accesses {
             required(
-                &access.provider_id,
+                access.provider_id.as_str(),
                 &format!("market data access {} provider", access.access_id),
             )?;
             required(
-                &access.product_family,
+                access.provider_product.as_str(),
                 &format!("market data access {} product family", access.access_id),
             )?;
             required(

@@ -3,7 +3,7 @@
 //! Wire formats deliberately remain outside this crate.  Adapters should use
 //! the fallible constructors and explicit accessors at contract boundaries.
 
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use rust_decimal::Decimal as RustDecimal;
 use serde::{Deserialize, Serialize};
@@ -194,6 +194,11 @@ text_type!(ListingId);
 text_type!(ExecutionAccessId);
 // Provider-owned symbol. It is valid only at an integration boundary.
 text_type!(ProviderSymbol);
+// Stable provider identity shared by Reference access records and composition.
+text_type!(ProviderId);
+// Opaque provider-owned product discriminator. This is deliberately not a
+// global product taxonomy (examples include `swap` and `usd-m-futures`).
+text_type!(ProviderProductCode);
 // Issuer identity used by securities reference data.
 text_type!(IssuerId);
 // Exchange segment identity used by securities reference data.
@@ -222,6 +227,141 @@ text_type!(ReservationId);
 text_type!(DecisionId);
 text_type!(ActorId);
 
+/// Canonical economic lifecycle of a tradable instrument.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstrumentKind {
+    Equity,
+    Spot,
+    Perpetual,
+    Future,
+    Option,
+    Index,
+    #[default]
+    Unknown,
+}
+
+impl InstrumentKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Equity => "equity",
+            Self::Spot => "spot",
+            Self::Perpetual => "perpetual",
+            Self::Future => "future",
+            Self::Option => "option",
+            Self::Index => "index",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Parses persisted/wire data. Unknown spellings fail instead of entering
+    /// domain state; the explicit `Unknown` value is reserved for wire evolution.
+    pub fn parse_known(value: &str) -> Result<Self, DomainTypeError> {
+        match value {
+            "equity" => Ok(Self::Equity),
+            "spot" => Ok(Self::Spot),
+            "perpetual" => Ok(Self::Perpetual),
+            "future" => Ok(Self::Future),
+            "option" => Ok(Self::Option),
+            "index" => Ok(Self::Index),
+            _ => Err(DomainTypeError::Invalid {
+                type_name: "InstrumentKind",
+                reason: "unknown canonical instrument kind",
+            }),
+        }
+    }
+}
+
+impl fmt::Display for InstrumentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for InstrumentKind {
+    type Err = DomainTypeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse_known(value)
+    }
+}
+
+impl PartialEq<str> for InstrumentKind {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for InstrumentKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Canonical class of an asset, independent of a provider product surface.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum AssetClass {
+    Fiat,
+    Crypto,
+    Equity,
+    #[default]
+    Unknown,
+}
+
+impl AssetClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fiat => "fiat",
+            Self::Crypto => "crypto",
+            Self::Equity => "equity",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_known(value: &str) -> Result<Self, DomainTypeError> {
+        match value {
+            "fiat" => Ok(Self::Fiat),
+            "crypto" => Ok(Self::Crypto),
+            "equity" => Ok(Self::Equity),
+            _ => Err(DomainTypeError::Invalid {
+                type_name: "AssetClass",
+                reason: "unknown canonical asset class",
+            }),
+        }
+    }
+}
+
+impl fmt::Display for AssetClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AssetClass {
+    type Err = DomainTypeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse_known(value)
+    }
+}
+
+impl PartialEq<str> for AssetClass {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for AssetClass {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
 macro_rules! default_text_type {
     ($name:ident, $value:literal) => {
         impl Default for $name {
@@ -238,6 +378,8 @@ default_text_type!(MarketId, "market:unresolved");
 default_text_type!(ExecutionAccessId, "access:unresolved");
 default_text_type!(Symbol, "symbol:unresolved");
 default_text_type!(AssetId, "asset:unresolved");
+default_text_type!(ProviderId, "provider:unknown");
+default_text_type!(ProviderProductCode, "unknown");
 
 impl InstrumentId {
     /// Canonical spot identity: the instrument is the base asset, not a quote pair.
@@ -1214,5 +1356,44 @@ mod more_tests {
             serde_json::from_str::<ReferenceStatus>("\"halted\"").unwrap(),
             ReferenceStatus::Unknown
         );
+    }
+
+    #[test]
+    fn canonical_reference_taxonomy_rejects_provider_vocabulary() {
+        assert_eq!(
+            "spot".parse::<InstrumentKind>().unwrap(),
+            InstrumentKind::Spot
+        );
+        assert_eq!(
+            "perpetual".parse::<InstrumentKind>().unwrap(),
+            InstrumentKind::Perpetual
+        );
+        assert!("margin".parse::<InstrumentKind>().is_err());
+        assert!("usd-m-futures".parse::<InstrumentKind>().is_err());
+        assert!("swap".parse::<InstrumentKind>().is_err());
+        assert_eq!("crypto".parse::<AssetClass>().unwrap(), AssetClass::Crypto);
+        assert!("coin-m".parse::<AssetClass>().is_err());
+    }
+
+    #[test]
+    fn canonical_reference_taxonomy_has_stable_wire_spellings() {
+        for (kind, spelling) in [
+            (InstrumentKind::Equity, "equity"),
+            (InstrumentKind::Spot, "spot"),
+            (InstrumentKind::Perpetual, "perpetual"),
+            (InstrumentKind::Future, "future"),
+            (InstrumentKind::Option, "option"),
+            (InstrumentKind::Index, "index"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{spelling}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<InstrumentKind>(&format!("\"{spelling}\"")).unwrap(),
+                kind
+            );
+        }
+        assert!(serde_json::from_str::<InstrumentKind>("\"future-value\"").is_err());
     }
 }

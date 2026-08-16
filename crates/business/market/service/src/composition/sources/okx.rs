@@ -1,7 +1,7 @@
-use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
-use kairos_workspace::{
-    WorkspaceMarketSourceBinding, WorkspaceOkxInstrumentType, WorkspacePublicMarketTransport,
+use super::super::config::{
+    MarketSourceBinding, OkxInstrumentType as ConfiguredOkxInstrumentType, PublicMarketTransport,
 };
+use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
 
 use crate::MarketApplication;
 
@@ -11,9 +11,9 @@ use super::positive_interval;
 pub(super) fn attach(
     application: &mut MarketApplication,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
-    let WorkspaceMarketSourceBinding::Okx {
+    let MarketSourceBinding::Okx {
         instrument_type,
         transport,
         endpoint,
@@ -24,13 +24,13 @@ pub(super) fn attach(
         return Err(format!("Market source {source_id} is not an OKX binding"));
     };
     let (market_type, instrument_type) = match instrument_type {
-        WorkspaceOkxInstrumentType::Spot => ("spot", OkxInstrumentType::Spot),
-        WorkspaceOkxInstrumentType::Swap => ("swap", OkxInstrumentType::Swap),
-        WorkspaceOkxInstrumentType::Futures => ("futures", OkxInstrumentType::Futures),
-        WorkspaceOkxInstrumentType::Options => ("options", OkxInstrumentType::Option),
+        ConfiguredOkxInstrumentType::Spot => ("spot", OkxInstrumentType::Spot),
+        ConfiguredOkxInstrumentType::Swap => ("swap", OkxInstrumentType::Swap),
+        ConfiguredOkxInstrumentType::Futures => ("futures", OkxInstrumentType::Futures),
+        ConfiguredOkxInstrumentType::Options => ("options", OkxInstrumentType::Option),
     };
     match transport {
-        WorkspacePublicMarketTransport::Websocket => attach_okx_live_source(
+        PublicMarketTransport::Websocket => attach_okx_live_source(
             application,
             source_id,
             market_type,
@@ -38,7 +38,7 @@ pub(super) fn attach(
                 .clone()
                 .unwrap_or_else(|| default_endpoint("okx-public-websocket").to_owned()),
         ),
-        WorkspacePublicMarketTransport::Rest => attach_okx_snapshot_source(
+        PublicMarketTransport::Rest => attach_okx_snapshot_source(
             application,
             source_id,
             market_type,

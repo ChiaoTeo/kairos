@@ -18,10 +18,12 @@ use kairos_integration::application::{
 use kairos_integration::blocking::{AccountMarketProfileConnection, AccountReadConnection};
 use kairos_integration::participants::binance::ConnectionDomain as BinanceConnectionDomain;
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinanceFuturesChannelConfig,
-    BinanceMarginChannelConfig, BinanceOptionsChannelConfig, BinancePrincipalConfig,
-    BinancePrincipalConnection, BinancePrincipalOrderQuotaAllocation, BinanceQuotaAllocation,
-    BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
+    BinanceCoinMConnection, BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig,
+    BinanceMarginChannelConfig, BinanceOptionsChannelConfig, BinanceOptionsConnection,
+    BinanceOptionsConnectionConfig, BinancePrincipalConfig, BinancePrincipalOrderQuotaAllocation,
+    BinanceQuotaAllocation, BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
+    BinanceSpotConnection, BinanceSpotConnectionConfig, BinanceSpotPrincipalConnection,
+    BinanceUsdMConnection,
 };
 use kairos_integration::participants::okx::{
     InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig, OkxPrincipalConfig,
@@ -53,6 +55,28 @@ pub struct AccountOptions {
     /// Workspace Reference SQLite database used read-only to resolve provider
     /// symbols into canonical business identity.
     pub reference_database: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountSegmentBinding {
+    pub segment_key: String,
+    pub provider_product: String,
+    pub trading_mode: Option<String>,
+}
+
+impl AccountSegmentBinding {
+    pub fn new(segment_key: impl Into<String>, provider_product: impl Into<String>) -> Self {
+        Self {
+            segment_key: segment_key.into(),
+            provider_product: provider_product.into(),
+            trading_mode: None,
+        }
+    }
+
+    pub fn with_trading_mode(mut self, trading_mode: impl Into<String>) -> Self {
+        self.trading_mode = Some(trading_mode.into());
+        self
+    }
 }
 
 pub struct AccountComposition {
@@ -92,8 +116,8 @@ fn connect_binance_principal(
     binding_id: impl Into<String>,
     shared_quota_ledger_path: Option<PathBuf>,
     egress_scope_id: &str,
-) -> Result<BinancePrincipalConnection, String> {
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+) -> Result<BinanceSpotPrincipalConnection, String> {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: options.environment.clone(),
         rest_base_url: options.base_url.clone(),
         quota: BinanceQuotaAllocation {
@@ -118,6 +142,70 @@ fn connect_binance_principal(
         .map_err(|error| error.to_string())
 }
 
+fn connect_binance_futures_principal(
+    options: &AccountOptions,
+    binding_id: impl Into<String>,
+    coin_m: bool,
+) -> Result<kairos_integration::participants::binance::BinanceFuturesPrincipalConnection, String> {
+    let config = BinanceFuturesConnectionConfig {
+        environment: options.environment.clone(),
+        rest_base_url: options.base_url.clone(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    };
+    let provider = if coin_m {
+        BinanceCoinMConnection::connect(config)
+            .map_err(|error| error.to_string())?
+            .principal_connection(BinancePrincipalConfig {
+                binding_id: binding_id.into(),
+                principal_id: (!options.account_id.trim().is_empty())
+                    .then(|| options.account_id.clone()),
+                api_key: options.api_key.clone(),
+                secret: options.secret.clone(),
+                principal_quota: None,
+            })
+    } else {
+        BinanceUsdMConnection::connect(config)
+            .map_err(|error| error.to_string())?
+            .principal_connection(BinancePrincipalConfig {
+                binding_id: binding_id.into(),
+                principal_id: (!options.account_id.trim().is_empty())
+                    .then(|| options.account_id.clone()),
+                api_key: options.api_key.clone(),
+                secret: options.secret.clone(),
+                principal_quota: None,
+            })
+    };
+    provider.map_err(|error| error.to_string())
+}
+
+fn connect_binance_options_principal(
+    options: &AccountOptions,
+    binding_id: impl Into<String>,
+) -> Result<kairos_integration::participants::binance::BinanceOptionsPrincipalConnection, String> {
+    BinanceOptionsConnection::connect(BinanceOptionsConnectionConfig {
+        environment: options.environment.clone(),
+        rest_base_url: options.base_url.clone(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .map_err(|error| error.to_string())?
+    .principal_connection(BinancePrincipalConfig {
+        binding_id: binding_id.into(),
+        principal_id: (!options.account_id.trim().is_empty()).then(|| options.account_id.clone()),
+        api_key: options.api_key.clone(),
+        secret: options.secret.clone(),
+        principal_quota: None,
+    })
+    .map_err(|error| error.to_string())
+}
+
 fn okx_instrument_type(segment: &str) -> Result<OkxInstrumentType, String> {
     match segment
         .trim()
@@ -126,9 +214,9 @@ fn okx_instrument_type(segment: &str) -> Result<OkxInstrumentType, String> {
         .as_str()
     {
         "spot" => Ok(OkxInstrumentType::Spot),
-        "cross-margin" | "isolated-margin" | "margin" => Ok(OkxInstrumentType::Margin),
-        "swap" | "usd-m-futures" => Ok(OkxInstrumentType::Swap),
-        "futures" | "coin-m-futures" => Ok(OkxInstrumentType::Futures),
+        "margin" => Ok(OkxInstrumentType::Margin),
+        "swap" => Ok(OkxInstrumentType::Swap),
+        "futures" => Ok(OkxInstrumentType::Futures),
         "option" | "options" => Ok(OkxInstrumentType::Option),
         value => Err(format!("unsupported OKX account segment: {value}")),
     }
@@ -175,11 +263,33 @@ fn normalized_segment(segment: &str) -> String {
     segment.trim().to_ascii_lowercase().replace('_', "-")
 }
 
+/// Exact provider/product endpoint selection for Account composition. Unknown
+/// combinations fail instead of inheriting another provider's endpoint.
+pub fn default_rest_endpoint(provider: &str, product: &str) -> Result<&'static str, String> {
+    let provider = normalized_provider(provider);
+    let product = normalized_segment(product);
+    match (provider.as_str(), product.as_str()) {
+        ("binance", "spot" | "funding" | "cross-margin" | "isolated-margin") => {
+            Ok("https://api.binance.com")
+        }
+        ("binance", "usd-m-futures") => Ok("https://fapi.binance.com"),
+        ("binance", "coin-m-futures") => Ok("https://dapi.binance.com"),
+        ("binance", "options") => Ok("https://eapi.binance.com"),
+        ("okx", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
+            Ok("https://www.okx.com")
+        }
+        ("ibkr", "equity" | "stocks" | "spot") | ("paper" | "simulated", _) => Ok(""),
+        _ => Err(format!(
+            "unsupported Account provider/product: {provider}/{product}"
+        )),
+    }
+}
+
 fn binance_endpoint_family(segment: &str) -> Result<&'static str, String> {
     match normalized_segment(segment).as_str() {
         "spot" | "funding" | "cross-margin" | "isolated-margin" => Ok("spot"),
-        "usd-m-futures" | "swap" => Ok("usd-m-futures"),
-        "coin-m-futures" | "futures" => Ok("coin-m-futures"),
+        "usd-m-futures" => Ok("usd-m-futures"),
+        "coin-m-futures" => Ok("coin-m-futures"),
         "options" => Ok("options"),
         value => Err(format!(
             "unsupported Binance async Account segment: {value}"
@@ -205,7 +315,7 @@ fn binance_rest_base_url(options: &AccountOptions, family: &str) -> String {
 /// snapshot recovery while their Account private-stream projections migrate.
 pub fn compose_binance_async_account_application(
     options: &AccountOptions,
-    segments: &[String],
+    segments: &[AccountSegmentBinding],
     state: Option<PathBuf>,
     websocket_api_url: &str,
     shared_quota_ledger_path: Option<PathBuf>,
@@ -219,7 +329,7 @@ pub fn compose_binance_async_account_application(
     }
     let families = segments
         .iter()
-        .map(|segment| binance_endpoint_family(segment))
+        .map(|segment| binance_endpoint_family(&segment.provider_product))
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     if families.len() != 1 {
         return Err(format!(
@@ -227,7 +337,7 @@ pub fn compose_binance_async_account_application(
             families.into_iter().collect::<Vec<_>>().join(",")
         ));
     }
-    let family = binance_endpoint_family(&segments[0])?;
+    let family = binance_endpoint_family(&segments[0].provider_product)?;
     let futures_stream_endpoint = match family {
         "usd-m-futures" => "wss://fstream.binance.com",
         "coin-m-futures" => "wss://dstream.binance.com",
@@ -248,9 +358,10 @@ pub fn compose_binance_async_account_application(
     let mut profile_sources = std::collections::BTreeMap::new();
     let mut streams = Vec::new();
     for configured_segment in segments {
-        let segment_key = normalized_segment(configured_segment);
-        let account_model = match binance_endpoint_family(&segment_key)? {
-            "spot" if segment_key == "spot" || segment_key == "funding" => "no_margin",
+        let segment_key = configured_segment.segment_key.clone();
+        let provider_product = normalized_segment(&configured_segment.provider_product);
+        let account_model = match binance_endpoint_family(&provider_product)? {
+            "spot" if provider_product == "spot" || provider_product == "funding" => "no_margin",
             "spot" => "margin",
             _ => "contract",
         };
@@ -265,7 +376,7 @@ pub fn compose_binance_async_account_application(
                     .unwrap_or_else(|| account_model.into()),
             ),
         });
-        let read = match segment_key.as_str() {
+        let read = match provider_product.as_str() {
             "spot" => {
                 let stream = private
                     .spot_account_events(
@@ -333,10 +444,12 @@ pub fn compose_binance_async_account_application(
                 });
                 AccountAsyncSnapshotConnection::BinanceMargin(connection.account_read())
             }
-            "usd-m-futures" | "swap" => {
-                let connection = private
-                    .usd_m_futures_connection()
-                    .map_err(|error| error.to_string())?;
+            "usd-m-futures" => {
+                let connection = connect_binance_futures_principal(
+                    options,
+                    format!("account.binance.usd-m-futures.{segment_key}"),
+                    false,
+                )?;
                 streams.push(AccountAsyncEventSource::BinanceFutures {
                     binding_id: format!("account.binance.usd-m-futures.{segment_key}"),
                     source: connection
@@ -351,10 +464,12 @@ pub fn compose_binance_async_account_application(
                 });
                 AccountAsyncSnapshotConnection::BinanceFutures(connection.account_read())
             }
-            "coin-m-futures" | "futures" => {
-                let connection = private
-                    .coin_m_futures_connection()
-                    .map_err(|error| error.to_string())?;
+            "coin-m-futures" => {
+                let connection = connect_binance_futures_principal(
+                    options,
+                    format!("account.binance.coin-m-futures.{segment_key}"),
+                    true,
+                )?;
                 streams.push(AccountAsyncEventSource::BinanceFutures {
                     binding_id: format!("account.binance.coin-m-futures.{segment_key}"),
                     source: connection
@@ -370,9 +485,10 @@ pub fn compose_binance_async_account_application(
                 AccountAsyncSnapshotConnection::BinanceFutures(connection.account_read())
             }
             "options" => {
-                let connection = private
-                    .options_connection()
-                    .map_err(|error| error.to_string())?;
+                let connection = connect_binance_options_principal(
+                    options,
+                    format!("account.binance.options.{segment_key}"),
+                )?;
                 streams.push(AccountAsyncEventSource::BinanceOptions {
                     binding_id: format!("account.binance.options.{segment_key}"),
                     source: connection
@@ -416,7 +532,7 @@ pub fn compose_binance_async_account_application(
 /// projected capability belongs to `okx::ConnectionDomain::Trading`.
 pub fn compose_okx_async_account_application(
     options: &AccountOptions,
-    segments: &[String],
+    segments: &[AccountSegmentBinding],
     state: Option<PathBuf>,
     private_websocket_url: Option<&str>,
     shared_quota_ledger_path: Option<PathBuf>,
@@ -428,9 +544,25 @@ pub fn compose_okx_async_account_application(
     if segments.is_empty() {
         return Err("OKX async composition requires at least one segment".into());
     }
+    for segment in segments {
+        let product = normalized_segment(&segment.provider_product);
+        let mode = segment.trading_mode.as_deref().map(normalized_segment);
+        match (product.as_str(), mode.as_deref()) {
+            ("spot", None | Some("cash")) => {}
+            ("margin" | "swap" | "futures" | "option" | "options", Some("cross" | "isolated")) => {}
+            ("spot", Some(_)) => return Err("OKX spot Account requires cash trading_mode".into()),
+            ("margin" | "swap" | "futures" | "option" | "options", None) => {
+                return Err(format!(
+                "OKX {product} Account segment requires explicit trading_mode (cross or isolated)"
+            ))
+            }
+            (_, Some(value)) => return Err(format!("unsupported OKX trading mode: {value}")),
+            _ => {}
+        }
+    }
     let instrument_types = segments
         .iter()
-        .map(|segment| okx_instrument_type(segment))
+        .map(|segment| okx_instrument_type(&segment.provider_product))
         .collect::<Result<Vec<_>, _>>()?;
     let principal = connect_okx_principal(
         options,
@@ -445,7 +577,7 @@ pub fn compose_okx_async_account_application(
     let mut profile_sources = std::collections::BTreeMap::new();
     let mut streams = Vec::new();
     for (configured_segment, instrument_type) in segments.iter().zip(instrument_types) {
-        let segment_key = configured_segment.trim().to_ascii_lowercase();
+        let segment_key = configured_segment.segment_key.clone();
         account_segments.push(AccountSegment {
             identity: identity.clone(),
             segment_key: SegmentKey::new(segment_key.clone()).map_err(|error| error.to_string())?,
@@ -501,23 +633,26 @@ pub fn compose_okx_async_account_application(
 /// used by execution for a TWS/Gateway client identity.
 pub fn compose_ibkr_async_account_application(
     options: &AccountOptions,
-    segments: &[String],
+    segments: &[AccountSegmentBinding],
     state: Option<PathBuf>,
 ) -> Result<AccountComposition, String> {
     if normalized_provider(&options.provider) != "ibkr" {
         return Err("IBKR async composition requires provider=ibkr".into());
     }
     if segments.is_empty()
-        || segments
-            .iter()
-            .any(|segment| !matches!(normalized_segment(segment).as_str(), "equity" | "spot"))
+        || segments.iter().any(|segment| {
+            !matches!(
+                normalized_segment(&segment.provider_product).as_str(),
+                "equity" | "spot"
+            )
+        })
     {
         return Err("IBKR Account supports only an equity segment".into());
     }
     if segments.len() != 1 {
         return Err("IBKR Account requires exactly one equity segment per client session".into());
     }
-    let segment_key = normalized_segment(&segments[0]);
+    let segment_key = segments[0].segment_key.clone();
     let connection = ibkr::IbkrConnection::connect(
         ibkr::IbkrConnectionConfig {
             host: options.host.clone(),
@@ -615,26 +750,20 @@ pub async fn inspect_account_credential(
                     .inspect_credential()
                     .await
             }
-            "usd-m-futures" | "swap" => {
-                principal
-                    .usd_m_futures_connection()
-                    .map_err(|error| error.to_string())?
+            "usd-m-futures" => {
+                connect_binance_futures_principal(options, "account.binance.usdm.inspect", false)?
                     .credential_inspection()
                     .inspect_credential()
                     .await
             }
-            "coin-m-futures" | "futures" => {
-                principal
-                    .coin_m_futures_connection()
-                    .map_err(|error| error.to_string())?
+            "coin-m-futures" => {
+                connect_binance_futures_principal(options, "account.binance.coinm.inspect", true)?
                     .credential_inspection()
                     .inspect_credential()
                     .await
             }
             "options" => {
-                principal
-                    .options_connection()
-                    .map_err(|error| error.to_string())?
+                connect_binance_options_principal(options, "account.binance.options.inspect")?
                     .credential_inspection()
                     .inspect_credential()
                     .await
@@ -680,14 +809,17 @@ pub fn compose_blocking_account_application(
 ) -> Result<AccountComposition, String> {
     compose_blocking_account_application_for_segments(
         options,
-        std::slice::from_ref(&options.segment),
+        &[AccountSegmentBinding::new(
+            &options.segment,
+            &options.product,
+        )],
         state,
     )
 }
 
 pub fn compose_local_account_application_for_segments(
     options: &AccountOptions,
-    segments: &[String],
+    segments: &[AccountSegmentBinding],
     state: Option<PathBuf>,
 ) -> Result<AccountComposition, String> {
     if !matches!(
@@ -709,7 +841,7 @@ pub fn compose_local_account_application_for_segments(
 /// provider-native async sources.
 pub fn compose_blocking_account_application_for_segments(
     options: &AccountOptions,
-    segments: &[String],
+    segments: &[AccountSegmentBinding],
     state: Option<PathBuf>,
 ) -> Result<AccountComposition, String> {
     if segments.is_empty() {
@@ -721,9 +853,9 @@ pub fn compose_blocking_account_application_for_segments(
             .map_err(|error| error.to_string())?;
         let account_segments: Vec<_> = segments
             .iter()
-            .map(|segment_key| AccountSegment {
+            .map(|segment| AccountSegment {
                 identity: identity.clone(),
-                segment_key: SegmentKey::new(segment_key.clone())
+                segment_key: SegmentKey::new(segment.segment_key.clone())
                     .expect("configured segment is required"),
                 environment: options.environment.clone(),
                 account_model: Some(
@@ -743,13 +875,13 @@ pub fn compose_blocking_account_application_for_segments(
         let snapshots = segments
             .iter()
             .map(|segment| {
-                let mut snapshot = empty_snapshot(segment.clone());
+                let mut snapshot = empty_snapshot(segment.segment_key.clone());
                 snapshot.balances = options
                     .initial_balances
                     .iter()
                     .map(|value| parse_initial_balance(value))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((segment.clone(), snapshot))
+                Ok((segment.segment_key.clone(), snapshot))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
         let application = AccountApplication::with_dependencies(
@@ -770,9 +902,10 @@ pub fn compose_blocking_account_application_for_segments(
     let mut account_segments = Vec::with_capacity(segments.len());
     let mut sources = std::collections::BTreeMap::new();
     let mut profile_sources = std::collections::BTreeMap::new();
-    for segment_key in segments {
+    for segment in segments {
+        let segment_key = &segment.segment_key;
         let mut segment_options = options.clone();
-        segment_options.product = segment_key.clone();
+        segment_options.product = segment.provider_product.clone();
         let product = account_product(&segment_options)?;
         let account_model = options.account_model.clone().unwrap_or_else(|| {
             if product == AccountProduct::Spot {
@@ -895,11 +1028,11 @@ pub fn account_product(options: &AccountOptions) -> Result<AccountProduct, Strin
     match provider.as_str() {
         "binance" => match product.as_str() {
             "spot" => Ok(AccountProduct::Spot),
-            "cross-margin" | "margin" => Ok(AccountProduct::CrossMargin),
+            "cross-margin" => Ok(AccountProduct::CrossMargin),
             "isolated-margin" => Ok(AccountProduct::IsolatedMargin),
             "options" => Ok(AccountProduct::Options),
-            "usd-m-futures" | "swap" => Ok(AccountProduct::UsdMFutures),
-            "coin-m-futures" | "futures" => Ok(AccountProduct::CoinMFutures),
+            "usd-m-futures" => Ok(AccountProduct::UsdMFutures),
+            "coin-m-futures" => Ok(AccountProduct::CoinMFutures),
             _ => Err(format!("unsupported Binance account product: {product}")),
         },
         "okx" => Err(
@@ -1032,10 +1165,15 @@ fn compose_blocking_market_profile(
 #[cfg(test)]
 mod secret_tests {
     use super::{
-        binance_rest_base_url, compose_binance_async_account_application,
-        compose_ibkr_async_account_application, compose_okx_async_account_application,
-        AccountOptions,
+        account_product, binance_endpoint_family, binance_rest_base_url,
+        compose_binance_async_account_application, compose_ibkr_async_account_application,
+        compose_okx_async_account_application, okx_instrument_type, AccountOptions,
+        AccountSegmentBinding,
     };
+
+    fn binding(value: &str) -> AccountSegmentBinding {
+        AccountSegmentBinding::new(value, value)
+    }
 
     fn options() -> AccountOptions {
         AccountOptions {
@@ -1071,7 +1209,7 @@ mod secret_tests {
     async fn binance_spot_server_composes_one_shared_async_principal_context() {
         let composition = compose_binance_async_account_application(
             &options(),
-            &["spot".into()],
+            &[binding("spot")],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
@@ -1084,10 +1222,25 @@ mod secret_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn account_segment_key_is_not_parsed_as_provider_product() {
+        let composition = compose_binance_async_account_application(
+            &options(),
+            &[AccountSegmentBinding::new("cash-main", "spot")],
+            None,
+            "ws://127.0.0.1:1/ws-api/v3",
+            None,
+            "test-egress",
+        )
+        .unwrap();
+
+        assert_eq!(composition.application.async_source_counts(), (1, 1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn binance_spot_and_funding_share_one_principal_without_fake_funding_stream() {
         let composition = compose_binance_async_account_application(
             &options(),
-            &["spot".into(), "funding".into()],
+            &[binding("spot"), binding("funding")],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
@@ -1108,7 +1261,7 @@ mod secret_tests {
         ] {
             let composition = compose_binance_async_account_application(
                 &options(),
-                &[segment.into()],
+                &[binding(segment)],
                 None,
                 "ws://127.0.0.1:1/ws-api/v3",
                 None,
@@ -1143,10 +1296,24 @@ mod secret_tests {
     }
 
     #[test]
+    fn provider_product_vocabulary_is_not_cross_normalized() {
+        assert!(binance_endpoint_family("swap").is_err());
+        assert!(binance_endpoint_family("futures").is_err());
+        assert!(okx_instrument_type("usd-m-futures").is_err());
+        assert!(okx_instrument_type("coin-m-futures").is_err());
+
+        let mut value = options();
+        value.product = "swap".into();
+        assert!(account_product(&value).is_err());
+        value.product = "margin".into();
+        assert!(account_product(&value).is_err());
+    }
+
+    #[test]
     fn binance_account_rejects_segments_from_different_endpoint_families() {
         let error = compose_binance_async_account_application(
             &options(),
-            &["spot".into(), "usd_m_futures".into()],
+            &[binding("spot"), binding("usd_m_futures")],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
@@ -1161,7 +1328,7 @@ mod secret_tests {
     fn binance_isolated_margin_requires_and_uses_account_owned_provider_symbol() {
         let missing = compose_binance_async_account_application(
             &options(),
-            &["isolated_margin".into()],
+            &[binding("isolated_margin")],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
@@ -1175,7 +1342,7 @@ mod secret_tests {
         configured.isolated_margin_symbol = Some("btcusdt".into());
         let composition = compose_binance_async_account_application(
             &configured,
-            &["isolated_margin".into()],
+            &[binding("isolated_margin")],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
@@ -1193,7 +1360,7 @@ mod secret_tests {
         options.passphrase = "passphrase".into();
         let composition = compose_okx_async_account_application(
             &options,
-            &["spot".into(), "swap".into()],
+            &[binding("spot"), binding("swap").with_trading_mode("cross")],
             None,
             Some("ws://127.0.0.1:1"),
             None,
@@ -1206,13 +1373,41 @@ mod secret_tests {
     }
 
     #[test]
+    fn okx_account_keeps_margin_product_and_trading_mode_independent() {
+        let mut options = options();
+        options.provider = "okx".into();
+        options.passphrase = "passphrase".into();
+        let missing = compose_okx_async_account_application(
+            &options,
+            &[AccountSegmentBinding::new("margin-main", "margin")],
+            None,
+            None,
+            None,
+            "test-egress",
+        )
+        .err()
+        .unwrap();
+        assert!(missing.contains("requires explicit trading_mode"));
+
+        compose_okx_async_account_application(
+            &options,
+            &[AccountSegmentBinding::new("margin-main", "margin").with_trading_mode("isolated")],
+            None,
+            None,
+            None,
+            "test-egress",
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn ibkr_account_projects_snapshot_and_events_from_one_native_session() {
         let mut options = options();
         options.provider = "ibkr".into();
         options.product = "equity".into();
         options.segment = "equity".into();
         let composition =
-            compose_ibkr_async_account_application(&options, &["equity".into()], None).unwrap();
+            compose_ibkr_async_account_application(&options, &[binding("equity")], None).unwrap();
         assert_eq!(composition.provider, "ibkr");
         assert_eq!(composition.async_account_streams.len(), 1);
         assert_eq!(composition.application.async_source_counts(), (1, 0));

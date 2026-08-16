@@ -265,7 +265,7 @@ mod tests {
     use super::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyncOrderQuery};
     use kairos_integration::application::{
         AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
-        ExternalOrder, ExternalOrderQuery, IntegrationError,
+        ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
     };
     use kairos_integration::application::{
         DecimalValue, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest, OrderEntryStatus,
@@ -382,6 +382,19 @@ mod tests {
         }
     }
 
+    fn request_with_instrument_type(
+        account: &str,
+        participant: &str,
+        instrument_type: Option<&str>,
+    ) -> OrderEntryRequest {
+        let mut request = request(account, participant);
+        request.provider_instrument.instrument_type = instrument_type
+            .map(ParticipantInstrumentTypeRef::new)
+            .transpose()
+            .unwrap();
+        request
+    }
+
     fn route<C>(
         route_id: &str,
         binding_id: &str,
@@ -433,6 +446,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(*calls.lock().unwrap(), ["okx-hedge", "binance-main"]);
+    }
+
+    #[tokio::test]
+    async fn entry_requires_the_exact_participant_product_discriminator() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let route = ExecutionRoute::new(
+            "binance-usdm",
+            kairos_domain_types::AccountId::new("main").unwrap(),
+            kairos_domain_types::SegmentKey::new("derivatives").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("usd-m-futures").unwrap()),
+            descriptor("execution.binance.usdm", "binance"),
+            RecordingEntry {
+                id: "binance-usdm",
+                calls,
+            },
+        )
+        .unwrap();
+        let mut router = RoutedAsyncOrderEntry::new(vec![route]).unwrap();
+
+        let mut request = request_with_instrument_type("main", "binance", Some("swap"));
+        request.segment_key = kairos_domain_types::SegmentKey::new("derivatives").unwrap();
+        let error = router.submit_order(&request).await.unwrap_err();
+
+        assert!(matches!(error, IntegrationError::InvalidRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn entry_does_not_treat_a_missing_product_as_a_wildcard() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut router = RoutedAsyncOrderEntry::new(vec![route(
+            "binance-main",
+            "execution.binance.main",
+            "main",
+            "binance",
+            RecordingEntry {
+                id: "binance-main",
+                calls,
+            },
+        )])
+        .unwrap();
+
+        let request = request_with_instrument_type("main", "binance", None);
+        let error = router.submit_order(&request).await.unwrap_err();
+
+        assert!(matches!(error, IntegrationError::InvalidRequest(_)));
     }
 
     #[test]

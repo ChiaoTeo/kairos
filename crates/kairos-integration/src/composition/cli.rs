@@ -7,8 +7,8 @@ use crate::application::{
     TransferRequest, TransferResult,
 };
 use crate::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinancePrincipalConfig, BinanceQuotaAllocation,
-    BinanceSharedQuotaConfig,
+    BinancePrincipalConfig, BinanceQuotaAllocation, BinanceSharedQuotaConfig,
+    BinanceSpotConnection, BinanceSpotConnectionConfig,
 };
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
@@ -132,7 +132,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    let shared = BinanceConnection::connect(BinanceConnectionConfig {
+    let shared = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: cli.connection.environment,
         rest_base_url: cli.connection.base_url,
         quota: BinanceQuotaAllocation {

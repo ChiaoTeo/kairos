@@ -6,10 +6,10 @@
 
 pub mod application;
 pub mod composition;
-pub mod credentials;
 pub mod domain;
 mod services;
 
+pub use application::market_input::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
 pub use application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
     BacktestRunResult, CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,
@@ -20,7 +20,6 @@ pub use application::{
     RefreshQuoteIntent, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,
 };
-pub use application::market_input::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
 pub use composition::{
     compose_execution_connections, compose_order_entry, ExecutionConnectionOptions,
     ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionPreflight,

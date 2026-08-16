@@ -200,7 +200,7 @@ mod tests {
         let instrument = Instrument {
             instrument_id: instrument_id.clone(),
             symbol: Symbol::new("BTC").unwrap(),
-            instrument_type: "spot".into(),
+            instrument_type: kairos_domain_types::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         };
@@ -211,7 +211,7 @@ mod tests {
             instrument_id: instrument_id.clone(),
             listing_id: ListingId::new("listing:binance:btc-usdt").unwrap(),
             exchange_id: Exchange::new("binance").unwrap(),
-            market_type: "spot".into(),
+            market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
             source_symbol: Symbol::new("BTCUSDT").unwrap(),
             status: "active".into(),
             ..Default::default()
@@ -353,7 +353,7 @@ mod tests {
             assets: vec![crate::domain::Asset {
                 asset_id: kairos_domain_types::AssetId::new("asset:BTC").unwrap(),
                 code: "BTC".into(),
-                asset_class: "crypto".into(),
+                asset_class: kairos_domain_types::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -460,7 +460,7 @@ mod tests {
             instruments: vec![Instrument {
                 instrument_id: instrument_id.clone(),
                 symbol: Symbol::new("TEST").unwrap(),
-                instrument_type: "spot".into(),
+                instrument_type: kairos_domain_types::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -479,7 +479,7 @@ mod tests {
                 instrument_id,
                 listing_id,
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                market_type: "spot".into(),
+                market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
                 source_symbol: Symbol::new("TEST").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -1549,7 +1549,7 @@ async fn replace_current_state(
         sqlx::query("INSERT INTO reference_assets_current(asset_id,code,asset_class,status,payload) VALUES (?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET code=excluded.code,asset_class=excluded.asset_class,status=excluded.status,payload=excluded.payload WHERE reference_assets_current.payload<>excluded.payload")
             .bind(asset.asset_id.as_str())
             .bind(&asset.code)
-            .bind(&asset.asset_class)
+            .bind(asset.asset_class.as_str())
             .bind(asset.status.as_str())
             .bind(serde_json::to_string(asset).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
             .execute(&mut **tx)
@@ -1560,8 +1560,8 @@ async fn replace_current_state(
         sqlx::query("INSERT INTO reference_instruments_current(instrument_id,symbol,instrument_type,product_family,underlying_instrument_id,expiry_unix_nanos,status,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(instrument_id) DO UPDATE SET symbol=excluded.symbol,instrument_type=excluded.instrument_type,product_family=excluded.product_family,underlying_instrument_id=excluded.underlying_instrument_id,expiry_unix_nanos=excluded.expiry_unix_nanos,status=excluded.status,payload=excluded.payload WHERE reference_instruments_current.payload<>excluded.payload")
             .bind(instrument.instrument_id.as_str())
             .bind(instrument.symbol.as_str())
-            .bind(&instrument.instrument_type)
-            .bind(&instrument.product_family)
+            .bind(instrument.instrument_type.as_str())
+            .bind(Option::<String>::None)
             .bind(instrument.underlying_instrument_id.as_ref().map(|value| value.as_str()))
             .bind(instrument.expiry_unix_nanos.map(|value| value.get() as i64))
             .bind(instrument.status.as_str())
@@ -1591,8 +1591,8 @@ async fn replace_current_state(
             .bind(market.instrument_id.as_str())
             .bind(market.listing_id.as_str())
             .bind(market.exchange_id.as_str())
-            .bind(&market.market_type)
-            .bind(&market.asset_type)
+            .bind(market.market_type.as_str())
+            .bind(market.asset_type.map(|value| value.as_str()))
             .bind(market.underlying_instrument_id.as_ref().map(|value| value.as_str()))
             .bind(market.source_symbol.as_str())
             .bind(market.status.as_str())
@@ -1620,8 +1620,8 @@ async fn replace_current_state(
         sqlx::query("INSERT INTO reference_execution_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_execution_accesses_current.payload<>excluded.payload")
             .bind(access.access_id.as_str())
             .bind(access.market_id.as_ref().map(|value| value.as_str()))
-            .bind(&access.provider_id)
-            .bind(&access.product_family)
+            .bind(access.provider_id.as_str())
+            .bind(access.provider_product.as_str())
             .bind(access.provider_symbol.as_str())
             .bind(access.status.as_str())
             .bind(access.effective_to_unix_nanos.map(|value| value.get() as i64))
@@ -1634,8 +1634,8 @@ async fn replace_current_state(
         sqlx::query("INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_market_data_accesses_current.payload<>excluded.payload")
             .bind(access.access_id.as_str())
             .bind(access.market_id.as_str())
-            .bind(&access.provider_id)
-            .bind(&access.product_family)
+            .bind(access.provider_id.as_str())
+            .bind(access.provider_product.as_str())
             .bind(access.provider_symbol.as_str())
             .bind(access.status.as_str())
             .bind(access.effective_to_unix_nanos.map(|value| value.get() as i64))

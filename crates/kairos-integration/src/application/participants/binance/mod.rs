@@ -9,23 +9,25 @@ mod market_snapshot;
 pub(crate) mod types;
 
 pub use config::{
-    BinanceConnectionConfig, BinanceFuturesChannelConfig, BinanceMarginChannelConfig,
-    BinanceOptionsChannelConfig, BinancePrincipalConfig, BinancePrincipalOrderQuotaAllocation,
-    BinanceQuotaAllocation, BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
+    BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig, BinanceMarginChannelConfig,
+    BinanceOptionsChannelConfig, BinanceOptionsConnectionConfig, BinancePrincipalConfig,
+    BinancePrincipalOrderQuotaAllocation, BinanceQuotaAllocation, BinanceSharedQuotaConfig,
+    BinanceSpotChannelConfig, BinanceSpotConnectionConfig,
 };
 pub use connection::{
-    BinanceConnection, BinanceEquityInstrumentCatalog, BinanceEquityMarketQuote,
+    BinanceCoinMConnection, BinanceEquityInstrumentCatalog, BinanceEquityMarketQuote,
     BinanceFundingAccountRead, BinanceFundingCredentialInspection, BinanceFuturesAccountEvents,
     BinanceFuturesAccountRead, BinanceFuturesCredentialInspection, BinanceFuturesOrderEntry,
     BinanceFuturesOrderEvents, BinanceFuturesOrderQuery, BinanceFuturesPrincipalConnection,
     BinanceInstrumentCatalog, BinanceMarginAccountEvents, BinanceMarginAccountRead,
     BinanceMarginCredentialInspection, BinanceMarginOrderEntry, BinanceMarginOrderEvents,
     BinanceMarginOrderQuery, BinanceMarginPrincipalConnection, BinanceOptionsAccountEvents,
-    BinanceOptionsAccountRead, BinanceOptionsCredentialInspection, BinanceOptionsOrderEntry,
-    BinanceOptionsOrderEvents, BinanceOptionsOrderQuery, BinanceOptionsPrincipalConnection,
-    BinancePrincipalConnection, BinanceSimpleEarn, BinanceSpotAccountEvents,
-    BinanceSpotAccountMarketProfile, BinanceSpotAccountRead, BinanceSpotOrderEntry,
-    BinanceSpotOrderEvents, BinanceSpotOrderQuery, BinanceTransfer,
+    BinanceOptionsAccountRead, BinanceOptionsConnection, BinanceOptionsCredentialInspection,
+    BinanceOptionsOrderEntry, BinanceOptionsOrderEvents, BinanceOptionsOrderQuery,
+    BinanceOptionsPrincipalConnection, BinanceSimpleEarn, BinanceSpotAccountEvents,
+    BinanceSpotAccountMarketProfile, BinanceSpotAccountRead, BinanceSpotConnection,
+    BinanceSpotOrderEntry, BinanceSpotOrderEvents, BinanceSpotOrderQuery,
+    BinanceSpotPrincipalConnection, BinanceTransfer, BinanceUsdMConnection,
 };
 pub use market_data::{
     futures_websocket_market, options_websocket_market, spot_historical_market,

@@ -109,32 +109,52 @@ impl ReferenceProjection {
                     market.market_type,
                     market.source_symbol,
                 )?;
-                descriptor.asset_type = market.asset_type;
-                descriptor.underlying_instrument_id = market.underlying_instrument_id;
-                descriptor.source_id = market.source_id;
-                descriptor.market_data_access_id = market.market_data_access_id;
-                descriptor.provider_symbol = market
-                    .provider_symbol
-                    .map(|value| kairos_domain_types::ProviderSymbol::new(value))
+                descriptor.asset_type = market
+                    .asset_type
+                    .map(|value| value.parse::<kairos_domain_types::AssetClass>())
                     .transpose()
                     .map_err(|error| error.to_string())?;
-                if descriptor.provider_symbol.is_none() {
-                    let selected = accesses.iter().find(|access| {
-                        descriptor.source_id.as_deref().is_some_and(|source| {
-                            source == access.access_id || source == access.provider_id
-                        })
-                    });
-                    let selected = selected.or_else(|| (accesses.len() == 1).then(|| &accesses[0]));
-                    if let Some(access) = selected {
-                        descriptor.market_data_access_id = Some(access.access_id.clone());
-                        descriptor.provider_symbol = Some(
-                            kairos_domain_types::ProviderSymbol::new(
-                                access.provider_symbol.clone(),
-                            )
-                            .map_err(|error| error.to_string())?,
-                        );
+                descriptor.underlying_instrument_id = market
+                    .underlying_instrument_id
+                    .map(kairos_domain_types::InstrumentId::new)
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                // Reference source_id is ingestion provenance, not a Market
+                // runtime source selector. Route solely through the explicit
+                // active MarketDataAccess address.
+                let access = match accesses.as_slice() {
+                    [access] => access,
+                    [] => {
+                        return Err(format!(
+                            "Reference market {} has no selected market-data access",
+                            descriptor.market_id
+                        ))
                     }
-                }
+                    _ => {
+                        return Err(format!(
+                            "Reference market {} has ambiguous market-data accesses: {}",
+                            descriptor.market_id,
+                            accesses
+                                .iter()
+                                .map(|value| value.access_id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ))
+                    }
+                };
+                descriptor.market_data_access_id = Some(access.access_id.clone());
+                descriptor.market_data_provider_id = Some(
+                    kairos_domain_types::ProviderId::new(access.provider_id.clone())
+                        .map_err(|error| error.to_string())?,
+                );
+                descriptor.market_data_provider_product = Some(
+                    kairos_domain_types::ProviderProductCode::new(access.provider_product.clone())
+                        .map_err(|error| error.to_string())?,
+                );
+                descriptor.provider_symbol = Some(
+                    kairos_domain_types::ProviderSymbol::new(access.provider_symbol.clone())
+                        .map_err(|error| error.to_string())?,
+                );
                 Ok(descriptor)
             })
             .collect::<Result<Vec<_>, String>>()?;

@@ -23,7 +23,7 @@ use crate::services::participants::binance::spot::order_events::BinanceSpotOrder
 use crate::services::transport::http::command_error_outcome;
 
 use super::{
-    instrument_catalog, map_exchange_error, BinanceSpotProviderRuntime, ConnectionDescriptor,
+    instrument_catalog, map_exchange_error, BinanceRequestRuntime, ConnectionDescriptor,
     InstrumentType, RequestPriority,
 };
 
@@ -63,7 +63,7 @@ pub struct BinanceInstrumentCatalog {
     pub(super) descriptor: ConnectionDescriptor,
     pub(super) instrument_type: InstrumentType,
     pub(super) base_url: String,
-    pub(super) runtime: BinanceSpotProviderRuntime,
+    pub(super) runtime: BinanceRequestRuntime,
 }
 
 fn reject_async_runtime() -> Result<(), IntegrationError> {

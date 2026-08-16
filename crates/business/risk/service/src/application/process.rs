@@ -215,17 +215,20 @@ impl RiskProcess {
                     .map(|_| serde_json::json!({"status":"active"}))
                     .map_err(|error| error.to_string())
             }),
-            "/v1/authorizations" | "/v1/authorize_and_reserve" => self.json_command(raw_body, |application, body| {
-                let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .authorize_and_reserve(request)
-                    .and_then(|result| {
-                        serde_json::to_value(result).map_err(|error| {
-                            crate::application::RiskError::State(error.to_string())
+            "/v1/authorizations" | "/v1/authorize_and_reserve" => {
+                self.json_command(raw_body, |application, body| {
+                    let request =
+                        serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                    application
+                        .authorize_and_reserve(request)
+                        .and_then(|result| {
+                            serde_json::to_value(result).map_err(|error| {
+                                crate::application::RiskError::State(error.to_string())
+                            })
                         })
-                    })
-                    .map_err(|error| error.to_string())
-            }),
+                        .map_err(|error| error.to_string())
+                })
+            }
             "/v1/pre_trade_check" => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
@@ -271,17 +274,21 @@ impl RiskProcess {
                     .map_err(|error| error.to_string())
             }),
             path if path == "/v1/release"
-                || (path.starts_with("/v1/reservations/") && path.ends_with("/release")) => self.json_command(raw_body, |application, body| {
-                let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .release(request)
-                    .and_then(|result| {
-                        serde_json::to_value(result).map_err(|error| {
-                            crate::application::RiskError::State(error.to_string())
+                || (path.starts_with("/v1/reservations/") && path.ends_with("/release")) =>
+            {
+                self.json_command(raw_body, |application, body| {
+                    let request =
+                        serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                    application
+                        .release(request)
+                        .and_then(|result| {
+                            serde_json::to_value(result).map_err(|error| {
+                                crate::application::RiskError::State(error.to_string())
+                            })
                         })
-                    })
-                    .map_err(|error| error.to_string())
-            }),
+                        .map_err(|error| error.to_string())
+                })
+            }
             "/v1/resize" => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
@@ -294,17 +301,21 @@ impl RiskProcess {
                     .map_err(|error| error.to_string())
             }),
             path if path == "/v1/consume"
-                || (path.starts_with("/v1/reservations/") && path.ends_with("/consume")) => self.json_command(raw_body, |application, body| {
-                let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .consume(request)
-                    .and_then(|result| {
-                        serde_json::to_value(result).map_err(|error| {
-                            crate::application::RiskError::State(error.to_string())
+                || (path.starts_with("/v1/reservations/") && path.ends_with("/consume")) =>
+            {
+                self.json_command(raw_body, |application, body| {
+                    let request =
+                        serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                    application
+                        .consume(request)
+                        .and_then(|result| {
+                            serde_json::to_value(result).map_err(|error| {
+                                crate::application::RiskError::State(error.to_string())
+                            })
                         })
-                    })
-                    .map_err(|error| error.to_string())
-            }),
+                        .map_err(|error| error.to_string())
+                })
+            }
             STOP_PATH => {
                 self.stop_requested = true;
                 (202, serde_json::json!({"status":"stopping"}))

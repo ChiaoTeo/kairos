@@ -30,8 +30,8 @@ provider-native connection migration described in
 
 | Provider behavior | Kairos owner |
 |---|---|
-| REST client, clock, signer, endpoint set | `BinanceConnection` / `BinanceSpotProviderRuntime` |
-| Credential and account context | `BinancePrincipalConnection` |
+| REST client, signer, endpoint set | `BinanceSpotConnection` / `BinanceRequestRuntime` |
+| Credential and Spot account context | `BinanceSpotPrincipalConnection` |
 | Submit/cancel | `BinanceSpotOrderEntry` and `CommandOutcome` |
 | Open/history/detail queries | `BinanceSpotOrderQuery` |
 | Private order events | `BinanceSpotOrderEvents` |
@@ -85,21 +85,19 @@ Update this section whenever upstream source or tests are actually reused:
   WebSocket queue overflow is returned as explicit Integration backpressure.
 - The native current-thread test uses local WebSocket and HTTP servers and proves that subscription
   yields the REST depth snapshot without a blocking bridge.
-- Spot REST and the non-Spot Binance market projections still use the compatibility bridge. This
-  slice remains open until those query capabilities become provider-native async snapshots and the
-  corresponding blocking market constructors leave production composition.
+- Spot REST uses the `BinanceSpotConnection` typed catalog; USD-M, COIN-M, and Options market
+  sources use their own family-native connections. No cross-family projection is constructed from
+  a Spot principal.
 
 ## Account source status (2026-08-11)
 
 - Spot snapshot/profile and private account events are projected from one
-  `BinancePrincipalConnection` and run on the Account process Tokio runtime.
+  `BinanceSpotPrincipalConnection` and run on the Account process Tokio runtime.
 - Funding snapshot shares the same principal/runtime and does not invent a funding private stream.
 - Account private envelopes record participant, binding, channel, epoch, provider event ID,
   sequence, observed time, and received time.
-- Account production composition no longer falls back to blocking Binance adapters. Margin,
-  futures, and options remain unavailable in the production Account server until their own native
-  async vertical slices satisfy the same exit criteria; the explicit blocking projection remains
-  available to CLI/offline callers.
+- Account production composition selects the typed Spot, Futures, and Options connections directly;
+  no generic Binance connection or cross-family Spot-principal projection remains in production.
 - Live production acceptance found two provider/network facts that local protocol tests did not
   expose:
   - `/api/v3/time` can arrive through a high-latency network path. Signed queries calibrate a

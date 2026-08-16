@@ -1,15 +1,14 @@
 use std::path::Path;
 
+use super::super::config::{
+    BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport, MarketSourceBinding,
+};
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::participants::binance::{
     self, ConnectionDomain as BinanceConnectionDomain,
 };
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinanceQuotaAllocation,
-};
-use kairos_workspace::{
-    WorkspaceBinanceDerivativeProduct, WorkspaceBinanceDerivativeTransport,
-    WorkspaceBinanceSpotTransport, WorkspaceMarketSourceBinding,
+    BinanceQuotaAllocation, BinanceSpotConnection, BinanceSpotConnectionConfig,
 };
 use secrecy::SecretString;
 
@@ -22,10 +21,10 @@ pub(super) fn attach(
     application: &mut MarketApplication,
     credentials_root: &Path,
     source_id: &str,
-    binding: &WorkspaceMarketSourceBinding,
+    binding: &MarketSourceBinding,
 ) -> Result<(), String> {
     match binding {
-        WorkspaceMarketSourceBinding::BinanceEquity {
+        MarketSourceBinding::BinanceEquity {
             credential_id,
             endpoint,
             snapshot_interval_ms,
@@ -36,7 +35,7 @@ pub(super) fn attach(
                     .ok_or_else(|| {
                         format!("Market source {source_id} requires a Binance credential")
                     })?;
-            let provider = BinanceConnection::connect(BinanceConnectionConfig {
+            let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
                 environment: "public".into(),
                 rest_base_url: endpoint
                     .clone()
@@ -57,7 +56,7 @@ pub(super) fn attach(
                 positive_interval(source_id, *snapshot_interval_ms)?,
             );
         }
-        WorkspaceMarketSourceBinding::BinanceSpot {
+        MarketSourceBinding::BinanceSpot {
             transport,
             endpoint,
             snapshot_interval_ms,
@@ -65,12 +64,12 @@ pub(super) fn attach(
         } => {
             let endpoint = endpoint.clone().unwrap_or_else(|| {
                 default_endpoint(match transport {
-                    WorkspaceBinanceSpotTransport::Rest => "binance-spot-rest",
-                    WorkspaceBinanceSpotTransport::Websocket => "binance-spot-websocket",
+                    BinanceSpotTransport::Rest => "binance-spot-rest",
+                    BinanceSpotTransport::Websocket => "binance-spot-websocket",
                 })
                 .to_owned()
             });
-            if *transport == WorkspaceBinanceSpotTransport::Rest {
+            if *transport == BinanceSpotTransport::Rest {
                 let connection =
                     binance::spot_snapshot(endpoint).map_err(|error| error.to_string())?;
                 return attach_binance_snapshot(
@@ -83,15 +82,13 @@ pub(super) fn attach(
                 );
             }
             let connection = match transport {
-                WorkspaceBinanceSpotTransport::Rest => unreachable!("handled above"),
-                WorkspaceBinanceSpotTransport::Websocket => {
-                    binance::spot_websocket_market(endpoint)
-                }
+                BinanceSpotTransport::Rest => unreachable!("handled above"),
+                BinanceSpotTransport::Websocket => binance::spot_websocket_market(endpoint),
             }
             .map_err(|error| error.to_string())?;
             attach_binance_stream(application, source_id, "spot", "crypto", connection)
         }
-        WorkspaceMarketSourceBinding::BinanceDerivatives {
+        MarketSourceBinding::BinanceDerivatives {
             product,
             transport,
             endpoint,
@@ -100,21 +97,21 @@ pub(super) fn attach(
         } => {
             let (market_type, domain, rest_path, rest_endpoint, websocket_endpoint) = match product
             {
-                WorkspaceBinanceDerivativeProduct::UsdMFutures => (
+                BinanceDerivativeProduct::UsdMFutures => (
                     "usd-m-futures",
                     BinanceConnectionDomain::UsdMFutures,
                     "/fapi/v1/ticker/bookTicker",
                     "binance-usdm-futures-rest",
                     "binance-usdm-futures-websocket",
                 ),
-                WorkspaceBinanceDerivativeProduct::CoinMFutures => (
+                BinanceDerivativeProduct::CoinMFutures => (
                     "coin-m-futures",
                     BinanceConnectionDomain::CoinMFutures,
                     "/dapi/v1/ticker/bookTicker",
                     "binance-coinm-futures-rest",
                     "binance-coinm-futures-websocket",
                 ),
-                WorkspaceBinanceDerivativeProduct::Options => (
+                BinanceDerivativeProduct::Options => (
                     "options",
                     BinanceConnectionDomain::Options,
                     "/eapi/v1/ticker",
@@ -124,12 +121,12 @@ pub(super) fn attach(
             };
             let endpoint = endpoint.clone().unwrap_or_else(|| {
                 default_endpoint(match transport {
-                    WorkspaceBinanceDerivativeTransport::Websocket => websocket_endpoint,
-                    WorkspaceBinanceDerivativeTransport::Rest => rest_endpoint,
+                    BinanceDerivativeTransport::Websocket => websocket_endpoint,
+                    BinanceDerivativeTransport::Rest => rest_endpoint,
                 })
                 .to_owned()
             });
-            if *transport == WorkspaceBinanceDerivativeTransport::Rest {
+            if *transport == BinanceDerivativeTransport::Rest {
                 let connection = binance::derivatives_snapshot(domain, endpoint, rest_path)
                     .map_err(|error| error.to_string())?;
                 return attach_binance_snapshot(
@@ -142,13 +139,13 @@ pub(super) fn attach(
                 );
             }
             let connection = match transport {
-                WorkspaceBinanceDerivativeTransport::Rest => unreachable!("handled above"),
-                WorkspaceBinanceDerivativeTransport::Websocket
-                    if *product == WorkspaceBinanceDerivativeProduct::Options =>
+                BinanceDerivativeTransport::Rest => unreachable!("handled above"),
+                BinanceDerivativeTransport::Websocket
+                    if *product == BinanceDerivativeProduct::Options =>
                 {
                     binance::options_websocket_market(endpoint)
                 }
-                WorkspaceBinanceDerivativeTransport::Websocket => {
+                BinanceDerivativeTransport::Websocket => {
                     binance::futures_websocket_market(domain, endpoint)
                 }
             }

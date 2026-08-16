@@ -20,8 +20,14 @@ fn mmap_resources_are_isolated_by_market_source_and_view() {
         quote.resource_path("/runtime"),
         bar.resource_path("/runtime")
     );
-    assert!(quote.resource_path("/runtime").to_string_lossy().ends_with(".e1.mmap"));
-    assert!(bar.resource_path("/runtime").to_string_lossy().ends_with(".e1.mmap"));
+    assert!(quote
+        .resource_path("/runtime")
+        .to_string_lossy()
+        .ends_with(".e1.mmap"));
+    assert!(bar
+        .resource_path("/runtime")
+        .to_string_lossy()
+        .ends_with(".e1.mmap"));
     assert!(quote.resource_id().contains("quote"));
     assert!(bar.resource_id().contains("bar"));
 }

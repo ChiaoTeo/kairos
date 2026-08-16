@@ -1,13 +1,15 @@
 use clap::Parser;
 use kairos_execution::application::ExecutionApplication;
 use kairos_execution::composition::{
-    compose_execution_routes, AeronExecutionEventPublisher, ExecutionConnectionOptions,
-    ExecutionSimulator, QueuedExecutionPreflight, SharedExecutionSnapshotPublisher,
-    SharedIntentSnapshotPublisher, SimulationConfig, SocketExecutionPreflight, SqlxExecutionStore,
+    compose_execution_routes, load_reference_execution_accesses, AeronExecutionEventPublisher,
+    ExecutionConnectionOptions, ExecutionSimulator, QueuedExecutionPreflight,
+    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulationConfig,
+    SocketExecutionPreflight, SqlxExecutionStore,
 };
-use kairos_execution::credentials::load_workspace_credential;
 use kairos_execution::{ExecutionProcess, SqlxExecutionAudit};
+use kairos_integration::application::credential::load_workspace_credential;
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -32,6 +34,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     instance.prepare()?;
     let _process_lock = instance.process_lock("execution")?;
     let route_options = args.connection_options_list(&workspace)?;
+    let simulated = route_options.iter().all(|options| {
+        matches!(
+            options.provider.trim().to_ascii_lowercase().as_str(),
+            "simulated" | "paper"
+        )
+    });
     let _provider_process_locks =
         acquire_exclusive_provider_process_locks(&workspace, &route_options)?;
     let state = instance.state(&["execution", "execution-state.sqlite"])?;
@@ -73,13 +81,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some(Box::new(state_store)),
     )?;
     let mut application = application;
-    let manifest = instance.component_manifest()?;
-    let simulated = route_options.iter().all(|options| {
-        matches!(
-            options.provider.trim().to_ascii_lowercase().as_str(),
-            "simulated" | "paper"
+    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
+    if reference_database.exists() {
+        for (access_id, provider_instrument) in
+            load_reference_execution_accesses(&reference_database)?
+        {
+            application.configure_execution_access(access_id, provider_instrument);
+        }
+    } else if !simulated {
+        return Err(format!(
+            "live Execution requires Reference execution accesses: {}",
+            reference_database.display()
         )
-    });
+        .into());
+    }
+    let manifest = instance.component_manifest()?;
     let mut preflight = SocketExecutionPreflight::from_manifest(manifest)?;
     if args.launch_mode == "backtest" {
         preflight = preflight.without_market_snapshot();
@@ -186,13 +202,16 @@ struct Args {
     provider: String,
     #[arg(long, default_value = "spot")]
     product: String,
-    #[arg(long, env = "BINANCE_API_KEY", default_value = "")]
+    /// OKX order/account mode, independent from its venue product.
+    #[arg(long)]
+    trading_mode: Option<String>,
+    #[arg(long, default_value = "")]
     api_key: String,
-    #[arg(long, env = "BINANCE_API_SECRET", default_value = "")]
+    #[arg(long, default_value = "")]
     secret: String,
     #[arg(long)]
     credential_id: Option<String>,
-    #[arg(long, env = "OKX_PASSPHRASE", default_value = "")]
+    #[arg(long, default_value = "")]
     passphrase: String,
     /// REST endpoint override; defaults from provider and product.
     #[arg(long, default_value = "")]
@@ -248,6 +267,8 @@ struct ExecutionRouteConfig {
     segment_key: Option<String>,
     provider: String,
     product: String,
+    #[serde(default)]
+    trading_mode: Option<String>,
     #[serde(default)]
     credential_id: Option<String>,
     #[serde(default)]
@@ -311,8 +332,12 @@ impl Args {
         {
             return Err("execution route_id, provider, and product are required".into());
         }
-        let stored =
-            load_workspace_credential(workspace, &route.provider, route.credential_id.as_deref())?;
+        let credentials_root = workspace.child(&["credentials"])?;
+        let stored = load_workspace_credential(
+            &credentials_root,
+            &route.provider,
+            route.credential_id.as_deref(),
+        )?;
         let (default_base_url, default_websocket_url) =
             provider_endpoints(&route.provider, &route.product);
         Ok(ExecutionConnectionOptions {
@@ -324,6 +349,7 @@ impl Args {
                 .unwrap_or_else(|| self.segment_key.clone()),
             provider: route.provider,
             product: route.product,
+            trading_mode: route.trading_mode,
             api_key: stored
                 .as_ref()
                 .map(|value| value.api_key.clone())
@@ -331,7 +357,7 @@ impl Args {
                 .into(),
             secret: stored
                 .as_ref()
-                .map(|value| value.secret.clone())
+                .map(|value| value.secret.expose_secret().to_owned())
                 .unwrap_or_default()
                 .into(),
             passphrase: stored
@@ -381,10 +407,11 @@ impl Args {
         &self,
         workspace: &Workspace,
     ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
+        let credentials_root = workspace.child(&["credentials"])?;
         let stored = self.credential_id.as_deref().map_or_else(
-            || load_workspace_credential(workspace, &self.provider, None),
+            || load_workspace_credential(&credentials_root, &self.provider, None),
             |credential_id| {
-                load_workspace_credential(workspace, &self.provider, Some(credential_id))
+                load_workspace_credential(&credentials_root, &self.provider, Some(credential_id))
             },
         )?;
         let (default_base_url, default_websocket_url) =
@@ -396,6 +423,7 @@ impl Args {
             segment_key: self.segment_key.clone(),
             provider: self.provider.clone(),
             product: self.product.clone(),
+            trading_mode: self.trading_mode.clone(),
             api_key: if self.api_key.is_empty() {
                 stored
                     .as_ref()
@@ -408,7 +436,7 @@ impl Args {
             secret: if self.secret.is_empty() {
                 stored
                     .as_ref()
-                    .map(|value| value.secret.clone())
+                    .map(|value| value.secret.expose_secret().to_owned())
                     .unwrap_or_default()
             } else {
                 self.secret.clone()
@@ -459,24 +487,24 @@ fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static 
         provider.trim().to_ascii_lowercase().as_str(),
         product.trim().to_ascii_lowercase().as_str(),
     ) {
-        ("binance", "usd-m-futures" | "swap") => {
-            ("https://fapi.binance.com", "wss://fstream.binance.com")
-        }
-        ("binance", "coin-m-futures" | "futures") => {
-            ("https://dapi.binance.com", "wss://dstream.binance.com")
-        }
+        ("binance", "spot") => (
+            "https://api.binance.com",
+            "wss://ws-api.binance.com:443/ws-api/v3",
+        ),
+        ("binance", "usd-m-futures") => ("https://fapi.binance.com", "wss://fstream.binance.com"),
+        ("binance", "coin-m-futures") => ("https://dapi.binance.com", "wss://dstream.binance.com"),
         ("binance", "options" | "option") => (
             "https://eapi.binance.com",
             "wss://nbstream.binance.com/eoptions/private/stream",
         ),
-        ("binance", "cross-margin" | "margin" | "isolated-margin") => {
+        ("binance", "cross-margin" | "isolated-margin") => {
             ("https://api.binance.com", "wss://stream.binance.com:9443")
         }
-        ("okx" | "okex", _) => ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private"),
-        _ => (
-            "https://api.binance.com",
-            "wss://ws-api.binance.com:443/ws-api/v3",
-        ),
+        ("okx" | "okex", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
+            ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private")
+        }
+        ("simulated" | "paper", _) | ("ibkr", "spot" | "equity") => ("", ""),
+        _ => ("", ""),
     }
 }
 
@@ -513,6 +541,7 @@ mod tests {
             segment_key: "equity".into(),
             provider: "ibkr".into(),
             product: "equity".into(),
+            trading_mode: None,
             api_key: SecretString::from(String::new()),
             secret: SecretString::from(String::new()),
             passphrase: SecretString::from(String::new()),

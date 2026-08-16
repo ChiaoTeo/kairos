@@ -1,4 +1,7 @@
-use kairos_domain_types::{Exchange, InstrumentId, MarketId, ReferenceStatus, Symbol};
+use kairos_domain_types::{
+    AssetClass, Exchange, InstrumentId, MarketId, ProviderId, ProviderProductCode, ProviderSymbol,
+    ReferenceStatus, Symbol,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -6,18 +9,22 @@ pub struct MarketDescriptor {
     pub market_id: MarketId,
     pub instrument_id: InstrumentId,
     pub exchange_id: Exchange,
-    pub market_type: String,
+    pub market_type: ProviderProductCode,
     #[serde(default)]
-    pub asset_type: Option<String>,
+    pub asset_type: Option<AssetClass>,
     #[serde(default)]
-    pub underlying_instrument_id: Option<String>,
+    pub underlying_instrument_id: Option<InstrumentId>,
     pub source_symbol: Symbol,
     /// Explicit Reference-owned market-data route. Never infer this from the
     /// listing symbol when a provider access is unavailable.
     #[serde(default)]
     pub market_data_access_id: Option<String>,
     #[serde(default)]
-    pub provider_symbol: Option<kairos_domain_types::ProviderSymbol>,
+    pub provider_symbol: Option<ProviderSymbol>,
+    #[serde(default)]
+    pub market_data_provider_id: Option<ProviderId>,
+    #[serde(default)]
+    pub market_data_provider_product: Option<ProviderProductCode>,
     /// Optional market-data source requested by the caller. Reference owns
     /// the canonical market; this field is a route constraint, not provider
     /// payload or exchange identity.
@@ -39,12 +46,15 @@ impl MarketDescriptor {
             instrument_id: InstrumentId::new(instrument_id.into())
                 .map_err(|error| error.to_string())?,
             exchange_id: Exchange::new(exchange_id).map_err(|error| error.to_string())?,
-            market_type: market_type.into(),
+            market_type: ProviderProductCode::new(market_type.into())
+                .map_err(|error| error.to_string())?,
             asset_type: None,
             underlying_instrument_id: None,
             source_symbol: Symbol::new(source_symbol).map_err(|error| error.to_string())?,
             market_data_access_id: None,
             provider_symbol: None,
+            market_data_provider_id: None,
+            market_data_provider_product: None,
             source_id: None,
             status: ReferenceStatus::Active,
         };
@@ -70,10 +80,10 @@ impl MarketDescriptor {
         asset_type: impl Into<String>,
         source_symbol: impl Into<String>,
     ) -> Result<Self, String> {
-        let asset_type = asset_type.into();
-        if asset_type.trim().is_empty() {
-            return Err("asset_type is required when provided".into());
-        }
+        let asset_type = asset_type
+            .into()
+            .parse::<AssetClass>()
+            .map_err(|error| error.to_string())?;
         let mut value = Self::new(
             market_id,
             instrument_id,
@@ -86,9 +96,6 @@ impl MarketDescriptor {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.market_type.trim().is_empty() {
-            return Err("market_type is required".into());
-        }
         if self.status == ReferenceStatus::Unknown {
             return Err("status is required".into());
         }
@@ -114,8 +121,8 @@ impl MarketDescriptor {
 pub struct MarketSelectionQuery {
     pub market_id: Option<MarketId>,
     pub exchange_id: Option<Exchange>,
-    pub market_type: Option<String>,
-    pub asset_type: Option<String>,
+    pub market_type: Option<ProviderProductCode>,
+    pub asset_type: Option<AssetClass>,
     pub source_symbol: Option<Symbol>,
     #[serde(default)]
     pub source_id: Option<String>,
@@ -136,12 +143,11 @@ impl MarketSelectionQuery {
                 .is_some_and(|v| v != &market.exchange_id)
             || self
                 .market_type
-                .as_deref()
-                .is_some_and(|v| v != market.market_type)
+                .as_ref()
+                .is_some_and(|v| v != &market.market_type)
             || self
                 .asset_type
-                .as_deref()
-                .is_some_and(|v| market.asset_type.as_deref() != Some(v))
+                .is_some_and(|v| market.asset_type.as_ref() != Some(&v))
             || self
                 .source_symbol
                 .as_deref()

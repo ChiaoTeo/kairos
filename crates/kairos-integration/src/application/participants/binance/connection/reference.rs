@@ -11,21 +11,21 @@ pub struct BinanceInstrumentCatalog {
     pub(super) descriptor: ConnectionDescriptor,
     pub(super) instrument_type: InstrumentType,
     pub(super) base_url: String,
-    pub(super) runtime: BinanceSpotProviderRuntime,
+    pub(super) runtime: BinanceRequestRuntime,
 }
 
 pub struct BinanceEquityInstrumentCatalog {
     pub(super) descriptor: ConnectionDescriptor,
     pub(super) base_url: String,
     pub(super) api_key: SecretString,
-    pub(super) runtime: BinanceSpotProviderRuntime,
+    pub(super) runtime: BinanceRequestRuntime,
 }
 
 pub struct BinanceEquityMarketQuote {
     pub(super) descriptor: ConnectionDescriptor,
     pub(super) base_url: String,
     pub(super) api_key: SecretString,
-    pub(super) runtime: BinanceSpotProviderRuntime,
+    pub(super) runtime: BinanceRequestRuntime,
 }
 
 impl BinanceInstrumentCatalog {

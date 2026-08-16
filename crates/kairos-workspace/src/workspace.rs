@@ -1,7 +1,6 @@
 //! Shared workspace identity and layout validation for Rust processes.
 
 use std::{
-    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -31,335 +30,19 @@ impl Default for WorkspaceCliConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMarketConfig {
-    /// Provider-native source bindings. The map key is a stable Market
-    /// SourceId and is deliberately independent from provider vocabulary.
-    #[serde(default)]
-    pub sources: BTreeMap<String, WorkspaceMarketSourceBinding>,
-    /// Named runtime policies select source ids; they never repeat provider
-    /// connection details.
-    #[serde(default)]
-    pub profiles: BTreeMap<String, WorkspaceMarketRuntimeProfile>,
-    /// Workspace-owned durable Market demand and historical recording rules.
-    #[serde(default)]
-    pub collections: BTreeMap<String, WorkspaceMarketCollection>,
-    pub default_profile: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMarketCollection {
-    #[serde(default = "enabled_by_default")]
-    pub enabled: bool,
-    pub subject: String,
-    /// Canonical Reference identities. A collection must not derive these
-    /// from exchange/type/symbol text.
-    #[serde(default)]
-    pub market_id: Option<String>,
-    #[serde(default)]
-    pub instrument_id: Option<String>,
-    #[serde(default)]
-    pub market_data_access_id: Option<String>,
-    #[serde(default)]
-    pub selectors: Vec<String>,
-    #[serde(default)]
-    pub exchange: Option<String>,
-    #[serde(default)]
-    pub market_type: Option<String>,
-    #[serde(default)]
-    pub asset_type: Option<String>,
-    #[serde(default)]
-    pub source_id: Option<String>,
-    #[serde(default = "default_market_collection_queue_capacity")]
-    pub queue_capacity: usize,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum WorkspaceMarketSourceBinding {
-    BinanceSpot {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        #[serde(default)]
-        transport: WorkspaceBinanceSpotTransport,
-        endpoint: Option<String>,
-        #[serde(default = "default_market_source_snapshot_interval_ms")]
-        snapshot_interval_ms: u64,
-    },
-    BinanceEquity {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        credential_id: String,
-        endpoint: Option<String>,
-        #[serde(default = "default_market_source_snapshot_interval_ms")]
-        snapshot_interval_ms: u64,
-    },
-    BinanceDerivatives {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        product: WorkspaceBinanceDerivativeProduct,
-        #[serde(default)]
-        transport: WorkspaceBinanceDerivativeTransport,
-        endpoint: Option<String>,
-        #[serde(default = "default_market_source_snapshot_interval_ms")]
-        snapshot_interval_ms: u64,
-    },
-    Massive {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        product: WorkspaceMassiveMarketProduct,
-        exchange: String,
-        credential_id: String,
-        endpoint: Option<String>,
-    },
-    Okx {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        instrument_type: WorkspaceOkxInstrumentType,
-        #[serde(default)]
-        transport: WorkspacePublicMarketTransport,
-        endpoint: Option<String>,
-        #[serde(default = "default_market_source_snapshot_interval_ms")]
-        snapshot_interval_ms: u64,
-    },
-    Hyperliquid {
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        market_type: WorkspaceHyperliquidMarketType,
-        #[serde(default)]
-        transport: WorkspacePublicMarketTransport,
-        endpoint: Option<String>,
-        #[serde(default = "default_market_source_snapshot_interval_ms")]
-        snapshot_interval_ms: u64,
-    },
-}
-
-impl WorkspaceMarketSourceBinding {
-    pub fn enabled(&self) -> bool {
-        match self {
-            Self::BinanceSpot { enabled, .. }
-            | Self::BinanceEquity { enabled, .. }
-            | Self::BinanceDerivatives { enabled, .. }
-            | Self::Massive { enabled, .. }
-            | Self::Okx { enabled, .. }
-            | Self::Hyperliquid { enabled, .. } => *enabled,
-        }
-    }
-}
-
-fn enabled_by_default() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceBinanceSpotTransport {
-    Rest,
-    #[default]
-    Websocket,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceBinanceDerivativeProduct {
-    UsdMFutures,
-    CoinMFutures,
-    Options,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceBinanceDerivativeTransport {
-    #[default]
-    Rest,
-    Websocket,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceMassiveMarketProduct {
-    Equity,
-    Options,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceOkxInstrumentType {
-    Spot,
-    Swap,
-    Futures,
-    Options,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceHyperliquidMarketType {
-    Spot,
-    Perpetual,
-}
-
-/// Public market delivery mode. Live WebSocket is the production default;
-/// REST snapshots remain available for diagnostics and constrained venues.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspacePublicMarketTransport {
-    Rest,
-    #[default]
-    Websocket,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceMarketRuntimeScope {
-    Shared,
-    Instance,
-    Replay,
-    Diagnostic,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceMarketReplayClock {
-    #[default]
-    Maximum,
-    EventTime,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMarketReplayConfig {
-    #[serde(default)]
-    pub start_unix_nanos: Option<u64>,
-    #[serde(default)]
-    pub end_unix_nanos: Option<u64>,
-    #[serde(default)]
-    pub clock: WorkspaceMarketReplayClock,
-    #[serde(default = "default_market_replay_speed_multiplier")]
-    pub speed_multiplier: u32,
-    #[serde(default)]
-    pub start_paused: bool,
-}
-
-impl Default for WorkspaceMarketReplayConfig {
-    fn default() -> Self {
-        Self {
-            start_unix_nanos: None,
-            end_unix_nanos: None,
-            clock: WorkspaceMarketReplayClock::Maximum,
-            speed_multiplier: default_market_replay_speed_multiplier(),
-            start_paused: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMarketRuntimeProfile {
-    pub scope: WorkspaceMarketRuntimeScope,
-    #[serde(default = "default_market_source_input_capacity")]
-    pub source_input_capacity: usize,
-    #[serde(default = "default_market_publication_queue_capacity")]
-    pub publication_queue_capacity: usize,
-    #[serde(default = "default_market_snapshot_interval_ms")]
-    pub snapshot_interval_ms: u64,
-    #[serde(default = "default_market_freshness_check_interval_ms")]
-    pub freshness_check_interval_ms: u64,
-    #[serde(default = "default_market_freshness_max_age_ms")]
-    pub freshness_max_age_ms: u64,
-    #[serde(default = "default_market_reference_recovery_interval_ms")]
-    pub reference_recovery_interval_ms: u64,
-    #[serde(default = "default_market_shutdown_timeout_ms")]
-    pub shutdown_timeout_ms: u64,
-    #[serde(default)]
-    pub replay: Option<WorkspaceMarketReplayConfig>,
-}
-
-fn default_market_replay_speed_multiplier() -> u32 {
-    1
-}
-
-fn default_market_source_input_capacity() -> usize {
-    10_000
-}
-
-fn default_market_publication_queue_capacity() -> usize {
-    256
-}
-
-fn default_market_collection_queue_capacity() -> usize {
-    4_096
-}
-
-fn default_market_snapshot_interval_ms() -> u64 {
-    1_000
-}
-
-fn default_market_source_snapshot_interval_ms() -> u64 {
-    1_000
-}
-
-fn default_market_freshness_check_interval_ms() -> u64 {
-    250
-}
-
-fn default_market_freshness_max_age_ms() -> u64 {
-    5_000
-}
-
-fn default_market_reference_recovery_interval_ms() -> u64 {
-    500
-}
-
-fn default_market_shutdown_timeout_ms() -> u64 {
-    5_000
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceReferenceProviderConfig {
-    pub enabled: Option<bool>,
-    pub credential_id: Option<String>,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceReferenceProductConfig {
-    pub enabled: Option<bool>,
-    pub credential_id: Option<String>,
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceReferenceParticipantConfig {
-    #[serde(rename = "type")]
-    pub entity_type: String,
-    pub name: String,
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceReferenceConfig {
-    #[serde(default)]
-    pub providers: BTreeMap<String, WorkspaceReferenceProviderConfig>,
-    #[serde(default)]
-    pub products: BTreeMap<String, BTreeMap<String, WorkspaceReferenceProductConfig>>,
-    #[serde(default)]
-    pub participants: BTreeMap<String, WorkspaceReferenceParticipantConfig>,
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceManifest {
     pub version: u32,
     pub workspace_id: String,
     #[serde(default)]
     pub cli: WorkspaceCliConfig,
-    #[serde(default)]
-    pub market: WorkspaceMarketConfig,
-    #[serde(default)]
-    pub reference: WorkspaceReferenceConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
     manifest: WorkspaceManifest,
+    document: toml::Value,
 }
 
 /// A workspace-scoped process lock held for the lifetime of its file handle.
@@ -555,10 +238,6 @@ impl InstanceWorkspace {
         self.snapshot(&[service, &format!("{service}.snapshot")])
     }
 
-    pub fn market_state(&self, name: &str) -> io::Result<PathBuf> {
-        Ok(self.root().join("market").join(Self::component(name)?))
-    }
-
     pub fn mode(&self) -> &str {
         &self.mode
     }
@@ -579,7 +258,6 @@ impl InstanceWorkspace {
             self.root().join("logs"),
             self.root().join("checkpoints"),
             self.root().join("locks"),
-            self.root().join("market"),
         ] {
             fs::create_dir_all(directory)?;
         }
@@ -589,12 +267,12 @@ impl InstanceWorkspace {
 
 impl Workspace {
     /// Acquires a workspace-wide lease for an external resource that permits
-    /// only one owning process. The provider identity is hashed so endpoints
+    /// only one owning process. The resource identity is hashed so endpoints
     /// and account-like identifiers are not exposed in lock filenames.
     pub fn exclusive_process_lock(
         &self,
         namespace: &str,
-        provider_identity: &str,
+        resource_identity: &str,
     ) -> io::Result<WorkspaceProcessLock> {
         if namespace.trim().is_empty()
             || !namespace
@@ -606,13 +284,13 @@ impl Workspace {
                 "exclusive process lock namespace is invalid",
             ));
         }
-        if provider_identity.trim().is_empty() {
+        if resource_identity.trim().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "exclusive process lock identity is required",
             ));
         }
-        let digest = Sha256::digest(provider_identity.as_bytes());
+        let digest = Sha256::digest(resource_identity.as_bytes());
         let short = digest[..10]
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -669,13 +347,6 @@ impl Workspace {
             workspace.run_root(),
             workspace.logs_root(),
             workspace.data_root(),
-            workspace.reference_root(),
-            workspace.market_connections_root(),
-            workspace.child(&["accounts"])?,
-            workspace.child(&["credentials"])?,
-            workspace.child(&["profiles"])?,
-            workspace.child(&["state", "account-locks"])?,
-            workspace.child(&["orders", "journals"])?,
             workspace.launch_dir("default")?,
         ] {
             fs::create_dir_all(directory)?;
@@ -694,7 +365,11 @@ impl Workspace {
             manifest_path = root.join("kairos.toml");
         }
         let contents = fs::read_to_string(manifest_path)?;
-        let manifest: WorkspaceManifest = toml::from_str(&contents)
+        let document: toml::Value = toml::from_str(&contents)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let manifest: WorkspaceManifest = document
+            .clone()
+            .try_into()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if manifest.version != 1 || manifest.workspace_id.trim().is_empty() {
             return Err(io::Error::new(
@@ -708,7 +383,11 @@ impl Workspace {
                 "workspace cli.format must be text, json, or table",
             ));
         }
-        Ok(Self { root, manifest })
+        Ok(Self {
+            root,
+            manifest,
+            document,
+        })
     }
 
     pub fn id(&self) -> &str {
@@ -722,12 +401,17 @@ impl Workspace {
         &self.manifest.cli.format
     }
 
-    pub fn market_config(&self) -> &WorkspaceMarketConfig {
-        &self.manifest.market
-    }
-
-    pub fn reference_config(&self) -> &WorkspaceReferenceConfig {
-        &self.manifest.reference
+    /// Decode one business-owned manifest section without teaching Workspace
+    /// its schema. Missing sections decode from an empty table.
+    pub fn read_section<T: serde::de::DeserializeOwned>(&self, section: &str) -> io::Result<T> {
+        let value = self
+            .document
+            .get(section)
+            .cloned()
+            .unwrap_or_else(|| toml::Value::Table(Default::default()));
+        value
+            .try_into()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     pub fn config_root(&self) -> PathBuf {
@@ -745,14 +429,6 @@ impl Workspace {
     pub fn data_root(&self) -> PathBuf {
         self.root.join("data")
     }
-    pub fn reference_root(&self) -> PathBuf {
-        self.root.join("reference")
-    }
-
-    pub fn market_connections_root(&self) -> PathBuf {
-        self.root.join("market").join("connections")
-    }
-
     pub fn instance(
         &self,
         mode: impl Into<String>,
@@ -894,6 +570,30 @@ mod tests {
     use std::{fs, path::Path};
 
     #[test]
+    fn production_workspace_source_has_no_provider_or_business_schema() {
+        let source = include_str!("workspace.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        for forbidden in [
+            "Binance",
+            "Okx",
+            "Hyperliquid",
+            "Massive",
+            "MarketSourceBinding",
+            "ReferenceProviderConfig",
+            "AccountBindingRecord",
+            "reference_root",
+            "market_connections_root",
+            "market_state",
+            "API_KEY",
+            "API_SECRET",
+        ] {
+            assert!(!source.contains(forbidden), "Workspace owns {forbidden}");
+        }
+    }
+
+    #[test]
     fn opens_manifest_and_derives_process_paths() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
@@ -916,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_reference_provider_registry_from_workspace_manifest() {
+    fn exposes_business_sections_without_owning_their_schema() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join("workspace.toml"),
@@ -924,25 +624,19 @@ mod tests {
         )
         .unwrap();
         let workspace = Workspace::open(root.path()).unwrap();
-        let massive = workspace
-            .reference_config()
-            .providers
-            .get("massive")
-            .unwrap();
-        assert_eq!(massive.enabled, Some(true));
-        assert_eq!(massive.credential_id.as_deref(), Some("massive-readonly"));
+        let reference: toml::Value = workspace.read_section("reference").unwrap();
         assert_eq!(
-            massive.endpoint.as_deref(),
-            Some("https://reference.example.test")
+            reference["providers"]["massive"]["credential_id"].as_str(),
+            Some("massive-readonly")
         );
         assert_eq!(
-            workspace.reference_config().providers["okx"].enabled,
+            reference["providers"]["okx"]["enabled"].as_bool(),
             Some(false)
         );
     }
 
     #[test]
-    fn parses_durable_market_collection_policy() {
+    fn reads_market_section_as_opaque_data() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join("workspace.toml"),
@@ -960,13 +654,10 @@ source_id = "binance-spot"
         .unwrap();
 
         let workspace = Workspace::open(root.path()).unwrap();
-        let collection = &workspace.market_config().collections["btc-bars"];
-
-        assert!(collection.enabled);
-        assert_eq!(collection.subject, "BTCUSDT");
-        assert_eq!(collection.selectors, ["bar:1m"]);
-        assert_eq!(collection.source_id.as_deref(), Some("binance-spot"));
-        assert_eq!(collection.queue_capacity, 4_096);
+        let market: toml::Value = workspace.read_section("market").unwrap();
+        let collection = &market["collections"]["btc-bars"];
+        assert_eq!(collection["subject"].as_str(), Some("BTCUSDT"));
+        assert_eq!(collection["source_id"].as_str(), Some("binance-spot"));
     }
 
     #[test]
@@ -1050,9 +741,9 @@ source_id = "binance-spot"
         let project = tempfile::tempdir().unwrap();
         let workspace = Workspace::init_project(project.path(), "demo").unwrap();
         assert!(project.path().join(".kairos/kairos.toml").is_file());
-        assert!(workspace.reference_root().is_dir());
-        assert!(workspace.child(&["accounts"]).unwrap().is_dir());
-        assert!(workspace.child(&["orders", "journals"]).unwrap().is_dir());
+        assert!(workspace.config_root().is_dir());
+        assert!(workspace.state_root().is_dir());
+        assert!(!workspace.child(&["accounts"]).unwrap().exists());
     }
 
     #[test]

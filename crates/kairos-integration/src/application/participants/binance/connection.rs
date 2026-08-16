@@ -44,6 +44,7 @@ use crate::application::{
 };
 use crate::services::participants::binance::async_margin_account_events::BinanceAsyncMarginAccountEventSource;
 use crate::services::participants::binance::async_margin_order_events::BinanceAsyncMarginOrderEventSource;
+use crate::services::participants::binance::clock::BinanceServerClock;
 use crate::services::participants::binance::futures::{
     account::BinanceFuturesAccountClient,
     async_account_events::BinanceFuturesAsyncAccountEventSource,
@@ -66,7 +67,7 @@ use crate::services::participants::binance::spot::async_order_events::BinanceSpo
 use crate::services::participants::binance::spot::order::BinanceSpotOrderConnection;
 use crate::services::participants::binance::spot::order_events::BinanceSpotOrderEventSource;
 use crate::services::participants::binance::spot::runtime::{
-    BinanceSpotProviderRuntime, PrincipalOrderQuota, QuotaAllocation, RequestPriority,
+    BinanceRequestRuntime, PrincipalOrderQuota, QuotaAllocation, RequestPriority,
 };
 use crate::services::participants::binance::{
     equity as equity_catalog,
@@ -77,30 +78,46 @@ use crate::services::quota::SharedFixedWindowQuota;
 use crate::services::transport::http::PublicHttpClient;
 
 use super::config::{
-    BinanceConnectionConfig, BinanceFuturesChannelConfig, BinanceMarginChannelConfig,
-    BinanceOptionsChannelConfig, BinancePrincipalConfig, BinanceSpotChannelConfig,
+    BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig, BinanceMarginChannelConfig,
+    BinanceOptionsChannelConfig, BinanceOptionsConnectionConfig, BinancePrincipalConfig,
+    BinanceSpotChannelConfig, BinanceSpotConnectionConfig,
 };
 use super::types::{ConnectionDomain, InstrumentType};
 
-/// Provider/IP scope shared by all Binance Spot principals in one business
-/// process. It owns the endpoint set and one HTTP scheduling lane.
-pub struct BinanceConnection {
-    config: BinanceConnectionConfig,
-    runtime: BinanceSpotProviderRuntime,
+/// Binance Spot API-family connection. Margin and funding projections are
+/// available only from this family because they use the Spot REST/auth scope.
+pub struct BinanceSpotConnection {
+    config: BinanceConnectionParts,
+    runtime: BinanceRequestRuntime,
+    clock: BinanceServerClock,
+}
+
+/// Binance USD-M Futures API-family connection.
+pub struct BinanceUsdMConnection {
+    config: BinanceConnectionParts,
+    runtime: BinanceRequestRuntime,
+}
+
+/// Binance COIN-M Futures API-family connection.
+pub struct BinanceCoinMConnection {
+    config: BinanceConnectionParts,
+    runtime: BinanceRequestRuntime,
+}
+
+/// Binance Options API-family connection.
+pub struct BinanceOptionsConnection {
+    config: BinanceConnectionParts,
+    runtime: BinanceRequestRuntime,
 }
 
 /// One provider/principal context. Capability handles projected from this
 /// object share the same authenticated HTTP client and worker.
-pub struct BinancePrincipalConnection {
+pub struct BinanceSpotPrincipalConnection {
     binding_id: String,
     participant: ParticipantRef,
     environment: String,
     principal_id: Option<String>,
     client: BinanceSpotAccountClient,
-    api_key: SecretString,
-    secret: SecretString,
-    rest_base_url: String,
-    runtime: BinanceSpotProviderRuntime,
 }
 
 pub struct BinanceFuturesPrincipalConnection {
@@ -121,76 +138,140 @@ pub struct BinanceOptionsPrincipalConnection {
     client: BinanceOptionsAccountClient,
 }
 
-impl BinanceConnection {
-    pub fn connect(mut config: BinanceConnectionConfig) -> Result<Self, IntegrationError> {
-        config.environment = config.environment.trim().to_string();
-        config.rest_base_url = config.rest_base_url.trim_end_matches('/').to_string();
-        if config.environment.is_empty() {
-            return Err(IntegrationError::InvalidRequest(
-                "Binance environment is required".into(),
-            ));
+#[derive(Clone, Debug)]
+struct BinanceConnectionParts {
+    environment: String,
+    rest_base_url: String,
+    quota: super::config::BinanceQuotaAllocation,
+    shared_quota: Option<super::config::BinanceSharedQuotaConfig>,
+}
+
+impl From<BinanceSpotConnectionConfig> for BinanceConnectionParts {
+    fn from(value: BinanceSpotConnectionConfig) -> Self {
+        Self {
+            environment: value.environment,
+            rest_base_url: value.rest_base_url,
+            quota: value.quota,
+            shared_quota: value.shared_quota,
         }
-        if !(config.rest_base_url.starts_with("https://")
-            || config.rest_base_url.starts_with("http://"))
-        {
-            return Err(IntegrationError::InvalidRequest(
-                "Binance REST endpoint must start with http:// or https://".into(),
-            ));
+    }
+}
+
+impl From<BinanceFuturesConnectionConfig> for BinanceConnectionParts {
+    fn from(value: BinanceFuturesConnectionConfig) -> Self {
+        Self {
+            environment: value.environment,
+            rest_base_url: value.rest_base_url,
+            quota: value.quota,
+            shared_quota: value.shared_quota,
         }
-        let http = PublicHttpClient::new("kairos-integration/binance")
-            .map_err(|error| IntegrationError::Transport(error.to_string()))?;
-        let shared_quota = config
-            .shared_quota
-            .as_ref()
-            .map(|shared| {
-                if shared.egress_scope_id.trim().is_empty() {
-                    return Err(IntegrationError::InvalidRequest(
-                        "Binance egress scope id is required".into(),
-                    ));
-                }
-                SharedFixedWindowQuota::open_or_register(
-                    &shared.ledger_path,
-                    &format!(
-                        "binance:{}:egress:{}:request-weight-1m",
-                        config.environment,
-                        shared.egress_scope_id.trim()
-                    ),
-                    config.quota.request_weight_per_minute,
-                    config.quota.cancel_reserve_weight,
-                    60_000,
-                )
-                .map_err(|error| {
-                    IntegrationError::Unavailable(format!(
-                        "open Binance shared quota ledger: {error}"
-                    ))
-                })
+    }
+}
+
+impl From<BinanceOptionsConnectionConfig> for BinanceConnectionParts {
+    fn from(value: BinanceOptionsConnectionConfig) -> Self {
+        Self {
+            environment: value.environment,
+            rest_base_url: value.rest_base_url,
+            quota: value.quota,
+            shared_quota: value.shared_quota,
+        }
+    }
+}
+
+fn connect_family(
+    mut config: BinanceConnectionParts,
+    api_family: &str,
+) -> Result<(BinanceConnectionParts, BinanceRequestRuntime), IntegrationError> {
+    config.environment = config.environment.trim().to_string();
+    config.rest_base_url = config.rest_base_url.trim_end_matches('/').to_string();
+    if config.environment.is_empty() {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance environment is required".into(),
+        ));
+    }
+    if !(config.rest_base_url.starts_with("https://")
+        || config.rest_base_url.starts_with("http://"))
+    {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance REST endpoint must start with http:// or https://".into(),
+        ));
+    }
+    let http = PublicHttpClient::new("kairos-integration/binance")
+        .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+    let shared_quota = config
+        .shared_quota
+        .as_ref()
+        .map(|shared| {
+            if shared.egress_scope_id.trim().is_empty() {
+                return Err(IntegrationError::InvalidRequest(
+                    "Binance egress scope id is required".into(),
+                ));
+            }
+            SharedFixedWindowQuota::open_or_register(
+                &shared.ledger_path,
+                &format!(
+                    "binance:{}:{}:egress:{}:request-weight-1m",
+                    config.environment,
+                    api_family,
+                    shared.egress_scope_id.trim()
+                ),
+                config.quota.request_weight_per_minute,
+                config.quota.cancel_reserve_weight,
+                60_000,
+            )
+            .map_err(|error| {
+                IntegrationError::Unavailable(format!("open Binance shared quota ledger: {error}"))
             })
-            .transpose()?;
-        let runtime = BinanceSpotProviderRuntime::new_with_shared_quota(
-            http,
-            QuotaAllocation {
-                request_weight_per_minute: config.quota.request_weight_per_minute,
-                cancel_reserve_weight: config.quota.cancel_reserve_weight,
-            },
-            shared_quota,
-        )
-        .map_err(map_exchange_error)?;
-        Ok(Self { config, runtime })
+        })
+        .transpose()?;
+    let runtime = BinanceRequestRuntime::new_with_shared_quota(
+        http,
+        QuotaAllocation {
+            request_weight_per_minute: config.quota.request_weight_per_minute,
+            cancel_reserve_weight: config.quota.cancel_reserve_weight,
+        },
+        shared_quota,
+    )
+    .map_err(map_exchange_error)?;
+    Ok((config, runtime))
+}
+
+impl BinanceSpotConnection {
+    pub fn connect(config: BinanceSpotConnectionConfig) -> Result<Self, IntegrationError> {
+        let (config, runtime) = connect_family(config.into(), "spot")?;
+        Ok(Self {
+            config,
+            runtime,
+            clock: BinanceServerClock::default(),
+        })
     }
 
-    pub fn instrument_catalog(&self, instrument_type: InstrumentType) -> BinanceInstrumentCatalog {
+    pub fn instrument_catalog(&self) -> BinanceInstrumentCatalog {
         BinanceInstrumentCatalog {
-            descriptor: self.public_descriptor(instrument_type),
-            instrument_type,
+            descriptor: public_descriptor(&self.config.environment, InstrumentType::Spot),
+            instrument_type: InstrumentType::Spot,
             base_url: self.config.rest_base_url.clone(),
             runtime: self.runtime.clone(),
         }
     }
 
-    /// Project the API-key-protected Binance Stocks Trading catalog.
-    ///
-    /// This is deliberately a catalog-only capability. It does not imply that
-    /// unverified Binance Equity quote or order endpoints are supported.
+    pub fn blocking_instrument_catalog(&self) -> blocking::BinanceInstrumentCatalog {
+        blocking::BinanceInstrumentCatalog {
+            descriptor: public_descriptor(&self.config.environment, InstrumentType::Spot),
+            instrument_type: InstrumentType::Spot,
+            base_url: self.config.rest_base_url.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+
+    pub fn principal_connection(
+        &self,
+        config: BinancePrincipalConfig,
+    ) -> Result<BinanceSpotPrincipalConnection, IntegrationError> {
+        spot_principal_connection(self, config)
+    }
+
     pub fn equity_instrument_catalog(
         &self,
         api_key: SecretString,
@@ -227,129 +308,262 @@ impl BinanceConnection {
             runtime: self.runtime.clone(),
         }
     }
+}
 
-    pub fn blocking_instrument_catalog(
-        &self,
-        instrument_type: InstrumentType,
-    ) -> blocking::BinanceInstrumentCatalog {
-        blocking::BinanceInstrumentCatalog {
-            descriptor: self.public_descriptor(instrument_type),
-            instrument_type,
-            base_url: self.config.rest_base_url.clone(),
-            runtime: self.runtime.clone(),
-        }
-    }
-
-    fn public_descriptor(&self, instrument_type: InstrumentType) -> ConnectionDescriptor {
-        let domain = match instrument_type {
-            InstrumentType::Spot => ConnectionDomain::Spot,
-            InstrumentType::UsdMFutures => ConnectionDomain::UsdMFutures,
-            InstrumentType::CoinMFutures => ConnectionDomain::CoinMFutures,
-            InstrumentType::Option => ConnectionDomain::Options,
-        };
-        ConnectionDescriptor {
-            binding_id: format!("binance.public.{}", domain.as_str()),
-            participant: ParticipantRef::new(ParticipantKind::Exchange, "binance")
-                .expect("static Binance participant"),
-            environment: self.config.environment.clone(),
-            principal_id: None,
-            domain: domain.into(),
-        }
+impl BinanceUsdMConnection {
+    pub fn connect(config: BinanceFuturesConnectionConfig) -> Result<Self, IntegrationError> {
+        let (config, runtime) = connect_family(config.into(), "usd-m-futures")?;
+        Ok(Self { config, runtime })
     }
 
     pub fn principal_connection(
         &self,
         config: BinancePrincipalConfig,
-    ) -> Result<BinancePrincipalConnection, IntegrationError> {
-        let binding_id = config.binding_id.trim().to_owned();
-        if binding_id.is_empty() {
+    ) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
+        futures_principal_connection(
+            &self.config,
+            &self.runtime,
+            config,
+            ConnectionDomain::UsdMFutures,
+        )
+    }
+
+    pub fn instrument_catalog(&self) -> BinanceInstrumentCatalog {
+        BinanceInstrumentCatalog {
+            descriptor: public_descriptor(&self.config.environment, InstrumentType::UsdMFutures),
+            instrument_type: InstrumentType::UsdMFutures,
+            base_url: self.config.rest_base_url.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+impl BinanceCoinMConnection {
+    pub fn connect(config: BinanceFuturesConnectionConfig) -> Result<Self, IntegrationError> {
+        let (config, runtime) = connect_family(config.into(), "coin-m-futures")?;
+        Ok(Self { config, runtime })
+    }
+
+    pub fn principal_connection(
+        &self,
+        config: BinancePrincipalConfig,
+    ) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
+        futures_principal_connection(
+            &self.config,
+            &self.runtime,
+            config,
+            ConnectionDomain::CoinMFutures,
+        )
+    }
+
+    pub fn instrument_catalog(&self) -> BinanceInstrumentCatalog {
+        BinanceInstrumentCatalog {
+            descriptor: public_descriptor(&self.config.environment, InstrumentType::CoinMFutures),
+            instrument_type: InstrumentType::CoinMFutures,
+            base_url: self.config.rest_base_url.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+impl BinanceOptionsConnection {
+    pub fn connect(config: BinanceOptionsConnectionConfig) -> Result<Self, IntegrationError> {
+        let (config, runtime) = connect_family(config.into(), "options")?;
+        Ok(Self { config, runtime })
+    }
+
+    pub fn principal_connection(
+        &self,
+        config: BinancePrincipalConfig,
+    ) -> Result<BinanceOptionsPrincipalConnection, IntegrationError> {
+        if config.principal_quota.is_some() {
             return Err(IntegrationError::InvalidRequest(
-                "Binance principal binding id is required".into(),
+                "Binance Options principal does not accept Spot order quota".into(),
             ));
         }
-        if config
-            .principal_id
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(IntegrationError::InvalidRequest(
-                "Binance principal id cannot be empty".into(),
-            ));
-        }
-        let runtime = match config.principal_quota {
-            Some(allocation) => {
-                let shared = self.config.shared_quota.as_ref().ok_or_else(|| {
-                    IntegrationError::InvalidRequest(
-                        "Binance principal quota requires a shared quota ledger".into(),
-                    )
-                })?;
-                let principal_id = config.principal_id.as_deref().ok_or_else(|| {
-                    IntegrationError::InvalidRequest(
-                        "Binance principal quota requires principal_id".into(),
-                    )
-                })?;
-                if allocation.orders_per_10_seconds == 0 || allocation.orders_per_day == 0 {
-                    return Err(IntegrationError::InvalidRequest(
-                        "Binance principal order quota limits must be positive".into(),
-                    ));
-                }
-                let quota = |rate_limit_id: &str, limit: u32, window_millis: u64| {
-                    SharedFixedWindowQuota::open_or_register(
-                        &shared.ledger_path,
-                        &format!(
-                            "binance:{}:principal:{}:{rate_limit_id}",
-                            self.config.environment, principal_id
-                        ),
-                        limit,
-                        0,
-                        window_millis,
-                    )
-                    .map(Arc::new)
-                    .map_err(|error| {
-                        IntegrationError::Unavailable(format!(
-                            "open Binance Spot principal quota slot: {error}"
-                        ))
-                    })
-                };
-                self.runtime.with_principal_order_quotas(vec![
-                    PrincipalOrderQuota {
-                        header_name: "x-mbx-order-count-10s",
-                        quota: quota(
-                            "unfilled-orders-10s",
-                            allocation.orders_per_10_seconds,
-                            10_000,
-                        )?,
-                    },
-                    PrincipalOrderQuota {
-                        header_name: "x-mbx-order-count-1d",
-                        quota: quota("unfilled-orders-1d", allocation.orders_per_day, 86_400_000)?,
-                    },
-                ])
-            }
-            None => self.runtime.clone(),
-        };
-        let api_key = config.api_key.expose_secret().to_owned();
-        let secret = config.secret.expose_secret().to_owned();
-        let client = BinanceSpotAccountClient::from_runtime(
-            runtime.clone(),
-            api_key.clone(),
-            secret.clone(),
+        let client = BinanceOptionsAccountClient::from_runtime(
+            self.runtime.clone(),
+            config.api_key.expose_secret().to_owned(),
+            config.secret.expose_secret().to_owned(),
             self.config.rest_base_url.clone(),
         )
         .map_err(map_exchange_error)?;
-        Ok(BinancePrincipalConnection {
-            binding_id,
-            participant: ParticipantRef::new(ParticipantKind::Exchange, "binance")
-                .expect("static Binance participant"),
-            environment: self.config.environment.clone(),
-            principal_id: config.principal_id,
+        Ok(BinanceOptionsPrincipalConnection {
+            descriptor: family_descriptor(
+                config.binding_id,
+                self.config.environment.clone(),
+                config.principal_id,
+                ConnectionDomain::Options,
+            ),
             client,
-            api_key: config.api_key,
-            secret: config.secret,
-            rest_base_url: self.config.rest_base_url.clone(),
-            runtime,
         })
     }
+
+    pub fn instrument_catalog(&self) -> BinanceInstrumentCatalog {
+        BinanceInstrumentCatalog {
+            descriptor: public_descriptor(&self.config.environment, InstrumentType::Option),
+            instrument_type: InstrumentType::Option,
+            base_url: self.config.rest_base_url.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
+fn futures_principal_connection(
+    config: &BinanceConnectionParts,
+    runtime: &BinanceRequestRuntime,
+    principal: BinancePrincipalConfig,
+    domain: ConnectionDomain,
+) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
+    if principal.principal_quota.is_some() {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance Futures principal does not accept Spot order quota".into(),
+        ));
+    }
+    let client = BinanceFuturesAccountClient::from_runtime(
+        runtime.clone(),
+        domain,
+        principal.api_key.expose_secret().to_owned(),
+        principal.secret.expose_secret().to_owned(),
+        config.rest_base_url.clone(),
+    )
+    .map_err(map_exchange_error)?;
+    Ok(BinanceFuturesPrincipalConnection {
+        descriptor: family_descriptor(
+            principal.binding_id,
+            config.environment.clone(),
+            principal.principal_id,
+            domain,
+        ),
+        client,
+        domain,
+    })
+}
+
+fn family_descriptor(
+    binding_id: String,
+    environment: String,
+    principal_id: Option<String>,
+    domain: ConnectionDomain,
+) -> ConnectionDescriptor {
+    ConnectionDescriptor {
+        binding_id: format!("{}.{}", binding_id, domain.as_str()),
+        participant: ParticipantRef::new(ParticipantKind::Exchange, "binance")
+            .expect("static Binance participant"),
+        environment,
+        principal_id,
+        domain: domain.into(),
+    }
+}
+
+fn public_descriptor(environment: &str, instrument_type: InstrumentType) -> ConnectionDescriptor {
+    let domain = match instrument_type {
+        InstrumentType::Spot => ConnectionDomain::Spot,
+        InstrumentType::UsdMFutures => ConnectionDomain::UsdMFutures,
+        InstrumentType::CoinMFutures => ConnectionDomain::CoinMFutures,
+        InstrumentType::Option => ConnectionDomain::Options,
+    };
+    ConnectionDescriptor {
+        binding_id: format!("binance.public.{}", domain.as_str()),
+        participant: ParticipantRef::new(ParticipantKind::Exchange, "binance")
+            .expect("static Binance participant"),
+        environment: environment.to_owned(),
+        principal_id: None,
+        domain: domain.into(),
+    }
+}
+
+fn spot_principal_connection(
+    owner: &BinanceSpotConnection,
+    config: BinancePrincipalConfig,
+) -> Result<BinanceSpotPrincipalConnection, IntegrationError> {
+    let binding_id = config.binding_id.trim().to_owned();
+    if binding_id.is_empty() {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance principal binding id is required".into(),
+        ));
+    }
+    if config
+        .principal_id
+        .as_ref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance principal id cannot be empty".into(),
+        ));
+    }
+    let runtime = match config.principal_quota {
+        Some(allocation) => {
+            let shared = owner.config.shared_quota.as_ref().ok_or_else(|| {
+                IntegrationError::InvalidRequest(
+                    "Binance principal quota requires a shared quota ledger".into(),
+                )
+            })?;
+            let principal_id = config.principal_id.as_deref().ok_or_else(|| {
+                IntegrationError::InvalidRequest(
+                    "Binance principal quota requires principal_id".into(),
+                )
+            })?;
+            if allocation.orders_per_10_seconds == 0 || allocation.orders_per_day == 0 {
+                return Err(IntegrationError::InvalidRequest(
+                    "Binance principal order quota limits must be positive".into(),
+                ));
+            }
+            let quota = |rate_limit_id: &str, limit: u32, window_millis: u64| {
+                SharedFixedWindowQuota::open_or_register(
+                    &shared.ledger_path,
+                    &format!(
+                        "binance:{}:spot:egress:{}:principal:{}:{rate_limit_id}",
+                        owner.config.environment,
+                        shared.egress_scope_id.trim(),
+                        principal_id,
+                    ),
+                    limit,
+                    0,
+                    window_millis,
+                )
+                .map(Arc::new)
+                .map_err(|error| {
+                    IntegrationError::Unavailable(format!(
+                        "open Binance Spot principal quota slot: {error}"
+                    ))
+                })
+            };
+            owner.runtime.with_principal_order_quotas(vec![
+                PrincipalOrderQuota {
+                    header_name: "x-mbx-order-count-10s",
+                    quota: quota(
+                        "unfilled-orders-10s",
+                        allocation.orders_per_10_seconds,
+                        10_000,
+                    )?,
+                },
+                PrincipalOrderQuota {
+                    header_name: "x-mbx-order-count-1d",
+                    quota: quota("unfilled-orders-1d", allocation.orders_per_day, 86_400_000)?,
+                },
+            ])
+        }
+        None => owner.runtime.clone(),
+    };
+    let api_key = config.api_key.expose_secret().to_owned();
+    let secret = config.secret.expose_secret().to_owned();
+    let client = BinanceSpotAccountClient::from_runtime_with_clock(
+        runtime.clone(),
+        owner.clock.clone(),
+        api_key.clone(),
+        secret.clone(),
+        owner.config.rest_base_url.clone(),
+    )
+    .map_err(map_exchange_error)?;
+    Ok(BinanceSpotPrincipalConnection {
+        binding_id,
+        participant: ParticipantRef::new(ParticipantKind::Exchange, "binance")
+            .expect("static Binance participant"),
+        environment: owner.config.environment.clone(),
+        principal_id: config.principal_id,
+        client,
+    })
 }
 
 fn map_exchange_error(error: crate::services::transport::http::ExchangeError) -> IntegrationError {
@@ -367,37 +581,9 @@ fn map_exchange_error(error: crate::services::transport::http::ExchangeError) ->
     }
 }
 
-impl BinancePrincipalConnection {
+impl BinanceSpotPrincipalConnection {
     pub fn spot_descriptor(&self) -> ConnectionDescriptor {
         self.domain_descriptor(ConnectionDomain::Spot)
-    }
-
-    pub fn usd_m_futures_connection(
-        &self,
-    ) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
-        self.futures_connection(ConnectionDomain::UsdMFutures)
-    }
-
-    pub fn coin_m_futures_connection(
-        &self,
-    ) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
-        self.futures_connection(ConnectionDomain::CoinMFutures)
-    }
-
-    pub fn options_connection(
-        &self,
-    ) -> Result<BinanceOptionsPrincipalConnection, IntegrationError> {
-        let client = BinanceOptionsAccountClient::from_runtime(
-            self.runtime.clone(),
-            self.api_key.expose_secret().to_owned(),
-            self.secret.expose_secret().to_owned(),
-            self.rest_base_url.clone(),
-        )
-        .map_err(map_exchange_error)?;
-        Ok(BinanceOptionsPrincipalConnection {
-            descriptor: self.domain_descriptor(ConnectionDomain::Options),
-            client,
-        })
     }
 
     pub fn cross_margin_connection(&self) -> BinanceMarginPrincipalConnection {
@@ -424,25 +610,6 @@ impl BinancePrincipalConnection {
             client: self.client.clone(),
             domain: ConnectionDomain::IsolatedMargin,
             isolated_symbol: Some(symbol),
-        })
-    }
-
-    fn futures_connection(
-        &self,
-        domain: ConnectionDomain,
-    ) -> Result<BinanceFuturesPrincipalConnection, IntegrationError> {
-        let client = BinanceFuturesAccountClient::from_runtime(
-            self.runtime.clone(),
-            domain,
-            self.api_key.expose_secret().to_owned(),
-            self.secret.expose_secret().to_owned(),
-            self.rest_base_url.clone(),
-        )
-        .map_err(map_exchange_error)?;
-        Ok(BinanceFuturesPrincipalConnection {
-            descriptor: self.domain_descriptor(domain),
-            client,
-            domain,
         })
     }
 
@@ -654,11 +821,6 @@ impl BinancePrincipalConnection {
 }
 
 impl BinanceFuturesPrincipalConnection {
-    #[cfg(test)]
-    fn shares_provider_http_with(&self, principal: &BinancePrincipalConnection) -> bool {
-        self.client.shares_runtime_with(&principal.runtime)
-    }
-
     pub fn descriptor(&self) -> &ConnectionDescriptor {
         &self.descriptor
     }
@@ -743,11 +905,6 @@ impl BinanceMarginPrincipalConnection {
 }
 
 impl BinanceOptionsPrincipalConnection {
-    #[cfg(test)]
-    fn shares_provider_http_with(&self, principal: &BinancePrincipalConnection) -> bool {
-        self.client.shares_runtime_with(&principal.runtime)
-    }
-
     pub fn descriptor(&self) -> &ConnectionDescriptor {
         &self.descriptor
     }

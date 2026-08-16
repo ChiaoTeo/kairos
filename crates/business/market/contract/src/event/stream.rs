@@ -31,33 +31,31 @@ impl MarketEventStream {
         std::thread::Builder::new()
             .name("kairos-market-event-stream".into())
             .spawn(move || {
-                let mut subscription = match AeronByteSubscription::connect(
-                    aeron_dir.as_deref(),
-                    &channel,
-                    stream_id,
-                ) {
-                    Ok(subscription) => subscription,
-                    Err(error) => {
-                        let _ = sender.blocking_send(Err(ContractError::Transport(error)));
-                        return;
-                    }
-                };
+                let mut subscription =
+                    match AeronByteSubscription::connect(aeron_dir.as_deref(), &channel, stream_id)
+                    {
+                        Ok(subscription) => subscription,
+                        Err(error) => {
+                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
+                            return;
+                        }
+                    };
                 loop {
-                match subscription.next_frame() {
-                    Ok(Some(frame)) => {
-                        if sender
-                            .blocking_send(Ok(MarketEventFrame::new(frame)))
-                            .is_err()
-                        {
+                    match subscription.next_frame() {
+                        Ok(Some(frame)) => {
+                            if sender
+                                .blocking_send(Ok(MarketEventFrame::new(frame)))
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Ok(None) => std::thread::yield_now(),
+                        Err(error) => {
+                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
                             break;
                         }
                     }
-                    Ok(None) => std::thread::yield_now(),
-                    Err(error) => {
-                        let _ = sender.blocking_send(Err(ContractError::Transport(error)));
-                        break;
-                    }
-                }
                 }
             })
             .map_err(|error| ContractError::Transport(error.to_string()))?;

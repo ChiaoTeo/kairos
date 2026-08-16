@@ -4,7 +4,7 @@ use crate::services::transport::http::{AsyncPublicHttpClient, ExchangeError, Pub
 
 use super::config::HyperliquidConnectionConfig;
 use super::market::{HyperliquidLiveMarket, HyperliquidMarketSnapshot};
-use super::reference::{blocking, HyperliquidInstrumentCatalog};
+use super::reference::{blocking, HyperliquidInstrumentCatalog, HyperliquidInstrumentProduct};
 
 pub struct HyperliquidConnection {
     config: HyperliquidConnectionConfig,
@@ -28,6 +28,16 @@ impl HyperliquidConnection {
             descriptor: self.descriptor(),
             endpoint: self.config.info_endpoint.clone(),
             client: self.client.clone(),
+            product: HyperliquidInstrumentProduct::Perpetual,
+        }
+    }
+
+    pub fn spot_instrument_catalog(&self) -> HyperliquidInstrumentCatalog {
+        HyperliquidInstrumentCatalog {
+            descriptor: self.descriptor(),
+            endpoint: self.config.info_endpoint.clone(),
+            client: self.client.clone(),
+            product: HyperliquidInstrumentProduct::Spot,
         }
     }
 
@@ -54,6 +64,19 @@ impl HyperliquidConnection {
             endpoint: self.config.info_endpoint.clone(),
             client: PublicHttpClient::new("kairos-integration/hyperliquid")
                 .map_err(map_exchange_error)?,
+            product: HyperliquidInstrumentProduct::Perpetual,
+        })
+    }
+
+    pub fn blocking_spot_instrument_catalog(
+        &self,
+    ) -> Result<blocking::HyperliquidInstrumentCatalog, IntegrationError> {
+        Ok(blocking::HyperliquidInstrumentCatalog {
+            descriptor: self.descriptor(),
+            endpoint: self.config.info_endpoint.clone(),
+            client: PublicHttpClient::new("kairos-integration/hyperliquid")
+                .map_err(map_exchange_error)?,
+            product: HyperliquidInstrumentProduct::Spot,
         })
     }
 

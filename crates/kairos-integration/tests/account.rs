@@ -10,8 +10,9 @@ use kairos_integration::blocking::{
     OrderQueryConnection,
 };
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinancePrincipalConfig, BinanceQuotaAllocation,
-    ConnectionDomain,
+    BinanceFuturesConnectionConfig, BinanceOptionsConnection, BinanceOptionsConnectionConfig,
+    BinancePrincipalConfig, BinanceQuotaAllocation, BinanceSpotConnection,
+    BinanceSpotConnectionConfig, BinanceUsdMConnection, ConnectionDomain,
 };
 use kairos_integration::participants::okx::{
     InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig, OkxPrincipalConfig,
@@ -227,7 +228,7 @@ fn buffered_account_stream_reconnects_after_read_failure() {
 
 #[test]
 fn integration_exposes_binance_spot_as_a_provider_native_connection() {
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "test".into(),
         rest_base_url: "http://127.0.0.1:1".into(),
         quota: BinanceQuotaAllocation {
@@ -251,7 +252,7 @@ fn integration_exposes_binance_spot_as_a_provider_native_connection() {
 
 #[test]
 fn integration_projects_binance_usdm_futures_async_entry_without_network_access() {
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: "http://127.0.0.1:1".into(),
         quota: BinanceQuotaAllocation {
@@ -261,7 +262,7 @@ fn integration_projects_binance_usdm_futures_async_entry_without_network_access(
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.usdm.fixture".into(),
             principal_id: Some("fixture".into()),
@@ -270,7 +271,24 @@ fn integration_projects_binance_usdm_futures_async_entry_without_network_access(
             principal_quota: None,
         })
         .unwrap();
-    let futures = principal.usd_m_futures_connection().unwrap();
+    let futures = BinanceUsdMConnection::connect(BinanceFuturesConnectionConfig {
+        environment: "testnet".into(),
+        rest_base_url: "http://127.0.0.1:1".into(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .unwrap()
+    .principal_connection(BinancePrincipalConfig {
+        binding_id: "execution.binance.usdm.fixture".into(),
+        principal_id: Some("fixture".into()),
+        api_key: "api-key".into(),
+        secret: "secret".into(),
+        principal_quota: None,
+    })
+    .unwrap();
     fn binance_async_capability<T: AsyncOrderEntryConnection>(_: &T) {}
     binance_async_capability(&futures.order_entry());
 
@@ -291,7 +309,7 @@ fn integration_projects_binance_usdm_futures_async_entry_without_network_access(
 fn integration_composes_remote_order_queries_for_native_private_products() {
     fn async_capability<T: AsyncOrderQueryConnection>(_: &T) {}
     fn blocking_capability<T: OrderQueryConnection>(_: &T) {}
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "test".into(),
         rest_base_url: "http://127.0.0.1:1".into(),
         quota: BinanceQuotaAllocation {
@@ -301,7 +319,7 @@ fn integration_composes_remote_order_queries_for_native_private_products() {
         shared_quota: None,
     })
     .unwrap();
-    let binance_principal = provider
+    let _binance_principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.options.test".into(),
             principal_id: Some("test".into()),
@@ -310,10 +328,25 @@ fn integration_composes_remote_order_queries_for_native_private_products() {
             principal_quota: None,
         })
         .unwrap();
-    let options_query = binance_principal
-        .options_connection()
-        .unwrap()
-        .order_query();
+    let options_query = BinanceOptionsConnection::connect(BinanceOptionsConnectionConfig {
+        environment: "test".into(),
+        rest_base_url: "http://127.0.0.1:1".into(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .unwrap()
+    .principal_connection(BinancePrincipalConfig {
+        binding_id: "execution.binance.options.test".into(),
+        principal_id: Some("test".into()),
+        api_key: "binance-key".into(),
+        secret: "binance-secret".into(),
+        principal_quota: None,
+    })
+    .unwrap()
+    .order_query();
     async_capability(&options_query);
     assert!(matches!(
         binance::blocking::order_query(

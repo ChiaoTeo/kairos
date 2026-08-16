@@ -230,7 +230,7 @@ Account async slice 验收重点：
 - `cargo test -p kairos-execution-service --test execution -- --test-threads=1`：33/33
   通过；
 - `cargo test -p kairos-integration --test architecture -- --test-threads=1`：7/7 通过；
-- Binance Futures/Options projection 与 Spot principal 共用 provider HTTP worker，并进入
+- Binance Futures/Options 已使用各自 API-family connection，并按 family 隔离 endpoint 与 quota；继续
   同一 shared egress quota；Isolated Margin entry/query/event 共用并校验 route symbol；
 - 删除无官方 provider contract 的 Binance Equity/Stocks Execution 下单/查询伪协议；
   当前生产 Execution 支持的真实 live route 均为 async entry/query/event，不再保留一个

@@ -7,11 +7,12 @@ use clap::Parser;
 use kairos_account::composition::account::{
     compose_binance_async_account_application, compose_ibkr_async_account_application,
     compose_local_account_application_for_segments, compose_okx_async_account_application,
-    AccountOptions,
+    default_rest_endpoint, AccountOptions, AccountSegmentBinding,
 };
+use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account::composition::{AeronAccountEventPublisher, MmapAccountPublisher};
+use kairos_integration::application::credential::CredentialStore;
 use kairos_protocol::InstanceIdentity;
-use kairos_workspace::account::{AccountBindingRecord, AccountRegistry, CredentialStore};
 use kairos_workspace::Workspace;
 
 #[tokio::main(flavor = "current_thread")]
@@ -53,11 +54,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|record| record.account_id == args.account_id)
         .cloned();
-    let segments = record
-        .as_ref()
-        .map(|record| record.segments.clone())
-        .filter(|segments| !segments.is_empty())
-        .unwrap_or_else(|| vec![args.segment.clone()]);
+    let segment_bindings = if let Some(record) =
+        record.as_ref().filter(|value| !value.segments.is_empty())
+    {
+        record
+            .segments
+            .iter()
+            .map(|segment_key| {
+                record
+                    .product_for_segment(segment_key)
+                    .map(|product| {
+                        let binding = AccountSegmentBinding::new(segment_key, product);
+                        record
+                            .segment_trading_modes
+                            .get(segment_key)
+                            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))
+                    })
+                    .ok_or_else(|| format!("account segment {segment_key} has no provider product"))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let binding = AccountSegmentBinding::new(&args.segment, &args.product);
+        vec![args
+            .trading_mode
+            .as_ref()
+            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))]
+    };
     let credential_id = record.as_ref().and_then(|value| {
         value.credential_id.clone().or_else(|| {
             value
@@ -93,16 +115,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         args.passphrase.clone()
     };
-    let mut options = args.options(record.as_ref(), api_key, secret, passphrase);
+    let mut options = args.options(record.as_ref(), api_key, secret, passphrase)?;
     options.reference_database = Some(workspace.child(&["reference", "reference.sqlite"])?);
     let shared_quota_ledger = workspace
         .state_root()
         .join("integration")
         .join("provider-quota.mmap");
     let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
-        && segments.iter().all(|segment| {
+        && segment_bindings.iter().all(|segment| {
             matches!(
                 segment
+                    .provider_product
                     .trim()
                     .to_ascii_lowercase()
                     .replace('_', "-")
@@ -113,8 +136,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     | "isolated-margin"
                     | "usd-m-futures"
                     | "coin-m-futures"
-                    | "swap"
-                    | "futures"
                     | "options"
             )
         });
@@ -144,7 +165,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut composition = if native_binance_account {
         compose_binance_async_account_application(
             &options,
-            &segments,
+            &segment_bindings,
             Some(state),
             args.account_stream_endpoint
                 .as_deref()
@@ -155,24 +176,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else if native_okx_account {
         compose_okx_async_account_application(
             &options,
-            &segments,
+            &segment_bindings,
             Some(state),
             args.account_stream_endpoint.as_deref(),
             Some(shared_quota_ledger.clone()),
             &args.egress_scope_id,
         )?
     } else if native_ibkr_account {
-        compose_ibkr_async_account_application(&options, &segments, Some(state))?
+        compose_ibkr_async_account_application(&options, &segment_bindings, Some(state))?
     } else if matches!(
         options.provider.trim().to_ascii_lowercase().as_str(),
         "paper" | "simulated"
     ) {
-        compose_local_account_application_for_segments(&options, &segments, Some(state))?
+        compose_local_account_application_for_segments(&options, &segment_bindings, Some(state))?
     } else {
         return Err(format!(
             "production Account requires a provider-native async source; provider={} segments={} are not migrated",
             options.provider,
-            segments.join(",")
+            segment_bindings
+                .iter()
+                .map(|value| value.segment_key.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
         )
         .into());
     };
@@ -235,13 +260,15 @@ struct Args {
     provider: String,
     #[arg(long, default_value = "spot")]
     product: String,
-    #[arg(long, env = "BINANCE_API_KEY", default_value = "")]
+    #[arg(long)]
+    trading_mode: Option<String>,
+    #[arg(long, default_value = "")]
     api_key: String,
-    #[arg(long, env = "BINANCE_API_SECRET", default_value = "")]
+    #[arg(long, default_value = "")]
     secret: String,
-    #[arg(long, env = "OKX_PASSPHRASE", default_value = "")]
+    #[arg(long, default_value = "")]
     passphrase: String,
-    #[arg(long, default_value = "https://api.binance.com")]
+    #[arg(long, default_value = "")]
     base_url: String,
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -312,23 +339,34 @@ impl Args {
         api_key: String,
         secret: String,
         passphrase: String,
-    ) -> AccountOptions {
+    ) -> Result<AccountOptions, String> {
         let provider = record
             .map(|value| value.provider.clone())
             .unwrap_or_else(|| self.provider.clone());
         let product = record
-            .and_then(|value| value.segments.first().cloned())
+            .and_then(|value| {
+                value
+                    .segments
+                    .first()
+                    .and_then(|segment| value.product_for_segment(segment))
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| self.product.clone());
         let environment = record
             .map(|value| value.environment.clone())
             .unwrap_or_else(|| self.environment.clone());
-        AccountOptions {
+        let base_url = if self.base_url.trim().is_empty() {
+            default_rest_endpoint(&provider, &product)?.to_owned()
+        } else {
+            self.base_url.clone()
+        };
+        Ok(AccountOptions {
             provider,
             product,
             api_key: api_key.into(),
             secret: secret.into(),
             passphrase: passphrase.into(),
-            base_url: self.base_url.clone(),
+            base_url,
             account_id: self.account_id.clone(),
             segment: record
                 .and_then(|value| value.segments.first().cloned())
@@ -344,7 +382,7 @@ impl Args {
             isolated_margin_symbol: record
                 .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
             reference_database: None,
-        }
+        })
     }
 }
 

@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 flatbuffers = "25.12.19"
 kairos-protocol = { path = "../../../kairos-protocol" }
+kairos-domain-types = { path = "../../../kairos-domain-types" }
 kairos-transport = { path = "../../../kairos-transport" }
 kairos-workspace = { path = "../../../kairos-workspace" }
 rusqlite.workspace = true

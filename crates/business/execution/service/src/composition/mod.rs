@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::application::{
     ExecutionAsyncRoute, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
@@ -12,7 +12,8 @@ use crate::services::routing::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyn
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderEventSource, AsyncOrderQueryConnection, CommandOutcome,
     ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
-    IntegrationError, ParticipantInstrumentTypeRef,
+    IntegrationError, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
+    ProviderInstrumentRef,
 };
 use kairos_integration::application::{
     ConnectionDescriptor, ConnectionHealth, DecimalValue, OrderEntryEvent, OrderEntryRequest,
@@ -21,10 +22,12 @@ use kairos_integration::application::{
 use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use kairos_integration::participants::binance::ConnectionDomain as BinanceConnectionDomain;
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinanceFuturesChannelConfig,
-    BinanceMarginChannelConfig, BinanceOptionsChannelConfig, BinancePrincipalConfig,
-    BinancePrincipalConnection, BinancePrincipalOrderQuotaAllocation, BinanceQuotaAllocation,
-    BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
+    BinanceCoinMConnection, BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig,
+    BinanceMarginChannelConfig, BinanceOptionsChannelConfig, BinanceOptionsConnection,
+    BinanceOptionsConnectionConfig, BinancePrincipalConfig, BinancePrincipalOrderQuotaAllocation,
+    BinanceQuotaAllocation, BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
+    BinanceSpotConnection, BinanceSpotConnectionConfig, BinanceSpotPrincipalConnection,
+    BinanceUsdMConnection,
 };
 use kairos_integration::participants::okx::{
     InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig, OkxPrincipalConfig,
@@ -47,6 +50,79 @@ pub use crate::services::simulator::{
     SimulationOrderStatus, SimulationResult,
 };
 
+/// Load the active Reference-owned execution address book. Production
+/// composition installs this before accepting submissions; Execution never
+/// reconstructs provider symbols or product discriminators from business IDs.
+pub fn load_reference_execution_accesses(
+    database: &Path,
+) -> Result<
+    Vec<(
+        kairos_domain_types::ExecutionAccessId,
+        ProviderInstrumentRef,
+    )>,
+    String,
+> {
+    let reader = kairos_reference_contract::ReferenceSqliteReader::open(database)
+        .map_err(|error| error.to_string())?;
+    let mut after_access_id = None;
+    let mut result = Vec::new();
+    loop {
+        let page = reader
+            .execution_accesses(&kairos_reference_contract::SqliteExecutionAccessQuery {
+                statuses: vec!["active".into()],
+                after_access_id: after_access_id.clone(),
+                limit: 1_000,
+                ..Default::default()
+            })
+            .map_err(|error| error.to_string())?;
+        if page.is_empty() {
+            break;
+        }
+        for access in &page {
+            result.push(provider_instrument_from_execution_access(access)?);
+        }
+        after_access_id = page.last().map(|access| access.access_id.clone());
+        if page.len() < 1_000 {
+            break;
+        }
+    }
+    Ok(result)
+}
+
+fn provider_instrument_from_execution_access(
+    access: &kairos_reference_contract::ExecutionAccess,
+) -> Result<
+    (
+        kairos_domain_types::ExecutionAccessId,
+        ProviderInstrumentRef,
+    ),
+    String,
+> {
+    let participant_kind = match access.provider_id.as_str() {
+        "binance" | "okx" | "hyperliquid" => ParticipantKind::Exchange,
+        "ibkr" => ParticipantKind::Broker,
+        provider => {
+            return Err(format!(
+                "unsupported execution-access provider in Reference: {provider}"
+            ))
+        }
+    };
+    Ok((
+        kairos_domain_types::ExecutionAccessId::new(access.access_id.clone())
+            .map_err(|error| error.to_string())?,
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(participant_kind, access.provider_id.clone())
+                .map_err(|error| error.to_string())?,
+            Some(
+                ParticipantInstrumentTypeRef::new(access.provider_product.clone())
+                    .map_err(|error| error.to_string())?,
+            ),
+            access.provider_symbol.clone(),
+        )
+        .map_err(|error| error.to_string())?,
+    ))
+}
+
 #[derive(Default)]
 pub struct SimulatedOrderEntry;
 
@@ -61,7 +137,10 @@ pub struct ExecutionConnectionOptions {
     pub account_id: String,
     pub segment_key: String,
     pub provider: String,
+    /// Provider venue product. For OKX this remains independent from the
+    /// order/account trading mode below.
     pub product: String,
+    pub trading_mode: Option<String>,
     pub api_key: SecretString,
     pub secret: SecretString,
     pub passphrase: SecretString,
@@ -469,8 +548,8 @@ impl AsyncOrderEventSource for ExecutionAsyncEventSource {
 
 fn binance_spot_provider_connection(
     options: &ExecutionConnectionOptions,
-) -> Result<BinanceConnection, String> {
-    BinanceConnection::connect(BinanceConnectionConfig {
+) -> Result<BinanceSpotConnection, String> {
+    BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: if options.base_url.to_ascii_lowercase().contains("testnet") {
             "testnet".into()
         } else {
@@ -492,9 +571,9 @@ fn binance_spot_provider_connection(
 }
 
 fn binance_spot_private_connection_from_provider(
-    provider: &BinanceConnection,
+    provider: &BinanceSpotConnection,
     options: &ExecutionConnectionOptions,
-) -> Result<BinancePrincipalConnection, String> {
+) -> Result<BinanceSpotPrincipalConnection, String> {
     provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: format!("binance.principal.{}", options.principal_scope_id),
@@ -520,25 +599,117 @@ fn binance_spot_channel_config(options: &ExecutionConnectionOptions) -> BinanceS
 
 fn binance_spot_private_connection(
     options: &ExecutionConnectionOptions,
-) -> Result<BinancePrincipalConnection, String> {
+) -> Result<BinanceSpotPrincipalConnection, String> {
     let provider = binance_spot_provider_connection(options)?;
     binance_spot_private_connection_from_provider(&provider, options)
 }
 
+fn binance_futures_private_connection(
+    options: &ExecutionConnectionOptions,
+    domain: BinanceConnectionDomain,
+) -> Result<kairos_integration::participants::binance::BinanceFuturesPrincipalConnection, String> {
+    let config = BinanceFuturesConnectionConfig {
+        environment: if options.base_url.to_ascii_lowercase().contains("testnet") {
+            "testnet".into()
+        } else {
+            "live".into()
+        },
+        rest_base_url: options.base_url.clone(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: options.request_weight_per_minute,
+            cancel_reserve_weight: options.cancel_reserve_weight,
+        },
+        shared_quota: options.shared_quota_ledger_path.clone().map(|ledger_path| {
+            BinanceSharedQuotaConfig {
+                ledger_path,
+                egress_scope_id: options.egress_scope_id.clone(),
+            }
+        }),
+    };
+    let principal = BinancePrincipalConfig {
+        binding_id: format!("binance.principal.{}", options.principal_scope_id),
+        principal_id: Some(options.principal_scope_id.clone()),
+        api_key: options.api_key.clone(),
+        secret: options.secret.clone(),
+        principal_quota: None,
+    };
+    match domain {
+        BinanceConnectionDomain::UsdMFutures => BinanceUsdMConnection::connect(config)
+            .map_err(|error| error.to_string())?
+            .principal_connection(principal)
+            .map_err(|error| error.to_string()),
+        BinanceConnectionDomain::CoinMFutures => BinanceCoinMConnection::connect(config)
+            .map_err(|error| error.to_string())?
+            .principal_connection(principal)
+            .map_err(|error| error.to_string()),
+        _ => Err(format!("unsupported Binance futures domain: {domain:?}")),
+    }
+}
+
+fn binance_options_private_connection(
+    options: &ExecutionConnectionOptions,
+) -> Result<kairos_integration::participants::binance::BinanceOptionsPrincipalConnection, String> {
+    let provider = BinanceOptionsConnection::connect(BinanceOptionsConnectionConfig {
+        environment: if options.base_url.to_ascii_lowercase().contains("testnet") {
+            "testnet".into()
+        } else {
+            "live".into()
+        },
+        rest_base_url: options.base_url.clone(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: options.request_weight_per_minute,
+            cancel_reserve_weight: options.cancel_reserve_weight,
+        },
+        shared_quota: options.shared_quota_ledger_path.clone().map(|ledger_path| {
+            BinanceSharedQuotaConfig {
+                ledger_path,
+                egress_scope_id: options.egress_scope_id.clone(),
+            }
+        }),
+    })
+    .map_err(|error| error.to_string())?;
+    provider
+        .principal_connection(BinancePrincipalConfig {
+            binding_id: format!("binance.principal.{}", options.principal_scope_id),
+            principal_id: Some(options.principal_scope_id.clone()),
+            api_key: options.api_key.clone(),
+            secret: options.secret.clone(),
+            principal_quota: None,
+        })
+        .map_err(|error| error.to_string())
+}
+
 fn okx_trading_shape(
     product: &str,
+    trading_mode: Option<&str>,
 ) -> Result<(OkxInstrumentType, OkxTradingMode), String> {
-    match product.trim().to_ascii_lowercase().as_str() {
-        "spot" => Ok((OkxInstrumentType::Spot, OkxTradingMode::Cash)),
-        "cross-margin" | "margin" => {
-            Ok((OkxInstrumentType::Margin, OkxTradingMode::Cross))
+    let instrument_type = match product.trim().to_ascii_lowercase().as_str() {
+        "spot" => OkxInstrumentType::Spot,
+        "margin" => OkxInstrumentType::Margin,
+        "swap" => OkxInstrumentType::Swap,
+        "futures" => OkxInstrumentType::Futures,
+        "option" | "options" => OkxInstrumentType::Option,
+        other => return Err(format!("unsupported OKX execution product: {other}")),
+    };
+    let trading_mode = match trading_mode.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "cash" => OkxTradingMode::Cash,
+        Some(value) if value == "cross" => OkxTradingMode::Cross,
+        Some(value) if value == "isolated" => OkxTradingMode::Isolated,
+        Some(value) => return Err(format!("unsupported OKX trading mode: {value}")),
+        None if instrument_type == OkxInstrumentType::Spot => OkxTradingMode::Cash,
+        None => {
+            return Err(format!(
+                "OKX {product} execution route requires explicit trading_mode (cross or isolated)"
+            ))
         }
-        "isolated-margin" => Ok((OkxInstrumentType::Margin, OkxTradingMode::Isolated)),
-        "swap" => Ok((OkxInstrumentType::Swap, OkxTradingMode::Cross)),
-        "futures" => Ok((OkxInstrumentType::Futures, OkxTradingMode::Cross)),
-        "option" | "options" => Ok((OkxInstrumentType::Option, OkxTradingMode::Cross)),
-        other => Err(format!("unsupported OKX execution product: {other}")),
+    };
+    if instrument_type == OkxInstrumentType::Spot && trading_mode != OkxTradingMode::Cash {
+        return Err("OKX spot execution requires cash trading_mode".into());
     }
+    if instrument_type == OkxInstrumentType::Margin && trading_mode == OkxTradingMode::Cash {
+        return Err("OKX margin execution requires cross or isolated trading_mode".into());
+    }
+    Ok((instrument_type, trading_mode))
 }
 
 fn okx_provider_connection(options: &ExecutionConnectionOptions) -> Result<OkxConnection, String> {
@@ -634,12 +805,9 @@ pub fn compose_execution_routes(
                 product.as_str(),
                 "spot"
                     | "cross-margin"
-                    | "margin"
                     | "isolated-margin"
                     | "usd-m-futures"
-                    | "swap"
                     | "coin-m-futures"
-                    | "futures"
                     | "options"
             ))
             || provider == "okx"
@@ -661,12 +829,9 @@ pub fn compose_execution_routes(
                     product.as_str(),
                     "spot"
                         | "cross-margin"
-                        | "margin"
                         | "isolated-margin"
                         | "usd-m-futures"
-                        | "swap"
                         | "coin-m-futures"
-                        | "futures"
                         | "options"
                 ) => {}
             "ibkr" if matches!(product.as_str(), "equity" | "stocks") => {
@@ -683,7 +848,7 @@ pub fn compose_execution_routes(
                 }
             }
             "okx" | "okex" => {
-                okx_trading_shape(&product)?;
+                okx_trading_shape(&product, option.trading_mode.as_deref())?;
             }
             _ => {
                 return Err(format!(
@@ -694,7 +859,7 @@ pub fn compose_execution_routes(
         }
     }
 
-    let mut binance_contexts: Vec<(usize, BinanceConnection)> = Vec::new();
+    let mut binance_contexts: Vec<(usize, BinanceSpotConnection)> = Vec::new();
     let mut okx_contexts: Vec<(usize, OkxConnection)> = Vec::new();
     let mut descriptors = Vec::with_capacity(options.len());
     let mut async_entry_routes = Vec::with_capacity(options.len());
@@ -709,24 +874,33 @@ pub fn compose_execution_routes(
         let provider = option.provider.trim().to_ascii_lowercase();
         let product = option.product.trim().to_ascii_lowercase();
         if provider == "binance" {
-            let context_index = if let Some(index) =
-                binance_contexts.iter().position(|(representative, _)| {
-                    same_binance_spot_provider_context(&options[*representative], option)
-                }) {
-                index
-            } else {
-                binance_contexts.push((option_index, binance_spot_provider_connection(option)?));
-                binance_contexts.len() - 1
-            };
-            let connection = binance_spot_private_connection_from_provider(
-                &binance_contexts[context_index].1,
-                option,
-            )?;
-            if matches!(
+            let connection = if matches!(
                 product.as_str(),
-                "cross-margin" | "margin" | "isolated-margin"
+                "spot" | "cross-margin" | "isolated-margin"
             ) {
-                let (margin, route_product, isolated_symbol) = if product == "isolated-margin" {
+                let context_index = if let Some(index) =
+                    binance_contexts.iter().position(|(representative, _)| {
+                        same_binance_spot_provider_context(&options[*representative], option)
+                    }) {
+                    index
+                } else {
+                    binance_contexts
+                        .push((option_index, binance_spot_provider_connection(option)?));
+                    binance_contexts.len() - 1
+                };
+                Some(binance_spot_private_connection_from_provider(
+                    &binance_contexts[context_index].1,
+                    option,
+                )?)
+            } else {
+                None
+            };
+            if matches!(product.as_str(), "cross-margin" | "isolated-margin") {
+                let (margin, provider_instrument_type, isolated_symbol): (
+                    _,
+                    ParticipantInstrumentTypeRef,
+                    Option<String>,
+                ) = if product == "isolated-margin" {
                     let symbol = option
                         .isolated_symbol
                         .as_ref()
@@ -737,15 +911,20 @@ pub fn compose_execution_routes(
                         .to_ascii_uppercase();
                     (
                         connection
+                            .as_ref()
+                            .expect("Spot family connection for margin route")
                             .isolated_margin_connection(symbol.clone())
                             .map_err(|error| error.to_string())?,
-                        RouteProduct::IsolatedMargin,
+                        BinanceConnectionDomain::IsolatedMargin.into(),
                         Some(symbol),
                     )
                 } else {
                     (
-                        connection.cross_margin_connection(),
-                        RouteProduct::CrossMargin,
+                        connection
+                            .as_ref()
+                            .expect("Spot family connection for margin route")
+                            .cross_margin_connection(),
+                        BinanceConnectionDomain::CrossMargin.into(),
                         None,
                     )
                 };
@@ -754,7 +933,7 @@ pub fn compose_execution_routes(
                     option.route_id.clone(),
                     account_id.clone(),
                     segment_key.clone(),
-                    Some(route_product),
+                    Some(provider_instrument_type.clone()),
                     descriptor.clone(),
                     ExecutionAsyncOrderEntry::BinanceMargin(
                         margin.order_entry().map_err(|error| error.to_string())?,
@@ -764,7 +943,7 @@ pub fn compose_execution_routes(
                     option.route_id.clone(),
                     account_id,
                     segment_key,
-                    Some(route_product),
+                    Some(provider_instrument_type),
                     descriptor.clone(),
                     ExecutionAsyncOrderQuery::BinanceMargin(
                         margin.order_query().map_err(|error| error.to_string())?,
@@ -789,24 +968,23 @@ pub fn compose_execution_routes(
                 descriptors.push(descriptor);
                 continue;
             }
-            if matches!(
-                product.as_str(),
-                "usd-m-futures" | "swap" | "coin-m-futures" | "futures"
-            ) {
-                let (futures, route_product) =
-                    if matches!(product.as_str(), "usd-m-futures" | "swap") {
+            if matches!(product.as_str(), "usd-m-futures" | "coin-m-futures") {
+                let (futures, provider_instrument_type): (_, ParticipantInstrumentTypeRef) =
+                    if product == "usd-m-futures" {
                         (
-                            connection
-                                .usd_m_futures_connection()
-                                .map_err(|error| error.to_string())?,
-                            RouteProduct::UsdMFutures,
+                            binance_futures_private_connection(
+                                option,
+                                BinanceConnectionDomain::UsdMFutures,
+                            )?,
+                            BinanceConnectionDomain::UsdMFutures.into(),
                         )
                     } else {
                         (
-                            connection
-                                .coin_m_futures_connection()
-                                .map_err(|error| error.to_string())?,
-                            RouteProduct::CoinMFutures,
+                            binance_futures_private_connection(
+                                option,
+                                BinanceConnectionDomain::CoinMFutures,
+                            )?,
+                            BinanceConnectionDomain::CoinMFutures.into(),
                         )
                     };
                 let descriptor = futures.descriptor().clone();
@@ -814,7 +992,7 @@ pub fn compose_execution_routes(
                     option.route_id.clone(),
                     account_id.clone(),
                     segment_key.clone(),
-                    Some(route_product),
+                    Some(provider_instrument_type.clone()),
                     descriptor.clone(),
                     ExecutionAsyncOrderEntry::BinanceFutures(futures.order_entry()),
                 )?);
@@ -822,7 +1000,7 @@ pub fn compose_execution_routes(
                     option.route_id.clone(),
                     account_id,
                     segment_key,
-                    Some(route_product),
+                    Some(provider_instrument_type),
                     descriptor.clone(),
                     ExecutionAsyncOrderQuery::BinanceFutures(futures.order_query()),
                 )?);
@@ -845,15 +1023,13 @@ pub fn compose_execution_routes(
                 continue;
             }
             if product == "options" {
-                let options_connection = connection
-                    .options_connection()
-                    .map_err(|error| error.to_string())?;
+                let options_connection = binance_options_private_connection(option)?;
                 let descriptor = options_connection.descriptor().clone();
                 async_entry_routes.push(ExecutionRoute::new(
                     option.route_id.clone(),
                     account_id.clone(),
                     segment_key.clone(),
-                    Some(RouteProduct::Options),
+                    Some(BinanceConnectionDomain::Options.into()),
                     descriptor.clone(),
                     ExecutionAsyncOrderEntry::BinanceOptions(options_connection.order_entry()),
                 )?);
@@ -861,7 +1037,7 @@ pub fn compose_execution_routes(
                     option.route_id.clone(),
                     account_id,
                     segment_key,
-                    Some(RouteProduct::Options),
+                    Some(BinanceConnectionDomain::Options.into()),
                     descriptor.clone(),
                     ExecutionAsyncOrderQuery::BinanceOptions(options_connection.order_query()),
                 )?);
@@ -883,13 +1059,14 @@ pub fn compose_execution_routes(
                 descriptors.push(descriptor);
                 continue;
             }
+            let connection = connection.expect("Spot family connection for spot route");
             let descriptor = connection.spot_descriptor();
             let channel = binance_spot_channel_config(option);
             async_entry_routes.push(ExecutionRoute::new(
                 option.route_id.clone(),
                 account_id.clone(),
                 segment_key.clone(),
-                Some(RouteProduct::Spot),
+                Some(BinanceConnectionDomain::Spot.into()),
                 descriptor.clone(),
                 ExecutionAsyncOrderEntry::BinanceSpot(
                     connection
@@ -901,7 +1078,7 @@ pub fn compose_execution_routes(
                 option.route_id.clone(),
                 account_id,
                 segment_key,
-                Some(RouteProduct::Spot),
+                Some(BinanceConnectionDomain::Spot.into()),
                 descriptor.clone(),
                 ExecutionAsyncOrderQuery::BinanceSpot(
                     connection
@@ -941,7 +1118,7 @@ pub fn compose_execution_routes(
                 option.route_id.clone(),
                 account_id.clone(),
                 segment_key.clone(),
-                Some(RouteProduct::Equity),
+                Some(ParticipantInstrumentTypeRef::new("equity")?),
                 descriptor.clone(),
                 ExecutionAsyncOrderEntry::Ibkr(connection.order_entry()),
             )?);
@@ -949,7 +1126,7 @@ pub fn compose_execution_routes(
                 option.route_id.clone(),
                 account_id,
                 segment_key,
-                Some(RouteProduct::Equity),
+                Some(ParticipantInstrumentTypeRef::new("equity")?),
                 descriptor.clone(),
                 ExecutionAsyncOrderQuery::Ibkr(connection.order_query()),
             )?);
@@ -965,7 +1142,8 @@ pub fn compose_execution_routes(
             continue;
         }
 
-        let (instrument_type, trading_mode, product_family) = okx_trading_shape(&product)?;
+        let (instrument_type, trading_mode) =
+            okx_trading_shape(&product, option.trading_mode.as_deref())?;
         let context_index = if let Some(index) =
             okx_contexts.iter().position(|(representative, _)| {
                 same_okx_provider_context(&options[*representative], option)
@@ -987,7 +1165,7 @@ pub fn compose_execution_routes(
             option.route_id.clone(),
             account_id.clone(),
             segment_key.clone(),
-            Some(product_family),
+            Some(instrument_type.into()),
             entry_descriptor.clone(),
             ExecutionAsyncOrderEntry::OkxTrading(async_entry),
         )?);
@@ -995,7 +1173,7 @@ pub fn compose_execution_routes(
             option.route_id.clone(),
             account_id,
             segment_key,
-            Some(product_family),
+            Some(instrument_type.into()),
             query_descriptor,
             ExecutionAsyncOrderQuery::OkxTrading(async_query),
         )?);
@@ -1064,7 +1242,7 @@ fn compose_ibkr_async_execution(
             options.route_id.clone(),
             account_id.clone(),
             segment_key.clone(),
-            Some(RouteProduct::Equity),
+            Some(ParticipantInstrumentTypeRef::new("equity")?),
             descriptor.clone(),
             ExecutionAsyncOrderEntry::Ibkr(connection.order_entry()),
         )?])?,
@@ -1074,7 +1252,7 @@ fn compose_ibkr_async_execution(
             options.route_id.clone(),
             account_id,
             segment_key,
-            Some(RouteProduct::Equity),
+            Some(ParticipantInstrumentTypeRef::new("equity")?),
             descriptor.clone(),
             ExecutionAsyncOrderQuery::Ibkr(connection.order_query()),
         )?])?,
@@ -1110,14 +1288,7 @@ pub fn compose_direct_execution_connections(
         || (provider == "binance"
             && matches!(
                 product.as_str(),
-                "cross-margin"
-                    | "margin"
-                    | "isolated-margin"
-                    | "usd-m-futures"
-                    | "swap"
-                    | "coin-m-futures"
-                    | "futures"
-                    | "options"
+                "cross-margin" | "isolated-margin" | "usd-m-futures" | "coin-m-futures" | "options"
             ));
     if !native_async_direct {
         let connections = compose_execution_connections(options)?;
@@ -1196,7 +1367,7 @@ pub fn compose_execution_connections(
                 options.route_id.clone(),
                 account_id.clone(),
                 segment_key.clone(),
-                Some(RouteProduct::Spot),
+                Some(BinanceConnectionDomain::Spot.into()),
                 descriptor.clone(),
                 async_order_entry,
             )?])?,
@@ -1206,7 +1377,7 @@ pub fn compose_execution_connections(
                 options.route_id.clone(),
                 account_id,
                 segment_key,
-                Some(RouteProduct::Spot),
+                Some(BinanceConnectionDomain::Spot.into()),
                 descriptor.clone(),
                 async_order_query,
             )?])?,
@@ -1233,7 +1404,8 @@ pub fn compose_execution_connections(
         });
     }
     if provider == "okx" || provider == "okex" {
-        let (instrument_type, trading_mode, product_family) = okx_trading_shape(&product)?;
+        let (instrument_type, trading_mode) =
+            okx_trading_shape(&product, options.trading_mode.as_deref())?;
         let connection = okx_private_connection(options)?;
         let async_entry = connection
             .trading_order_entry(instrument_type, trading_mode)
@@ -1260,7 +1432,7 @@ pub fn compose_execution_connections(
                 options.route_id.clone(),
                 account_id.clone(),
                 segment_key.clone(),
-                Some(product_family),
+                Some(instrument_type.into()),
                 entry_descriptor.clone(),
                 ExecutionAsyncOrderEntry::OkxTrading(async_entry),
             )?])?,
@@ -1270,7 +1442,7 @@ pub fn compose_execution_connections(
                 options.route_id.clone(),
                 account_id,
                 segment_key,
-                Some(product_family),
+                Some(instrument_type.into()),
                 query_descriptor,
                 ExecutionAsyncOrderQuery::OkxTrading(async_query),
             )?])?,
@@ -1321,7 +1493,8 @@ pub fn compose_order_entry(
         ));
     }
     if provider == "okx" || provider == "okex" {
-        let (instrument_type, trading_mode, _) = okx_trading_shape(&product_name)?;
+        let (instrument_type, trading_mode) =
+            okx_trading_shape(&product_name, options.trading_mode.as_deref())?;
         return Ok(Box::new(
             okx_private_connection(options)?
                 .blocking_trading_order_entry(instrument_type, trading_mode)
@@ -1334,7 +1507,7 @@ pub fn compose_order_entry(
                 "Binance does not publish a supported Equity/Stocks execution API; use a broker route such as IBKR"
                     .into(),
             ),
-            "cross-margin" | "margin" => Err(
+            "cross-margin" => Err(
                 "Binance Cross Margin is async-only; use production/direct async composition"
                     .into(),
             ),
@@ -1345,11 +1518,11 @@ pub fn compose_order_entry(
             "options" => {
                 Err("Binance Options is async-only; use production/direct async composition".into())
             }
-            "usd-m-futures" | "swap" => Err(
+            "usd-m-futures" => Err(
                 "Binance USD-M Futures is async-only; use production/direct async composition"
                     .into(),
             ),
-            "coin-m-futures" | "futures" => Err(
+            "coin-m-futures" => Err(
                 "Binance COIN-M Futures is async-only; use production/direct async composition"
                     .into(),
             ),
@@ -1376,7 +1549,7 @@ pub fn compose_order_query(
         )));
     }
     if provider == "okx" || provider == "okex" {
-        let (instrument_type, _, _) = okx_trading_shape(&product)?;
+        let (instrument_type, _) = okx_trading_shape(&product, options.trading_mode.as_deref())?;
         return Ok(Some(Box::new(
             okx_private_connection(options)?.blocking_trading_order_query(instrument_type),
         )));
@@ -1384,8 +1557,8 @@ pub fn compose_order_query(
     let product_family = match product.as_str() {
         "equity" | "stocks" => return Ok(None),
         "spot" => BinanceConnectionDomain::Spot,
-        "usd-m-futures" | "swap" => BinanceConnectionDomain::UsdMFutures,
-        "coin-m-futures" | "futures" => BinanceConnectionDomain::CoinMFutures,
+        "usd-m-futures" => BinanceConnectionDomain::UsdMFutures,
+        "coin-m-futures" => BinanceConnectionDomain::CoinMFutures,
         "options" => BinanceConnectionDomain::Options,
         _ => return Ok(None),
     };
@@ -1549,7 +1722,8 @@ impl ExecutionStateStore for FileExecutionStore {
 mod secret_tests {
     use super::{
         compose_direct_execution_connections, compose_execution_connections,
-        compose_execution_routes, ExecutionConnectionOptions,
+        compose_execution_routes, provider_instrument_from_execution_access,
+        ExecutionConnectionOptions,
     };
 
     fn binance_spot_options() -> ExecutionConnectionOptions {
@@ -1560,6 +1734,7 @@ mod secret_tests {
             segment_key: "spot".into(),
             provider: "binance".into(),
             product: "spot".into(),
+            trading_mode: None,
             api_key: "api-key-secret".into(),
             secret: "api-secret".into(),
             passphrase: "passphrase-secret".into(),
@@ -1590,6 +1765,36 @@ mod secret_tests {
     }
 
     #[test]
+    fn reference_execution_access_maps_without_reconstructing_provider_facts() {
+        let access = kairos_reference_contract::ExecutionAccess {
+            access_id: "execution-access:okx:margin:btc-usdt".into(),
+            provider_id: "okx".into(),
+            provider_product: "margin".into(),
+            provider_symbol: "BTC-USDT".into(),
+            status: "active".into(),
+            ..Default::default()
+        };
+        let (access_id, provider_instrument) =
+            provider_instrument_from_execution_access(&access).unwrap();
+
+        assert_eq!(access_id.as_str(), access.access_id);
+        assert_eq!(provider_instrument.participant.id, "okx");
+        assert_eq!(
+            provider_instrument
+                .instrument_type
+                .as_ref()
+                .unwrap()
+                .as_str(),
+            "margin"
+        );
+        assert_eq!(provider_instrument.source_symbol.as_str(), "BTC-USDT");
+
+        let mut unsupported = access;
+        unsupported.provider_id = "future-provider".into();
+        assert!(provider_instrument_from_execution_access(&unsupported).is_err());
+    }
+
+    #[test]
     fn binance_spot_route_uses_one_native_provider_context() {
         let connections = compose_execution_connections(&binance_spot_options()).unwrap();
         let descriptor = connections.descriptor.expect("native route descriptor");
@@ -1610,6 +1815,7 @@ mod secret_tests {
         options.route_id = "okx.swap".into();
         options.provider = "okx".into();
         options.product = "swap".into();
+        options.trading_mode = Some("cross".into());
         options.segment_key = "swap".into();
         options.base_url = "https://www.okx.com".into();
         let connections = compose_execution_connections(&options).unwrap();
@@ -1626,6 +1832,53 @@ mod secret_tests {
         assert!(connections.async_order_entry.is_some());
         assert!(connections.async_order_query.is_some());
         assert_eq!(connections.async_execution_streams.len(), 1);
+    }
+
+    #[test]
+    fn okx_rejects_binance_settlement_product_names() {
+        for product in ["usd-m-futures", "coin-m-futures"] {
+            let mut options = binance_spot_options();
+            options.provider = "okx".into();
+            options.product = product.into();
+            options.base_url = "https://www.okx.com".into();
+
+            let error = compose_execution_routes(&[options])
+                .err()
+                .expect("a Binance settlement product must not select an OKX route");
+            assert!(error.contains("unsupported OKX execution product"));
+        }
+    }
+
+    #[test]
+    fn okx_keeps_product_and_trading_mode_independent() {
+        let mut options = binance_spot_options();
+        options.provider = "okx".into();
+        options.product = "margin".into();
+        options.base_url = "https://www.okx.com".into();
+
+        let error = compose_execution_routes(&[options.clone()])
+            .err()
+            .expect("margin without an explicit mode must fail closed");
+        assert!(error.contains("requires explicit trading_mode"));
+
+        options.trading_mode = Some("isolated".into());
+        let connections = compose_execution_routes(&[options]).unwrap();
+        assert!(connections.descriptors[0]
+            .binding_id
+            .ends_with("trading.margin.isolated"));
+    }
+
+    #[test]
+    fn binance_rejects_okx_contract_product_names() {
+        for product in ["swap", "futures"] {
+            let mut options = binance_spot_options();
+            options.product = product.into();
+
+            let error = compose_execution_routes(&[options])
+                .err()
+                .expect("an OKX contract product must not select a Binance route");
+            assert!(error.contains("production async execution route is not available"));
+        }
     }
 
     #[test]
@@ -1852,6 +2105,7 @@ mod secret_tests {
         okx.route_id = "okx.swap".into();
         okx.provider = "okx".into();
         okx.product = "swap".into();
+        okx.trading_mode = Some("cross".into());
         okx.segment_key = "swap".into();
         okx.base_url = "https://www.okx.com".into();
         okx.websocket_url = "wss://ws.okx.com:8443/ws/v5/private".into();

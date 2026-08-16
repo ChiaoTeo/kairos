@@ -1,6 +1,7 @@
 use super::{
-    BinanceConnection, BinanceConnectionConfig, BinancePrincipalConfig, ConnectionDomain,
-    InstrumentType,
+    BinanceFuturesConnectionConfig, BinanceOptionsConnection, BinanceOptionsConnectionConfig,
+    BinancePrincipalConfig, BinanceSpotConnection, BinanceSpotConnectionConfig,
+    BinanceUsdMConnection, ConnectionDomain,
 };
 use crate::application::participants::binance::BinanceQuotaAllocation;
 use secrecy::SecretString;
@@ -16,6 +17,54 @@ use crate::application::{
     AsyncAccountCredentialInspectionConnection, AsyncAccountReadConnection, AsyncEarnConnection,
     AsyncOrderEntryConnection, AsyncOrderQueryConnection, AsyncTransferConnection,
 };
+
+fn native_usdm_principal(
+    base_url: String,
+    binding_id: &str,
+) -> super::BinanceFuturesPrincipalConnection {
+    BinanceUsdMConnection::connect(BinanceFuturesConnectionConfig {
+        environment: "testnet".into(),
+        rest_base_url: base_url,
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .unwrap()
+    .principal_connection(BinancePrincipalConfig {
+        binding_id: binding_id.into(),
+        principal_id: Some("test".into()),
+        api_key: SecretString::from("api-key"),
+        secret: SecretString::from("secret"),
+        principal_quota: None,
+    })
+    .unwrap()
+}
+
+fn native_options_principal(
+    base_url: String,
+    binding_id: &str,
+) -> super::BinanceOptionsPrincipalConnection {
+    BinanceOptionsConnection::connect(BinanceOptionsConnectionConfig {
+        environment: "test".into(),
+        rest_base_url: base_url,
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .unwrap()
+    .principal_connection(BinancePrincipalConfig {
+        binding_id: binding_id.into(),
+        principal_id: Some("test".into()),
+        api_key: SecretString::from("api-key"),
+        secret: SecretString::from("secret"),
+        principal_quota: None,
+    })
+    .unwrap()
+}
 
 fn futures_order_request(order_id: &str) -> OrderEntryRequest {
     OrderEntryRequest {
@@ -86,7 +135,7 @@ fn options_order_request(order_id: &str) -> OrderEntryRequest {
 #[test]
 fn native_connection_validates_binding_and_projects_shared_capabilities() {
     fn is_credential_inspection<T: AsyncAccountCredentialInspectionConnection>(_: &T) {}
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: "https://testnet.binance.vision".into(),
         quota: BinanceQuotaAllocation {
@@ -132,7 +181,7 @@ fn funding_handles_share_one_connection_domain_without_capability_metadata() {
     fn is_earn<T: AsyncEarnConnection>(_: &T) {}
     fn is_transfer<T: AsyncTransferConnection>(_: &T) {}
 
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: "https://testnet.binance.vision".into(),
         quota: BinanceQuotaAllocation {
@@ -191,7 +240,7 @@ fn funding_handles_share_one_connection_domain_without_capability_metadata() {
 
 #[test]
 fn provider_context_shares_ip_http_lane_but_separates_principals() {
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "live".into(),
         rest_base_url: "https://api.binance.com".into(),
         quota: BinanceQuotaAllocation {
@@ -221,14 +270,13 @@ fn provider_context_shares_ip_http_lane_but_separates_principals() {
         .unwrap();
 
     assert!(main.shares_provider_http_with(&hedge));
-    assert!(main
-        .usd_m_futures_connection()
-        .unwrap()
-        .shares_provider_http_with(&main));
-    assert!(main
-        .options_connection()
-        .unwrap()
-        .shares_provider_http_with(&main));
+    let usdm = native_usdm_principal("https://fapi.binance.com".into(), "execution.binance.usdm");
+    let options = native_options_principal(
+        "https://eapi.binance.com".into(),
+        "execution.binance.options",
+    );
+    assert_eq!(usdm.descriptor().domain.as_str(), "usd-m-futures");
+    assert_eq!(options.descriptor().domain.as_str(), "options");
     assert_ne!(
         main.spot_descriptor().binding_id,
         hedge.spot_descriptor().binding_id
@@ -241,7 +289,7 @@ fn provider_context_shares_ip_http_lane_but_separates_principals() {
 
 #[test]
 fn spot_channel_validates_transport_without_network_access() {
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "live".into(),
         rest_base_url: "https://api.binance.com".into(),
         quota: BinanceQuotaAllocation {
@@ -296,7 +344,7 @@ async fn instrument_catalog_uses_the_callers_runtime_and_trait_is_the_capability
         );
         stream.write_all(response.as_bytes()).await.unwrap();
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "public".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -306,8 +354,8 @@ async fn instrument_catalog_uses_the_callers_runtime_and_trait_is_the_capability
         shared_quota: None,
     })
     .unwrap();
-    let mut catalog = provider.instrument_catalog(InstrumentType::Spot);
-    let blocking = provider.blocking_instrument_catalog(InstrumentType::Spot);
+    let mut catalog = provider.instrument_catalog();
+    let blocking = provider.blocking_instrument_catalog();
     is_async(&catalog);
     is_blocking(&blocking);
     assert_eq!(catalog.descriptor().domain.as_str(), "spot");
@@ -362,7 +410,7 @@ async fn async_order_entry_and_query_use_the_callers_runtime() {
         }
     });
 
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "test".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -468,7 +516,7 @@ async fn futures_submit_server_failure_is_indeterminate_and_not_retried() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -478,7 +526,7 @@ async fn futures_submit_server_failure_is_indeterminate_and_not_retried() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.usdm.failure".into(),
             principal_id: Some("test".into()),
@@ -487,7 +535,10 @@ async fn futures_submit_server_failure_is_indeterminate_and_not_retried() {
             principal_quota: None,
         })
         .unwrap();
-    let futures = principal.usd_m_futures_connection().unwrap();
+    let futures = native_usdm_principal(
+        format!("http://{address}"),
+        "execution.binance.usdm.failure",
+    );
     let request = OrderEntryRequest {
         order_id: kairos_domain_types::OrderId::new("order-futures-1").unwrap(),
         intent_id: None,
@@ -546,7 +597,7 @@ async fn futures_submit_preflight_failure_is_proven_not_sent() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -556,7 +607,7 @@ async fn futures_submit_preflight_failure_is_proven_not_sent() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.usdm.preflight".into(),
             principal_id: Some("test".into()),
@@ -565,7 +616,10 @@ async fn futures_submit_preflight_failure_is_proven_not_sent() {
             principal_quota: None,
         })
         .unwrap();
-    let futures = principal.usd_m_futures_connection().unwrap();
+    let futures = native_usdm_principal(
+        format!("http://{address}"),
+        "execution.binance.usdm.preflight",
+    );
     let mut entry = futures.order_entry();
     let error = AsyncOrderEntryConnection::submit_order(
         &mut entry,
@@ -619,7 +673,7 @@ async fn futures_submit_response_loss_is_indeterminate_and_not_retried() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -629,7 +683,7 @@ async fn futures_submit_response_loss_is_indeterminate_and_not_retried() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.usdm.response-loss".into(),
             principal_id: Some("test".into()),
@@ -638,7 +692,10 @@ async fn futures_submit_response_loss_is_indeterminate_and_not_retried() {
             principal_quota: None,
         })
         .unwrap();
-    let futures = principal.usd_m_futures_connection().unwrap();
+    let futures = native_usdm_principal(
+        format!("http://{address}"),
+        "execution.binance.usdm.response-loss",
+    );
     let mut entry = futures.order_entry();
     let outcome = AsyncOrderEntryConnection::submit_order(
         &mut entry,
@@ -681,7 +738,7 @@ async fn margin_submit_preflight_failure_is_proven_not_sent() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -756,7 +813,7 @@ async fn margin_submit_response_loss_is_indeterminate_and_not_retried() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -835,7 +892,7 @@ async fn options_submit_server_failure_is_indeterminate_and_not_retried() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -845,7 +902,7 @@ async fn options_submit_server_failure_is_indeterminate_and_not_retried() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.options.failure".into(),
             principal_id: Some("test".into()),
@@ -854,7 +911,10 @@ async fn options_submit_server_failure_is_indeterminate_and_not_retried() {
             principal_quota: None,
         })
         .unwrap();
-    let options = principal.options_connection().unwrap();
+    let options = native_options_principal(
+        format!("http://{address}"),
+        "execution.binance.options.failure",
+    );
     let request = OrderEntryRequest {
         order_id: kairos_domain_types::OrderId::new("order-options-1").unwrap(),
         intent_id: None,
@@ -913,7 +973,7 @@ async fn options_submit_preflight_failure_is_proven_not_sent() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -923,7 +983,7 @@ async fn options_submit_preflight_failure_is_proven_not_sent() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.options.preflight".into(),
             principal_id: Some("test".into()),
@@ -932,7 +992,10 @@ async fn options_submit_preflight_failure_is_proven_not_sent() {
             principal_quota: None,
         })
         .unwrap();
-    let options = principal.options_connection().unwrap();
+    let options = native_options_principal(
+        format!("http://{address}"),
+        "execution.binance.options.preflight",
+    );
     let mut entry = options.order_entry();
     let error = AsyncOrderEntryConnection::submit_order(
         &mut entry,
@@ -986,7 +1049,7 @@ async fn options_submit_response_loss_is_indeterminate_and_not_retried() {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
         ));
     });
-    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+    let provider = BinanceSpotConnection::connect(BinanceSpotConnectionConfig {
         environment: "testnet".into(),
         rest_base_url: format!("http://{address}"),
         quota: BinanceQuotaAllocation {
@@ -996,7 +1059,7 @@ async fn options_submit_response_loss_is_indeterminate_and_not_retried() {
         shared_quota: None,
     })
     .unwrap();
-    let principal = provider
+    let _principal = provider
         .principal_connection(BinancePrincipalConfig {
             binding_id: "execution.binance.options.response-loss".into(),
             principal_id: Some("test".into()),
@@ -1005,7 +1068,10 @@ async fn options_submit_response_loss_is_indeterminate_and_not_retried() {
             principal_quota: None,
         })
         .unwrap();
-    let options = principal.options_connection().unwrap();
+    let options = native_options_principal(
+        format!("http://{address}"),
+        "execution.binance.options.response-loss",
+    );
     let mut entry = options.order_entry();
     let outcome = AsyncOrderEntryConnection::submit_order(
         &mut entry,

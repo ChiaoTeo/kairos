@@ -64,3 +64,25 @@ fn execution_cli_accepts_semantic_decimal_arguments() {
         assert!(!cli.contains(forbidden), "CLI exposes {forbidden}");
     }
 }
+
+#[test]
+fn execution_does_not_reintroduce_cross_provider_product_aliases() {
+    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    for path in rust_files(&source_root) {
+        let source = fs::read_to_string(&path).expect("read Execution source");
+        for forbidden in [
+            "RouteProduct",
+            "product_matches",
+            "\"usd-m-futures\" | \"swap\"",
+            "\"swap\" | \"usd-m-futures\"",
+            "\"coin-m-futures\" | \"futures\"",
+            "\"futures\" | \"coin-m-futures\"",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "cross-provider product alias {forbidden} leaked through {}",
+                path.display()
+            );
+        }
+    }
+}

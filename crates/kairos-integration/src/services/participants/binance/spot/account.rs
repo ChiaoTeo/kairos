@@ -18,9 +18,10 @@ use crate::application::{
     ExternalAccountCredentialProfile, ExternalMarketProfile as AccountMarketProfile,
     ExternalMarketProfileRequest as AccountMarketProfileRequest, IntegrationError,
 };
+use crate::services::participants::binance::clock::BinanceServerClock;
 use crate::services::participants::binance::signing::signed_query;
 use crate::services::participants::binance::spot::runtime::{
-    BinanceSpotProviderRuntime, QuotaAllocation, RequestPriority,
+    BinanceRequestRuntime, QuotaAllocation, RequestPriority,
 };
 use crate::services::transport::http::{ExchangeError, PublicHttpClient};
 
@@ -148,7 +149,8 @@ pub(crate) fn normalize_credential_profile(payload: &Value) -> ExternalAccountCr
 
 #[derive(Clone)]
 pub(crate) struct BinanceSpotAccountClient {
-    runtime: BinanceSpotProviderRuntime,
+    runtime: BinanceRequestRuntime,
+    clock: BinanceServerClock,
     credentials: Arc<RwLock<PrincipalCredentials>>,
     base_url: String,
 }
@@ -179,7 +181,7 @@ impl BinanceSpotAccountClient {
         secret: impl Into<String>,
         base_url: impl Into<String>,
     ) -> Result<Self, ExchangeError> {
-        let runtime = BinanceSpotProviderRuntime::new(
+        let runtime = BinanceRequestRuntime::new(
             http,
             QuotaAllocation {
                 request_weight_per_minute: 6_000,
@@ -190,7 +192,23 @@ impl BinanceSpotAccountClient {
     }
 
     pub(crate) fn from_runtime(
-        runtime: BinanceSpotProviderRuntime,
+        runtime: BinanceRequestRuntime,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, ExchangeError> {
+        Self::from_runtime_with_clock(
+            runtime,
+            BinanceServerClock::default(),
+            api_key,
+            secret,
+            base_url,
+        )
+    }
+
+    pub(crate) fn from_runtime_with_clock(
+        runtime: BinanceRequestRuntime,
+        clock: BinanceServerClock,
         api_key: impl Into<String>,
         secret: impl Into<String>,
         base_url: impl Into<String>,
@@ -210,6 +228,7 @@ impl BinanceSpotAccountClient {
         }
         Ok(Self {
             runtime,
+            clock,
             credentials: Arc::new(RwLock::new(PrincipalCredentials {
                 generation: 1,
                 api_key: SecretString::from(api_key),
@@ -267,21 +286,22 @@ impl BinanceSpotAccountClient {
     }
 
     fn signed_context(&self) -> Result<(u64, u64, String, String), ExchangeError> {
-        self.runtime.ensure_clock_synchronized(&self.base_url)?;
+        self.clock
+            .ensure_synchronized(&self.runtime, &self.base_url, "/api/v3/time")?;
         let (generation, api_key, secret) = self.credential_snapshot()?;
-        Ok((self.runtime.now_millis()?, generation, api_key, secret))
+        Ok((self.clock.now_millis()?, generation, api_key, secret))
     }
 
     async fn signed_context_async(&self) -> Result<(u64, u64, String, String), ExchangeError> {
-        self.runtime
-            .ensure_clock_synchronized_async(&self.base_url)
+        self.clock
+            .ensure_synchronized_async(&self.runtime, &self.base_url, "/api/v3/time")
             .await
             .map_err(|error| match error {
                 ExchangeError::LocalRateLimit { .. } => error,
                 other => ExchangeError::Preflight(other.to_string()),
             })?;
         let (generation, api_key, secret) = self.credential_snapshot()?;
-        Ok((self.runtime.now_millis()?, generation, api_key, secret))
+        Ok((self.clock.now_millis()?, generation, api_key, secret))
     }
 
     #[cfg(test)]
@@ -726,7 +746,7 @@ impl BinanceSpotAccountClient {
                 Err(error)
                     if attempt == 0 && method.is_query() && is_timestamp_rejection(&error) =>
                 {
-                    self.runtime.invalidate_clock()?;
+                    self.clock.invalidate()?;
                     self.runtime.acquire(1, RequestPriority::Background)?;
                 }
                 Err(error) => return Err(error),

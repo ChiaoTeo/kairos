@@ -14,7 +14,9 @@ fn unknown_risk_event_identifier_is_rejected() {
         Ok(_) => panic!("unknown root must be rejected"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("unknown Risk v2 event identifier"));
+    assert!(error
+        .to_string()
+        .contains("unknown Risk v2 event identifier"));
 }
 
 #[test]
