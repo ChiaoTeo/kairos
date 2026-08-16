@@ -90,15 +90,15 @@ mod tests {
         let data = directory.path().join("events.jsonl");
         let manifest = directory.path().join("events.manifest.json");
         let event = MarketObservation::Bar(Bar {
-            market_id: kairos_domain_types::MarketId::new("market:test").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:test").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:test").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:test").unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),
             high: "1".parse().unwrap(),
             low: "1".parse().unwrap(),
             close: "1".parse().unwrap(),
             volume: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
             source_id: "test".into(),
             derivation: "test".into(),
         });

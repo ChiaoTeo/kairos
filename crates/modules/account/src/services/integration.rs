@@ -32,7 +32,7 @@ const ASYNC_ACCOUNT_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
     reader: Option<Arc<kairos_reference_contract::ReferenceSqliteReader>>,
-    cache: Arc<Mutex<BTreeMap<String, (InstrumentId, Option<kairos_domain_types::MarketId>)>>>,
+    cache: Arc<Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::MarketId>)>>>,
     cache_generation: Arc<Mutex<Option<u64>>>,
     #[cfg(test)]
     fixture_markets: Arc<Vec<kairos_reference_contract::ReferenceMarket>>,
@@ -54,7 +54,7 @@ impl AccountInstrumentResolver {
     fn resolve(
         &self,
         provider: &kairos_integration::application::ProviderInstrumentRef,
-    ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
+    ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let key = format!(
             "{}|{}|{}",
             provider.participant.id.to_ascii_lowercase(),
@@ -106,7 +106,7 @@ impl AccountInstrumentResolver {
     fn resolve_uncached(
         &self,
         provider: &kairos_integration::application::ProviderInstrumentRef,
-    ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
+    ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         if let Some(access_id) = provider.market_data_access_id.as_deref() {
             let reader = self
                 .reader
@@ -139,7 +139,7 @@ impl AccountInstrumentResolver {
             return Ok((
                 InstrumentId::new(market.instrument_id.clone())
                     .map_err(|error| error.to_string())?,
-                Some(kairos_domain_types::MarketId::new(
+                Some(kairos_primitives::MarketId::new(
                     market.market_id.clone(),
                 )?),
             ));
@@ -159,7 +159,7 @@ impl AccountInstrumentResolver {
                     .iter()
                     .filter(|value| {
                         value.symbol.eq_ignore_ascii_case(symbol)
-                            && value.instrument_type == kairos_domain_types::InstrumentKind::Equity
+                            && value.instrument_type == kairos_primitives::InstrumentKind::Equity
                             && matches!(value.status.as_str(), "active" | "trading")
                     })
                     .collect::<Vec<_>>();
@@ -195,7 +195,7 @@ impl AccountInstrumentResolver {
             Ok((
                 InstrumentId::new(market.instrument_id.clone())
                     .map_err(|error| error.to_string())?,
-                Some(kairos_domain_types::MarketId::new(
+                Some(kairos_primitives::MarketId::new(
                     market.market_id.clone(),
                 )?),
             ))
@@ -520,7 +520,7 @@ impl AccountAsyncMarketProfileGateway {
             .ok_or_else(|| format!("account segment is not configured: {}", request.segment_key))?;
         let external_request = ExternalMarketProfileRequest {
             account_id: request.account_id.clone(),
-            segment_key: kairos_domain_types::SegmentKey::new(request.segment_key.to_string())
+            segment_key: kairos_primitives::SegmentKey::new(request.segment_key.to_string())
                 .map_err(|error| error.to_string())?,
             market_id: request.market_id.clone(),
             source_symbol: request.source_symbol.clone(),
@@ -713,7 +713,7 @@ impl AccountMarketProfileGateway {
         connection
             .fetch_market_profile(&ExternalMarketProfileRequest {
                 account_id: request.account_id.clone(),
-                segment_key: kairos_domain_types::SegmentKey::new(request.segment_key.to_string())
+                segment_key: kairos_primitives::SegmentKey::new(request.segment_key.to_string())
                     .map_err(|error| error.to_string())?,
                 market_id: request.market_id.clone(),
                 source_symbol: request.source_symbol.clone(),
@@ -731,7 +731,7 @@ fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
                 broker: segment.identity.broker.clone(),
                 account_id: segment.identity.account_id.clone(),
             },
-        segment_key: kairos_domain_types::SegmentKey::new(segment.segment_key.to_string())
+        segment_key: kairos_primitives::SegmentKey::new(segment.segment_key.to_string())
             .expect("validated account segment key"),
         environment: segment.environment.clone(),
         account_model: segment.account_model.clone(),
@@ -742,21 +742,21 @@ fn signed_quantity(value: ExternalDecimal) -> Result<SignedQuantity, String> {
     SignedQuantity::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
-fn quantity(value: ExternalDecimal) -> Result<kairos_domain_types::Quantity, String> {
-    kairos_domain_types::Quantity::new(value.mantissa, value.scale)
+fn quantity(value: ExternalDecimal) -> Result<kairos_primitives::Quantity, String> {
+    kairos_primitives::Quantity::new(value.mantissa, value.scale)
         .map_err(|error| error.to_string())
 }
 
-fn price(value: ExternalDecimal) -> Result<kairos_domain_types::Price, String> {
-    kairos_domain_types::Price::new(value.mantissa, value.scale).map_err(|error| error.to_string())
+fn price(value: ExternalDecimal) -> Result<kairos_primitives::Price, String> {
+    kairos_primitives::Price::new(value.mantissa, value.scale).map_err(|error| error.to_string())
 }
 
 fn money(value: ExternalDecimal) -> Result<Money, String> {
     Money::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
-fn rate(value: ExternalDecimal) -> Result<kairos_domain_types::Rate, String> {
-    kairos_domain_types::Rate::new(value.mantissa, value.scale).map_err(Into::into)
+fn rate(value: ExternalDecimal) -> Result<kairos_primitives::Rate, String> {
+    kairos_primitives::Rate::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
 fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
@@ -915,13 +915,13 @@ pub(crate) fn map_event(
             AccountEvent::OrderObserved(AccountOrderObservation {
                 order_id: value.order_id,
                 status: match status {
-                    "acknowledged" => kairos_domain_types::OrderStatus::Acknowledged,
-                    "partially_filled" => kairos_domain_types::OrderStatus::PartiallyFilled,
-                    "filled" => kairos_domain_types::OrderStatus::Filled,
-                    "canceled" => kairos_domain_types::OrderStatus::Canceled,
-                    "rejected" => kairos_domain_types::OrderStatus::Rejected,
-                    "expired" => kairos_domain_types::OrderStatus::Expired,
-                    _ => kairos_domain_types::OrderStatus::Unknown,
+                    "acknowledged" => kairos_primitives::OrderStatus::Acknowledged,
+                    "partially_filled" => kairos_primitives::OrderStatus::PartiallyFilled,
+                    "filled" => kairos_primitives::OrderStatus::Filled,
+                    "canceled" => kairos_primitives::OrderStatus::Canceled,
+                    "rejected" => kairos_primitives::OrderStatus::Rejected,
+                    "expired" => kairos_primitives::OrderStatus::Expired,
+                    _ => kairos_primitives::OrderStatus::Unknown,
                 },
                 active,
                 remote_order_id: value.remote_order_id,
@@ -1028,7 +1028,7 @@ mod identity_tests {
         let (instrument, market) = resolver.resolve(&provider).unwrap();
         assert_eq!(instrument.as_str(), "instrument:spot:BTC");
         assert_eq!(
-            market.as_ref().map(kairos_domain_types::MarketId::as_str),
+            market.as_ref().map(kairos_primitives::MarketId::as_str),
             Some("market:binance:spot:BTCUSDT")
         );
     }
@@ -1040,7 +1040,7 @@ mod identity_tests {
             vec![kairos_reference_contract::Instrument {
                 instrument_id: "instrument:equity:US:AAPL:common".into(),
                 symbol: "AAPL".into(),
-                instrument_type: kairos_domain_types::InstrumentKind::Equity,
+                instrument_type: kairos_primitives::InstrumentKind::Equity,
                 status: "active".into(),
                 ..Default::default()
             }],

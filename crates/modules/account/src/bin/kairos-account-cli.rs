@@ -13,7 +13,7 @@ use kairos_account::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use kairos_account::domain::{AccountFill, AccountId, AccountModel, SegmentKey};
-use kairos_domain_types::{MarketId, Symbol};
+use kairos_primitives::{MarketId, Symbol};
 use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
 use kairos_integration::application::ExternalAccountCredentialProfile;
 use kairos_workspace::cli::{render, OutputFormat};
@@ -336,7 +336,7 @@ impl FillArgs {
             order_id: self
                 .order_id
                 .clone()
-                .map(kairos_domain_types::OrderId::new)
+                .map(kairos_primitives::OrderId::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             segment_key: kairos_account::domain::SegmentKey::new(self.segment.clone())
@@ -346,11 +346,11 @@ impl FillArgs {
             quantity: self
                 .quantity
                 .parse()
-                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
+                .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
             price: self
                 .price
                 .parse()
-                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
+                .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
             side: match self.side.to_ascii_lowercase().as_str() {
                 "sell" => kairos_account::domain::FillSide::Sell,
                 _ => kairos_account::domain::FillSide::Buy,
@@ -358,7 +358,7 @@ impl FillArgs {
             settlement_asset: self
                 .settlement_asset
                 .clone()
-                .map(kairos_domain_types::Currency::new)
+                .map(kairos_primitives::Currency::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             settlement_delta: self
@@ -366,11 +366,11 @@ impl FillArgs {
                 .as_deref()
                 .map(str::parse)
                 .transpose()
-                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
+                .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
             fee_asset: self
                 .fee_asset
                 .clone()
-                .map(kairos_domain_types::Currency::new)
+                .map(kairos_primitives::Currency::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             fee_amount: self
@@ -378,8 +378,8 @@ impl FillArgs {
                 .as_deref()
                 .map(str::parse)
                 .transpose()
-                .map_err(|error: kairos_domain_types::DomainTypeError| error.to_string())?,
-            occurred_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
+                .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
+            occurred_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
         })
     }
 }

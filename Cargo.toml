@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kairos-workspace",
-    "crates/kairos-domain-types",
-    "crates/business/market/service",
-    "crates/kairos-integration",
-    "crates/kairos-network",
-    "crates/kairos-protocol",
-    "crates/kairos-transport",
-    "crates/business/reference/service",
-    "crates/business/account/service",
-    "crates/business/risk/service",
-    "crates/business/execution/service",
-    "crates/business/reference/contract",
-    "crates/business/market/contract",
-    "crates/business/account/contract",
-    "crates/business/risk/contract",
-    "crates/business/execution/contract",
+    "crates/primitives",
+    "crates/platform/integration",
+    "crates/platform/network",
+    "crates/platform/protocol",
+    "crates/platform/transport",
+    "crates/platform/workspace",
+    "crates/modules/account",
+    "crates/modules/account/contract",
+    "crates/modules/execution",
+    "crates/modules/execution/contract",
+    "crates/modules/market",
+    "crates/modules/market/contract",
+    "crates/modules/reference",
+    "crates/modules/reference/contract",
+    "crates/modules/risk",
+    "crates/modules/risk/contract",
 ]
 
 [workspace.dependencies]

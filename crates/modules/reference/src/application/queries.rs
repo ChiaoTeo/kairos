@@ -4,7 +4,7 @@
 //! query contract without knowing whether the catalog came from SQLite, an
 //! in-memory test store, or a running reference process.
 
-use kairos_domain_types::{Exchange, MarketId, Sequence, Symbol, UnixNanos};
+use kairos_primitives::{Exchange, MarketId, Sequence, Symbol, UnixNanos};
 use serde::Serialize;
 
 use crate::domain::{

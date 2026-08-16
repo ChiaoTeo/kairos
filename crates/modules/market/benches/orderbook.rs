@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kairos_domain_types::{Price, Quantity};
+use kairos_primitives::{Price, Quantity};
 use kairos_market::PriceLevel;
 use std::hint::black_box;
 

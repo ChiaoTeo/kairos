@@ -5,7 +5,7 @@ use crate::application::{
     AsyncMarketQuoteConnection, AsyncMarketSnapshotConnection, MarketEvent, MarketEventKind,
     MarketQuote,
 };
-use kairos_domain_types::ProviderSymbol;
+use kairos_primitives::ProviderSymbol;
 
 pub struct BinanceInstrumentCatalog {
     pub(super) descriptor: ConnectionDescriptor,

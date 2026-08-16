@@ -5,7 +5,7 @@ use crate::domain::observations::MarketObservation;
 use crate::domain::orderbook::OrderBook;
 use crate::domain::snapshot::{MarketSnapshot, SubscriptionState};
 use crate::domain::view::MarketViewKey;
-use kairos_domain_types::{Money, Price, PriceDelta, Quantity, Rate};
+use kairos_primitives::{Money, Price, PriceDelta, Quantity, Rate};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 

@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{Currency, FillId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::{Currency, FillId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::{
@@ -501,7 +501,7 @@ mod tests {
     use crate::application::OrderEventSource;
     use crate::services::participants::binance::spot::account::BinanceSpotAccountClient;
     use futures_util::{SinkExt, StreamExt};
-    use kairos_domain_types::{OrderStatus, UnixNanos};
+    use kairos_primitives::{OrderStatus, UnixNanos};
 
     #[test]
     fn parses_execution_report_with_stable_envelope_and_fill() {

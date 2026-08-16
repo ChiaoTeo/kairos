@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, ExecutionAccessId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
 };
 use kairos_execution::{
@@ -430,27 +430,27 @@ fn run_direct_with_options(
         }
         Command::RemoteOpenOrders { symbol } => {
             serde_json::to_value(application.remote_open_orders(RemoteOrderQuery {
-                symbol: symbol.map(kairos_domain_types::Symbol::new).transpose()?,
+                symbol: symbol.map(kairos_primitives::Symbol::new).transpose()?,
                 ..Default::default()
             })?)?
         }
         Command::RemoteHistory { symbol, limit } => {
             serde_json::to_value(application.remote_history(RemoteOrderQuery {
-                symbol: symbol.map(kairos_domain_types::Symbol::new).transpose()?,
+                symbol: symbol.map(kairos_primitives::Symbol::new).transpose()?,
                 limit,
                 ..Default::default()
             })?)?
         }
         Command::RemoteInspect { order_id } => {
             serde_json::to_value(application.remote_detail(RemoteOrderQuery {
-                order_id: Some(kairos_domain_types::OrderId::new(order_id)?),
+                order_id: Some(kairos_primitives::OrderId::new(order_id)?),
                 ..Default::default()
             })?)?
         }
         Command::ReconcileRemote { symbol, limit } => serde_json::json!({
             "changed": application.reconcile_remote_orders(RemoteOrderQuery {
                 symbol: symbol
-                    .map(kairos_domain_types::Symbol::new)
+                    .map(kairos_primitives::Symbol::new)
                     .transpose()?,
                 limit,
                 ..Default::default()
@@ -488,10 +488,10 @@ fn run_direct_with_options(
         } => serde_json::to_value(
             application.audit_events(ExecutionAuditQuery {
                 order_id: order_id
-                    .map(kairos_domain_types::OrderId::new)
+                    .map(kairos_primitives::OrderId::new)
                     .transpose()?,
                 remote_order_id: remote_order_id
-                    .map(kairos_domain_types::RemoteOrderId::new)
+                    .map(kairos_primitives::RemoteOrderId::new)
                     .transpose()?,
                 status,
                 limit,
@@ -500,7 +500,7 @@ fn run_direct_with_options(
         )?,
         Command::Journal { order_id } => {
             serde_json::to_value(application.audit_events(ExecutionAuditQuery {
-                order_id: Some(kairos_domain_types::OrderId::new(order_id)?),
+                order_id: Some(kairos_primitives::OrderId::new(order_id)?),
                 ..Default::default()
             })?)?
         }
@@ -513,15 +513,15 @@ fn run_direct_with_options(
         }
         Command::Fill(args) => serde_json::to_value(
             application.record_fill(ExecutionFillReport {
-                fill_id: kairos_domain_types::FillId::new(args.fill_id)?,
-                order_id: kairos_domain_types::OrderId::new(args.order_id)?,
+                fill_id: kairos_primitives::FillId::new(args.fill_id)?,
+                order_id: kairos_primitives::OrderId::new(args.order_id)?,
                 quantity: args.quantity.parse()?,
                 price: args.price.parse()?,
                 fee: args.fee.parse()?,
                 fee_currency: args
                     .fee_currency
                     .as_deref()
-                    .map(kairos_domain_types::Currency::new)
+                    .map(kairos_primitives::Currency::new)
                     .transpose()?,
                 occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
                 execution_market_id: None,

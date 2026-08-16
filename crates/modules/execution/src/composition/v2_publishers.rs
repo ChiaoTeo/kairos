@@ -691,30 +691,30 @@ trait DecimalValue {
     fn scale(&self) -> u8;
 }
 
-impl DecimalValue for kairos_domain_types::Quantity {
+impl DecimalValue for kairos_primitives::Quantity {
     fn mantissa(&self) -> i64 {
-        kairos_domain_types::Quantity::mantissa(*self)
+        kairos_primitives::Quantity::mantissa(*self)
     }
     fn scale(&self) -> u8 {
-        kairos_domain_types::Quantity::scale(*self)
+        kairos_primitives::Quantity::scale(*self)
     }
 }
 
-impl DecimalValue for kairos_domain_types::Price {
+impl DecimalValue for kairos_primitives::Price {
     fn mantissa(&self) -> i64 {
-        kairos_domain_types::Price::mantissa(*self)
+        kairos_primitives::Price::mantissa(*self)
     }
     fn scale(&self) -> u8 {
-        kairos_domain_types::Price::scale(*self)
+        kairos_primitives::Price::scale(*self)
     }
 }
 
-impl DecimalValue for kairos_domain_types::Money {
+impl DecimalValue for kairos_primitives::Money {
     fn mantissa(&self) -> i64 {
-        kairos_domain_types::Money::mantissa(*self)
+        kairos_primitives::Money::mantissa(*self)
     }
     fn scale(&self) -> u8 {
-        kairos_domain_types::Money::scale(*self)
+        kairos_primitives::Money::scale(*self)
     }
 }
 

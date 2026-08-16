@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub use kairos_domain_types::IntentId;
-pub use kairos_domain_types::{
+pub use kairos_primitives::IntentId;
+pub use kairos_primitives::{
     AccountId, Currency, ExecutionAccessId, FillId, InstrumentId, LegId, MarketId, Money, OrderId,
     OrderSide, PlanId, Price, Quantity, RemoteOrderId, SegmentKey, UnixNanos,
 };
@@ -36,7 +36,7 @@ impl ExecutionOrderStatus {
     }
 }
 
-impl From<ExecutionOrderStatus> for kairos_domain_types::OrderStatus {
+impl From<ExecutionOrderStatus> for kairos_primitives::OrderStatus {
     fn from(status: ExecutionOrderStatus) -> Self {
         match status {
             ExecutionOrderStatus::Pending | ExecutionOrderStatus::Submitting => Self::Pending,
@@ -62,7 +62,7 @@ pub struct ExecutionOrder {
     pub leg_id: Option<LegId>,
     pub intent_id: Option<IntentId>,
     #[serde(default)]
-    pub strategy_id: Option<kairos_domain_types::StrategyId>,
+    pub strategy_id: Option<kairos_primitives::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,

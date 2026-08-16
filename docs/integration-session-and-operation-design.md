@@ -145,7 +145,7 @@ REST snapshot、WebSocket live、historical bulk 和 replay 是不同能力，�
 ## 9. 目标代码结构
 
 ```text
-crates/kairos-integration/src/
+crates/platform/integration/src/
   application/{capabilities,participants,blocking}
   application/participants/<provider>/
     connection.rs
@@ -154,7 +154,7 @@ crates/kairos-integration/src/
   domain/
   services/{participants,transport,quota}
 
-crates/business/<module>/service/src/
+crates/modules/<module>/src/
   bin/ composition/ application/ services/ domain/
 ```
 

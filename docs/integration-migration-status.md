@@ -145,7 +145,7 @@ Account async slice 验收重点：
 
 ### 2026-08-11 Execution route isolation、IBKR notice 与跨进程 lease 收口
 
-- `cargo test -p kairos-execution-service resync_barrier_isolates_the_failed_route --lib`：
+- `cargo test -p kairos-execution resync_barrier_isolates_the_failed_route --lib`：
   1/1 通过；故障 route 保持 `resync_required` 且不重连时，健康 route 继续交付；
 - `cargo test -p kairos-integration async_source_reconnects_with_a_new_listen_key_after_expiry --lib`：
   1/1 通过；使用真实本地 HTTP/WebSocket transport，而不是 mock capability；
@@ -154,14 +154,14 @@ Account async slice 验收重点：
 - `cargo test -p kairos-workspace workspace::tests::exclusive_process_lock_is_enforced_across_processes --lib`：
   1/1 通过；第二个真实子进程无法获取同一 IBKR client-id lease；
 - `cargo fmt --all -- --check` 当前被并行 Market 的
-  `crates/business/market/service/tests/architecture.rs` 格式差异阻塞，本轮修改文件自身通过 rustfmt；
+  `crates/modules/market/tests/architecture.rs` 格式差异阻塞，本轮修改文件自身通过 rustfmt；
 - 未完成：真实 IBKR Gateway、Binance testnet/Margin/Options credential contract；`ibapi 3.3`
   公共 API 不暴露 notice lag count，也不提供 submit socket write 前后 fault injection seam。
 
 ### 2026-08-11 Execution async route 收口
 
-- `cargo check -p kairos-execution-service --lib --bins`：通过；
-- `cargo test -p kairos-execution-service --lib`：通过；
+- `cargo check -p kairos-execution --lib --bins`：通过；
+- `cargo test -p kairos-execution --lib`：通过；
 - focused coverage：production composition 不构造 blocking capability、required route
   readiness gate、optional route degraded readiness、async command/query/runtime 和 stream
   reconnect、resync reconciliation barrier。
@@ -169,14 +169,14 @@ Account async slice 验收重点：
 ### 2026-08-11 IBKR execution async vertical slice
 
 - `cargo check -p kairos-integration --lib`：通过；
-- `cargo check -p kairos-execution-service --lib --bins`：通过；
+- `cargo check -p kairos-execution --lib --bins`：通过；
 - `cargo test -p kairos-integration --lib async_execution::tests`：6/6 通过；
-- `cargo test -p kairos-execution-service --lib -- --test-threads=1`：42/42 通过；
-- `cargo test -p kairos-execution-service --test execution -- --test-threads=1`：33/33
+- `cargo test -p kairos-execution --lib -- --test-threads=1`：42/42 通过；
+- `cargo test -p kairos-execution --test execution -- --test-threads=1`：33/33
   通过；
 - `cargo test -p kairos-workspace workspace::tests::exclusive_process_lock_hashes_provider_identity_and_rejects_second_owner`：通过；
-- `cargo test -p kairos-execution-service --bin kairos-execution-server ibkr_client_identity_is_exclusive_before_provider_composition`：通过；
-- `cargo test -p kairos-execution-service --lib production_rejects_unmigrated_live_blocking_provider_slice`：通过；
+- `cargo test -p kairos-execution --bin kairos-execution-server ibkr_client_identity_is_exclusive_before_provider_composition`：通过；
+- `cargo test -p kairos-execution --lib production_rejects_unmigrated_live_blocking_provider_slice`：通过；
 - focused coverage：IBKR production composition 仅构造 async capability、canonical remote
   order identity、binding-scoped recovery target；
 - 未完成：IBKR socket write 前后故障注入、ibapi 内部 lag/notice 可观测语义和真实
@@ -185,9 +185,9 @@ Account async slice 验收重点：
 ### 2026-08-11 Binance Futures execution async vertical slice
 
 - `cargo check -p kairos-integration --lib`：通过；
-- `cargo check -p kairos-execution-service --lib --bins`：通过；
+- `cargo check -p kairos-execution --lib --bins`：通过；
 - `cargo test -p kairos-integration --lib services::participants::binance::futures -- --test-threads=1`：3/3 通过；
-- `cargo test -p kairos-execution-service --lib secret_tests -- --test-threads=1`：11/11 通过；
+- `cargo test -p kairos-execution --lib secret_tests -- --test-threads=1`：11/11 通过；
 - focused coverage：production composition 仅投影 async entry/query/event、Reference-owned
   provider symbol、10 秒 command uncertainty、partial-fill/event identity、listen-key expiry
   与 queue overflow reconciliation、30 分钟 listen-key keepalive；
@@ -199,9 +199,9 @@ Account async slice 验收重点：
 ### 2026-08-11 Binance Margin execution async vertical slice
 
 - `cargo check -p kairos-integration --lib`：通过；
-- `cargo check -p kairos-execution-service --lib --bins --tests`：通过；
+- `cargo check -p kairos-execution --lib --bins --tests`：通过；
 - `cargo test -p kairos-integration --lib margin -- --test-threads=1`：3/3 通过；
-- `cargo test -p kairos-execution-service --lib secret_tests -- --test-threads=1`：14/14 通过；
+- `cargo test -p kairos-execution --lib secret_tests -- --test-threads=1`：14/14 通过；
 - Cross/Isolated 使用独立 connection domain 和 RouteProduct；Isolated route 必须显式提供
   `isolated_symbol`，listen key 按该 provider symbol 隔离；
 - production 与 direct CLI 均使用 async entry/query/event，旧 public blocking margin
@@ -211,7 +211,7 @@ Account async slice 验收重点：
 ### 2026-08-11 Binance Options execution async vertical slice
 
 - `cargo check -p kairos-integration --lib`：通过；
-- `cargo check -p kairos-execution-service --lib --bins --tests`：通过；
+- `cargo check -p kairos-execution --lib --bins --tests`：通过；
 - Options 使用独立 connection domain、REST endpoint 和 private-stream endpoint；
   provider 默认 endpoint 现在同时按 provider/product 选择，避免把 Options、Futures、
   Margin 私有流错误发往 Spot WebSocket API；
@@ -226,8 +226,8 @@ Account async slice 验收重点：
 
 - `cargo test -p kairos-integration --lib -- --test-threads=1`：123/123 通过，1 个显式
   live credential test ignored；
-- `cargo test -p kairos-execution-service --lib -- --test-threads=1`：47/47 通过；
-- `cargo test -p kairos-execution-service --test execution -- --test-threads=1`：33/33
+- `cargo test -p kairos-execution --lib -- --test-threads=1`：47/47 通过；
+- `cargo test -p kairos-execution --test execution -- --test-threads=1`：33/33
   通过；
 - `cargo test -p kairos-integration --test architecture -- --test-threads=1`：7/7 通过；
 - Binance Futures/Options 已使用各自 API-family connection，并按 family 隔离 endpoint 与 quota；继续
@@ -245,7 +245,7 @@ Account async slice 验收重点：
 
 ### 2026-08-11 Account async source 收口
 
-- `cargo test -p kairos-account-service --tests`：通过（8 lib + 1 CLI + 24 account +
+- `cargo test -p kairos-account --tests`：通过（8 lib + 1 CLI + 24 account +
   14 architecture）；
 - `cargo test -p kairos-integration --test account -- --test-threads=1`：16/16 通过；
 - focused coverage：共享 principal context、async snapshot/profile、private-stream
@@ -259,7 +259,7 @@ Account async slice 验收重点：
   远端 trade permission 提升为可写，也不错误要求 trade lease；
 - focused commands：`cargo test -p kairos-integration
   generates_provider_safe_subscription_request_id --lib`、显式 ignored live contract test、
-  `cargo test -p kairos-account-service --bin kairos-account-server` 均通过；
+  `cargo test -p kairos-account --bin kairos-account-server` 均通过；
 - 尚待人工验收：在保持上述 live 进程运行时，由用户在 Binance UI 手工挂单并撤单，确认
   Account 私有流的订单事实与状态序列均发生对应变化；
 - 未完成：Binance Isolated Margin 与衍生品 Account private stream、IBKR hard session、
@@ -268,12 +268,12 @@ Account async slice 验收重点：
 ### 2026-08-11 Binance Account derivatives async snapshot slice
 
 - `cargo check -p kairos-integration --lib`：通过；
-- `cargo check -p kairos-account-service --lib --bins`：通过；
-- `cargo test -p kairos-account-service --lib composition::account::secret_tests -- --test-threads=1`：
+- `cargo check -p kairos-account --lib --bins`：通过；
+- `cargo test -p kairos-account --lib composition::account::secret_tests -- --test-threads=1`：
   7/7 通过；
 - `cargo test -p kairos-integration --lib application::participants::binance::connection::tests -- --test-threads=1`：
   8/8 通过；
-- `cargo test -p kairos-account-service --lib --bins -- --test-threads=1`：14/14 通过；
+- `cargo test -p kairos-account --lib --bins -- --test-threads=1`：14/14 通过；
   Account architecture 14/14、Integration architecture 7/7、Integration Account 14/14 通过；
 - `uv run pytest -q`：171 passed、8 skipped；`git diff --check`：通过；
 - focused coverage：Cross Margin、USDⓈ-M、COIN-M、Options async snapshot capability；默认
@@ -288,7 +288,7 @@ Account async slice 验收重点：
 
 ### 2026-08-11 Market async runtime 与伪协议收口
 
-- `cargo test -p kairos-market-service --lib`：30/30 通过；Market architecture 2/2、actor
+- `cargo test -p kairos-market --lib`：30/30 通过；Market architecture 2/2、actor
   9/9、orderbook 4/4、replay 2/2 通过；
 - 修复 one-shot/replay source 在 desired subscription command 尚未 flush 时先等待 provider
   input 的死锁；source input 前后均执行 subscription reconciliation；
@@ -397,7 +397,7 @@ Account async slice 验收重点：
 
 ### 2026-08-11 Reference async runtime 与公开 provider 验收
 
-- `cargo test -p kairos-reference-service --all-targets`：42/42 通过；
+- `cargo test -p kairos-reference --all-targets`：42/42 通过；
   `cargo test -p kairos-reference-contract`：7/7 通过（包含真实嵌入式 Aeron driver）；
   `uv run pytest -q tests/test_reference_contract.py`：4/4 通过；
 - `cargo test -p kairos-integration --lib`：115/115 通过、1 个显式凭证 live test ignored；

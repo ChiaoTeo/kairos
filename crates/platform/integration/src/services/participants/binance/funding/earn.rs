@@ -10,7 +10,7 @@ use crate::application::{
 pub(crate) fn normalize_product(value: &Value) -> Option<EarnProduct> {
     Some(EarnProduct {
         product_id: value.get("productId")?.as_str()?.into(),
-        asset: kairos_domain_types::Currency::new(value.get("asset")?.as_str()?).ok()?,
+        asset: kairos_primitives::Currency::new(value.get("asset")?.as_str()?).ok()?,
         product_type: product_type(
             value
                 .get("productType")
@@ -53,7 +53,7 @@ pub(crate) fn normalize_product(value: &Value) -> Option<EarnProduct> {
 pub(crate) fn normalize_position(value: &Value) -> Option<EarnPosition> {
     Some(EarnPosition {
         product_id: value.get("productId")?.as_str()?.into(),
-        asset: kairos_domain_types::Currency::new(value.get("asset")?.as_str()?).ok()?,
+        asset: kairos_primitives::Currency::new(value.get("asset")?.as_str()?).ok()?,
         amount: value
             .get("totalAmount")
             .map(value_string)
@@ -89,7 +89,7 @@ pub(crate) fn normalize_position(value: &Value) -> Option<EarnPosition> {
 
 pub(crate) fn normalize_reward(value: &Value) -> Option<EarnReward> {
     Some(EarnReward {
-        asset: kairos_domain_types::Currency::new(value.get("asset")?.as_str()?).ok()?,
+        asset: kairos_primitives::Currency::new(value.get("asset")?.as_str()?).ok()?,
         amount: value
             .get("rewardsAmount")
             .map(value_string)

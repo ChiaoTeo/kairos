@@ -148,7 +148,7 @@ mod tests {
 
         let error = connection
             .params(&ExternalOrderQuery {
-                symbol: Some(kairos_domain_types::Symbol::new("ETHUSDT").unwrap()),
+                symbol: Some(kairos_primitives::Symbol::new("ETHUSDT").unwrap()),
                 ..Default::default()
             })
             .unwrap_err();

@@ -8,7 +8,7 @@ use axum::{
     routing::any,
     Json, Router,
 };
-use kairos_domain_types::Sequence;
+use kairos_primitives::Sequence;
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde_json::{json, Value};
 use std::time::Instant;

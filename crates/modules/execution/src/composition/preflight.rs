@@ -10,7 +10,7 @@ use crate::application::{
     SnapshotWatermark, SubmitOrder,
 };
 use crate::domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
-use kairos_domain_types::{
+use kairos_primitives::{
     InstrumentId, MarketId, Money, OrderId, Price, Quantity, SignedQuantity, StrategyId, UnixNanos,
 };
 use rust_decimal::Decimal;
@@ -2030,7 +2030,7 @@ fn decimal_signed_quantity(value: SignedQuantity) -> Result<Decimal, String> {
 
 fn quantity_from_decimal(value: Decimal) -> Result<Quantity, String> {
     let value = value.normalize();
-    if value < Decimal::ZERO || value.scale() > u32::from(kairos_domain_types::MAX_DECIMAL_SCALE) {
+    if value < Decimal::ZERO || value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
         return Err("quantity is outside the supported decimal range".into());
     }
     Quantity::new(
@@ -2053,7 +2053,7 @@ fn decimal_risk_amount(value: RiskAmount) -> Result<Decimal, String> {
 
 fn risk_amount(value: Decimal) -> Result<RiskAmount, String> {
     let value = value.normalize();
-    if value.scale() > u32::from(kairos_domain_types::MAX_DECIMAL_SCALE) {
+    if value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
     Ok(RiskAmount {
@@ -2076,7 +2076,7 @@ mod tests {
         decimal_price, decimal_quantity, risk_amount, DependencyCircuit, DependencyProjection,
         SocketExecutionPreflight,
     };
-    use kairos_domain_types::{Price, Quantity};
+    use kairos_primitives::{Price, Quantity};
     use std::collections::BTreeMap;
     use std::sync::{
         atomic::{AtomicBool, Ordering},

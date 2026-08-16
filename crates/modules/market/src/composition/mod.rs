@@ -276,7 +276,7 @@ pub(super) fn attach_stream<
 ) -> Result<(), String> {
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new(exchange).map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new(exchange).map_err(|error| error.to_string())?,
         market_type,
         Some(asset_type.into()),
     )?;
@@ -293,7 +293,7 @@ fn attach_binance_stream(
 ) -> Result<(), String> {
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new("binance").map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
         market_type,
         Some(asset_type.into()),
     )?;
@@ -314,7 +314,7 @@ where
 {
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new("binance").map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
         market_type,
         Some(asset_type.into()),
     )?;
@@ -344,7 +344,7 @@ pub fn attach_okx_snapshot_source(
     .map_err(|error| error.to_string())?;
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new("okx").map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new("okx").map_err(|error| error.to_string())?,
         market_type,
         Some(asset_type.into()),
     )?;
@@ -394,7 +394,7 @@ pub fn attach_hyperliquid_snapshot_source(
     .map_err(|error| error.to_string())?;
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new("hyperliquid").map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new("hyperliquid").map_err(|error| error.to_string())?,
         market_type,
         Some("crypto".into()),
     )?;
@@ -488,7 +488,7 @@ fn attach_massive_source_with_id(
         .map_err(|error| error.to_string())?;
     let descriptor = SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_domain_types::Exchange::new(exchange).map_err(|error| error.to_string())?,
+        kairos_primitives::Exchange::new(exchange).map_err(|error| error.to_string())?,
         route_market_type,
         Some(asset_type.into()),
     )?;

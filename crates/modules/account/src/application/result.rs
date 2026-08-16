@@ -2,7 +2,7 @@ use crate::domain::{
     Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, InstrumentId, MarginMode,
     Money, OpenOrder, Position, PositionMode, SegmentKey,
 };
-use kairos_domain_types::{
+use kairos_primitives::{
     ActorId, Currency, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
 };
 
@@ -167,8 +167,8 @@ pub struct AccountCapability {
 pub struct AccountFeeSchedule {
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
-    pub maker: Option<kairos_domain_types::Rate>,
-    pub taker: Option<kairos_domain_types::Rate>,
+    pub maker: Option<kairos_primitives::Rate>,
+    pub taker: Option<kairos_primitives::Rate>,
     pub currency: Option<Currency>,
     pub tier: Option<String>,
     pub source: String,

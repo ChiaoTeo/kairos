@@ -19,8 +19,8 @@ pub struct ReferenceActor<S, C> {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CatalogMetadata {
-    pub generation: kairos_domain_types::Generation,
-    pub event_sequence: kairos_domain_types::Sequence,
+    pub generation: kairos_primitives::Generation,
+    pub event_sequence: kairos_primitives::Sequence,
     pub market_count: usize,
 }
 
@@ -452,8 +452,8 @@ fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
 
 #[derive(Debug)]
 pub struct RefreshResult {
-    pub generation: kairos_domain_types::Generation,
-    pub event_sequence: kairos_domain_types::Sequence,
+    pub generation: kairos_primitives::Generation,
+    pub event_sequence: kairos_primitives::Sequence,
     pub changed: bool,
     pub event_count: usize,
     pub events: Vec<LifecycleEvent>,

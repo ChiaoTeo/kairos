@@ -139,7 +139,7 @@ fn risk_contract_amount(value: crate::Amount) -> kairos_risk_contract::Amount {
     }
 }
 
-fn risk_contract_money(value: kairos_domain_types::Money) -> kairos_risk_contract::Amount {
+fn risk_contract_money(value: kairos_primitives::Money) -> kairos_risk_contract::Amount {
     kairos_risk_contract::Amount {
         mantissa: value.mantissa(),
         scale: value.scale(),
@@ -273,8 +273,8 @@ fn risk_contract_reason(value: &crate::ReasonCode) -> kairos_risk_contract::Reas
 
 fn risk_contract_decision(
     value: &crate::RiskDecision,
-    account_id: &kairos_domain_types::AccountId,
-    strategy_id: &kairos_domain_types::StrategyId,
+    account_id: &kairos_primitives::AccountId,
+    strategy_id: &kairos_primitives::StrategyId,
 ) -> kairos_risk_contract::RiskDecision {
     kairos_risk_contract::RiskDecision {
         decision_id: value.decision_id.to_string(),

@@ -23,8 +23,8 @@ impl std::fmt::Display for ReferenceError {
 
 impl std::error::Error for ReferenceError {}
 
-impl From<kairos_domain_types::DomainTypeError> for ReferenceError {
-    fn from(error: kairos_domain_types::DomainTypeError) -> Self {
+impl From<kairos_primitives::DomainTypeError> for ReferenceError {
+    fn from(error: kairos_primitives::DomainTypeError) -> Self {
         Self::Invalid(error.to_string())
     }
 }

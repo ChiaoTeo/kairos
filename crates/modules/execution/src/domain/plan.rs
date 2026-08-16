@@ -1,4 +1,4 @@
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, DurationNanos, InstrumentId, IntentId, LegId, MarketId, OrderId, PlanId, Quantity,
     Ratio, SegmentKey, SignedQuantity,
 };
@@ -154,7 +154,7 @@ pub fn split_quantity(total: Quantity, policy: &SplitOrderPolicy) -> Result<Vec<
         let maximum = rescale_quantity(maximum, scale)?;
         count = count.max((total_mantissa + maximum - 1) / maximum);
     }
-    while count > total_mantissa && scale < kairos_domain_types::MAX_DECIMAL_SCALE {
+    while count > total_mantissa && scale < kairos_primitives::MAX_DECIMAL_SCALE {
         scale += 1;
         total_mantissa = total_mantissa
             .checked_mul(10)

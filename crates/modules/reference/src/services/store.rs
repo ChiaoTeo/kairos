@@ -4,8 +4,8 @@ use crate::domain::{LifecycleEvent, ProviderCatalog, ReferenceCatalog, Reference
 
 #[derive(Debug)]
 pub(crate) struct NormalizedRefresh {
-    pub generation: kairos_domain_types::Generation,
-    pub event_sequence: kairos_domain_types::Sequence,
+    pub generation: kairos_primitives::Generation,
+    pub event_sequence: kairos_primitives::Sequence,
     pub market_count: usize,
     pub changed: bool,
     pub event_count: usize,
@@ -14,8 +14,8 @@ pub(crate) struct NormalizedRefresh {
 #[cfg_attr(test, allow(dead_code))]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CatalogState {
-    pub generation: kairos_domain_types::Generation,
-    pub event_sequence: kairos_domain_types::Sequence,
+    pub generation: kairos_primitives::Generation,
+    pub event_sequence: kairos_primitives::Sequence,
     pub market_count: usize,
 }
 
@@ -44,7 +44,7 @@ pub(crate) trait CatalogStore: Send {
     async fn reconcile_provider_facts(
         &mut self,
         _overlay: &ProviderCatalog,
-        _now: kairos_domain_types::UnixNanos,
+        _now: kairos_primitives::UnixNanos,
     ) -> ReferenceResult<Option<NormalizedRefresh>> {
         Ok(None)
     }

@@ -1022,7 +1022,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                 .simulator
                 .as_ref()
                 .and_then(|simulator| simulator.business_time())
-                .map(kairos_domain_types::UnixNanos::get)
+                .map(kairos_primitives::UnixNanos::get)
                 .unwrap_or(now);
             let recovery_targets = resync_targets(&self.route_readiness);
             let recovery_required = !recovery_targets.is_empty();
@@ -1226,23 +1226,23 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             .unwrap_or_default();
         simulator
             .submit(SimulationOrderRequest {
-                order_id: kairos_domain_types::OrderId::new(order.order_id.to_string())
+                order_id: kairos_primitives::OrderId::new(order.order_id.to_string())
                     .map_err(|error| error.to_string())?,
-                instrument_id: kairos_domain_types::InstrumentId::new(
+                instrument_id: kairos_primitives::InstrumentId::new(
                     order.instrument_id.to_string(),
                 )
                 .map_err(|error| error.to_string())?,
                 market_id: order.market_id.clone(),
                 side: order.side,
                 order_type: order.order_type,
-                quantity: kairos_domain_types::Quantity::new(
+                quantity: kairos_primitives::Quantity::new(
                     order.quantity.mantissa(),
                     order.quantity.scale(),
                 )
                 .map_err(|error| error.to_string())?,
                 limit_price: order
                     .limit_price
-                    .map(|price| kairos_domain_types::Price::new(price.mantissa(), price.scale()))
+                    .map(|price| kairos_primitives::Price::new(price.mantissa(), price.scale()))
                     .transpose()
                     .map_err(|error| error.to_string())?,
                 // The order carries the causal intent's business time.  A
@@ -1745,22 +1745,22 @@ fn remote_query(query: &str) -> RemoteOrderQuery {
     RemoteOrderQuery {
         binding_id: query_value(query, "binding_id"),
         symbol: query_value(query, "symbol")
-            .and_then(|value| kairos_domain_types::Symbol::new(value).ok()),
+            .and_then(|value| kairos_primitives::Symbol::new(value).ok()),
         order_id: query_value(query, "order_id")
-            .and_then(|value| kairos_domain_types::OrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::OrderId::new(value).ok()),
         limit: query_value(query, "limit").and_then(|value| value.parse().ok()),
         since_unix_nanos: query_value(query, "since_unix_nanos")
             .and_then(|value| value.parse::<u64>().ok())
-            .map(kairos_domain_types::UnixNanos::from),
+            .map(kairos_primitives::UnixNanos::from),
     }
 }
 
 fn audit_query(query: &str) -> ExecutionAuditQuery {
     ExecutionAuditQuery {
         order_id: query_value(query, "order_id")
-            .and_then(|value| kairos_domain_types::OrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::OrderId::new(value).ok()),
         remote_order_id: query_value(query, "remote_order_id")
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
         status: query_value(query, "status"),
         limit: query_value(query, "limit").and_then(|value| value.parse().ok()),
         ..Default::default()
@@ -2096,7 +2096,7 @@ mod tests {
     };
     use crate::application::{ExecutionBusinessEvent, ExecutionOrderOptions, SubmitOrder};
     use crate::domain::{OrderSide as DomainOrderSide, OrderType};
-    use kairos_domain_types::{
+    use kairos_primitives::{
         AccountId, ExecutionAccessId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId,
     };
     use kairos_integration::application::{
@@ -2337,10 +2337,10 @@ mod tests {
                 )),
                 2 => {
                     let event = ExternalExecutionEvent {
-                        order_id: kairos_domain_types::OrderId::new("local-recovered-order")
+                        order_id: kairos_primitives::OrderId::new("local-recovered-order")
                             .unwrap(),
-                        symbol: kairos_domain_types::Symbol::new("BTCUSDT").unwrap(),
-                        status: kairos_domain_types::OrderStatus::Filled,
+                        symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
+                        status: kairos_primitives::OrderStatus::Filled,
                         side: Some(OrderSide::Buy),
                         order_type: None,
                         quantity: None,
@@ -2350,7 +2350,7 @@ mod tests {
                         fill_quantity: None,
                         fill_price: None,
                         execution_id: Some(
-                            kairos_domain_types::FillId::new("recovered-event-1").unwrap(),
+                            kairos_primitives::FillId::new("recovered-event-1").unwrap(),
                         ),
                         fee_currency: None,
                         fee_amount: None,
@@ -2444,10 +2444,10 @@ mod tests {
                 )),
                 2 => {
                     let event = ExternalExecutionEvent {
-                        order_id: kairos_domain_types::OrderId::new("async-recovered-order")
+                        order_id: kairos_primitives::OrderId::new("async-recovered-order")
                             .unwrap(),
-                        symbol: kairos_domain_types::Symbol::new("BTCUSDT").unwrap(),
-                        status: kairos_domain_types::OrderStatus::Filled,
+                        symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
+                        status: kairos_primitives::OrderStatus::Filled,
                         side: Some(OrderSide::Buy),
                         order_type: None,
                         quantity: None,
@@ -2457,7 +2457,7 @@ mod tests {
                         fill_quantity: None,
                         fill_price: None,
                         execution_id: Some(
-                            kairos_domain_types::FillId::new("async-recovered-event").unwrap(),
+                            kairos_primitives::FillId::new("async-recovered-event").unwrap(),
                         ),
                         fee_currency: None,
                         fee_amount: None,

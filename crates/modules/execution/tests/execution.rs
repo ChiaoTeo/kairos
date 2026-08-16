@@ -1,8 +1,8 @@
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, ClientOrderId, Currency, ExecutionAccessId, FillId, InstrumentId, IntentId, LegId,
     MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
 };
-use kairos_domain_types::{Money, Price};
+use kairos_primitives::{Money, Price};
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
     ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RefreshQuoteIntent,
@@ -42,9 +42,9 @@ fn fill_report(
     ExecutionFillReport {
         fill_id: FillId::new(fill_id.into()).unwrap(),
         order_id: OrderId::new(order_id.into()).unwrap(),
-        quantity: kairos_domain_types::Quantity::new(quantity, 0).unwrap(),
+        quantity: kairos_primitives::Quantity::new(quantity, 0).unwrap(),
         price: Price::new(price, 0).unwrap(),
-        fee: kairos_domain_types::Money::new(fee, 0).unwrap(),
+        fee: kairos_primitives::Money::new(fee, 0).unwrap(),
         fee_currency: None,
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
         execution_market_id: None,
@@ -66,7 +66,7 @@ fn submit_order(
     SubmitOrder {
         order_id: OrderId::new(order_id).unwrap(),
         intent_id: intent_id.map(|value| IntentId::new(value).unwrap()),
-        strategy_id: Some(kairos_domain_types::StrategyId::new("strategy").unwrap()),
+        strategy_id: Some(kairos_primitives::StrategyId::new("strategy").unwrap()),
         account_id: AccountId::new(account_id).unwrap(),
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
@@ -344,7 +344,7 @@ impl ExecutionPreflight for TestPreflight {
                         .unwrap(),
                     intent_id: Some(intent.intent_id.clone()),
                     strategy_id: Some(
-                        kairos_domain_types::StrategyId::new(intent.strategy_id.clone()).unwrap(),
+                        kairos_primitives::StrategyId::new(intent.strategy_id.clone()).unwrap(),
                     ),
                     account_id: leg.account_id.clone(),
                     segment_key: leg.segment_key.clone(),
@@ -372,7 +372,7 @@ impl ExecutionPreflight for TestPreflight {
                 order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index)).unwrap(),
                 intent_id: Some(intent.intent_id.clone()),
                 strategy_id: Some(
-                    kairos_domain_types::StrategyId::new(intent.strategy_id.clone()).unwrap(),
+                    kairos_primitives::StrategyId::new(intent.strategy_id.clone()).unwrap(),
                 ),
                 account_id: account_id.clone(),
                 segment_key: intent.segment_key.clone(),
@@ -555,11 +555,11 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
-fn quantity(value: &str) -> kairos_domain_types::Quantity {
+fn quantity(value: &str) -> kairos_primitives::Quantity {
     value.parse().unwrap()
 }
 
-fn price(value: &str) -> kairos_domain_types::Price {
+fn price(value: &str) -> kairos_primitives::Price {
     value.parse().unwrap()
 }
 
@@ -571,7 +571,7 @@ fn currency(value: &str) -> Currency {
     Currency::new(value).unwrap()
 }
 
-fn money(value: &str) -> kairos_domain_types::Money {
+fn money(value: &str) -> kairos_primitives::Money {
     value.parse().unwrap()
 }
 
@@ -654,7 +654,7 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_integration::application::OrderSide::Buy,
         order_type: kairos_integration::application::OrderType::Limit,
-        status: kairos_domain_types::OrderStatus::Filled,
+        status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
@@ -688,7 +688,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_integration::application::OrderSide::Buy,
         order_type: kairos_integration::application::OrderType::Limit,
-        status: kairos_domain_types::OrderStatus::Filled,
+        status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
@@ -1587,8 +1587,8 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
             intent.hedge_policy = Some(HedgePolicy {
                 leader_leg_id: LegId::new("leader").unwrap(),
                 hedge_leg_id: LegId::new("hedge").unwrap(),
-                ratio: kairos_domain_types::Ratio::new(2, 1).unwrap(),
-                contract_multiplier: kairos_domain_types::Ratio::new(1, 1).unwrap(),
+                ratio: kairos_primitives::Ratio::new(2, 1).unwrap(),
+                contract_multiplier: kairos_primitives::Ratio::new(1, 1).unwrap(),
                 max_unhedged_quantity: Quantity::new(0, 0).unwrap(),
                 compensate_on_failure: true,
                 max_compensation_attempts: 3,
@@ -2009,12 +2009,12 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
     let mut audit = SqlxExecutionAudit::new(&path).unwrap();
     audit
         .publish(&ExecutionEvent {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_domain_types::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
@@ -2023,12 +2023,12 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
         .unwrap();
     audit
         .publish(&ExecutionEvent {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_domain_types::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,

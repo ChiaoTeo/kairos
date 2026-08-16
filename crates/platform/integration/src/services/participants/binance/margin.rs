@@ -153,8 +153,8 @@ pub(crate) fn normalize(
                 scale,
             );
             Ok(Balance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-                asset_code: kairos_domain_types::Currency::new(code)?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+                asset_code: kairos_primitives::Currency::new(code)?,
                 total,
                 available: Some(free),
                 locked: Some(locked),
@@ -177,12 +177,12 @@ pub(crate) fn normalize(
             )
             .ok()?;
             Some(OpenOrder {
-                order_id: kairos_domain_types::OrderId::new(row.get("clientOrderId")?.as_str()?)
+                order_id: kairos_primitives::OrderId::new(row.get("clientOrderId")?.as_str()?)
                     .ok()?,
                 remote_order_id: row
                     .get("orderId")
                     .and_then(Value::as_i64)
-                    .and_then(|v| kairos_domain_types::RemoteOrderId::new(v.to_string()).ok()),
+                    .and_then(|v| kairos_primitives::RemoteOrderId::new(v.to_string()).ok()),
                 provider_instrument,
                 side: crate::application::capabilities::execution_facts::normalize_order_side(
                     row.get("side")?.as_str()?,
@@ -250,7 +250,7 @@ mod tests {
     fn segment(key: &str) -> AccountSegment {
         AccountSegment {
             identity: ExternalAccountIdentity::new("binance", "margin").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new(key).unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new(key).unwrap(),
             environment: "paper".into(),
             account_model: Some("margin".into()),
         }

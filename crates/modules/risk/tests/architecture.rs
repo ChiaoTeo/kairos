@@ -28,8 +28,8 @@ fn risk_domain_has_no_infrastructure_dependencies() {
     for path in rust_files(&root) {
         let source = fs::read_to_string(&path).unwrap();
         let shared_types_only = source
-            .replace("kairos_domain_types", "")
-            .replace("kairos-domain-types", "");
+            .replace("kairos_primitives", "")
+            .replace("kairos-primitives", "");
         assert!(!shared_types_only.contains("kairos_") && !source.contains("std::fs"));
     }
 }

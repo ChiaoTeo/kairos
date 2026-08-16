@@ -168,13 +168,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &TransferRequest {
                     source: ExternalAccountSegment {
                         identity: identity.clone(),
-                        segment_key: kairos_domain_types::SegmentKey::new(source_segment)?,
+                        segment_key: kairos_primitives::SegmentKey::new(source_segment)?,
                         environment: environment.clone(),
                         account_model: None,
                     },
                     destination: ExternalAccountSegment {
                         identity,
-                        segment_key: kairos_domain_types::SegmentKey::new(destination_segment)?,
+                        segment_key: kairos_primitives::SegmentKey::new(destination_segment)?,
                         environment,
                         account_model: None,
                     },
@@ -234,7 +234,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &EarnSubscribeRequest {
                             product_id,
                             product_type: parse_product_type(&product_type)?,
-                            amount: amount.parse::<kairos_domain_types::Quantity>()?,
+                            amount: amount.parse::<kairos_primitives::Quantity>()?,
                             auto_renew,
                         },
                     )
@@ -252,7 +252,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             product_id,
                             product_type: parse_product_type(&product_type)?,
                             amount: amount
-                                .map(|value| value.parse::<kairos_domain_types::Quantity>())
+                                .map(|value| value.parse::<kairos_primitives::Quantity>())
                                 .transpose()?,
                             destination_account,
                         },

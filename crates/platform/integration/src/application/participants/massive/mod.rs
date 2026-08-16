@@ -94,10 +94,10 @@ mod tests {
             .blocking_historical_market(MarketType::Equity)
             .unwrap();
         let request = HistoricalMarketRequest {
-            symbol: kairos_domain_types::Symbol::new("SPY").unwrap(),
+            symbol: kairos_primitives::Symbol::new("SPY").unwrap(),
             data_kind: MarketDataKind::Bar,
-            start_time_unix_nanos: kairos_domain_types::UnixNanos::new(1),
-            end_time_unix_nanos: kairos_domain_types::UnixNanos::new(2),
+            start_time_unix_nanos: kairos_primitives::UnixNanos::new(1),
+            end_time_unix_nanos: kairos_primitives::UnixNanos::new(2),
             interval: Some("1m".into()),
             adjusted: Some(false),
         };
@@ -183,12 +183,12 @@ mod tests {
         assert_async_historical(&historical);
         let events = historical
             .fetch(&HistoricalMarketRequest {
-                symbol: kairos_domain_types::Symbol::new("SPY").unwrap(),
+                symbol: kairos_primitives::Symbol::new("SPY").unwrap(),
                 data_kind: MarketDataKind::Bar,
-                start_time_unix_nanos: kairos_domain_types::UnixNanos::new(
+                start_time_unix_nanos: kairos_primitives::UnixNanos::new(
                     1_799_000_000_000_000_000,
                 ),
-                end_time_unix_nanos: kairos_domain_types::UnixNanos::new(1_801_000_000_000_000_000),
+                end_time_unix_nanos: kairos_primitives::UnixNanos::new(1_801_000_000_000_000_000),
                 interval: Some("1m".into()),
                 adjusted: Some(false),
             })

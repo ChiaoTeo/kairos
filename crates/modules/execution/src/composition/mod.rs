@@ -57,7 +57,7 @@ pub fn load_reference_execution_accesses(
     database: &Path,
 ) -> Result<
     Vec<(
-        kairos_domain_types::ExecutionAccessId,
+        kairos_primitives::ExecutionAccessId,
         ProviderInstrumentRef,
     )>,
     String,
@@ -93,7 +93,7 @@ fn provider_instrument_from_execution_access(
     access: &kairos_reference_contract::ExecutionAccess,
 ) -> Result<
     (
-        kairos_domain_types::ExecutionAccessId,
+        kairos_primitives::ExecutionAccessId,
         ProviderInstrumentRef,
     ),
     String,
@@ -108,7 +108,7 @@ fn provider_instrument_from_execution_access(
         }
     };
     Ok((
-        kairos_domain_types::ExecutionAccessId::new(access.access_id.clone())
+        kairos_primitives::ExecutionAccessId::new(access.access_id.clone())
             .map_err(|error| error.to_string())?,
         ProviderInstrumentRef::new(
             ParticipantRef::new(participant_kind, access.provider_id.clone())
@@ -867,9 +867,9 @@ pub fn compose_execution_routes(
     let mut streams = Vec::with_capacity(options.len());
 
     for (option_index, option) in options.iter().enumerate() {
-        let account_id = kairos_domain_types::AccountId::new(option.account_id.clone())
+        let account_id = kairos_primitives::AccountId::new(option.account_id.clone())
             .map_err(|error| error.to_string())?;
-        let segment_key = kairos_domain_types::SegmentKey::new(option.segment_key.clone())
+        let segment_key = kairos_primitives::SegmentKey::new(option.segment_key.clone())
             .map_err(|error| error.to_string())?;
         let provider = option.provider.trim().to_ascii_lowercase();
         let product = option.product.trim().to_ascii_lowercase();
@@ -1233,9 +1233,9 @@ fn compose_ibkr_async_execution(
     )
     .map_err(|error| error.to_string())?;
     let descriptor = connection.descriptor().clone();
-    let account_id = kairos_domain_types::AccountId::new(options.account_id.clone())
+    let account_id = kairos_primitives::AccountId::new(options.account_id.clone())
         .map_err(|error| error.to_string())?;
-    let segment_key = kairos_domain_types::SegmentKey::new(options.segment_key.clone())
+    let segment_key = kairos_primitives::SegmentKey::new(options.segment_key.clone())
         .map_err(|error| error.to_string())?;
     let entry_routes = ExecutionAsyncOrderEntryRoutes {
         inner: RoutedAsyncOrderEntry::new(vec![ExecutionRoute::new(
@@ -1358,9 +1358,9 @@ pub fn compose_execution_connections(
                 .spot_order_query()
                 .map_err(|error| error.to_string())?,
         );
-        let account_id = kairos_domain_types::AccountId::new(options.account_id.clone())
+        let account_id = kairos_primitives::AccountId::new(options.account_id.clone())
             .map_err(|error| error.to_string())?;
-        let segment_key = kairos_domain_types::SegmentKey::new(options.segment_key.clone())
+        let segment_key = kairos_primitives::SegmentKey::new(options.segment_key.clone())
             .map_err(|error| error.to_string())?;
         let entry_routes = ExecutionAsyncOrderEntryRoutes {
             inner: RoutedAsyncOrderEntry::new(vec![ExecutionRoute::new(
@@ -1423,9 +1423,9 @@ pub fn compose_execution_connections(
                 },
             )
             .map_err(|error| error.to_string())?;
-        let account_id = kairos_domain_types::AccountId::new(options.account_id.clone())
+        let account_id = kairos_primitives::AccountId::new(options.account_id.clone())
             .map_err(|error| error.to_string())?;
-        let segment_key = kairos_domain_types::SegmentKey::new(options.segment_key.clone())
+        let segment_key = kairos_primitives::SegmentKey::new(options.segment_key.clone())
             .map_err(|error| error.to_string())?;
         let entry_routes = ExecutionAsyncOrderEntryRoutes {
             inner: RoutedAsyncOrderEntry::new(vec![ExecutionRoute::new(
@@ -1590,7 +1590,7 @@ impl OrderEntryConnection for SimulatedOrderEntry {
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
             status: OrderEntryStatus::Accepted,
-            remote_order_id: kairos_domain_types::RemoteOrderId::new(format!(
+            remote_order_id: kairos_primitives::RemoteOrderId::new(format!(
                 "simulated:{}",
                 request.order_id
             ))
@@ -1609,7 +1609,7 @@ impl OrderEntryConnection for SimulatedOrderEntry {
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
             status: OrderEntryStatus::Canceled,
-            remote_order_id: kairos_domain_types::RemoteOrderId::new(remote_order_id).ok(),
+            remote_order_id: kairos_primitives::RemoteOrderId::new(remote_order_id).ok(),
             filled_quantity: None,
             occurred_at_unix_nanos: at_unix_nanos.into(),
             reason: String::new(),

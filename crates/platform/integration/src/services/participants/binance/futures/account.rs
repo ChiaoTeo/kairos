@@ -574,8 +574,8 @@ pub(crate) fn normalize_account(
             let wallet = required_decimal_field(item, "walletBalance")?;
             let available = required_decimal_field(item, "availableBalance").ok();
             Ok(Balance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-                asset_code: kairos_domain_types::Currency::new(code)?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+                asset_code: kairos_primitives::Currency::new(code)?,
                 total: wallet,
                 available,
                 ..Default::default()
@@ -657,8 +657,8 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
         .filter(|value| !value.is_empty())
         .unwrap_or(&remote_order_id);
     Ok(OpenOrder {
-        order_id: kairos_domain_types::OrderId::new(local_order_id)?,
-        remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
+        order_id: kairos_primitives::OrderId::new(local_order_id)?,
+        remote_order_id: Some(kairos_primitives::RemoteOrderId::new(remote_order_id)?),
         provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
@@ -882,12 +882,12 @@ pub(super) fn parse_user_event(
             let occurred_at_unix_nanos =
                 value.get("E").and_then(Value::as_u64).unwrap_or_default() * 1_000_000;
             let mut events = vec![AccountEvent::Order(OrderEvent {
-                order_id: kairos_domain_types::OrderId::new(order_id)?,
+                order_id: kairos_primitives::OrderId::new(order_id)?,
                 status,
                 remote_order_id: row
                     .get("i")
                     .map(value_string)
-                    .map(kairos_domain_types::RemoteOrderId::new)
+                    .map(kairos_primitives::RemoteOrderId::new)
                     .transpose()?,
                 filled_quantity: row
                     .get("z")
@@ -921,14 +921,14 @@ pub(super) fn parse_user_event(
                     symbol,
                 )?;
                 events.push(AccountEvent::Fill(FillEvent {
-                    fill_id: kairos_domain_types::FillId::new(
+                    fill_id: kairos_primitives::FillId::new(
                         row.get("t")
                             .map(value_string)
                             .filter(|value| value != "-1")
                             .unwrap_or_else(|| format!("{order_id}:{occurred_at_unix_nanos}")),
                     )?,
-                    order_id: kairos_domain_types::OrderId::new(order_id)?,
-                    segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+                    order_id: kairos_primitives::OrderId::new(order_id)?,
+                    segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
                     provider_instrument,
                     side: row.get("S").and_then(Value::as_str).unwrap_or("BUY").into(),
                     quantity: decimal(quantity)?,
@@ -936,7 +936,7 @@ pub(super) fn parse_user_event(
                     fee_asset: row
                         .get("N")
                         .and_then(Value::as_str)
-                        .map(kairos_domain_types::Currency::new)
+                        .map(kairos_primitives::Currency::new)
                         .transpose()?,
                     fee_amount: row
                         .get("n")
@@ -963,9 +963,9 @@ pub(super) fn parse_user_event(
                     let total =
                         decimal(row.get("wb").and_then(Value::as_str).unwrap_or("0")).ok()?;
                     Some(Balance {
-                        asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))
+                        asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))
                             .ok()?,
-                        asset_code: kairos_domain_types::Currency::new(code).ok()?,
+                        asset_code: kairos_primitives::Currency::new(code).ok()?,
                         total,
                         available: stream_decimal_field(row, "cw"),
                         ..Default::default()
@@ -998,7 +998,7 @@ pub(super) fn parse_user_event(
                 })
                 .collect();
             Ok(Some(AccountEvent::Snapshot(AccountSnapshot {
-                segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+                segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
                 balances: balances.clone(),
                 collateral: balances,
                 positions,
@@ -1047,7 +1047,7 @@ mod tests {
     fn normalizes_futures_assets_and_non_zero_positions() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("usd_m_futures").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("usd_m_futures").unwrap(),
             environment: "live".into(),
             account_model: Some("contract".into()),
         };

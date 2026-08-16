@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{Price, ProviderSymbol, Quantity, Rate, Symbol, UnixNanos};
+use kairos_primitives::{Price, ProviderSymbol, Quantity, Rate, Symbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::market_facts::MarketGreeks;
@@ -357,7 +357,7 @@ fn map_http_error(error: ExchangeError) -> IntegrationError {
 mod tests {
     use super::spot_snapshot;
     use crate::application::AsyncMarketSnapshotConnection;
-    use kairos_domain_types::ProviderSymbol;
+    use kairos_primitives::ProviderSymbol;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 

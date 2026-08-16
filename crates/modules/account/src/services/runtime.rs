@@ -10,7 +10,7 @@ use crate::services::actor::AccountActor;
 use crate::services::persistence::JsonAccountStore;
 use crate::services::persistence_worker::AccountPersistenceWorker;
 use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
-use kairos_domain_types::ActorId;
+use kairos_primitives::ActorId;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -316,7 +316,7 @@ impl AccountRuntime {
             self.commit_candidate(candidate)?;
         }
         Ok(AccountRefreshReport {
-            account_id: kairos_domain_types::AccountId::new(account_id)
+            account_id: kairos_primitives::AccountId::new(account_id)
                 .map_err(|error| error.to_string())?,
             refreshed_segments: refreshed,
             issues,

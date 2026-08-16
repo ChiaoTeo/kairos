@@ -8,7 +8,7 @@ use crate::domain::{
     ReasonCode, Reservation, ReservationStatus, RiskPolicy,
 };
 use crate::services::persistence::{PersistedEvent, RiskStateStore};
-use kairos_domain_types::{
+use kairos_primitives::{
     ActorId, DecisionId, Generation, IdempotencyKey, PolicyId, RequestId, ReservationId, Sequence,
     UnixNanos,
 };

@@ -48,11 +48,11 @@ BinanceConnectionConfig 只有一个 rest_base_url，但 path 和 time endpoint 
 | COIN-M | /dapi/... | /dapi/v1/time |
 | Options | /eapi/... | /eapi/v1/time |
 
-因此一个 Spot host 可以被拼接 Futures path，反之亦然。Account composition 目前通过改写 endpoint 并拒绝一次使用多个 endpoint family 来规避，见 crates/business/account/service/src/composition/account.rs:190。真实边界存在于业务代码，却没有进入 Integration 类型。
+因此一个 Spot host 可以被拼接 Futures path，反之亦然。Account composition 目前通过改写 endpoint 并拒绝一次使用多个 endpoint family 来规避，见 crates/modules/account/src/composition/account.rs:190。真实边界存在于业务代码，却没有进入 Integration 类型。
 
 ### 3.3 Spot runtime 不是中性 runtime
 
-crates/kairos-integration/src/services/participants/binance/spot/runtime.rs:53 的 BinanceSpotProviderRuntime 同时包含 HTTP、async HTTP、quota、shared quota、Spot clock 和 principal order quota。其 clock 硬编码 /api/v3/time；Futures/Options 又各自维护 offset。因此不能只改名为 BinanceProviderRuntime，Spot 语义仍会泄漏。
+crates/platform/integration/src/services/participants/binance/spot/runtime.rs:53 的 BinanceSpotProviderRuntime 同时包含 HTTP、async HTTP、quota、shared quota、Spot clock 和 principal order quota。其 clock 硬编码 /api/v3/time；Futures/Options 又各自维护 offset。因此不能只改名为 BinanceProviderRuntime，Spot 语义仍会泄漏。
 
 ### 3.4 shared quota 没有 API family
 
@@ -178,8 +178,8 @@ Account、Execution、Market、Reference 逐个使用 typed constructor。route 
 
     cargo test -p kairos-integration --lib -- --test-threads=1
     cargo test -p kairos-integration --test architecture -- --test-threads=1
-    cargo test -p kairos-execution-service --lib -- --test-threads=1
-    cargo test -p kairos-account-service --lib -- --test-threads=1
+    cargo test -p kairos-execution --lib -- --test-threads=1
+    cargo test -p kairos-account --lib -- --test-threads=1
     cargo test --workspace
     uv run pytest -q
     cargo fmt --all -- --check
@@ -188,7 +188,7 @@ Account、Execution、Market、Reference 逐个使用 typed constructor。route 
 静态搜索：
 
     rg -n "BinanceSpotProviderRuntime|BinanceConnection|BinancePrincipalConnection" crates --glob '*.rs'
-    rg -n "api/v3/time|fapi/v1/time|dapi/v1/time|eapi/v1/time" crates/kairos-integration
+    rg -n "api/v3/time|fapi/v1/time|dapi/v1/time|eapi/v1/time" crates/platform/integration
     rg -n "ConnectionSpec|IntegrationCapability|dyn Connection" crates
 
 若全仓库检查被无关预存失败阻塞，记录精确失败，并保留已通过的最窄验证结果。
@@ -214,10 +214,10 @@ Account、Execution、Market、Reference 逐个使用 typed constructor。route 
 - `cargo test -p kairos-integration --lib -- --test-threads=1`：150 tests passed，1 live-network test ignored。
 - `cargo test -p kairos-integration --test account -- --test-threads=1`：14 tests passed。
 - `cargo test -p kairos-integration --test architecture -- --test-threads=1`：7 tests passed。
-- `cargo test -p kairos-account-service --lib -- --test-threads=1`：20 tests passed。
-- `cargo test -p kairos-execution-service --lib -- --test-threads=1`：58 tests passed。
+- `cargo test -p kairos-account --lib -- --test-threads=1`：20 tests passed。
+- `cargo test -p kairos-execution --lib -- --test-threads=1`：58 tests passed。
 - `uv run pytest -q`：346 passed，8 skipped。
-- 本次改动文件的 `rustfmt --check` 与 `git diff --check`：通过；全仓库 `cargo fmt --all -- --check` 仍被预存的 `crates/business/market/service/src/application/process.rs:1066` 长行格式差异阻塞。
+- 本次改动文件的 `rustfmt --check` 与 `git diff --check`：通过；全仓库 `cargo fmt --all -- --check` 仍被预存的 `crates/modules/market/src/application/process.rs:1066` 长行格式差异阻塞。
 - `cargo test --workspace --no-run`：通过。
 - `cargo test --workspace` 已运行；当前工作区中与 Binance 边界无关的 Market 预存测试仍失败：
   `application::process::tests::owner_release_is_scoped_idempotent_and_enforced_by_unsubscribe`（实际 422，期望 202），以及

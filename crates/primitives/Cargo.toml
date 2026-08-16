@@ -1,9 +1,9 @@
 [package]
-name = "kairos-domain-types"
+name = "kairos-primitives"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Shared, infrastructure-free value objects for trading domains"
+description = "Shared, infrastructure-free primitive value objects"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

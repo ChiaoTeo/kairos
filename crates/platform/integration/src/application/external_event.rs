@@ -1,6 +1,6 @@
 //! Metadata carried with normalized facts received from an external channel.
 
-use kairos_domain_types::UnixNanos;
+use kairos_primitives::UnixNanos;
 
 use crate::domain::ParticipantRef;
 

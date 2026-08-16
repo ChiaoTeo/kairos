@@ -11,7 +11,7 @@ use super::subscriptions::{
     SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode,
     SubscriptionStatus,
 };
-use kairos_domain_types::{ActorId, Generation, Sequence};
+use kairos_primitives::{ActorId, Generation, Sequence};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SubscriptionState {
@@ -53,10 +53,10 @@ pub struct MarketSnapshot {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketCurrentFreshness {
     pub source_id: String,
-    pub market_id: kairos_domain_types::MarketId,
+    pub market_id: kairos_primitives::MarketId,
     pub data_kind: String,
-    pub last_event_time_unix_nanos: kairos_domain_types::UnixNanos,
-    pub last_received_time_unix_nanos: kairos_domain_types::UnixNanos,
+    pub last_event_time_unix_nanos: kairos_primitives::UnixNanos,
+    pub last_received_time_unix_nanos: kairos_primitives::UnixNanos,
     pub status: super::freshness::DataFreshnessStatus,
 }
 

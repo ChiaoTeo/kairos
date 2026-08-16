@@ -501,7 +501,12 @@ kairospy/
   strategy/           # 用户策略协议、事件与请求类型
   infrastructure/     # contract、transport 与边界 adapter
   surface/            # CLI、Textual 与渲染层
-crates/business/      # Account、Execution、Market、Reference、Risk 服务
+crates/
+  modules/            # Account、Execution、Market、Reference、Risk 业务模块
+    <module>/         # 模块主 crate；内部包含 application/domain/services 等层
+      contract/       # 可单独依赖的跨进程 contract crate
+  platform/           # Integration、Network、Protocol、Transport、Workspace
+  primitives/         # 多模块真正共享、且与基础设施无关的值对象
 schemas/              # FlatBuffers contract 与 projection schema
 tests/                # pytest 测试
 ```

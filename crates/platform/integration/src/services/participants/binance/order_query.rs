@@ -3,7 +3,7 @@
 use crate::services::participants::binance::ConnectionDomain;
 use std::collections::BTreeMap;
 
-use kairos_domain_types::{ClientOrderId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::{ClientOrderId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::{DecimalValue, OrderSide, OrderType};

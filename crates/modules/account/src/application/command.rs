@@ -1,4 +1,4 @@
-use kairos_domain_types::{AccountId, Currency, Price, UnixNanos};
+use kairos_primitives::{AccountId, Currency, Price, UnixNanos};
 
 use crate::domain::{InstrumentId, SegmentKey};
 

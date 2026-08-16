@@ -149,7 +149,7 @@ mod tests {
     use crate::domain::{
         Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
     };
-    use kairos_domain_types::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+    use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
     #[tokio::test]
     async fn sqlx_catalog_round_trips_state_and_outbox() {
@@ -200,7 +200,7 @@ mod tests {
         let instrument = Instrument {
             instrument_id: instrument_id.clone(),
             symbol: Symbol::new("BTC").unwrap(),
-            instrument_type: kairos_domain_types::InstrumentKind::Spot,
+            instrument_type: kairos_primitives::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         };
@@ -211,7 +211,7 @@ mod tests {
             instrument_id: instrument_id.clone(),
             listing_id: ListingId::new("listing:binance:btc-usdt").unwrap(),
             exchange_id: Exchange::new("binance").unwrap(),
-            market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
+            market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
             source_symbol: Symbol::new("BTCUSDT").unwrap(),
             status: "active".into(),
             ..Default::default()
@@ -292,7 +292,7 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let first = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_domain_types::MarketId::new("market:first").unwrap(),
+                market_id: kairos_primitives::MarketId::new("market:first").unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -300,7 +300,7 @@ mod tests {
         };
         let second = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_domain_types::MarketId::new("market:second").unwrap(),
+                market_id: kairos_primitives::MarketId::new("market:second").unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -351,9 +351,9 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let catalog = ProviderCatalog {
             assets: vec![crate::domain::Asset {
-                asset_id: kairos_domain_types::AssetId::new("asset:BTC").unwrap(),
+                asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
                 code: "BTC".into(),
-                asset_class: kairos_domain_types::AssetClass::Crypto,
+                asset_class: kairos_primitives::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -460,7 +460,7 @@ mod tests {
             instruments: vec![Instrument {
                 instrument_id: instrument_id.clone(),
                 symbol: Symbol::new("TEST").unwrap(),
-                instrument_type: kairos_domain_types::InstrumentKind::Spot,
+                instrument_type: kairos_primitives::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -479,7 +479,7 @@ mod tests {
                 instrument_id,
                 listing_id,
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
+                market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
                 source_symbol: Symbol::new("TEST").unwrap(),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -1201,7 +1201,7 @@ impl CatalogStore for SqlxCatalogStore {
     async fn reconcile_provider_facts(
         &mut self,
         overlay: &ProviderCatalog,
-        now: kairos_domain_types::UnixNanos,
+        now: kairos_primitives::UnixNanos,
     ) -> ReferenceResult<Option<NormalizedRefresh>> {
         let overlay = provider_records(overlay)?;
         self.run(|pool| async move {

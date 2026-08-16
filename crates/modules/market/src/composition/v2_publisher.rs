@@ -1111,7 +1111,7 @@ mod tests {
     use super::MmapMarketSnapshotPublisher;
     use crate::domain::events::{MarketChange, MarketEvent, MarketViewUpdate};
     use crate::domain::observations::{MarketObservation, Quote};
-    use kairos_domain_types::{InstrumentId, MarketId, Price, Quantity, Sequence, UnixNanos};
+    use kairos_primitives::{InstrumentId, MarketId, Price, Quantity, Sequence, UnixNanos};
     use kairos_protocol::InstanceIdentity;
 
     #[test]

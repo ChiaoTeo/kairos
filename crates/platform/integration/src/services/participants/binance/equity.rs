@@ -3,7 +3,7 @@
 //! The catalog and single-symbol quote are separate read-only capabilities;
 //! this module does not imply order-entry or order-query support.
 
-use kairos_domain_types::{Price, ProviderSymbol, Quantity, Symbol, UnixNanos};
+use kairos_primitives::{Price, ProviderSymbol, Quantity, Symbol, UnixNanos};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -151,7 +151,7 @@ fn decimal_scale(value: Option<&Value>) -> Option<u32> {
 mod tests {
     use super::{normalize_catalog, normalize_quote};
     use crate::application::capabilities::reference::ExternalInstrumentKind;
-    use kairos_domain_types::ProviderSymbol;
+    use kairos_primitives::ProviderSymbol;
 
     #[test]
     fn normalizes_real_binance_equity_exchange_info_shape() {

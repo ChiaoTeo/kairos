@@ -57,8 +57,8 @@ pub(crate) fn normalize_funding(
                 .ok()?
                 .checked_add(rescale(locked, scale).ok()?)?;
             Some(Ok(Balance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}")).ok()?,
-                asset_code: kairos_domain_types::Currency::new(code).ok()?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}")).ok()?,
+                asset_code: kairos_primitives::Currency::new(code).ok()?,
                 total: DecimalValue::new(total, scale),
                 available: Some(free),
                 locked: Some(locked),
@@ -110,7 +110,7 @@ mod tests {
     fn normalizes_funding_wallet_balances() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("funding").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("funding").unwrap(),
             environment: "live".into(),
             account_model: None,
         };

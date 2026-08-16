@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kairos_domain_types::{
+use kairos_primitives::{
     Currency, DurationNanos, Generation, MarketId, OrderId, OrderSide, OrderStatus, RemoteOrderId,
     Sequence, UnixNanos,
 };
@@ -11,7 +11,7 @@ mod identity;
 mod market_profile;
 pub use error::AccountDomainError;
 pub use identity::{AccountId, AssetId, ExternalOrderId, FillId, InstrumentId, SegmentKey};
-pub use kairos_domain_types::{Money, Price, Quantity, Rate, SignedQuantity};
+pub use kairos_primitives::{Money, Price, Quantity, Rate, SignedQuantity};
 pub use market_profile::AccountMarketProfile;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -464,7 +464,7 @@ pub struct AccountObservedFill {
     pub occurred_at_unix_nanos: UnixNanos,
 }
 
-pub use kairos_domain_types::OrderSide as FillSide;
+pub use kairos_primitives::OrderSide as FillSide;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountEvent {

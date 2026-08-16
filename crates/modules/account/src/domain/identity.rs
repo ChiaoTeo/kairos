@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::AccountDomainError;
 
-pub use kairos_domain_types::AccountId;
+pub use kairos_primitives::AccountId;
 
 macro_rules! non_empty_id {
     ($name:ident, $field:literal) => {

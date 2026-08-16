@@ -12,11 +12,11 @@ fn fixture() -> (MarketDescriptor, Vec<MarketObservation>) {
             MarketObservation::Quote(Quote {
                 market_id: descriptor.market_id.clone(),
                 instrument_id: descriptor.instrument_id.clone(),
-                bid_price: Some(kairos_domain_types::Price::new(time as i64, 0).unwrap()),
+                bid_price: Some(kairos_primitives::Price::new(time as i64, 0).unwrap()),
                 bid_quantity: None,
                 ask_price: None,
                 ask_quantity: None,
-                observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(time),
+                observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
                 source_id: "recorded".into(),
             })
         })

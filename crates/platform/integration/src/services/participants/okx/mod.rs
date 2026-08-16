@@ -15,7 +15,7 @@ use crate::application::capabilities::account_facts::{
     ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder, ExternalPosition as Position,
 };
 use chrono::{SecondsFormat, Utc};
-use kairos_domain_types::{ClientOrderId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::{ClientOrderId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::{
@@ -464,7 +464,7 @@ pub(crate) fn normalize_order_submission(
         remote_order_id: row
             .get("ordId")
             .and_then(Value::as_str)
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
         filled_quantity: None,
         occurred_at_unix_nanos: now_nanos().into(),
         reason: row
@@ -513,7 +513,7 @@ pub(crate) fn normalize_order_cancellation(
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Canceled,
-        remote_order_id: kairos_domain_types::RemoteOrderId::new(remote_order_id).ok(),
+        remote_order_id: kairos_primitives::RemoteOrderId::new(remote_order_id).ok(),
         filled_quantity: None,
         occurred_at_unix_nanos: at_unix_nanos.into(),
         reason: row
@@ -575,7 +575,7 @@ pub(crate) fn normalize_market_profile(
         fee_currency: fee_row
             .get("feeCcy")
             .and_then(Value::as_str)
-            .map(kairos_domain_types::Currency::new)
+            .map(kairos_primitives::Currency::new)
             .transpose()
             .map_err(|error| error.to_string())?,
         fee_discount: None,
@@ -611,8 +611,8 @@ pub(crate) fn normalize_account(
                 .or_else(|_| decimal_field(item, "cashBal"))
                 .ok()?;
             Some(Balance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}")).ok()?,
-                asset_code: kairos_domain_types::Currency::new(code).ok()?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}")).ok()?,
+                asset_code: kairos_primitives::Currency::new(code).ok()?,
                 total,
                 available: decimal_field(item, "availBal").ok(),
                 locked: decimal_field(item, "frozenBal").ok(),
@@ -732,8 +732,8 @@ fn normalize_open_order(value: &Value) -> Result<OpenOrder, String> {
         .filter(|value| !value.is_empty())
         .unwrap_or(remote_order_id);
     Ok(OpenOrder {
-        order_id: kairos_domain_types::OrderId::new(local_order_id)?,
-        remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
+        order_id: kairos_primitives::OrderId::new(local_order_id)?,
+        remote_order_id: Some(kairos_primitives::RemoteOrderId::new(remote_order_id)?),
         provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
@@ -839,13 +839,13 @@ mod tests {
     #[test]
     fn order_uses_provider_instrument_instead_of_parsing_market_id() {
         let request = crate::application::capabilities::OrderEntryRequest {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
-            account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("swap").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-swap").unwrap(),
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-swap").unwrap(),
             market_id: Some(
-                kairos_domain_types::MarketId::new("market:canonical:not-an-okx-symbol").unwrap(),
+                kairos_primitives::MarketId::new("market:canonical:not-an-okx-symbol").unwrap(),
             ),
             provider_instrument: crate::domain::ProviderInstrumentRef::new(
                 crate::domain::ParticipantRef::new(crate::domain::ParticipantKind::Exchange, "okx")
@@ -868,7 +868,7 @@ mod tests {
     fn normalizes_okx_balance_and_short_position() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("okx", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("swap").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
             environment: "live".into(),
             account_model: Some("unified".into()),
         };
@@ -889,10 +889,10 @@ mod tests {
     #[test]
     fn normalizes_okx_market_fee_and_account_mode_profile() {
         let request = AccountMarketProfileRequest {
-            account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("swap").unwrap(),
-            market_id: kairos_domain_types::MarketId::new("market:okx:BTC-USDT-SWAP").unwrap(),
-            source_symbol: kairos_domain_types::Symbol::new("BTC-USDT-SWAP").unwrap(),
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:okx:BTC-USDT-SWAP").unwrap(),
+            source_symbol: kairos_primitives::Symbol::new("BTC-USDT-SWAP").unwrap(),
             market_data_access_id: None,
         };
         let result = normalize_market_profile(

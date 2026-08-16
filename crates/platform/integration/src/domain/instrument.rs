@@ -1,6 +1,6 @@
 //! Provider-owned instrument identity at the Integration boundary.
 
-use kairos_domain_types::ProviderSymbol;
+use kairos_primitives::ProviderSymbol;
 
 use super::ParticipantRef;
 

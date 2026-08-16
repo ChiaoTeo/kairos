@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{Price, Quantity, Sequence, Symbol};
+use kairos_primitives::{Price, Quantity, Sequence, Symbol};
 use serde_json::Value;
 
 use crate::application::capabilities::{MarketBar, MarketEvent, MarketEventKind};

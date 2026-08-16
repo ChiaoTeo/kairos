@@ -1,5 +1,5 @@
 use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
-use kairos_domain_types::{ActorId, Generation, Sequence};
+use kairos_primitives::{ActorId, Generation, Sequence};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

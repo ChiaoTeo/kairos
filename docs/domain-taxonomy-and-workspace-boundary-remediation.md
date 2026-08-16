@@ -71,7 +71,7 @@ This section is retained as the pre-migration diagnosis. Statements using
 
 ### Provider knowledge in Workspace
 
-`crates/kairos-workspace/src/workspace.rs` defines:
+`crates/platform/workspace/src/workspace.rs` defines:
 
 - `WorkspaceMarketSourceBinding`, including concrete Binance, Massive, OKX, and
   Hyperliquid variants;
@@ -80,7 +80,7 @@ This section is retained as the pre-migration diagnosis. Statements using
 - `WorkspaceHyperliquidMarketType`;
 - provider-specific transport choices.
 
-`crates/kairos-workspace/src/account.rs` also:
+`crates/platform/workspace/src/account.rs` also:
 
 - stores Account business configuration such as `segments`, `account_model`,
   `initial_balances`, and `fee_rate`;
@@ -227,7 +227,7 @@ pub struct ProviderAccessRef {
 ```
 
 `ProviderId` and `ProviderProductCode` are opaque validated values, not global
-provider taxonomies. They may live in `kairos-domain-types` if Reference,
+provider taxonomies. They may live in `kairos-primitives` if Reference,
 Market, Execution, and Integration all use exactly the same identity semantics;
 otherwise Reference owns them and composition performs the conversion.
 
@@ -424,7 +424,7 @@ Exit criteria:
 
 Actions:
 
-1. Add canonical value types to Reference domain or `kairos-domain-types` only
+1. Add canonical value types to Reference domain or `kairos-primitives` only
    where semantics are genuinely shared.
 2. Convert `ExternalInstrumentKind` to canonical types in one Reference-owned
    normalizer.
@@ -614,8 +614,8 @@ Also run focused searches after each slice:
 
 ```text
 rg -n "Workspace(Okx|Binance|Hyperliquid|Massive)" crates
-rg -n "market_type: String|asset_type: String|product_family: String" crates/business
-rg -n '"swap".*"usd-m-futures"|"futures".*"coin-m-futures"' crates/business
+rg -n "market_type: String|asset_type: String|product_family: String" crates/modules
+rg -n '"swap".*"usd-m-futures"|"futures".*"coin-m-futures"' crates/modules
 rg -n "kairos_workspace::account" crates
 ```
 
@@ -635,8 +635,8 @@ The following obsolete concepts and ownership paths were removed:
 - redundant Reference domain `Instrument.product_family` field;
 - string-based source matching paths replaced by explicit access IDs.
 
-- `crates/business/execution/service/src/credentials.rs`;
-- `crates/kairos-workspace/src/account.rs` and business-owned Workspace path
+- `crates/modules/execution/src/credentials.rs`;
+- `crates/platform/workspace/src/account.rs` and business-owned Workspace path
   helpers.
 
 The v2 FlatBuffers/SQLite field named `product_family` is intentionally kept
@@ -658,7 +658,7 @@ Decisions recorded on 2026-08-16:
    normalizer and is removed from domain state. Its nullable persisted/wire
    slot is read only for compatibility and newly written as null.
 4. Reusable opaque participant identity is `ProviderId` in
-   `kairos-domain-types`; Integration retains its richer `ParticipantRef` and
+   `kairos-primitives`; Integration retains its richer `ParticipantRef` and
    composition performs the explicit conversion.
 5. Canonical enum spellings continue through the current string-backed v2
    schema so older readers remain compatible. Persistence decoding validates

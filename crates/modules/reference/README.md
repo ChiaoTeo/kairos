@@ -144,6 +144,6 @@ tracked in the Reference service code, tests, and migration notes under
 ## Verification
 
 ```text
-cargo test -p kairos-reference-service -p kairos-integration
+cargo test -p kairos-reference -p kairos-integration
 cargo fmt --all -- --check
 ```

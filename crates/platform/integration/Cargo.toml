@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-kairos-domain-types = { path = "../kairos-domain-types" }
+kairos-primitives = { path = "../../primitives" }
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 secrecy = { workspace = true }
 thiserror = "2"
 tracing = "0.1"
-kairos-network = { path = "../kairos-network" }
+kairos-network = { path = "../network" }
 hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"

@@ -10,7 +10,7 @@ use crate::domain::OrderSide;
 use crate::services::simulator::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
 };
-use kairos_domain_types::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
+use kairos_primitives::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
 use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

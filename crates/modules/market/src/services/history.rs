@@ -276,13 +276,13 @@ mod tests {
 
     fn quote(time: u64) -> MarketObservation {
         MarketObservation::Quote(Quote {
-            market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             bid_price: Some("100".parse().unwrap()),
             bid_quantity: None,
             ask_price: None,
             ask_quantity: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(time),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
             source_id: "binance".into(),
         })
     }

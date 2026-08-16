@@ -1,6 +1,6 @@
 //! Binance instrument payload normalization without canonical Reference IDs.
 
-use kairos_domain_types::{Currency, ProviderSymbol, UnixNanos};
+use kairos_primitives::{Currency, ProviderSymbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::reference::{

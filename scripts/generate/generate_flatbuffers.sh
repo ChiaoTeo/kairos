@@ -9,7 +9,7 @@ command -v flatc >/dev/null 2>&1 || {
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 schema_root="$repo_root/schemas"
 python_out="$repo_root/kairospy/infrastructure/transport/generated"
-rust_out="$repo_root/crates/kairos-protocol/src/generated"
+rust_out="$repo_root/crates/platform/protocol/src/generated"
 stage_root="$(mktemp -d)"
 python_stage="$stage_root/python"
 rust_stage="$stage_root/rust"

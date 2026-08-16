@@ -31,12 +31,12 @@ pub(crate) fn settle_paper_fill(
             mark_price: None,
             unrealized_pnl: None,
             realized_pnl: None,
-            updated_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
+            updated_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
         });
     let previous_quantity = position.quantity;
     let previous_average = position
         .average_price
-        .unwrap_or_else(|| kairos_domain_types::Price::new(1, 0).expect("positive fallback price"));
+        .unwrap_or_else(|| kairos_primitives::Price::new(1, 0).expect("positive fallback price"));
     let fill_quantity = SignedQuantity::new(fill.quantity.mantissa(), fill.quantity.scale())?;
     let (next_quantity, next_average, realized_pnl) = match fill.side {
         FillSide::Buy => {
@@ -76,7 +76,7 @@ pub(crate) fn settle_paper_fill(
             } else if next_quantity.is_negative() {
                 fill.price
             } else {
-                kairos_domain_types::Price::new(1, 0).expect("positive fallback price")
+                kairos_primitives::Price::new(1, 0).expect("positive fallback price")
             };
             (next_quantity, next_average, realized_pnl)
         }
@@ -154,7 +154,7 @@ fn balance_after_delta(
         .cloned()
         .unwrap_or(Balance {
             asset_id,
-            asset_code: kairos_domain_types::Currency::new(asset_code)?,
+            asset_code: kairos_primitives::Currency::new(asset_code)?,
             total: SignedQuantity::ZERO,
             available: None,
             locked: None,

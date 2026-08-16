@@ -3,7 +3,7 @@ use crate::domain::{
     Reservation, ReservationStatus, RiskPolicy,
 };
 use crate::services::actor::{ActorError, RiskActor};
-use kairos_domain_types::{
+use kairos_primitives::{
     ActorId, DecisionId, Generation, RequestId, ReservationId, Sequence, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
@@ -80,8 +80,8 @@ pub enum RiskEvent {
     },
     DecisionEvaluated {
         decision: RiskDecision,
-        account_id: kairos_domain_types::AccountId,
-        strategy_id: kairos_domain_types::StrategyId,
+        account_id: kairos_primitives::AccountId,
+        strategy_id: kairos_primitives::StrategyId,
         event_sequence: Sequence,
     },
     CircuitChanged {

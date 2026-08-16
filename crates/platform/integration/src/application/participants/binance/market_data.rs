@@ -12,7 +12,7 @@ use crate::domain::{ConnectionHealth, ConnectionState};
 use crate::services::participants::binance as service;
 use crate::services::transport::http::AsyncPublicHttpClient;
 use crate::services::transport::websocket::{AsyncSocketEvent, AsyncTokioSocket};
-use kairos_domain_types::Sequence;
+use kairos_primitives::Sequence;
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 

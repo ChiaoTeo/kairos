@@ -1,7 +1,7 @@
 //! Binance Options public WebSocket payload normalization.
 
 use crate::application::{IntegrationError, MarketEvent, MarketEventKind};
-use kairos_domain_types::{Price, Quantity, Sequence, Symbol};
+use kairos_primitives::{Price, Quantity, Sequence, Symbol};
 use serde_json::Value;
 
 pub(crate) fn normalize_derivatives_market_message(

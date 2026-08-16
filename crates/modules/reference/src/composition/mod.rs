@@ -540,8 +540,8 @@ impl ReferenceEventWriter {
 
     pub fn publish(
         &mut self,
-        generation: kairos_domain_types::Generation,
-        current_event_sequence: kairos_domain_types::Sequence,
+        generation: kairos_primitives::Generation,
+        current_event_sequence: kairos_primitives::Sequence,
         events: &[crate::domain::LifecycleEvent],
     ) -> ReferenceResult<()> {
         for event in events {
@@ -657,7 +657,7 @@ impl ReferenceEventWriter {
                         instrument_id: record.instrument_id,
                         listing_id: record.listing_id,
                         exchange_id: record.exchange_id,
-                        market_type: kairos_domain_types::ProviderProductCode::new(
+                        market_type: kairos_primitives::ProviderProductCode::new(
                             record.market_type,
                         )
                         .map_err(|error| {
@@ -665,7 +665,7 @@ impl ReferenceEventWriter {
                         })?,
                         asset_type: record
                             .asset_type
-                            .map(|value| value.parse::<kairos_domain_types::AssetClass>())
+                            .map(|value| value.parse::<kairos_primitives::AssetClass>())
                             .transpose()
                             .map_err(|error| {
                                 crate::domain::ReferenceError::Publication(error.to_string())

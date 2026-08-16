@@ -143,8 +143,8 @@ fn normalize_cancel_event(
         remote_order_id: payload
             .get("orderId")
             .map(value_as_string)
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok())
-            .or_else(|| kairos_domain_types::RemoteOrderId::new(remote_order_id).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok())
+            .or_else(|| kairos_primitives::RemoteOrderId::new(remote_order_id).ok()),
         filled_quantity: payload
             .get("executedQty")
             .and_then(Value::as_str)
@@ -186,7 +186,7 @@ pub(crate) fn normalize_order_event(
         remote_order_id: payload
             .get("orderId")
             .map(value_as_string)
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
         filled_quantity,
         occurred_at_unix_nanos: now_nanos().into(),
         reason: payload
@@ -283,7 +283,7 @@ fn now_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kairos_domain_types::InstrumentId;
+    use kairos_primitives::InstrumentId;
 
     use super::normalize_order_event;
     use crate::application::capabilities::{
@@ -293,10 +293,10 @@ mod tests {
 
     fn request() -> OrderRequest {
         OrderRequest {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
-            account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
             instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
             market_id: None,
             provider_instrument: crate::domain::ProviderInstrumentRef::new(

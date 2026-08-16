@@ -1,4 +1,4 @@
-use kairos_domain_types::{InstrumentId, MarketId, Price, Quantity, Sequence, UnixNanos};
+use kairos_primitives::{InstrumentId, MarketId, Price, Quantity, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -214,7 +214,7 @@ fn apply_levels(levels: &mut Vec<PriceLevel>, updates: Vec<PriceLevel>) {
 
 #[cfg(test)]
 mod tests {
-    use kairos_domain_types::{Price, Quantity};
+    use kairos_primitives::{Price, Quantity};
     use proptest::prelude::*;
 
     use super::{OrderBook, OrderBookDelta, PriceLevel};
@@ -233,8 +233,8 @@ mod tests {
             let mut book = OrderBook::snapshot("BTC-USD", "BTC-USD", 10_u64, 1_u64, vec![initial], vec![]).unwrap();
             let delta = OrderBookDelta {
                 source_id: "market".into(),
-                market_id: kairos_domain_types::MarketId::new("BTC-USD").unwrap(),
-                instrument_id: kairos_domain_types::InstrumentId::new("BTC-USD").unwrap(),
+                market_id: kairos_primitives::MarketId::new("BTC-USD").unwrap(),
+                instrument_id: kairos_primitives::InstrumentId::new("BTC-USD").unwrap(),
                 first_sequence: 11_u64.into(),
                 last_sequence: 11_u64.into(),
                 event_time_unix_nanos: 2_u64.into(),

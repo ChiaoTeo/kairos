@@ -49,14 +49,14 @@ pub trait ExecutionAuditSink: Send {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteOrderUpdate {
-    pub order_id: kairos_domain_types::OrderId,
-    pub symbol: kairos_domain_types::Symbol,
+    pub order_id: kairos_primitives::OrderId,
+    pub symbol: kairos_primitives::Symbol,
     pub status: crate::domain::ExecutionOrderStatus,
-    pub fill_quantity: Option<kairos_domain_types::Quantity>,
-    pub fill_price: Option<kairos_domain_types::Price>,
-    pub execution_id: Option<kairos_domain_types::FillId>,
-    pub fee_currency: Option<kairos_domain_types::Currency>,
-    pub fee_amount: Option<kairos_domain_types::Money>,
-    pub occurred_at_unix_nanos: kairos_domain_types::UnixNanos,
+    pub fill_quantity: Option<kairos_primitives::Quantity>,
+    pub fill_price: Option<kairos_primitives::Price>,
+    pub execution_id: Option<kairos_primitives::FillId>,
+    pub fee_currency: Option<kairos_primitives::Currency>,
+    pub fee_amount: Option<kairos_primitives::Money>,
+    pub occurred_at_unix_nanos: kairos_primitives::UnixNanos,
     pub reason: String,
 }

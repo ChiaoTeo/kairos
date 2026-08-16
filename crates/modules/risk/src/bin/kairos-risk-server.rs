@@ -40,7 +40,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = instance.service_snapshot("risk")?;
     let policies = if args.launch_mode == "backtest" {
         vec![RiskPolicy {
-            policy_id: kairos_domain_types::PolicyId::new("backtest-notional")?,
+            policy_id: kairos_primitives::PolicyId::new("backtest-notional")?,
             version: 1.into(),
             scope: PolicyScope {
                 account_id: None,

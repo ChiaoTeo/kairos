@@ -145,8 +145,8 @@ fn normalize_cancel(
         remote_order_id: payload
             .get("orderId")
             .map(value_string)
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok())
-            .or_else(|| kairos_domain_types::RemoteOrderId::new(remote_order_id).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok())
+            .or_else(|| kairos_primitives::RemoteOrderId::new(remote_order_id).ok()),
         filled_quantity: None,
         occurred_at_unix_nanos: at_unix_nanos.into(),
         reason: String::new(),
@@ -168,7 +168,7 @@ fn normalize(request: &OrderEntryRequest, payload: &Value) -> Result<OrderEntryE
         remote_order_id: payload
             .get("orderId")
             .map(value_string)
-            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
         filled_quantity: None,
         occurred_at_unix_nanos: 0.into(),
         reason: payload

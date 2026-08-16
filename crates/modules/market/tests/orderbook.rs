@@ -19,8 +19,8 @@ fn orderbook_applies_contiguous_deltas() {
     .unwrap();
     book.apply_delta(OrderBookDelta {
         source_id: "market".into(),
-        market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+        market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 11.into(),
         last_sequence: 11.into(),
         event_time_unix_nanos: 2.into(),
@@ -91,8 +91,8 @@ fn orderbook_accepts_overlapping_provider_delta_ranges() {
         OrderBook::snapshot("market:btc", "instrument:btc", 10, 1, vec![], vec![]).unwrap();
     book.apply_delta(OrderBookDelta {
         source_id: "market".into(),
-        market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+        market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 9.into(),
         last_sequence: 12.into(),
         event_time_unix_nanos: 2.into(),
@@ -111,8 +111,8 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
     assert!(book
         .apply_delta(OrderBookDelta {
             source_id: "market".into(),
-            market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             first_sequence: 12.into(),
             last_sequence: 12.into(),
             event_time_unix_nanos: 2.into(),
@@ -125,8 +125,8 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
     assert!(book
         .apply_delta(OrderBookDelta {
             source_id: "market".into(),
-            market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             first_sequence: 11.into(),
             last_sequence: 11.into(),
             event_time_unix_nanos: 3.into(),

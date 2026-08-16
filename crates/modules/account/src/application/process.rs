@@ -29,7 +29,7 @@ use crate::services::integration::{
     AccountAsyncEventSource, AccountAsyncSnapshotGateway, AccountInstrumentResolver,
 };
 use crate::services::refresh::RefreshFetch;
-use kairos_domain_types::AccountId;
+use kairos_primitives::AccountId;
 use kairos_integration::application::{ConnectionHealth, ConnectionLifecycle, IntegrationError};
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use tracing::{debug, error, info, warn, Instrument};
@@ -897,37 +897,37 @@ impl AccountProcess {
                     "acknowledged" | "partially_filled" | "open" | "new"
                 );
                 let observation = AccountOrderObservation {
-                    order_id: kairos_domain_types::OrderId::new(event.order_id)
+                    order_id: kairos_primitives::OrderId::new(event.order_id)
                         .map_err(|error| error.to_string())?,
                     remote_order_id: event
                         .remote_order_id
-                        .map(kairos_domain_types::RemoteOrderId::new)
+                        .map(kairos_primitives::RemoteOrderId::new)
                         .transpose()
                         .map_err(|error| error.to_string())?,
                     status: match event.status.to_ascii_lowercase().as_str() {
-                        "pending" => kairos_domain_types::OrderStatus::Pending,
+                        "pending" => kairos_primitives::OrderStatus::Pending,
                         "acknowledged" | "new" | "open" => {
-                            kairos_domain_types::OrderStatus::Acknowledged
+                            kairos_primitives::OrderStatus::Acknowledged
                         }
-                        "accepted" => kairos_domain_types::OrderStatus::Accepted,
+                        "accepted" => kairos_primitives::OrderStatus::Accepted,
                         "partially_filled" | "partial" => {
-                            kairos_domain_types::OrderStatus::PartiallyFilled
+                            kairos_primitives::OrderStatus::PartiallyFilled
                         }
-                        "filled" => kairos_domain_types::OrderStatus::Filled,
-                        "canceled" | "cancelled" => kairos_domain_types::OrderStatus::Canceled,
-                        "rejected" => kairos_domain_types::OrderStatus::Rejected,
-                        "expired" => kairos_domain_types::OrderStatus::Expired,
-                        _ => kairos_domain_types::OrderStatus::Unknown,
+                        "filled" => kairos_primitives::OrderStatus::Filled,
+                        "canceled" | "cancelled" => kairos_primitives::OrderStatus::Canceled,
+                        "rejected" => kairos_primitives::OrderStatus::Rejected,
+                        "expired" => kairos_primitives::OrderStatus::Expired,
+                        _ => kairos_primitives::OrderStatus::Unknown,
                     },
                     filled_quantity: Some(
-                        kairos_domain_types::Quantity::new(
+                        kairos_primitives::Quantity::new(
                             event.filled_quantity.mantissa,
                             event.filled_quantity.scale,
                         )
                         .map_err(|error| error.to_string())?,
                     ),
                     active,
-                    observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(
+                    observed_at_unix_nanos: kairos_primitives::UnixNanos::new(
                         event.occurred_at_unix_nanos,
                     ),
                 };
@@ -1322,7 +1322,7 @@ mod tests {
             observed_at_unix_nanos: sequence.into(),
             received_at_unix_nanos: sequence.into(),
             payload: ExternalAccountEvent::Snapshot(ExternalAccountSnapshot {
-                segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+                segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
                 balances: Vec::new(),
                 collateral: Vec::new(),
                 positions: Vec::new(),
@@ -1400,7 +1400,7 @@ mod tests {
         let mut snapshot = empty_snapshot("spot");
         snapshot.balances = vec![crate::domain::Balance {
             asset_id: crate::domain::AssetId::new("asset:test:USD").unwrap(),
-            asset_code: kairos_domain_types::Currency::new("USD").unwrap(),
+            asset_code: kairos_primitives::Currency::new("USD").unwrap(),
             total: crate::domain::SignedQuantity::new(10_000, 2).unwrap(),
             available: Some(crate::domain::SignedQuantity::new(9_000, 2).unwrap()),
             locked: Some(crate::domain::SignedQuantity::new(1_000, 2).unwrap()),
@@ -1409,7 +1409,7 @@ mod tests {
         }];
         snapshot.positions = vec![crate::domain::Position {
             instrument_id: crate::domain::InstrumentId::new("instrument:test:BTCUSD").unwrap(),
-            market_id: Some(kairos_domain_types::MarketId::new("market:test:BTCUSD").unwrap()),
+            market_id: Some(kairos_primitives::MarketId::new("market:test:BTCUSD").unwrap()),
             quantity: crate::domain::SignedQuantity::new(2, 0).unwrap(),
             average_price: Some(crate::domain::Price::new(50_000, 2).unwrap()),
             mark_price: Some(crate::domain::Price::new(51_000, 2).unwrap()),
@@ -1537,7 +1537,7 @@ fn parse_account_query(query: &str, account_id: &str) -> AccountDataQuery {
                     request.segments.push(value);
                 }
             }
-            "symbol" => request.symbol = kairos_domain_types::Symbol::new(value).ok(),
+            "symbol" => request.symbol = kairos_primitives::Symbol::new(value).ok(),
             "limit" => request.limit = value.parse().ok(),
             "include_zero" => request.include_zero = value == "true" || value == "1",
             "page" => request.page = value.parse().ok(),

@@ -39,7 +39,7 @@ pub trait ExecutionPreflight: Send {
     fn resize_order(
         &mut self,
         _order_id: &str,
-        _remaining_quantity: kairos_domain_types::Quantity,
+        _remaining_quantity: kairos_primitives::Quantity,
     ) -> Result<(), String> {
         Ok(())
     }

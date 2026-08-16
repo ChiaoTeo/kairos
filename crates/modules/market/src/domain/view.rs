@@ -1,4 +1,4 @@
-use kairos_domain_types::MarketId;
+use kairos_primitives::MarketId;
 use serde::{Deserialize, Serialize};
 
 /// Stable identity for one current market-data projection.

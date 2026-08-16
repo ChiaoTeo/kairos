@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use kairos_domain_types::{InstrumentId, MarketId};
+use kairos_primitives::{InstrumentId, MarketId};
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::application::{
     AsyncHistoricalMarketDataConnection, HistoricalMarketRequest, MarketEventKind,
@@ -84,7 +84,7 @@ async fn download(
         HistoricalDataKind::Trade => kairos_integration::application::MarketDataKind::Trade,
     };
     let request = HistoricalMarketRequest {
-        symbol: kairos_domain_types::Symbol::new(command.symbol.clone())
+        symbol: kairos_primitives::Symbol::new(command.symbol.clone())
             .map_err(|error| error.to_string())?,
         data_kind,
         start_time_unix_nanos,
@@ -226,11 +226,11 @@ async fn download(
     Ok(manifest)
 }
 
-fn millis_to_nanos(value: i64) -> Result<kairos_domain_types::UnixNanos, String> {
+fn millis_to_nanos(value: i64) -> Result<kairos_primitives::UnixNanos, String> {
     let value = u64::try_from(value).map_err(|_| "historical time must be non-negative")?;
     value
         .checked_mul(1_000_000)
-        .map(kairos_domain_types::UnixNanos::new)
+        .map(kairos_primitives::UnixNanos::new)
         .ok_or_else(|| "historical time is out of range".into())
 }
 

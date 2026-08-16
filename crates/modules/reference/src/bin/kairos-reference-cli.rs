@@ -4,7 +4,7 @@
 //! one JSON value to stdout, and exits. It never starts or discovers a server.
 
 use clap::{Args, Parser, Subcommand};
-use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
+use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
 use kairos_reference::application::{ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
     build_application, ensure_database_parent, prepare_massive_cash_dividends,

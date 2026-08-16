@@ -20,8 +20,8 @@ fn account_domain_has_no_cross_module_or_infrastructure_dependencies() {
     for path in rust_files(&root) {
         let source = fs::read_to_string(&path).expect("read domain source");
         let shared_types_only = source
-            .replace("kairos_domain_types", "")
-            .replace("kairos-domain-types", "");
+            .replace("kairos_primitives", "")
+            .replace("kairos-primitives", "");
         assert!(
             !shared_types_only.contains("kairos_"),
             "domain source imports another Kairos module: {}",
@@ -109,7 +109,7 @@ fn account_does_not_own_execution_order_lifecycle_or_expose_raw_aggregates() {
 #[test]
 fn account_contract_does_not_expose_execution_order_planning() {
     let client = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract/src/control/account.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contract/src/control/account.rs"),
     )
     .expect("read account contract client");
     assert!(!client.contains("OrderPlan"));

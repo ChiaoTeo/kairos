@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use kairos_domain_types::Money;
+use kairos_primitives::Money;
 use kairos_integration::application::{
     AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
     SubscriptionId as IntegrationSubscriptionId,
@@ -122,8 +122,8 @@ async fn run<C>(
         }
     }
     let mut markets = BTreeMap::<IntegrationSubscriptionId, MarketDescriptor>::new();
-    let mut resyncing = BTreeMap::<kairos_domain_types::MarketId, SourceRequestId>::new();
-    let mut blocked_markets = BTreeSet::<kairos_domain_types::MarketId>::new();
+    let mut resyncing = BTreeMap::<kairos_primitives::MarketId, SourceRequestId>::new();
+    let mut blocked_markets = BTreeSet::<kairos_primitives::MarketId>::new();
     loop {
         tokio::select! {
             command = async {
@@ -556,7 +556,7 @@ pub(super) fn normalize(
 async fn resync<C: AsyncMarketEventSource>(
     connection: &mut C,
     markets: &mut BTreeMap<IntegrationSubscriptionId, MarketDescriptor>,
-    resyncing: &mut BTreeMap<kairos_domain_types::MarketId, SourceRequestId>,
+    resyncing: &mut BTreeMap<kairos_primitives::MarketId, SourceRequestId>,
     inputs: &mpsc::Sender<SourceInput>,
     source_id: &SourceId,
     epoch: SourceEpoch,
@@ -754,7 +754,7 @@ mod tests {
     use crate::domain::market::MarketDescriptor;
     use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceId, SourceStatus};
     use crate::services::messages::{SourceCommand, SourceInput};
-    use kairos_domain_types::{Sequence, Symbol, UnixNanos};
+    use kairos_primitives::{Sequence, Symbol, UnixNanos};
     use kairos_integration::application::{
         AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
         SubscriptionId,

@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::UnixNanos;
+use kairos_primitives::UnixNanos;
 
 use crate::application::capabilities::{ConnectionHealth, ConnectionLifecycle};
 use crate::application::{
@@ -279,7 +279,7 @@ mod tests {
     use std::io::{Read, Write};
 
     use futures_util::SinkExt;
-    use kairos_domain_types::OrderStatus;
+    use kairos_primitives::OrderStatus;
 
     use crate::application::AsyncOrderEventSource;
     use crate::services::participants::binance::spot::account::BinanceSpotAccountClient;

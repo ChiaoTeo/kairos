@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use kairos_domain_types::Sequence;
+use kairos_primitives::Sequence;
 
 use crate::domain::market::MarketDescriptor;
 
@@ -111,12 +111,12 @@ impl ReferenceProjection {
                 )?;
                 descriptor.asset_type = market
                     .asset_type
-                    .map(|value| value.parse::<kairos_domain_types::AssetClass>())
+                    .map(|value| value.parse::<kairos_primitives::AssetClass>())
                     .transpose()
                     .map_err(|error| error.to_string())?;
                 descriptor.underlying_instrument_id = market
                     .underlying_instrument_id
-                    .map(kairos_domain_types::InstrumentId::new)
+                    .map(kairos_primitives::InstrumentId::new)
                     .transpose()
                     .map_err(|error| error.to_string())?;
                 // Reference source_id is ingestion provenance, not a Market
@@ -144,15 +144,15 @@ impl ReferenceProjection {
                 };
                 descriptor.market_data_access_id = Some(access.access_id.clone());
                 descriptor.market_data_provider_id = Some(
-                    kairos_domain_types::ProviderId::new(access.provider_id.clone())
+                    kairos_primitives::ProviderId::new(access.provider_id.clone())
                         .map_err(|error| error.to_string())?,
                 );
                 descriptor.market_data_provider_product = Some(
-                    kairos_domain_types::ProviderProductCode::new(access.provider_product.clone())
+                    kairos_primitives::ProviderProductCode::new(access.provider_product.clone())
                         .map_err(|error| error.to_string())?,
                 );
                 descriptor.provider_symbol = Some(
-                    kairos_domain_types::ProviderSymbol::new(access.provider_symbol.clone())
+                    kairos_primitives::ProviderSymbol::new(access.provider_symbol.clone())
                         .map_err(|error| error.to_string())?,
                 );
                 Ok(descriptor)

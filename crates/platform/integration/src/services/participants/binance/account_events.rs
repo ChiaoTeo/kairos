@@ -8,17 +8,17 @@ use crate::application::{ExternalExecutionEvent, IntegrationError};
 
 pub(super) fn from_execution_event(
     product: &str,
-    segment_key: &kairos_domain_types::SegmentKey,
+    segment_key: &kairos_primitives::SegmentKey,
     value: ExternalExecutionEvent,
 ) -> Result<ExternalAccountEvent, IntegrationError> {
     let status = match value.status {
-        kairos_domain_types::OrderStatus::Acknowledged
-        | kairos_domain_types::OrderStatus::Accepted => ExternalOrderStatus::Acknowledged,
-        kairos_domain_types::OrderStatus::PartiallyFilled => ExternalOrderStatus::PartiallyFilled,
-        kairos_domain_types::OrderStatus::Filled => ExternalOrderStatus::Filled,
-        kairos_domain_types::OrderStatus::Canceled => ExternalOrderStatus::Canceled,
-        kairos_domain_types::OrderStatus::Rejected => ExternalOrderStatus::Rejected,
-        kairos_domain_types::OrderStatus::Expired => ExternalOrderStatus::Expired,
+        kairos_primitives::OrderStatus::Acknowledged
+        | kairos_primitives::OrderStatus::Accepted => ExternalOrderStatus::Acknowledged,
+        kairos_primitives::OrderStatus::PartiallyFilled => ExternalOrderStatus::PartiallyFilled,
+        kairos_primitives::OrderStatus::Filled => ExternalOrderStatus::Filled,
+        kairos_primitives::OrderStatus::Canceled => ExternalOrderStatus::Canceled,
+        kairos_primitives::OrderStatus::Rejected => ExternalOrderStatus::Rejected,
+        kairos_primitives::OrderStatus::Expired => ExternalOrderStatus::Expired,
         _ => ExternalOrderStatus::Unknown,
     };
     let order = ExternalAccountEvent::Order(ExternalOrderEvent {
@@ -51,7 +51,7 @@ pub(super) fn from_execution_event(
         segment_key: segment_key.clone(),
         provider_instrument,
         side: match value.side {
-            Some(kairos_domain_types::OrderSide::Sell) => "SELL",
+            Some(kairos_primitives::OrderSide::Sell) => "SELL",
             _ => "BUY",
         }
         .into(),

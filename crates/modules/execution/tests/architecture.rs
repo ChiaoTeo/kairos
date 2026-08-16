@@ -20,7 +20,7 @@ fn execution_public_boundaries_do_not_expose_decimal_storage_parts() {
     let roots = [
         service_root.join("src/application"),
         service_root.join("src/bin"),
-        service_root.join("../contract/src"),
+        service_root.join("contract/src"),
     ];
 
     for root in roots {

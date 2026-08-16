@@ -2,7 +2,7 @@
 
 mod earn {
     use crate::application::{CommandResult, IntegrationError};
-    use kairos_domain_types::{Currency, Quantity, Rate, UnixNanos};
+    use kairos_primitives::{Currency, Quantity, Rate, UnixNanos};
     use std::future::Future;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -85,9 +85,9 @@ fn integration_connection_exposes_only_normalized_external_facts() {
         identity:
             kairos_integration::application::capabilities::account_facts::ExternalAccountIdentity {
                 broker: "fixture".into(),
-                account_id: kairos_domain_types::AccountId::new("main").unwrap(),
+                account_id: kairos_primitives::AccountId::new("main").unwrap(),
             },
-        segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
         environment: "paper".into(),
         account_model: None,
     };
@@ -154,9 +154,9 @@ impl AccountEventStreamConnection for ReconnectingAccountStream {
             )),
             2 => Ok(AccountEventReceive::Event(ExternalAccountEvent::Fill(
                 ExternalFillEvent {
-                    fill_id: kairos_domain_types::FillId::new("account-recovered-fill").unwrap(),
-                    order_id: kairos_domain_types::OrderId::new("local-order-1").unwrap(),
-                    segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+                    fill_id: kairos_primitives::FillId::new("account-recovered-fill").unwrap(),
+                    order_id: kairos_primitives::OrderId::new("local-order-1").unwrap(),
+                    segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
                     provider_instrument:
                         kairos_integration::application::ProviderInstrumentRef::new(
                             ParticipantRef::new(ParticipantKind::Exchange, "fixture").unwrap(),

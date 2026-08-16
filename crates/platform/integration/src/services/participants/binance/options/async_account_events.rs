@@ -9,7 +9,7 @@ use crate::domain::ConnectionHealth;
 use super::async_order_events::BinanceOptionsAsyncOrderEventSource;
 
 pub(crate) struct BinanceOptionsAsyncAccountEventSource {
-    segment_key: kairos_domain_types::SegmentKey,
+    segment_key: kairos_primitives::SegmentKey,
     inner: BinanceOptionsAsyncOrderEventSource,
 }
 
@@ -21,7 +21,7 @@ impl BinanceOptionsAsyncAccountEventSource {
         websocket_endpoint: impl Into<String>,
         event_queue_capacity: usize,
     ) -> Result<Self, IntegrationError> {
-        let segment_key = kairos_domain_types::SegmentKey::new(segment_key.into())
+        let segment_key = kairos_primitives::SegmentKey::new(segment_key.into())
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
         Ok(Self {
             segment_key,
@@ -77,7 +77,7 @@ impl AsyncAccountEventSource for BinanceOptionsAsyncAccountEventSource {
 
 #[cfg(test)]
 mod tests {
-    use kairos_domain_types::{
+    use kairos_primitives::{
         Currency, FillId, OrderId, OrderSide, OrderStatus, Symbol, UnixNanos,
     };
 
@@ -91,7 +91,7 @@ mod tests {
     fn options_fill_projects_order_and_fill_account_facts() {
         let payload = from_execution_event(
             "binance-options",
-            &kairos_domain_types::SegmentKey::new("options").unwrap(),
+            &kairos_primitives::SegmentKey::new("options").unwrap(),
             ExternalExecutionEvent {
                 order_id: OrderId::new("order-1").unwrap(),
                 symbol: Symbol::new("BTC-260327-100000-C").unwrap(),

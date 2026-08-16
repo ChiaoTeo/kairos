@@ -16,7 +16,7 @@ use crate::application::queries::{MarketQuery, ReferenceKind};
 use crate::services::actor::ReferenceActor;
 use crate::services::providers::ReferenceSource;
 use crate::services::store::CatalogStore;
-use kairos_domain_types::{Generation, Sequence};
+use kairos_primitives::{Generation, Sequence};
 use tracing::{info, warn};
 
 /// Public application boundary for reference data.
@@ -323,8 +323,8 @@ where
     /// Replay lifecycle events in their persisted sequence order.
     pub async fn replay_lifecycle_events(
         &mut self,
-        sequence_from: Option<kairos_domain_types::Sequence>,
-        sequence_to: Option<kairos_domain_types::Sequence>,
+        sequence_from: Option<kairos_primitives::Sequence>,
+        sequence_to: Option<kairos_primitives::Sequence>,
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         self.lifecycle_events(&LifecycleQuery {
             sequence_from,
@@ -485,7 +485,7 @@ where
                 source_symbol: query
                     .text
                     .as_deref()
-                    .and_then(|value| kairos_domain_types::Symbol::new(value).ok()),
+                    .and_then(|value| kairos_primitives::Symbol::new(value).ok()),
                 active_only: query.active_only,
                 as_of_unix_nanos: query.as_of_unix_nanos,
                 status: query.status.clone(),

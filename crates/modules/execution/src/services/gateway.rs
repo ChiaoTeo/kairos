@@ -830,11 +830,11 @@ mod tests {
 
     fn request() -> OrderEntryRequest {
         OrderEntryRequest {
-            order_id: kairos_domain_types::OrderId::new("order-async-gateway").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-async-gateway").unwrap(),
             intent_id: None,
-            account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-usdt").unwrap(),
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-usdt").unwrap(),
             market_id: None,
             provider_instrument: ProviderInstrumentRef::new(
                 ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),

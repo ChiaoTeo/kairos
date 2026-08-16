@@ -1,13 +1,13 @@
 //! Provider-neutral order and execution data.
 
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, ClientOrderId, Currency, DomainTypeError, FillId, InstrumentId, IntentId, MarketId,
     Money, OrderId, Price, Quantity, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
 };
 
 use crate::domain::ProviderInstrumentRef;
 
-pub use kairos_domain_types::{OrderSide, OrderStatus};
+pub use kairos_primitives::{OrderSide, OrderStatus};
 
 pub(crate) fn normalize_order_side(value: &str) -> OrderSide {
     match value.to_ascii_uppercase().as_str() {
@@ -200,7 +200,7 @@ pub struct ExecutionReport {
 #[cfg(test)]
 mod tests {
     use super::{OrderRequest, OrderSide, OrderType};
-    use kairos_domain_types::Symbol;
+    use kairos_primitives::Symbol;
 
     #[test]
     fn limit_order_requires_a_limit_price() {

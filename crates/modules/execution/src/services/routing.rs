@@ -6,7 +6,7 @@
 //! global registry: it is a private, typed collection with current callers in
 //! Execution composition and runtime.
 
-use kairos_domain_types::{AccountId, SegmentKey};
+use kairos_primitives::{AccountId, SegmentKey};
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
     ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
@@ -313,9 +313,9 @@ mod tests {
         fn order(&self) -> ExternalOrder {
             ExternalOrder {
                 binding_id: String::new(),
-                order_id: kairos_domain_types::OrderId::new(self.order_id).unwrap(),
+                order_id: kairos_primitives::OrderId::new(self.order_id).unwrap(),
                 client_order_id: None,
-                symbol: kairos_domain_types::Symbol::new("BTCUSDT").unwrap(),
+                symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
                 side: OrderSide::Buy,
                 order_type: OrderType::Limit,
                 status: OrderStatus::Acknowledged,
@@ -362,11 +362,11 @@ mod tests {
 
     fn request(account: &str, participant: &str) -> OrderEntryRequest {
         OrderEntryRequest {
-            order_id: kairos_domain_types::OrderId::new(format!("{participant}-order")).unwrap(),
+            order_id: kairos_primitives::OrderId::new(format!("{participant}-order")).unwrap(),
             intent_id: None,
-            account_id: kairos_domain_types::AccountId::new(account).unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("btc-usdt").unwrap(),
+            account_id: kairos_primitives::AccountId::new(account).unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("btc-usdt").unwrap(),
             market_id: None,
             provider_instrument: ProviderInstrumentRef::new(
                 ParticipantRef::new(ParticipantKind::Exchange, participant).unwrap(),
@@ -404,8 +404,8 @@ mod tests {
     ) -> ExecutionRoute<C> {
         ExecutionRoute::new(
             route_id,
-            kairos_domain_types::AccountId::new(account_id).unwrap(),
-            kairos_domain_types::SegmentKey::new("spot").unwrap(),
+            kairos_primitives::AccountId::new(account_id).unwrap(),
+            kairos_primitives::SegmentKey::new("spot").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             descriptor(binding_id, participant),
             connection,
@@ -453,8 +453,8 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let route = ExecutionRoute::new(
             "binance-usdm",
-            kairos_domain_types::AccountId::new("main").unwrap(),
-            kairos_domain_types::SegmentKey::new("derivatives").unwrap(),
+            kairos_primitives::AccountId::new("main").unwrap(),
+            kairos_primitives::SegmentKey::new("derivatives").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("usd-m-futures").unwrap()),
             descriptor("execution.binance.usdm", "binance"),
             RecordingEntry {
@@ -466,7 +466,7 @@ mod tests {
         let mut router = RoutedAsyncOrderEntry::new(vec![route]).unwrap();
 
         let mut request = request_with_instrument_type("main", "binance", Some("swap"));
-        request.segment_key = kairos_domain_types::SegmentKey::new("derivatives").unwrap();
+        request.segment_key = kairos_primitives::SegmentKey::new("derivatives").unwrap();
         let error = router.submit_order(&request).await.unwrap_err();
 
         assert!(matches!(error, IntegrationError::InvalidRequest(_)));
@@ -559,7 +559,7 @@ mod tests {
         let one = router
             .order_detail(&ExternalOrderQuery {
                 binding_id: Some("execution.okx.hedge".into()),
-                order_id: Some(kairos_domain_types::OrderId::new("same-id").unwrap()),
+                order_id: Some(kairos_primitives::OrderId::new("same-id").unwrap()),
                 ..ExternalOrderQuery::default()
             })
             .await

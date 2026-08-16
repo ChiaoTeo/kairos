@@ -1,4 +1,4 @@
-use kairos_domain_types::{MarketId, Sequence, UnixNanos};
+use kairos_primitives::{MarketId, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

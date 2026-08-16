@@ -329,8 +329,8 @@ pub(crate) fn normalize_account(
             )
             .ok()?;
             Some(Balance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}")).ok()?,
-                asset_code: kairos_domain_types::Currency::new(code).ok()?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}")).ok()?,
+                asset_code: kairos_primitives::Currency::new(code).ok()?,
                 total,
                 available: decimal_field(row, "available"),
                 locked: decimal_field(row, "locked").or_else(|| decimal_field(row, "freeze")),
@@ -414,8 +414,8 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
         .filter(|value| !value.is_empty())
         .unwrap_or(&remote_order_id);
     Ok(OpenOrder {
-        order_id: kairos_domain_types::OrderId::new(local_order_id)?,
-        remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
+        order_id: kairos_primitives::OrderId::new(local_order_id)?,
+        remote_order_id: Some(kairos_primitives::RemoteOrderId::new(remote_order_id)?),
         provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
@@ -465,7 +465,7 @@ mod tests {
     fn normalizes_options_assets_and_positions() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("options").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("options").unwrap(),
             environment: "live".into(),
             account_model: Some("contract".into()),
         };

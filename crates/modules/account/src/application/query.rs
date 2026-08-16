@@ -1,4 +1,4 @@
-use kairos_domain_types::{AccountId, DurationNanos, MarketId, Symbol, UnixNanos};
+use kairos_primitives::{AccountId, DurationNanos, MarketId, Symbol, UnixNanos};
 
 use crate::domain::SegmentKey;
 

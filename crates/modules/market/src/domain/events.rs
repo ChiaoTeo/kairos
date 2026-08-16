@@ -19,10 +19,10 @@ pub enum MarketEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderBookResyncRequired {
     pub source_id: String,
-    pub market_id: kairos_domain_types::MarketId,
-    pub instrument_id: kairos_domain_types::InstrumentId,
-    pub expected_sequence: kairos_domain_types::Sequence,
-    pub observed_sequence: kairos_domain_types::Sequence,
+    pub market_id: kairos_primitives::MarketId,
+    pub instrument_id: kairos_primitives::InstrumentId,
+    pub expected_sequence: kairos_primitives::Sequence,
+    pub observed_sequence: kairos_primitives::Sequence,
     pub reason: String,
 }
 
@@ -31,7 +31,7 @@ pub struct OrderBookResyncRequired {
 /// but a view update is scoped to exactly one resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketChange {
-    pub sequence: kairos_domain_types::Sequence,
+    pub sequence: kairos_primitives::Sequence,
     pub event: Option<MarketEvent>,
     pub view: Option<MarketViewUpdate>,
 }

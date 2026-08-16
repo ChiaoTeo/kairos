@@ -25,22 +25,22 @@ pub(super) fn normalize_ibkr_order_status(
     status: OrderStatusKind,
     filled: Option<f64>,
     remaining: Option<f64>,
-) -> kairos_domain_types::OrderStatus {
+) -> kairos_primitives::OrderStatus {
     if filled.is_some_and(|value| value > 0.0) && remaining.is_some_and(|value| value > 0.0) {
-        return kairos_domain_types::OrderStatus::PartiallyFilled;
+        return kairos_primitives::OrderStatus::PartiallyFilled;
     }
     match status {
         OrderStatusKind::ApiPending
         | OrderStatusKind::PendingSubmit
-        | OrderStatusKind::PreSubmitted => kairos_domain_types::OrderStatus::Acknowledged,
+        | OrderStatusKind::PreSubmitted => kairos_primitives::OrderStatus::Acknowledged,
         OrderStatusKind::PendingCancel | OrderStatusKind::Submitted => {
-            kairos_domain_types::OrderStatus::Accepted
+            kairos_primitives::OrderStatus::Accepted
         }
         OrderStatusKind::ApiCancelled | OrderStatusKind::Cancelled => {
-            kairos_domain_types::OrderStatus::Canceled
+            kairos_primitives::OrderStatus::Canceled
         }
-        OrderStatusKind::Filled => kairos_domain_types::OrderStatus::Filled,
-        OrderStatusKind::Inactive => kairos_domain_types::OrderStatus::Unknown,
+        OrderStatusKind::Filled => kairos_primitives::OrderStatus::Filled,
+        OrderStatusKind::Inactive => kairos_primitives::OrderStatus::Unknown,
     }
 }
 pub struct IbkrAccountConnection {
@@ -159,7 +159,7 @@ impl AccountEventStreamConnection for IbkrAccountStreamConnection {
                     self.account_id.clone(),
                 )
                 .map_err(IntegrationError::InvalidPayload)?,
-            segment_key: kairos_domain_types::SegmentKey::new(self.segment_key.clone())
+            segment_key: kairos_primitives::SegmentKey::new(self.segment_key.clone())
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             environment: "live".into(),
             account_model: None,
@@ -247,10 +247,10 @@ fn fetch_snapshot(
         .map(
             |(currency, (total, available))| -> Result<ExternalBalance, String> {
                 Ok(ExternalBalance {
-                    asset_id: kairos_domain_types::AssetId::new(format!(
+                    asset_id: kairos_primitives::AssetId::new(format!(
                         "asset:equity:{currency}"
                     ))?,
-                    asset_code: kairos_domain_types::Currency::new(currency)?,
+                    asset_code: kairos_primitives::Currency::new(currency)?,
                     total: total.or(available).unwrap_or_default(),
                     available,
                     locked: None,
@@ -274,15 +274,15 @@ fn fetch_snapshot(
                 )
                 .ok()?;
                 Some(ExternalOpenOrder {
-                    order_id: kairos_domain_types::OrderId::new(value.order_id.to_string()).ok()?,
+                    order_id: kairos_primitives::OrderId::new(value.order_id.to_string()).ok()?,
                     remote_order_id: Some(
-                        kairos_domain_types::RemoteOrderId::new(value.order_id.to_string()).ok()?,
+                        kairos_primitives::RemoteOrderId::new(value.order_id.to_string()).ok()?,
                     ),
                     provider_instrument,
                     side: if format!("{:?}", value.order.action).eq_ignore_ascii_case("sell") {
-                        kairos_domain_types::OrderSide::Sell
+                        kairos_primitives::OrderSide::Sell
                     } else {
-                        kairos_domain_types::OrderSide::Buy
+                        kairos_primitives::OrderSide::Buy
                     },
                     quantity: decimal_f64_value(value.order.total_quantity),
                     filled_quantity: ExternalDecimal::new(0, 0),

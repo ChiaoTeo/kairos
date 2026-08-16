@@ -757,7 +757,7 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &MarketDescripto
 mod tests {
     use std::time::Duration;
 
-    use kairos_domain_types::{Exchange, UnixNanos};
+    use kairos_primitives::{Exchange, UnixNanos};
     use tokio::sync::mpsc;
 
     use super::MarketApplication;

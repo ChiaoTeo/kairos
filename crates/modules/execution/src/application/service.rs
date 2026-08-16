@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, ActorId, ClientOrderId, Currency, DurationNanos, ExecutionAccessId, FillId,
     Generation, InstrumentId, IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity,
     RemoteOrderId, SegmentKey, Sequence, StrategyId, Symbol, UnixNanos,
@@ -44,7 +44,7 @@ pub struct SubmitOrder {
     pub order_id: OrderId,
     pub intent_id: Option<IntentId>,
     #[serde(default)]
-    pub strategy_id: Option<kairos_domain_types::StrategyId>,
+    pub strategy_id: Option<kairos_primitives::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
@@ -219,7 +219,7 @@ pub struct ExecutionCurrentView {
 /// error: recovery must be able to inspect and resolve it after a restart.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UnknownRemoteOrder {
-    pub remote_order_id: kairos_domain_types::RemoteOrderId,
+    pub remote_order_id: kairos_primitives::RemoteOrderId,
     pub symbol: Symbol,
     pub status: ExecutionOrderStatus,
     pub execution_id: Option<FillId>,
@@ -372,7 +372,7 @@ impl Serialize for RemoteOrder {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAuditQuery {
     pub order_id: Option<OrderId>,
-    pub remote_order_id: Option<kairos_domain_types::RemoteOrderId>,
+    pub remote_order_id: Option<kairos_primitives::RemoteOrderId>,
     pub status: Option<String>,
     pub since_unix_nanos: Option<UnixNanos>,
     pub until_unix_nanos: Option<UnixNanos>,
@@ -384,7 +384,7 @@ pub struct ExecutionAuditEvent {
     pub sequence: Sequence,
     pub order_id: OrderId,
     pub status: ExecutionOrderStatus,
-    pub remote_order_id: Option<kairos_domain_types::RemoteOrderId>,
+    pub remote_order_id: Option<kairos_primitives::RemoteOrderId>,
     pub occurred_at_unix_nanos: UnixNanos,
     pub reason: String,
 }
@@ -3320,7 +3320,7 @@ impl ExecutionApplication {
         event: &RemoteOrderUpdate,
     ) -> Result<(), ExecutionError> {
         let now = event.occurred_at_unix_nanos;
-        let remote_order_id = kairos_domain_types::RemoteOrderId::new(event.order_id.to_string())
+        let remote_order_id = kairos_primitives::RemoteOrderId::new(event.order_id.to_string())
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
         let entry = self
             .unknown_remote_orders
@@ -3372,7 +3372,7 @@ fn to_connection_request(
         order_id: order.order_id.clone(),
         intent_id: order.intent_id.clone(),
         account_id: order.account_id.clone(),
-        segment_key: kairos_domain_types::SegmentKey::new(segment_key)
+        segment_key: kairos_primitives::SegmentKey::new(segment_key)
             .map_err(|error| error.to_string())?,
         instrument_id: order.instrument_id.clone(),
         market_id: order.market_id.clone(),

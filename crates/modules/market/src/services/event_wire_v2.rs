@@ -61,10 +61,10 @@ macro_rules! decimal_value {
 }
 
 decimal_value!(
-    kairos_domain_types::Price,
-    kairos_domain_types::Quantity,
-    kairos_domain_types::Money,
-    kairos_domain_types::Rate,
+    kairos_primitives::Price,
+    kairos_primitives::Quantity,
+    kairos_primitives::Money,
+    kairos_primitives::Rate,
 );
 
 fn strings<'a, A: flatbuffers::Allocator + 'a>(
@@ -911,7 +911,7 @@ mod tests {
     use super::encode_event;
     use crate::domain::events::MarketEvent;
     use crate::domain::observations::{Quote, Rate};
-    use kairos_domain_types::{
+    use kairos_primitives::{
         InstrumentId, MarketId, Price, Quantity, Rate as FixedRate, UnixNanos,
     };
     use kairos_market_contract::event::decode_event;

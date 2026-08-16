@@ -21,7 +21,7 @@ mod state {
         ExternalAccountSnapshot,
     };
     use crate::application::IntegrationError;
-    use kairos_domain_types::{AccountId, Currency, MarketId, SegmentKey, Symbol, UnixNanos};
+    use kairos_primitives::{AccountId, Currency, MarketId, SegmentKey, Symbol, UnixNanos};
 
     pub trait AccountReadConnection: Send {
         fn fetch_account(

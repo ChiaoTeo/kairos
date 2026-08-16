@@ -1,5 +1,5 @@
 [package]
-name = "kairos-account-service"
+name = "kairos-account"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -12,16 +12,16 @@ path = "src/lib.rs"
 
 [dependencies]
 axum = "0.8"
-kairos-domain-types = { path = "../../../kairos-domain-types" }
+kairos-primitives = { path = "../../primitives" }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
 futures-util = { version = "0.3", features = ["alloc"] }
-kairos-integration = { path = "../../../kairos-integration" }
-kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
-kairos-protocol = { path = "../../../kairos-protocol" }
-kairos-transport = { path = "../../../kairos-transport" }
-kairos-account-contract = { path = "../contract" }
-kairos-reference-contract = { path = "../../reference/contract" }
+kairos-integration = { path = "../../platform/integration" }
+kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
+kairos-protocol = { path = "../../platform/protocol" }
+kairos-transport = { path = "../../platform/transport" }
+kairos-account-contract = { path = "contract" }
+kairos-reference-contract = { path = "../reference/contract" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy = { workspace = true }

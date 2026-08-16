@@ -24,7 +24,7 @@ mod tests {
         AsyncInstrumentCatalogConnection, InstrumentCatalogConnection,
     };
     use crate::application::AsyncMarketSnapshotConnection;
-    use kairos_domain_types::ProviderSymbol;
+    use kairos_primitives::ProviderSymbol;
 
     #[tokio::test(flavor = "current_thread")]
     async fn catalog_uses_caller_runtime_and_trait_proves_capability() {

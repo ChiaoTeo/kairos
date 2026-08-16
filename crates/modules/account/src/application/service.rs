@@ -442,7 +442,7 @@ impl AccountApplication {
                 balances.into_iter().filter_map(move |balance| {
                     if request.include_zero || !balance.total.is_zero() {
                         Some(AccountBalanceRow {
-                            account_id: kairos_domain_types::AccountId::new(account_id.clone())
+                            account_id: kairos_primitives::AccountId::new(account_id.clone())
                                 .expect("runtime projection account IDs are validated"),
                             segment_key: crate::domain::SegmentKey::new(segment_key.clone())
                                 .expect("runtime projection segment keys are validated"),

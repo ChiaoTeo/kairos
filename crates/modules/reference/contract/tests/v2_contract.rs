@@ -81,7 +81,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
         instrument_id: "instrument:spot:BTC".into(),
         listing_id: "listing:binance:spot:BTCUSDT".into(),
         exchange_id: "exchange:binance".into(),
-        market_type: kairos_domain_types::ProviderProductCode::new("spot").unwrap(),
+        market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
         source_symbol: "BTCUSDT".into(),
         status: "active".into(),
         price_tick: Some("0.01".into()),

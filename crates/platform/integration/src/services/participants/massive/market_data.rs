@@ -1,6 +1,6 @@
 //! Massive Stocks and Options WebSocket market streams.
 
-use kairos_domain_types::{Price, Quantity, Sequence, Symbol};
+use kairos_primitives::{Price, Quantity, Sequence, Symbol};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tokio_tungstenite::tungstenite::Message;

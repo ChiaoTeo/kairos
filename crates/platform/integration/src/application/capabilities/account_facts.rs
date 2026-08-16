@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{ParticipantKind, ParticipantRef, ProviderInstrumentRef};
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, AssetId, Currency, OrderId, RemoteOrderId, SegmentKey, UnixNanos,
 };
 
@@ -199,10 +199,10 @@ pub struct ExternalOpenOrder {
     pub order_id: OrderId,
     pub remote_order_id: Option<RemoteOrderId>,
     pub provider_instrument: ProviderInstrumentRef,
-    pub side: kairos_domain_types::OrderSide,
+    pub side: kairos_primitives::OrderSide,
     pub quantity: ExternalDecimal,
     pub filled_quantity: ExternalDecimal,
-    pub status: kairos_domain_types::OrderStatus,
+    pub status: kairos_primitives::OrderStatus,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -229,7 +229,7 @@ pub struct ExternalOrderEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExternalFillEvent {
-    pub fill_id: kairos_domain_types::FillId,
+    pub fill_id: kairos_primitives::FillId,
     pub order_id: OrderId,
     pub segment_key: SegmentKey,
     pub provider_instrument: ProviderInstrumentRef,

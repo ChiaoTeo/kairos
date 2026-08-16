@@ -326,8 +326,8 @@ struct ReferenceHttpRequest {
 }
 
 struct PublishRequest {
-    generation: kairos_domain_types::Generation,
-    event_sequence: kairos_domain_types::Sequence,
+    generation: kairos_primitives::Generation,
+    event_sequence: kairos_primitives::Sequence,
     events: Vec<kairos_reference::domain::LifecycleEvent>,
     response: SyncSender<Result<(), String>>,
 }
@@ -358,8 +358,8 @@ impl EventPublisherRuntime {
 
     fn publish(
         &self,
-        generation: kairos_domain_types::Generation,
-        event_sequence: kairos_domain_types::Sequence,
+        generation: kairos_primitives::Generation,
+        event_sequence: kairos_primitives::Sequence,
         events: &[kairos_reference::domain::LifecycleEvent],
     ) -> kairos_reference::domain::ReferenceResult<()> {
         let receiver = self.enqueue(generation, event_sequence, events)?;
@@ -373,8 +373,8 @@ impl EventPublisherRuntime {
 
     fn enqueue(
         &self,
-        generation: kairos_domain_types::Generation,
-        event_sequence: kairos_domain_types::Sequence,
+        generation: kairos_primitives::Generation,
+        event_sequence: kairos_primitives::Sequence,
         events: &[kairos_reference::domain::LifecycleEvent],
     ) -> kairos_reference::domain::ReferenceResult<std_mpsc::Receiver<Result<(), String>>> {
         let (response, receiver) = std_mpsc::sync_channel(1);
@@ -767,8 +767,8 @@ fn publish(
 
 fn publish_events(
     writer: Option<&EventPublisherRuntime>,
-    generation: kairos_domain_types::Generation,
-    event_sequence: kairos_domain_types::Sequence,
+    generation: kairos_primitives::Generation,
+    event_sequence: kairos_primitives::Sequence,
     events: &[kairos_reference::domain::LifecycleEvent],
 ) -> kairos_reference::domain::ReferenceResult<()> {
     let writer = writer.ok_or_else(|| {

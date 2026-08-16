@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use kairos_domain_types::{FillId, Price, Quantity, Rate, Sequence, Symbol, UnixNanos};
+use kairos_primitives::{FillId, Price, Quantity, Rate, Sequence, Symbol, UnixNanos};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MarketDataKind {

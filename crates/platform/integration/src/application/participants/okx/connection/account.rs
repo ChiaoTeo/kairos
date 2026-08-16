@@ -290,7 +290,7 @@ impl AsyncAccountEventSource for OkxTradingAccountEvents {
 
 fn account_event_time(
     event: &crate::application::capabilities::account_facts::ExternalAccountEvent,
-) -> kairos_domain_types::UnixNanos {
+) -> kairos_primitives::UnixNanos {
     use crate::application::capabilities::account_facts::ExternalAccountEvent;
     match event {
         ExternalAccountEvent::Snapshot(snapshot) => snapshot.observed_at_unix_nanos,
@@ -300,7 +300,7 @@ fn account_event_time(
             .iter()
             .map(account_event_time)
             .max()
-            .unwrap_or_else(|| kairos_domain_types::UnixNanos::new(0)),
+            .unwrap_or_else(|| kairos_primitives::UnixNanos::new(0)),
     }
 }
 
@@ -343,13 +343,13 @@ fn parse_provider_channel(text: &str) -> Option<&'static str> {
     }
 }
 
-fn now_unix_nanos() -> kairos_domain_types::UnixNanos {
+fn now_unix_nanos() -> kairos_primitives::UnixNanos {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         .min(u64::MAX as u128) as u64;
-    kairos_domain_types::UnixNanos::new(nanos)
+    kairos_primitives::UnixNanos::new(nanos)
 }
 
 impl OkxTradingAccountRead {

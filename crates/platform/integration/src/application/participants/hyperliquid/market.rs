@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{Price, ProviderSymbol, Quantity, Sequence, Symbol, UnixNanos};
+use kairos_primitives::{Price, ProviderSymbol, Quantity, Sequence, Symbol, UnixNanos};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 

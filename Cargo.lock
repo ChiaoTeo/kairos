@@ -1577,23 +1577,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-account-contract"
-version = "0.1.0"
-dependencies = [
- "flatbuffers",
- "futures-core",
- "kairos-protocol",
- "kairos-transport",
- "kairos-workspace",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
-name = "kairos-account-service"
+name = "kairos-account"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -1601,8 +1585,8 @@ dependencies = [
  "flatbuffers",
  "futures-util",
  "kairos-account-contract",
- "kairos-domain-types",
  "kairos-integration",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-reference-contract",
  "kairos-transport",
@@ -1619,12 +1603,51 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-domain-types"
+name = "kairos-account-contract"
 version = "0.1.0"
 dependencies = [
- "rust_decimal",
+ "flatbuffers",
+ "futures-core",
+ "kairos-protocol",
+ "kairos-transport",
+ "kairos-workspace",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "kairos-execution"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "flatbuffers",
+ "futures-util",
+ "kairos-account-contract",
+ "kairos-execution-contract",
+ "kairos-integration",
+ "kairos-market-contract",
+ "kairos-primitives",
+ "kairos-protocol",
+ "kairos-reference-contract",
+ "kairos-risk-contract",
+ "kairos-transport",
+ "kairos-workspace",
+ "rusqlite",
+ "rust_decimal",
+ "rusteron-media-driver",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1645,38 +1668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-execution-service"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "flatbuffers",
- "futures-util",
- "kairos-account-contract",
- "kairos-domain-types",
- "kairos-execution-contract",
- "kairos-integration",
- "kairos-market-contract",
- "kairos-protocol",
- "kairos-reference-contract",
- "kairos-risk-contract",
- "kairos-transport",
- "kairos-workspace",
- "rusqlite",
- "rust_decimal",
- "rusteron-media-driver",
- "secrecy",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
 name = "kairos-integration"
 version = "0.1.0"
 dependencies = [
@@ -1688,8 +1679,8 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "ibapi",
- "kairos-domain-types",
  "kairos-network",
+ "kairos-primitives",
  "memmap2",
  "reqwest 0.13.4",
  "rust_decimal",
@@ -1704,6 +1695,34 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "kairos-market"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "criterion",
+ "flatbuffers",
+ "kairos-integration",
+ "kairos-market-contract",
+ "kairos-primitives",
+ "kairos-protocol",
+ "kairos-reference-contract",
+ "kairos-transport",
+ "kairos-workspace",
+ "proptest",
+ "rusqlite",
+ "rust_decimal",
+ "rusteron-media-driver",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1723,38 +1742,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-market-service"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "criterion",
- "flatbuffers",
- "kairos-domain-types",
- "kairos-integration",
- "kairos-market-contract",
- "kairos-protocol",
- "kairos-reference-contract",
- "kairos-transport",
- "kairos-workspace",
- "proptest",
- "rusqlite",
- "rust_decimal",
- "rusteron-media-driver",
- "secrecy",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
 name = "kairos-network"
 version = "0.1.0"
 dependencies = [
  "tracing",
+]
+
+[[package]]
+name = "kairos-primitives"
+version = "0.1.0"
+dependencies = [
+ "rust_decimal",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1766,12 +1766,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-reference"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "flatbuffers",
+ "futures-util",
+ "kairos-integration",
+ "kairos-primitives",
+ "kairos-protocol",
+ "kairos-reference-contract",
+ "kairos-transport",
+ "kairos-workspace",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kairos-reference-contract"
 version = "0.1.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
- "kairos-domain-types",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",
@@ -1786,25 +1810,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-reference-service"
+name = "kairos-risk"
 version = "0.1.0"
 dependencies = [
  "axum",
- "chrono",
  "clap",
  "flatbuffers",
- "futures-util",
- "kairos-domain-types",
- "kairos-integration",
+ "kairos-primitives",
  "kairos-protocol",
- "kairos-reference-contract",
+ "kairos-risk-contract",
  "kairos-transport",
  "kairos-workspace",
- "secrecy",
+ "rust_decimal",
+ "rusteron-media-driver",
  "serde",
  "serde_json",
- "sqlx",
  "tempfile",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
 ]
@@ -1823,28 +1845,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
-]
-
-[[package]]
-name = "kairos-risk-service"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "flatbuffers",
- "kairos-domain-types",
- "kairos-protocol",
- "kairos-risk-contract",
- "kairos-transport",
- "kairos-workspace",
- "rust_decimal",
- "rusteron-media-driver",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
 ]
 
 [[package]]

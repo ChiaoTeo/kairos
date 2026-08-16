@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use kairos_domain_types::{Currency, UnixNanos};
+use kairos_primitives::{Currency, UnixNanos};
 
 use super::{AccountId, AccountModel, MarginMode, MarketId, PositionMode, Rate, SegmentKey};
 

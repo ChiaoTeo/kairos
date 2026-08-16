@@ -10,12 +10,12 @@ RETIRED_VERSION = "v" + "1"
 RETIRED_MODULE = "v_" + "1"
 PATH_ROOTS = (
     ROOT / "schemas",
-    ROOT / "crates" / "kairos-protocol" / "src" / "generated",
+    ROOT / "crates" / "platform" / "protocol" / "src" / "generated",
     ROOT / "kairospy" / "infrastructure" / "transport" / "generated",
 )
 TEXT_ROOTS = (
     ROOT / "scripts" / "generate",
-    ROOT / "crates" / "kairos-protocol",
+    ROOT / "crates" / "platform" / "protocol",
     ROOT / "kairospy" / "infrastructure" / "transport",
     ROOT / "tests" / "fixtures",
 )

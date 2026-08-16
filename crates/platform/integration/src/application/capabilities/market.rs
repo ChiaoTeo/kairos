@@ -5,7 +5,7 @@ mod snapshot {
 
     use std::future::Future;
 
-    use kairos_domain_types::ProviderSymbol;
+    use kairos_primitives::ProviderSymbol;
 
     pub use super::super::market_facts::{MarketEvent, MarketEventKind};
     use crate::application::IntegrationError;
@@ -24,7 +24,7 @@ pub use snapshot::*;
 mod quote {
     use super::super::market_facts::MarketQuote;
     use crate::application::IntegrationError;
-    use kairos_domain_types::ProviderSymbol;
+    use kairos_primitives::ProviderSymbol;
     use std::future::Future;
 
     /// Bounded, provider-native best bid/ask query for one symbol.
@@ -120,7 +120,7 @@ mod historical {
 
     use super::super::market_facts::{MarketDataKind, MarketEvent, MarketStreamCapabilities};
     use crate::application::IntegrationError;
-    use kairos_domain_types::{Symbol, UnixNanos};
+    use kairos_primitives::{Symbol, UnixNanos};
     use std::future::Future;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,7 +179,7 @@ mod historical {
     #[cfg(test)]
     mod tests {
         use super::{HistoricalMarketRequest, MarketDataKind};
-        use kairos_domain_types::{Symbol, UnixNanos};
+        use kairos_primitives::{Symbol, UnixNanos};
 
         fn request() -> HistoricalMarketRequest {
             HistoricalMarketRequest {

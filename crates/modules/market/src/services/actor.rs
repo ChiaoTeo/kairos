@@ -20,7 +20,7 @@ use crate::domain::subscriptions::{
 use crate::services::messages::{
     ProviderSubscriptionId, SourceCommand, SourceInput, SourceRequestId,
 };
-use kairos_domain_types::{ActorId, Generation, Sequence};
+use kairos_primitives::{ActorId, Generation, Sequence};
 use tokio::sync::mpsc;
 
 pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
@@ -44,7 +44,7 @@ pub(crate) enum PendingSourceRequest {
     },
     ResyncOrderBook {
         source_id: SourceId,
-        market_id: kairos_domain_types::MarketId,
+        market_id: kairos_primitives::MarketId,
     },
 }
 
@@ -270,7 +270,7 @@ impl MarketActor {
         &mut self,
         source_id: &SourceId,
         epoch: SourceEpoch,
-        market_id: &kairos_domain_types::MarketId,
+        market_id: &kairos_primitives::MarketId,
         reason: String,
     ) -> Result<bool, String> {
         let source = self
@@ -306,7 +306,7 @@ impl MarketActor {
                 .get(&format!("{source_id}:{market_id}"))
                 .map(|book| book.instrument_id.clone())
                 .unwrap_or_else(|| {
-                    kairos_domain_types::InstrumentId::new(market_id.as_str())
+                    kairos_primitives::InstrumentId::new(market_id.as_str())
                         .expect("validated market id is a valid fallback instrument id")
                 });
             self.event_sequence += 1;
@@ -336,7 +336,7 @@ impl MarketActor {
         &mut self,
         source_id: &SourceId,
         epoch: SourceEpoch,
-        market_id: &kairos_domain_types::MarketId,
+        market_id: &kairos_primitives::MarketId,
     ) -> Result<bool, String> {
         let source = self
             .sources
@@ -662,12 +662,12 @@ impl MarketActor {
             freshness_key,
             MarketFreshness {
                 source_id: observation.source_id().to_owned(),
-                market_id: kairos_domain_types::MarketId::new(observation.market_id().to_owned())
+                market_id: kairos_primitives::MarketId::new(observation.market_id().to_owned())
                     .expect("validated market observation market id"),
                 data_kind: observation.view_kind().to_owned(),
                 last_event_time_unix_nanos: observation.observed_at_unix_nanos(),
-                last_received_time_unix_nanos: kairos_domain_types::UnixNanos::new(now_unix_nanos()),
-                event_sequence: kairos_domain_types::Sequence::new(next_sequence),
+                last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(now_unix_nanos()),
+                event_sequence: kairos_primitives::Sequence::new(next_sequence),
                 status: DataFreshnessStatus::Current,
             },
         );
@@ -1031,12 +1031,12 @@ impl MarketActor {
             format!("{source_id}:{market_id}:order_book"),
             MarketFreshness {
                 source_id: source_id.to_owned(),
-                market_id: kairos_domain_types::MarketId::new(market_id.to_owned())
+                market_id: kairos_primitives::MarketId::new(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: "order_book".into(),
-                last_event_time_unix_nanos: kairos_domain_types::UnixNanos::new(event_time_unix_nanos),
-                last_received_time_unix_nanos: kairos_domain_types::UnixNanos::new(now_unix_nanos()),
-                event_sequence: kairos_domain_types::Sequence::new(sequence),
+                last_event_time_unix_nanos: kairos_primitives::UnixNanos::new(event_time_unix_nanos),
+                last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(now_unix_nanos()),
+                event_sequence: kairos_primitives::Sequence::new(sequence),
                 status: if synchronized {
                     DataFreshnessStatus::Current
                 } else {

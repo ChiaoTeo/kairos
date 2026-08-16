@@ -813,8 +813,8 @@ pub(crate) fn normalize_account(
             scale,
         );
         result.push(Balance {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-            asset_code: kairos_domain_types::Currency::new(code)?,
+            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+            asset_code: kairos_primitives::Currency::new(code)?,
             total,
             available: Some(free),
             locked: Some(locked),
@@ -881,7 +881,7 @@ pub(crate) fn normalize_market_profile(
         position_mode: None,
         maker_fee: Some(maker_fee),
         taker_fee: Some(taker_fee),
-        fee_currency: Some(kairos_domain_types::Currency::new("BNB").expect("static fee currency")),
+        fee_currency: Some(kairos_primitives::Currency::new("BNB").expect("static fee currency")),
         fee_discount: burn_enabled.then_some(DecimalValue::new(25, 2)),
         fee_tier: burn_enabled.then(|| "bnb_burn".into()),
         source: "binance.spot".into(),
@@ -917,8 +917,8 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
         .filter(|value| !value.is_empty())
         .unwrap_or(&remote_order_id);
     Ok(OpenOrder {
-        order_id: kairos_domain_types::OrderId::new(local_order_id)?,
-        remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
+        order_id: kairos_primitives::OrderId::new(local_order_id)?,
+        remote_order_id: Some(kairos_primitives::RemoteOrderId::new(remote_order_id)?),
         provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
@@ -982,7 +982,7 @@ mod tests {
     fn normalizes_private_balances_without_vendor_payloads() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
             environment: "live".into(),
             account_model: None,
         };
@@ -1004,10 +1004,10 @@ mod tests {
     #[test]
     fn normalizes_spot_market_fee_and_bnb_discount_profile() {
         let request = AccountMarketProfileRequest {
-            account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-            market_id: kairos_domain_types::MarketId::new("market:binance:BTCUSDT").unwrap(),
-            source_symbol: kairos_domain_types::Symbol::new("BTCUSDT").unwrap(),
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:binance:BTCUSDT").unwrap(),
+            source_symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
             market_data_access_id: None,
         };
         let result = normalize_market_profile(

@@ -11,7 +11,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{OrderSide, OrderType};
-use kairos_domain_types::{
+use kairos_primitives::{
     Currency, FillId, InstrumentId, MarketId, Money, OrderId, Price, Quantity, Rate, UnixNanos,
 };
 

@@ -68,11 +68,11 @@ fn native_options_principal(
 
 fn futures_order_request(order_id: &str) -> OrderEntryRequest {
     OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new(order_id).unwrap(),
+        order_id: kairos_primitives::OrderId::new(order_id).unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("usd-m-futures").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-usdt").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("usd-m-futures").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-usdt").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -90,11 +90,11 @@ fn futures_order_request(order_id: &str) -> OrderEntryRequest {
 
 fn margin_order_request(order_id: &str) -> OrderEntryRequest {
     OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new(order_id).unwrap(),
+        order_id: kairos_primitives::OrderId::new(order_id).unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("cross-margin").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-usdt").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("cross-margin").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-usdt").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -112,11 +112,11 @@ fn margin_order_request(order_id: &str) -> OrderEntryRequest {
 
 fn options_order_request(order_id: &str) -> OrderEntryRequest {
     OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new(order_id).unwrap(),
+        order_id: kairos_primitives::OrderId::new(order_id).unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("options").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-call").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("options").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-call").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -430,11 +430,11 @@ async fn async_order_entry_and_query_use_the_callers_runtime() {
         })
         .unwrap();
     let request = OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new("order-async-1").unwrap(),
+        order_id: kairos_primitives::OrderId::new("order-async-1").unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-usdt").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-usdt").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -461,7 +461,7 @@ async fn async_order_entry_and_query_use_the_callers_runtime() {
     let rows = AsyncOrderQueryConnection::open_orders(
         &mut query,
         &crate::application::ExternalOrderQuery {
-            symbol: Some(kairos_domain_types::Symbol::new("BTCUSDT").unwrap()),
+            symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
             ..Default::default()
         },
     )
@@ -540,11 +540,11 @@ async fn futures_submit_server_failure_is_indeterminate_and_not_retried() {
         "execution.binance.usdm.failure",
     );
     let request = OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new("order-futures-1").unwrap(),
+        order_id: kairos_primitives::OrderId::new("order-futures-1").unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("usd-m-futures").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-usdt").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("usd-m-futures").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-usdt").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -916,11 +916,11 @@ async fn options_submit_server_failure_is_indeterminate_and_not_retried() {
         "execution.binance.options.failure",
     );
     let request = OrderEntryRequest {
-        order_id: kairos_domain_types::OrderId::new("order-options-1").unwrap(),
+        order_id: kairos_primitives::OrderId::new("order-options-1").unwrap(),
         intent_id: None,
-        account_id: kairos_domain_types::AccountId::new("main").unwrap(),
-        segment_key: kairos_domain_types::SegmentKey::new("options").unwrap(),
-        instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-call").unwrap(),
+        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        segment_key: kairos_primitives::SegmentKey::new("options").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-call").unwrap(),
         market_id: None,
         provider_instrument: ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),

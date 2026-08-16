@@ -247,7 +247,7 @@ fn map_exchange_error(error: ExchangeError) -> IntegrationError {
     }
 }
 
-fn account_event_time(event: &ExternalAccountEvent) -> kairos_domain_types::UnixNanos {
+fn account_event_time(event: &ExternalAccountEvent) -> kairos_primitives::UnixNanos {
     match event {
         ExternalAccountEvent::Snapshot(value) => value.observed_at_unix_nanos,
         ExternalAccountEvent::Order(value) => value.occurred_at_unix_nanos,
@@ -274,8 +274,8 @@ fn provider_event_id(event: &ExternalAccountEvent) -> Option<String> {
     }
 }
 
-fn now_unix_nanos() -> kairos_domain_types::UnixNanos {
-    kairos_domain_types::UnixNanos::new(
+fn now_unix_nanos() -> kairos_primitives::UnixNanos {
+    kairos_primitives::UnixNanos::new(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

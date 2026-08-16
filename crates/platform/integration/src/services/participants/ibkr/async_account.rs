@@ -32,7 +32,7 @@ pub(crate) struct IbkrAsyncAccountEvents {
     session: Arc<IbkrAsyncSession>,
     binding_id: String,
     account_id: String,
-    segment_key: kairos_domain_types::SegmentKey,
+    segment_key: kairos_primitives::SegmentKey,
     subscription: Option<Subscription<AccountUpdate>>,
     notices: watch::Receiver<Option<ibapi::Notice>>,
     balance_values: BTreeMap<String, (Option<ExternalDecimal>, Option<ExternalDecimal>)>,
@@ -48,7 +48,7 @@ impl IbkrAsyncAccountEvents {
         account_id: impl Into<String>,
         segment_key: impl Into<String>,
     ) -> Result<Self, IntegrationError> {
-        let segment_key = kairos_domain_types::SegmentKey::new(segment_key.into())
+        let segment_key = kairos_primitives::SegmentKey::new(segment_key.into())
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
         let notices = session.notice_receiver();
         Ok(Self {
@@ -258,7 +258,7 @@ impl AsyncAccountEventSource for IbkrAsyncAccountEvents {
 }
 
 fn partial_event(
-    segment_key: &kairos_domain_types::SegmentKey,
+    segment_key: &kairos_primitives::SegmentKey,
     update: AccountUpdate,
     balance_values: &mut BTreeMap<String, (Option<ExternalDecimal>, Option<ExternalDecimal>)>,
 ) -> Result<Option<ExternalAccountEvent>, IntegrationError> {
@@ -295,11 +295,11 @@ fn partial_event(
                         return Ok(None);
                     };
                     snapshot.balances.push(ExternalBalance {
-                        asset_id: kairos_domain_types::AssetId::new(format!(
+                        asset_id: kairos_primitives::AssetId::new(format!(
                             "asset:fiat:{currency}"
                         ))
                         .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-                        asset_code: kairos_domain_types::Currency::new(currency)
+                        asset_code: kairos_primitives::Currency::new(currency)
                             .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                         total,
                         available: values.1,
@@ -353,13 +353,13 @@ fn open_order(value: ibapi::orders::OrderData) -> Option<ExternalOpenOrder> {
     )
     .ok()?;
     Some(ExternalOpenOrder {
-        order_id: kairos_domain_types::OrderId::new(value.order_id.to_string()).ok()?,
-        remote_order_id: kairos_domain_types::RemoteOrderId::new(value.order_id.to_string()).ok(),
+        order_id: kairos_primitives::OrderId::new(value.order_id.to_string()).ok()?,
+        remote_order_id: kairos_primitives::RemoteOrderId::new(value.order_id.to_string()).ok(),
         provider_instrument,
         side: if format!("{:?}", value.order.action).eq_ignore_ascii_case("sell") {
-            kairos_domain_types::OrderSide::Sell
+            kairos_primitives::OrderSide::Sell
         } else {
-            kairos_domain_types::OrderSide::Buy
+            kairos_primitives::OrderSide::Buy
         },
         quantity: decimal_f64(value.order.total_quantity),
         filled_quantity: ExternalDecimal::default(),
@@ -374,9 +374,9 @@ fn normalized_balances(
         .into_iter()
         .map(|(currency, (total, available))| {
             Ok(ExternalBalance {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:fiat:{currency}"))
+                asset_id: kairos_primitives::AssetId::new(format!("asset:fiat:{currency}"))
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-                asset_code: kairos_domain_types::Currency::new(currency)
+                asset_code: kairos_primitives::Currency::new(currency)
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                 total: total.or(available).unwrap_or_default(),
                 available,
@@ -392,8 +392,8 @@ fn decimal_f64(value: f64) -> ExternalDecimal {
     ExternalDecimal::parse(&format!("{value:.8}")).unwrap_or_default()
 }
 
-fn now_nanos() -> kairos_domain_types::UnixNanos {
-    kairos_domain_types::UnixNanos::new(
+fn now_nanos() -> kairos_primitives::UnixNanos {
+    kairos_primitives::UnixNanos::new(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn available_funds_waits_for_total_and_preserves_total_cash_value() {
-        let segment_key = kairos_domain_types::SegmentKey::new("equity").unwrap();
+        let segment_key = kairos_primitives::SegmentKey::new("equity").unwrap();
         let mut values = BTreeMap::new();
 
         let available = partial_event(
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn net_liquidation_is_emitted_as_partial_equity() {
-        let segment_key = kairos_domain_types::SegmentKey::new("equity").unwrap();
+        let segment_key = kairos_primitives::SegmentKey::new("equity").unwrap();
         let event = partial_event(
             &segment_key,
             AccountUpdate::AccountValue(AccountValue {

@@ -79,7 +79,7 @@ impl SqlxExecutionAudit {
                 sqlx::query("INSERT OR IGNORE INTO execution_events(order_id,status,remote_order_id,occurred_at_unix_nanos,reason,event_key) VALUES (?,?,?,?,?,?)")
                     .bind(event.order_id.as_str())
                     .bind(format!("{:?}", event.status).to_ascii_lowercase())
-                    .bind(event.remote_order_id.as_ref().map(kairos_domain_types::RemoteOrderId::as_str))
+                    .bind(event.remote_order_id.as_ref().map(kairos_primitives::RemoteOrderId::as_str))
                     .bind(event.occurred_at_unix_nanos.get() as i64)
                     .bind(&event.reason)
                     .bind(order_event_key(event))
@@ -132,13 +132,13 @@ impl SqlxExecutionAudit {
                 .await?;
             rows.into_iter()
                 .map(|row| {
-                    let order_id = kairos_domain_types::OrderId::new(
+                    let order_id = kairos_primitives::OrderId::new(
                         row.try_get::<String, _>("order_id")?,
                     )
                     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
                     let remote_order_id = row
                         .try_get::<Option<String>, _>("remote_order_id")?
-                        .map(kairos_domain_types::RemoteOrderId::new)
+                        .map(kairos_primitives::RemoteOrderId::new)
                         .transpose()
                         .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
                     Ok(ExecutionAuditEvent {
@@ -192,7 +192,7 @@ fn order_event_key(event: &ExecutionEvent) -> String {
         event
             .remote_order_id
             .as_ref()
-            .map(kairos_domain_types::RemoteOrderId::as_str)
+            .map(kairos_primitives::RemoteOrderId::as_str)
             .unwrap_or_default(),
         event.occurred_at_unix_nanos,
         event.reason
@@ -222,12 +222,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut audit = SqlxExecutionAudit::new(directory.path().join("audit.sqlite")).unwrap();
         let event = ExecutionEvent {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_domain_types::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
@@ -237,7 +237,7 @@ mod tests {
         audit.publish(&event).unwrap();
         let events = audit
             .query(&ExecutionAuditQuery {
-                order_id: Some(kairos_domain_types::OrderId::new("order-1").unwrap()),
+                order_id: Some(kairos_primitives::OrderId::new("order-1").unwrap()),
                 ..Default::default()
             })
             .unwrap();

@@ -41,7 +41,7 @@ mod query {
 
     use super::super::execution_facts::{DecimalValue, OrderSide, OrderStatus, OrderType};
     use crate::application::IntegrationError;
-    use kairos_domain_types::{ClientOrderId, OrderId, Symbol, UnixNanos};
+    use kairos_primitives::{ClientOrderId, OrderId, Symbol, UnixNanos};
     use std::future::Future;
 
     #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -112,7 +112,7 @@ mod events {
     use super::super::execution_facts::{DecimalValue, OrderSide, OrderType};
     use crate::application::{ExternalEventEnvelope, IntegrationError};
     use crate::domain::ConnectionHealth;
-    use kairos_domain_types::{Currency, FillId, OrderId, OrderStatus, Symbol, UnixNanos};
+    use kairos_primitives::{Currency, FillId, OrderId, OrderStatus, Symbol, UnixNanos};
     use std::future::Future;
 
     #[derive(Clone, Debug, Eq, PartialEq)]

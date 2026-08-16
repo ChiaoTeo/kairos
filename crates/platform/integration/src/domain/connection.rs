@@ -1,6 +1,6 @@
 //! Stable identity and health for one participant-owned connection domain.
 
-use kairos_domain_types::UnixNanos;
+use kairos_primitives::UnixNanos;
 
 use super::ParticipantRef;
 

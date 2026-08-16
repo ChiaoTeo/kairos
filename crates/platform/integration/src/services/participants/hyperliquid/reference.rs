@@ -1,6 +1,6 @@
 //! Hyperliquid public metadata normalization without canonical Reference IDs.
 
-use kairos_domain_types::{Currency, ProviderSymbol};
+use kairos_primitives::{Currency, ProviderSymbol};
 use serde_json::Value;
 
 use crate::application::capabilities::reference::{

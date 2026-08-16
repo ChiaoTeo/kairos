@@ -81,20 +81,20 @@ fn collection_market_descriptor(
         .map_err(MarketStartupError::new)?;
     descriptor.underlying_instrument_id = market
         .underlying_instrument_id
-        .map(kairos_domain_types::InstrumentId::new)
+        .map(kairos_primitives::InstrumentId::new)
         .transpose()
         .map_err(MarketStartupError::new)?;
     descriptor.market_data_access_id = Some(access.access_id.clone());
     descriptor.market_data_provider_id = Some(
-        kairos_domain_types::ProviderId::new(access.provider_id.clone())
+        kairos_primitives::ProviderId::new(access.provider_id.clone())
             .map_err(MarketStartupError::new)?,
     );
     descriptor.market_data_provider_product = Some(
-        kairos_domain_types::ProviderProductCode::new(access.provider_product.clone())
+        kairos_primitives::ProviderProductCode::new(access.provider_product.clone())
             .map_err(MarketStartupError::new)?,
     );
     descriptor.provider_symbol = Some(
-        kairos_domain_types::ProviderSymbol::new(access.provider_symbol.clone())
+        kairos_primitives::ProviderSymbol::new(access.provider_symbol.clone())
             .map_err(MarketStartupError::new)?,
     );
     if let Some(source_id) = &collection.source_id {

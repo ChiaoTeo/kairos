@@ -1,5 +1,5 @@
 [package]
-name = "kairos-market-service"
+name = "kairos-market"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -12,15 +12,15 @@ path = "src/lib.rs"
 
 [dependencies]
 axum = "0.8"
-kairos-domain-types = { path = "../../../kairos-domain-types" }
-kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
+kairos-primitives = { path = "../../primitives" }
+kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
-kairos-protocol = { path = "../../../kairos-protocol" }
-kairos-integration = { path = "../../../kairos-integration" }
-kairos-transport = { path = "../../../kairos-transport" }
-kairos-market-contract = { path = "../contract" }
-kairos-reference-contract = { path = "../../reference/contract" }
+kairos-protocol = { path = "../../platform/protocol" }
+kairos-integration = { path = "../../platform/integration" }
+kairos-transport = { path = "../../platform/transport" }
+kairos-market-contract = { path = "contract" }
+kairos-reference-contract = { path = "../reference/contract" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy.workspace = true

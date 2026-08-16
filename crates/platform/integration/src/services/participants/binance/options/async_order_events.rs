@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_domain_types::{Currency, FillId, OrderId, OrderStatus, Symbol, UnixNanos};
+use kairos_primitives::{Currency, FillId, OrderId, OrderStatus, Symbol, UnixNanos};
 use serde_json::Value;
 
 use crate::application::capabilities::{
@@ -390,7 +390,7 @@ mod tests {
     use std::io::{Read, Write};
 
     use futures_util::SinkExt;
-    use kairos_domain_types::{OrderStatus, UnixNanos};
+    use kairos_primitives::{OrderStatus, UnixNanos};
 
     use crate::application::AsyncOrderEventSource;
 

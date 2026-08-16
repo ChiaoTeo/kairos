@@ -11,7 +11,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APPLICATION_ROOTS = tuple((ROOT / "crates/business").glob("*/service/src/application"))
+APPLICATION_ROOTS = tuple((ROOT / "crates/modules").glob("*/src/application"))
 
 
 def main() -> int:

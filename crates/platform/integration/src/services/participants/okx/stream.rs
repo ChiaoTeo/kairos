@@ -12,7 +12,7 @@ use crate::application::capabilities::{
     execution_facts::normalize_order_status, DecimalValue as ExecutionDecimal, OrderSide, OrderType,
 };
 use crate::application::{ExternalEventEnvelope, ExternalExecutionEvent};
-use kairos_domain_types::{Currency, FillId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::{Currency, FillId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -178,18 +178,18 @@ fn parse_account_event(segment_key: &str, value: &Value) -> Result<Option<Accoun
         .ok_or_else(|| "OKX account event currency is missing".to_string())?;
     let total = decimal_field(row, "eq").or_else(|_| decimal_field(row, "cashBal"))?;
     Ok(Some(AccountEvent::Snapshot(AccountSnapshot {
-        segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+        segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
         balances: vec![Balance {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-            asset_code: kairos_domain_types::Currency::new(code)?,
+            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+            asset_code: kairos_primitives::Currency::new(code)?,
             total,
             available: decimal_field(row, "availBal").ok(),
             locked: decimal_field(row, "frozenBal").ok(),
             ..Default::default()
         }],
         collateral: vec![Balance {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-            asset_code: kairos_domain_types::Currency::new(code)?,
+            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+            asset_code: kairos_primitives::Currency::new(code)?,
             total,
             available: decimal_field(row, "availBal").ok(),
             locked: decimal_field(row, "frozenBal").ok(),
@@ -245,12 +245,12 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
         .unwrap_or_else(now_nanos)
         * 1_000_000;
     let mut events = vec![AccountEvent::Order(OrderEvent {
-        order_id: kairos_domain_types::OrderId::new(order_id)?,
+        order_id: kairos_primitives::OrderId::new(order_id)?,
         status,
         remote_order_id: row
             .get("ordId")
             .and_then(Value::as_str)
-            .map(kairos_domain_types::RemoteOrderId::new)
+            .map(kairos_primitives::RemoteOrderId::new)
             .transpose()?,
         filled_quantity: row
             .get("accFillSz")
@@ -290,9 +290,9 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             .map(str::to_owned)
             .unwrap_or_else(|| format!("{order_id}:{occurred_at_unix_nanos}"));
         events.push(AccountEvent::Fill(FillEvent {
-            fill_id: kairos_domain_types::FillId::new(fill_id)?,
-            order_id: kairos_domain_types::OrderId::new(order_id)?,
-            segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+            fill_id: kairos_primitives::FillId::new(fill_id)?,
+            order_id: kairos_primitives::OrderId::new(order_id)?,
+            segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
             provider_instrument: external_instrument_ref(
                 crate::domain::ParticipantKind::Exchange,
                 "okx",
@@ -309,7 +309,7 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             fee_asset: row
                 .get("feeCcy")
                 .and_then(Value::as_str)
-                .map(kairos_domain_types::Currency::new)
+                .map(kairos_primitives::Currency::new)
                 .transpose()?,
             fee_amount: row
                 .get("fee")
@@ -356,7 +356,7 @@ mod tests {
         ExternalAccountEvent as AccountEvent, ExternalOrderStatus as AccountOrderStatus,
     };
     use crate::application::capabilities::{OrderSide, OrderType};
-    use kairos_domain_types::{OrderStatus, UnixNanos};
+    use kairos_primitives::{OrderStatus, UnixNanos};
 
     #[test]
     fn parses_all_matching_execution_rows_into_stable_envelopes() {

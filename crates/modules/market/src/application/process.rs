@@ -10,7 +10,7 @@ use crate::services::reference::{resolve_market, resolve_option_markets};
 use crate::services::reference_projection::ReferenceProjection;
 use crate::services::sources::SourceActivator;
 use crate::SubscriptionId;
-use kairos_domain_types::Sequence;
+use kairos_primitives::Sequence;
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde::Deserialize;
@@ -968,14 +968,14 @@ impl MarketActorTask {
                 }
                 Err(error) => return (422, json!({"error": error})),
             };
-            let exchange_id = match kairos_domain_types::Exchange::new(exchange.clone()) {
+            let exchange_id = match kairos_primitives::Exchange::new(exchange.clone()) {
                 Ok(value) => value,
                 Err(error) => return (422, json!({"error": error.to_string()})),
             };
             let asset_type = match request
                 .asset_type
                 .as_deref()
-                .map(str::parse::<kairos_domain_types::AssetClass>)
+                .map(str::parse::<kairos_primitives::AssetClass>)
                 .transpose()
             {
                 Ok(value) => value,
@@ -984,7 +984,7 @@ impl MarketActorTask {
             let query = crate::MarketSelectionQuery {
                 exchange_id: Some(exchange_id),
                 market_type: Some(
-                    kairos_domain_types::ProviderProductCode::new(market_type)
+                    kairos_primitives::ProviderProductCode::new(market_type)
                         .expect("validated Reference market type"),
                 ),
                 asset_type,
@@ -1079,7 +1079,7 @@ impl MarketActorTask {
                         descriptor.asset_type = request
                             .asset_type
                             .as_deref()
-                            .map(str::parse::<kairos_domain_types::AssetClass>)
+                            .map(str::parse::<kairos_primitives::AssetClass>)
                             .transpose()
                             .map_err(|error| error.to_string())?;
                         descriptor.with_source("replay")
@@ -1353,21 +1353,21 @@ mod tests {
     fn bar_and_greeks_have_event_wire_messages() {
         let identity = InstanceIdentity::new("workspace", "launch", "instance");
         let bar = MarketObservation::Bar(Bar {
-            market_id: kairos_domain_types::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),
             high: "2".parse().unwrap(),
             low: "0.5".parse().unwrap(),
             close: "1.5".parse().unwrap(),
             volume: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
             source_id: "binance".into(),
             derivation: "aggregated".into(),
         });
         let greeks = MarketObservation::OptionGreeks(OptionGreeks {
-            market_id: kairos_domain_types::MarketId::new("market:btc-option").unwrap(),
-            instrument_id: kairos_domain_types::InstrumentId::new("instrument:btc-option").unwrap(),
+            market_id: kairos_primitives::MarketId::new("market:btc-option").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-option").unwrap(),
             expiry_unix_nanos: None,
             strike: None,
             delta: Some("0.5".parse().unwrap()),
@@ -1375,7 +1375,7 @@ mod tests {
             vega: None,
             theta: None,
             implied_volatility: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(2),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(2),
             source_id: "deribit".into(),
             derivation: "direct".into(),
         });
@@ -1427,8 +1427,8 @@ mod tests {
     fn derivative_observations_have_distinct_event_wire_messages() {
         let identity = InstanceIdentity::new("workspace", "launch", "instance");
         let common = (
-            kairos_domain_types::MarketId::new("market:btc").unwrap(),
-            kairos_domain_types::InstrumentId::new("instrument:btc").unwrap(),
+            kairos_primitives::MarketId::new("market:btc").unwrap(),
+            kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             "source".to_string(),
         );
         let ticker = MarketObservation::Ticker24h(Ticker24h {
@@ -1448,7 +1448,7 @@ mod tests {
             price_change_pct: None,
             vwap: None,
             mark_price: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
             source_id: common.2.clone(),
         });
         let mark = MarketObservation::MarkPrice(MarkPrice {
@@ -1459,7 +1459,7 @@ mod tests {
             estimated_settlement_price: None,
             funding_rate: None,
             next_funding_time_unix_nanos: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(2),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(2),
             source_id: common.2.clone(),
         });
         let index = MarketObservation::IndexPrice(IndexPrice {
@@ -1469,7 +1469,7 @@ mod tests {
             contract_index_price: None,
             index_price: None,
             funding_rate: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(3),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(3),
             source_id: common.2.clone(),
         });
         let funding = MarketObservation::FundingRate(FundingRate {
@@ -1478,7 +1478,7 @@ mod tests {
             funding_rate: "0.001".parse().unwrap(),
             funding_period_seconds: Some(28_800),
             next_funding_time_unix_nanos: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(4),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(4),
             source_id: common.2.clone(),
         });
         let open_interest = MarketObservation::OpenInterest(OpenInterest {
@@ -1488,7 +1488,7 @@ mod tests {
             quote_value: None,
             change_24h: None,
             change_pct_24h: None,
-            observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(5),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(5),
             source_id: common.2,
         });
         for (sequence, observation, identifier) in [
@@ -1684,8 +1684,8 @@ mod tests {
         crate::composition::attach_replay_source_with_policy(
             &mut application,
             [MarketObservation::Bar(crate::Bar {
-                market_id: kairos_domain_types::MarketId::new("market:test:spot:TEST").unwrap(),
-                instrument_id: kairos_domain_types::InstrumentId::new("instrument:test:spot:TEST")
+                market_id: kairos_primitives::MarketId::new("market:test:spot:TEST").unwrap(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:test:spot:TEST")
                     .unwrap(),
                 timeframe: "1m".into(),
                 open: "1".parse().unwrap(),
@@ -1693,7 +1693,7 @@ mod tests {
                 low: "1".parse().unwrap(),
                 close: "1".parse().unwrap(),
                 volume: None,
-                observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+                observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
                 source_id: "replay".into(),
                 derivation: "acceptance".into(),
             })],

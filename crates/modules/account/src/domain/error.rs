@@ -19,21 +19,21 @@ pub enum AccountDomainError {
     InvalidTransition(String),
 }
 
-impl From<kairos_domain_types::DomainTypeError> for AccountDomainError {
-    fn from(error: kairos_domain_types::DomainTypeError) -> Self {
+impl From<kairos_primitives::DomainTypeError> for AccountDomainError {
+    fn from(error: kairos_primitives::DomainTypeError) -> Self {
         match error {
-            kairos_domain_types::DomainTypeError::Empty { .. } => Self::Required {
+            kairos_primitives::DomainTypeError::Empty { .. } => Self::Required {
                 field: "account_id",
             },
-            kairos_domain_types::DomainTypeError::Whitespace { .. } => Self::Invalid {
+            kairos_primitives::DomainTypeError::Whitespace { .. } => Self::Invalid {
                 field: "account_id",
                 reason: "leading or trailing whitespace is not allowed",
             },
-            kairos_domain_types::DomainTypeError::Invalid { reason, .. } => Self::Invalid {
+            kairos_primitives::DomainTypeError::Invalid { reason, .. } => Self::Invalid {
                 field: "account_id",
                 reason,
             },
-            kairos_domain_types::DomainTypeError::NonPositive { .. } => Self::Invalid {
+            kairos_primitives::DomainTypeError::NonPositive { .. } => Self::Invalid {
                 field: "account_id",
                 reason: "value must be positive",
             },

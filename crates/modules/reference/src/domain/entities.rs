@@ -1,6 +1,6 @@
 //! Reference domain entities and provider snapshots.
 
-use kairos_domain_types::{
+use kairos_primitives::{
     AssetClass, AssetId, Exchange, ExecutionAccessId, Generation, InstrumentId, InstrumentKind,
     IssuerId, ListingId, MarketId, ProviderId, ProviderProductCode, ProviderSymbol, Rate,
     ReferenceStatus, Symbol, UnixNanos,

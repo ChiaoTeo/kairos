@@ -1,6 +1,6 @@
 //! Public Reference models used by SQLite payloads and change events.
 
-use kairos_domain_types::{AssetClass, InstrumentKind, ProviderProductCode};
+use kairos_primitives::{AssetClass, InstrumentKind, ProviderProductCode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

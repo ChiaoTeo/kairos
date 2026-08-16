@@ -1,4 +1,4 @@
-use kairos_domain_types::{
+use kairos_primitives::{
     AssetClass, Exchange, InstrumentId, MarketId, ProviderId, ProviderProductCode, ProviderSymbol,
     ReferenceStatus, Symbol,
 };

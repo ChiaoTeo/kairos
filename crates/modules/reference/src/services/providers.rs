@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::join_all;
-use kairos_domain_types::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
+use kairos_primitives::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
 use kairos_integration::application::capabilities::reference::{
     AsyncInstrumentCatalogConnection, ExternalInstrument, ExternalInstrumentCatalog,
     ExternalInstrumentKind,
@@ -1160,10 +1160,10 @@ fn merge_canonical_instrument(
 }
 
 fn canonical_instrument_status(
-    left: kairos_domain_types::ReferenceStatus,
-    right: kairos_domain_types::ReferenceStatus,
-) -> kairos_domain_types::ReferenceStatus {
-    use kairos_domain_types::ReferenceStatus;
+    left: kairos_primitives::ReferenceStatus,
+    right: kairos_primitives::ReferenceStatus,
+) -> kairos_primitives::ReferenceStatus {
+    use kairos_primitives::ReferenceStatus;
     if matches!(left, ReferenceStatus::Active | ReferenceStatus::Trading)
         || matches!(right, ReferenceStatus::Active | ReferenceStatus::Trading)
     {
@@ -2090,7 +2090,7 @@ fn hyperliquid_provider_catalog(
             .unwrap_or_else(|| "USDC".into());
         for code in [&base, &quote] {
             catalog.assets.push(Asset {
-                asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
+                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
                 code: code.clone(),
                 asset_class: AssetClass::Crypto,
                 status: "active".into(),
@@ -2098,24 +2098,24 @@ fn hyperliquid_provider_catalog(
             });
         }
         let instrument_id = match product {
-            HyperliquidInstrumentProduct::Perpetual => kairos_domain_types::InstrumentId::new(
+            HyperliquidInstrumentProduct::Perpetual => kairos_primitives::InstrumentId::new(
                 format!("instrument:perpetual:{base}-{quote}"),
             )?,
             HyperliquidInstrumentProduct::Spot => {
-                kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?
+                kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?
             }
         };
-        let listing_id = kairos_domain_types::ListingId::new(format!(
+        let listing_id = kairos_primitives::ListingId::new(format!(
             "listing:hyperliquid:{family}:{base}:{quote}"
         ))?;
-        let exchange_id = kairos_domain_types::Exchange::new("exchange:hyperliquid")?;
-        let status: kairos_domain_types::ReferenceStatus =
+        let exchange_id = kairos_primitives::Exchange::new("exchange:hyperliquid")?;
+        let status: kairos_primitives::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
-            symbol: kairos_domain_types::Symbol::new(format!("{base}-{quote}"))?,
+            symbol: kairos_primitives::Symbol::new(format!("{base}-{quote}"))?,
             instrument_type: instrument_kind,
-            primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+            primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),
             status,
@@ -2125,13 +2125,13 @@ fn hyperliquid_provider_catalog(
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
             exchange_id: exchange_id.clone(),
-            exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
+            exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
             status,
             effective_from_unix_nanos: 0.into(),
             ..Listing::default()
         });
         catalog.markets.push(Market {
-            market_id: kairos_domain_types::MarketId::new(format!(
+            market_id: kairos_primitives::MarketId::new(format!(
                 "market:hyperliquid:{family}:{source_symbol}"
             ))?,
             market_key: format!("hyperliquid.{family}.{source_symbol}"),
@@ -2140,11 +2140,11 @@ fn hyperliquid_provider_catalog(
             exchange_id,
             market_type: ProviderProductCode::new(family)?,
             asset_type: Some(AssetClass::Crypto),
-            source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
-            base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+            source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+            base_asset_id: Some(kairos_primitives::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),
-            quote_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+            quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
                 "asset:crypto:{quote}"
             ))?),
             status,
@@ -2238,7 +2238,7 @@ fn append_massive_instrument(
         .as_ref()
         .map(|value| value.as_str().to_ascii_uppercase())
         .unwrap_or_else(|| "USD".into());
-    let status: kairos_domain_types::ReferenceStatus =
+    let status: kairos_primitives::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     let (family, instrument_id, symbol, underlying_id) = match value.kind {
         ExternalInstrumentKind::Equity => {
@@ -2283,7 +2283,7 @@ fn append_massive_instrument(
                 "options",
                 format!("instrument:option:{underlying}:{expiry}:{strike}:{right}"),
                 format!("{underlying}-{expiry}-{strike}-{right}"),
-                Some(kairos_domain_types::InstrumentId::new(format!(
+                Some(kairos_primitives::InstrumentId::new(format!(
                     "instrument:equity:US:{underlying}:common"
                 ))?),
             )
@@ -2294,28 +2294,28 @@ fn append_massive_instrument(
             )))
         }
     };
-    let instrument_id = kairos_domain_types::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_domain_types::ListingId::new(if family == "equity" {
+    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
+    let listing_id = kairos_primitives::ListingId::new(if family == "equity" {
         format!("listing:{exchange_id}:equity:{source_symbol}:{quote}")
     } else {
         format!("listing:massive:options:{source_symbol}")
     })?;
-    let market_id = kairos_domain_types::MarketId::new(if family == "equity" {
+    let market_id = kairos_primitives::MarketId::new(if family == "equity" {
         format!("market:{exchange_id}:equity:{source_symbol}")
     } else {
         format!("market:massive:options:{source_symbol}")
     })?;
-    let exchange = kairos_domain_types::Exchange::new(exchange_id.clone())?;
+    let exchange = kairos_primitives::Exchange::new(exchange_id.clone())?;
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(symbol)?,
+        symbol: kairos_primitives::Symbol::new(symbol)?,
         instrument_type: canonical_instrument_kind(value.kind)?,
         issuer_id: (family == "equity").then(|| {
-            kairos_domain_types::IssuerId::new(format!("issuer:US:{source_symbol}"))
+            kairos_primitives::IssuerId::new(format!("issuer:US:{source_symbol}"))
                 .expect("validated Massive issuer")
         }),
         share_class: (family == "equity").then(|| "common".into()),
-        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:fiat:{quote}"
         ))?),
         underlying_instrument_id: underlying_id,
@@ -2334,7 +2334,7 @@ fn append_massive_instrument(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange.clone(),
-        exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
+        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -2348,15 +2348,15 @@ fn append_massive_instrument(
         exchange_id: exchange,
         market_type: ProviderProductCode::new(family)?,
         asset_type: Some(AssetClass::Equity),
-        source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
+        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
         base_asset_id: value.underlying.as_ref().map(|underlying| {
-            kairos_domain_types::AssetId::new(format!(
+            kairos_primitives::AssetId::new(format!(
                 "asset:equity:{}",
                 underlying.as_str().to_ascii_uppercase()
             ))
             .expect("validated Massive underlying asset")
         }),
-        quote_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:fiat:{quote}"
         ))?),
         status,
@@ -2379,10 +2379,10 @@ fn ensure_massive_underlying(
     ticker: &str,
     quote: &str,
     exchange_id: &str,
-    status: kairos_domain_types::ReferenceStatus,
+    status: kairos_primitives::ReferenceStatus,
 ) -> ReferenceResult<()> {
-    let equity_asset = kairos_domain_types::AssetId::new(format!("asset:equity:{ticker}"))?;
-    let fiat_asset = kairos_domain_types::AssetId::new(format!("asset:fiat:{quote}"))?;
+    let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{ticker}"))?;
+    let fiat_asset = kairos_primitives::AssetId::new(format!("asset:fiat:{quote}"))?;
     catalog.assets.push(Asset {
         asset_id: equity_asset.clone(),
         code: ticker.into(),
@@ -2398,7 +2398,7 @@ fn ensure_massive_underlying(
         ..Asset::default()
     });
     let instrument_id =
-        kairos_domain_types::InstrumentId::new(format!("instrument:equity:US:{ticker}:common"))?;
+        kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{ticker}:common"))?;
     if catalog
         .instruments
         .iter()
@@ -2406,15 +2406,15 @@ fn ensure_massive_underlying(
     {
         return Ok(());
     }
-    let listing_id = kairos_domain_types::ListingId::new(format!(
+    let listing_id = kairos_primitives::ListingId::new(format!(
         "listing:{exchange_id}:equity:{ticker}:{quote}"
     ))?;
-    let exchange = kairos_domain_types::Exchange::new(exchange_id.to_owned())?;
+    let exchange = kairos_primitives::Exchange::new(exchange_id.to_owned())?;
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(ticker.to_owned())?,
+        symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
         instrument_type: InstrumentKind::Equity,
-        issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
+        issuer_id: Some(kairos_primitives::IssuerId::new(format!(
             "issuer:US:{ticker}"
         ))?),
         share_class: Some("common".into()),
@@ -2426,13 +2426,13 @@ fn ensure_massive_underlying(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange.clone(),
-        exchange_symbol: kairos_domain_types::Symbol::new(ticker.to_owned())?,
+        exchange_symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
         status,
         effective_from_unix_nanos: 0.into(),
         ..Listing::default()
     });
     catalog.markets.push(Market {
-        market_id: kairos_domain_types::MarketId::new(format!(
+        market_id: kairos_primitives::MarketId::new(format!(
             "market:{exchange_id}:equity:{ticker}"
         ))?,
         market_key: format!("massive.equity.{ticker}"),
@@ -2441,7 +2441,7 @@ fn ensure_massive_underlying(
         exchange_id: exchange,
         market_type: ProviderProductCode::new("equity")?,
         asset_type: Some(AssetClass::Equity),
-        source_symbol: kairos_domain_types::Symbol::new(ticker.to_owned())?,
+        source_symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
         base_asset_id: Some(equity_asset),
         quote_asset_id: Some(fiat_asset),
         status,
@@ -2492,7 +2492,7 @@ fn binance_equity_provider_catalog(
             "Binance Equity source requires the Binance broker participant".into(),
         ));
     }
-    let exchange_id = kairos_domain_types::Exchange::new("exchange:binance")?;
+    let exchange_id = kairos_primitives::Exchange::new("exchange:binance")?;
     let mut catalog = ProviderCatalog {
         entities: vec![Entity {
             entity_id: exchange_id.to_string(),
@@ -2511,16 +2511,16 @@ fn binance_equity_provider_catalog(
             )));
         }
         let symbol = value.source_symbol.as_str().trim().to_ascii_uppercase();
-        let status: kairos_domain_types::ReferenceStatus =
+        let status: kairos_primitives::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
-        let equity_asset = kairos_domain_types::AssetId::new(format!("asset:equity:{symbol}"))?;
-        let instrument_id = kairos_domain_types::InstrumentId::new(format!(
+        let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{symbol}"))?;
+        let instrument_id = kairos_primitives::InstrumentId::new(format!(
             "instrument:equity:US:{symbol}:common"
         ))?;
         let listing_id =
-            kairos_domain_types::ListingId::new(format!("listing:binance:equity:{symbol}"))?;
+            kairos_primitives::ListingId::new(format!("listing:binance:equity:{symbol}"))?;
         let market_id =
-            kairos_domain_types::MarketId::new(format!("market:binance:equity:{symbol}"))?;
+            kairos_primitives::MarketId::new(format!("market:binance:equity:{symbol}"))?;
         catalog.assets.push(Asset {
             asset_id: equity_asset.clone(),
             code: symbol.clone(),
@@ -2530,9 +2530,9 @@ fn binance_equity_provider_catalog(
         });
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
-            symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            symbol: kairos_primitives::Symbol::new(symbol.clone())?,
             instrument_type: InstrumentKind::Equity,
-            issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
+            issuer_id: Some(kairos_primitives::IssuerId::new(format!(
                 "issuer:US:{symbol}"
             ))?),
             share_class: Some("common".into()),
@@ -2543,7 +2543,7 @@ fn binance_equity_provider_catalog(
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
             exchange_id: exchange_id.clone(),
-            exchange_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            exchange_symbol: kairos_primitives::Symbol::new(symbol.clone())?,
             status,
             effective_from_unix_nanos: 0.into(),
             ..Listing::default()
@@ -2556,7 +2556,7 @@ fn binance_equity_provider_catalog(
             exchange_id: exchange_id.clone(),
             market_type: ProviderProductCode::new("equity")?,
             asset_type: Some(AssetClass::Equity),
-            source_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            source_symbol: kairos_primitives::Symbol::new(symbol.clone())?,
             base_asset_id: Some(equity_asset),
             status,
             quantity_tick: value.quantity_tick,
@@ -2567,7 +2567,7 @@ fn binance_equity_provider_catalog(
             ..Market::default()
         });
         catalog.execution_accesses.push(ExecutionAccess {
-            access_id: kairos_domain_types::ExecutionAccessId::new(format!(
+            access_id: kairos_primitives::ExecutionAccessId::new(format!(
                 "execution-access:binance:equity:{symbol}"
             ))?,
             routing_mode: "direct".into(),
@@ -2655,7 +2655,7 @@ fn append_binance_instrument(
         (&quote, "crypto"),
     ] {
         catalog.assets.push(Asset {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:{asset_class}:{code}"))?,
+            asset_id: kairos_primitives::AssetId::new(format!("asset:{asset_class}:{code}"))?,
             code: code.clone(),
             asset_class: AssetClass::parse_known(asset_class)?,
             status: "active".into(),
@@ -2692,7 +2692,7 @@ fn append_binance_instrument(
             ExternalInstrumentKind::EquityPerpetual
                 if instrument_type == BinanceInstrumentType::UsdMFutures =>
             {
-                let underlying = kairos_domain_types::InstrumentId::new(format!(
+                let underlying = kairos_primitives::InstrumentId::new(format!(
                     "instrument:equity:US:{base}:common"
                 ))?;
                 if !catalog
@@ -2702,9 +2702,9 @@ fn append_binance_instrument(
                 {
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
-                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        symbol: kairos_primitives::Symbol::new(base.clone())?,
                         instrument_type: InstrumentKind::Equity,
-                        issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
+                        issuer_id: Some(kairos_primitives::IssuerId::new(format!(
                             "issuer:US:{base}"
                         ))?),
                         share_class: Some("common".into()),
@@ -2748,7 +2748,7 @@ fn append_binance_instrument(
                     ReferenceError::Provider("Binance option right is missing".into())
                 })?;
                 let underlying =
-                    kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?;
+                    kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
                 if !catalog
                     .instruments
                     .iter()
@@ -2756,9 +2756,9 @@ fn append_binance_instrument(
                 {
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
-                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        symbol: kairos_primitives::Symbol::new(base.clone())?,
                         instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
+                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(
                             format!("asset:crypto:{base}"),
                         )?),
                         status: "active".into(),
@@ -2797,22 +2797,22 @@ fn append_binance_instrument(
         )))
             }
         };
-    let instrument_id = kairos_domain_types::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_domain_types::ListingId::new(if family == "spot" {
+    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
+    let listing_id = kairos_primitives::ListingId::new(if family == "spot" {
         format!("listing:binance:spot:{base}:{quote}")
     } else {
         format!("listing:binance:{family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_domain_types::Exchange::new("exchange:binance")?;
+    let exchange_id = kairos_primitives::Exchange::new("exchange:binance")?;
     let market_id =
-        kairos_domain_types::MarketId::new(format!("market:binance:{family}:{source_symbol}"))?;
-    let status: kairos_domain_types::ReferenceStatus =
+        kairos_primitives::MarketId::new(format!("market:binance:{family}:{source_symbol}"))?;
+    let status: kairos_primitives::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
+        symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
         instrument_type: canonical_instrument_kind(value.kind)?,
-        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
                 &base
@@ -2836,7 +2836,7 @@ fn append_binance_instrument(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),
-        exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
+        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -2854,8 +2854,8 @@ fn append_binance_instrument(
         } else {
             AssetClass::Crypto
         }),
-        source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
-        base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+        base_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:{}:{base}",
             if value.kind == ExternalInstrumentKind::EquityPerpetual {
                 "equity"
@@ -2863,7 +2863,7 @@ fn append_binance_instrument(
                 "crypto"
             }
         ))?),
-        quote_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{quote}"
         ))?),
         status,
@@ -2969,7 +2969,7 @@ fn append_okx_instrument(
                 })?;
                 let canonical_right = right.to_ascii_uppercase();
                 let underlying =
-                    kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?;
+                    kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
                 if !catalog
                     .instruments
                     .iter()
@@ -2977,9 +2977,9 @@ fn append_okx_instrument(
                 {
                     catalog.instruments.push(Instrument {
                         instrument_id: underlying.clone(),
-                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        symbol: kairos_primitives::Symbol::new(base.clone())?,
                         instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
+                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(
                             format!("asset:crypto:{base}"),
                         )?),
                         status: "active".into(),
@@ -3000,29 +3000,29 @@ fn append_okx_instrument(
         };
     for code in [&base, &quote] {
         catalog.assets.push(Asset {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
+            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
             code: code.clone(),
             asset_class: AssetClass::Crypto,
             status: "active".into(),
             ..Asset::default()
         });
     }
-    let instrument_id = kairos_domain_types::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_domain_types::ListingId::new(if family == "spot" {
+    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
+    let listing_id = kairos_primitives::ListingId::new(if family == "spot" {
         format!("listing:okx:spot:{base}:{quote}")
     } else {
         format!("listing:okx:{family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_domain_types::Exchange::new("exchange:okx")?;
+    let exchange_id = kairos_primitives::Exchange::new("exchange:okx")?;
     let market_id =
-        kairos_domain_types::MarketId::new(format!("market:okx:{family}:{source_symbol}"))?;
-    let status: kairos_domain_types::ReferenceStatus =
+        kairos_primitives::MarketId::new(format!("market:okx:{family}:{source_symbol}"))?;
+    let status: kairos_primitives::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
+        symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
         instrument_type: canonical_instrument_kind(value.kind)?,
-        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
                 &base
@@ -3046,7 +3046,7 @@ fn append_okx_instrument(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),
-        exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
+        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -3060,11 +3060,11 @@ fn append_okx_instrument(
         exchange_id,
         market_type: ProviderProductCode::new(family)?,
         asset_type: Some(AssetClass::Crypto),
-        source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
-        base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+        base_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{base}"
         ))?),
-        quote_asset_id: Some(kairos_domain_types::AssetId::new(format!(
+        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{quote}"
         ))?),
         status,
@@ -3120,7 +3120,7 @@ fn okx_base_quote(value: &ExternalInstrument) -> ReferenceResult<(String, String
     Ok((base, quote))
 }
 
-fn canonical_expiry(value: Option<kairos_domain_types::UnixNanos>) -> ReferenceResult<String> {
+fn canonical_expiry(value: Option<kairos_primitives::UnixNanos>) -> ReferenceResult<String> {
     let value = value
         .ok_or_else(|| ReferenceError::Provider("expiring instrument expiry is missing".into()))?;
     let seconds = i64::try_from(value.get() / 1_000_000_000)
@@ -3163,7 +3163,7 @@ fn populate_market_data_accesses(
                 market_id: market.market_id.clone(),
                 provider_id: provider_id.clone(),
                 provider_product: market.market_type.clone(),
-                provider_symbol: kairos_domain_types::ProviderSymbol::new(
+                provider_symbol: kairos_primitives::ProviderSymbol::new(
                     market.source_symbol.as_str(),
                 )?,
                 status: market.status,
@@ -3182,7 +3182,7 @@ fn populate_execution_accesses(
     for market in &catalog.markets {
         catalog.execution_accesses.push(ExecutionAccess {
             source_id: None,
-            access_id: kairos_domain_types::ExecutionAccessId::new(format!(
+            access_id: kairos_primitives::ExecutionAccessId::new(format!(
                 "execution-access:{provider}:{}:{}",
                 market.market_type,
                 market.source_symbol.as_str().to_ascii_lowercase()
@@ -3195,7 +3195,7 @@ fn populate_execution_accesses(
             broker_id: None,
             provider_id: provider_id.clone(),
             provider_product: market.market_type.clone(),
-            provider_symbol: kairos_domain_types::ProviderSymbol::new(
+            provider_symbol: kairos_primitives::ProviderSymbol::new(
                 market.source_symbol.as_str(),
             )?,
             settlement_asset_id: None,
@@ -3273,7 +3273,7 @@ mod tests {
     use crate::services::actor::ReferenceActor;
     use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::services::store::ProviderSyncStore;
-    use kairos_domain_types::{
+    use kairos_primitives::{
         AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, ProviderSymbol, Symbol,
     };
     use kairos_integration::application::capabilities::reference::{
@@ -3670,8 +3670,8 @@ mod tests {
 
     #[test]
     fn spot_listing_expiry_does_not_split_or_mutate_the_canonical_instrument() {
-        let first_expiry = kairos_domain_types::UnixNanos::new(1_786_694_400_000_000_000);
-        let second_expiry = kairos_domain_types::UnixNanos::new(1_786_953_600_000_000_000);
+        let first_expiry = kairos_primitives::UnixNanos::new(1_786_694_400_000_000_000);
+        let second_expiry = kairos_primitives::UnixNanos::new(1_786_953_600_000_000_000);
         let spot = |symbol: &str, quote: &str, expiry| ExternalInstrument {
             source_symbol: ProviderSymbol::new(symbol).unwrap(),
             source_venue: None,
@@ -3752,7 +3752,7 @@ mod tests {
                     quote_currency: Some(Currency::new("USDT").unwrap()),
                     settlement_currency: Some(Currency::new("USDT").unwrap()),
                     underlying: Some(ProviderSymbol::new("BTCUSDT").unwrap()),
-                    expiry_unix_nanos: Some(kairos_domain_types::UnixNanos::new(
+                    expiry_unix_nanos: Some(kairos_primitives::UnixNanos::new(
                         1_780_000_000_000_000_000,
                     )),
                     strike: Some("50000".into()),
@@ -3794,7 +3794,7 @@ mod tests {
 
     #[test]
     fn binance_derivative_facts_keep_product_selection_but_not_canonical_identity() {
-        let expiry = kairos_domain_types::UnixNanos::new(1_782_432_000_000_000_000);
+        let expiry = kairos_primitives::UnixNanos::new(1_782_432_000_000_000_000);
         let catalog = binance_provider_catalog(
             ExternalInstrumentCatalog {
                 participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -3924,7 +3924,7 @@ mod tests {
 
     #[test]
     fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
-        let expiry = kairos_domain_types::UnixNanos::new(1_800_000_000_000_000_000);
+        let expiry = kairos_primitives::UnixNanos::new(1_800_000_000_000_000_000);
         let catalog = massive_provider_catalog(ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
             instruments: vec![ExternalInstrument {
@@ -4254,7 +4254,7 @@ mod tests {
             symbol: Symbol::new("BTC").unwrap(),
             instrument_type: InstrumentKind::Spot,
             primary_currency_asset_id: Some(
-                kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
+                kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
             ),
             status,
             ..Instrument::default()
@@ -4291,7 +4291,7 @@ mod tests {
             symbol: Symbol::new("BTC").unwrap(),
             instrument_type: InstrumentKind::Spot,
             primary_currency_asset_id: Some(
-                kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
+                kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
             ),
             status: "active".into(),
             ..Instrument::default()
@@ -4305,7 +4305,7 @@ mod tests {
 
         let mut legacy_quote_owned = canonical.clone();
         legacy_quote_owned.primary_currency_asset_id =
-            Some(kairos_domain_types::AssetId::new("asset:crypto:USDT").unwrap());
+            Some(kairos_primitives::AssetId::new("asset:crypto:USDT").unwrap());
         assert!(!provider_catalog_uses_current_canonical_shape(
             &ProviderCatalog {
                 instruments: vec![legacy_quote_owned],

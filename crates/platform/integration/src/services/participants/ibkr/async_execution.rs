@@ -9,7 +9,7 @@ use ibapi::contracts::Contract;
 use ibapi::orders::{OrderData, OrderUpdate, Orders};
 use ibapi::subscriptions::{Subscription, SubscriptionItemStreamExt};
 use ibapi::Client;
-use kairos_domain_types::{
+use kairos_primitives::{
     ClientOrderId, Currency, FillId, OrderId, RemoteOrderId, Symbol, UnixNanos,
 };
 use tokio::sync::{watch, Mutex};
@@ -525,7 +525,7 @@ impl IbkrAsyncOrderEvents {
                 ExternalExecutionEvent {
                     order_id: typed_order_id(execution.order_id)?,
                     symbol: typed_symbol(&symbol)?,
-                    status: kairos_domain_types::OrderStatus::Filled,
+                    status: kairos_primitives::OrderStatus::Filled,
                     side: Some(
                         if format!("{:?}", execution.side).eq_ignore_ascii_case("sold") {
                             OrderSide::Sell
@@ -560,7 +560,7 @@ impl IbkrAsyncOrderEvents {
                             .map(String::as_str)
                             .unwrap_or("UNKNOWN"),
                     )?,
-                    status: kairos_domain_types::OrderStatus::Unknown,
+                    status: kairos_primitives::OrderStatus::Unknown,
                     side: None,
                     order_type: None,
                     quantity: None,
@@ -670,7 +670,7 @@ fn normalize_order(data: OrderData, binding_id: &str) -> Result<ExternalOrder, I
         order_type: order_type(&data.order.order_type),
         status,
         quantity,
-        filled_quantity: if status == kairos_domain_types::OrderStatus::Filled {
+        filled_quantity: if status == kairos_primitives::OrderStatus::Filled {
             quantity
         } else {
             DecimalValue::default()
@@ -688,7 +688,7 @@ fn matches_filter(data: &OrderData, account_id: &str, symbol: Option<&str>) -> b
 fn execution_event(
     order_id: i32,
     symbol: &str,
-    status: kairos_domain_types::OrderStatus,
+    status: kairos_primitives::OrderStatus,
     side: Option<OrderSide>,
     order_type: Option<OrderType>,
     quantity: Option<DecimalValue>,
@@ -843,19 +843,19 @@ mod tests {
 
         assert_eq!(
             normalize_ibkr_order_status(OrderStatusKind::Submitted, Some(1.0), Some(2.0)),
-            kairos_domain_types::OrderStatus::PartiallyFilled
+            kairos_primitives::OrderStatus::PartiallyFilled
         );
         assert_eq!(
             normalize_ibkr_order_status(OrderStatusKind::PreSubmitted, None, None),
-            kairos_domain_types::OrderStatus::Acknowledged
+            kairos_primitives::OrderStatus::Acknowledged
         );
         assert_eq!(
             normalize_ibkr_order_status(OrderStatusKind::PendingCancel, None, None),
-            kairos_domain_types::OrderStatus::Accepted
+            kairos_primitives::OrderStatus::Accepted
         );
         assert_eq!(
             normalize_ibkr_order_status(OrderStatusKind::Cancelled, None, None),
-            kairos_domain_types::OrderStatus::Canceled
+            kairos_primitives::OrderStatus::Canceled
         );
     }
 
@@ -891,7 +891,7 @@ mod tests {
         let mut execution = execution_event(
             42,
             "AAPL",
-            kairos_domain_types::OrderStatus::Filled,
+            kairos_primitives::OrderStatus::Filled,
             Some(OrderSide::Buy),
             Some(OrderType::Market),
             Some(DecimalValue::new(1, 0)),

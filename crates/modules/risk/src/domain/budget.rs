@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use kairos_domain_types::{
+use kairos_primitives::{
     AccountId, BasisPoints, DurationNanos, Exchange, Generation, IdempotencyKey, InstrumentId,
     Money, PolicyId, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
 };

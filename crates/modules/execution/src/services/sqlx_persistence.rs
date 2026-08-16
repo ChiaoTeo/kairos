@@ -268,12 +268,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("execution.sqlite");
         let event = ExecutionEvent {
-            order_id: kairos_domain_types::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_domain_types::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
@@ -298,7 +298,7 @@ mod tests {
             return;
         };
         let event = ExecutionEvent {
-            order_id: kairos_domain_types::OrderId::new("crash-order").unwrap(),
+            order_id: kairos_primitives::OrderId::new("crash-order").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,

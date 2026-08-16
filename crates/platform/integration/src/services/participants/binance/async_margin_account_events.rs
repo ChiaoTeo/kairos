@@ -9,7 +9,7 @@ use crate::domain::ConnectionHealth;
 use super::async_margin_order_events::BinanceAsyncMarginOrderEventSource;
 
 pub(crate) struct BinanceAsyncMarginAccountEventSource {
-    segment_key: kairos_domain_types::SegmentKey,
+    segment_key: kairos_primitives::SegmentKey,
     inner: BinanceAsyncMarginOrderEventSource,
 }
 
@@ -22,7 +22,7 @@ impl BinanceAsyncMarginAccountEventSource {
         isolated_symbol: Option<String>,
         event_queue_capacity: usize,
     ) -> Result<Self, IntegrationError> {
-        let segment_key = kairos_domain_types::SegmentKey::new(segment_key.into())
+        let segment_key = kairos_primitives::SegmentKey::new(segment_key.into())
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
         Ok(Self {
             segment_key,

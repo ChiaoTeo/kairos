@@ -2,7 +2,7 @@
 
 use crate::application::IntegrationError;
 use crate::domain::ParticipantRef;
-use kairos_domain_types::{Currency, ProviderSymbol, UnixNanos};
+use kairos_primitives::{Currency, ProviderSymbol, UnixNanos};
 use std::future::Future;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

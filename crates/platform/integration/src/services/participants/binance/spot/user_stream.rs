@@ -213,12 +213,12 @@ pub(crate) fn parse_user_event_value(
                 _ => OrderStatus::Unknown,
             };
             let event = OrderEvent {
-                order_id: kairos_domain_types::OrderId::new(local_order_id)?,
+                order_id: kairos_primitives::OrderId::new(local_order_id)?,
                 status,
                 remote_order_id: value
                     .get("i")
                     .map(value_as_string)
-                    .map(kairos_domain_types::RemoteOrderId::new)
+                    .map(kairos_primitives::RemoteOrderId::new)
                     .transpose()?,
                 filled_quantity: value
                     .get("z")
@@ -268,9 +268,9 @@ pub(crate) fn parse_user_event_value(
                     .filter(|value| value != "-1")
                     .unwrap_or_else(|| format!("{local_order_id}:{occurred_at_unix_nanos}"));
                 events.push(AccountEvent::Fill(FillEvent {
-                    fill_id: kairos_domain_types::FillId::new(fill_id)?,
-                    order_id: kairos_domain_types::OrderId::new(local_order_id)?,
-                    segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+                    fill_id: kairos_primitives::FillId::new(fill_id)?,
+                    order_id: kairos_primitives::OrderId::new(local_order_id)?,
+                    segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
                     provider_instrument,
                     side: value
                         .get("S")
@@ -282,7 +282,7 @@ pub(crate) fn parse_user_event_value(
                     fee_asset: value
                         .get("N")
                         .and_then(Value::as_str)
-                        .map(kairos_domain_types::Currency::new)
+                        .map(kairos_primitives::Currency::new)
                         .transpose()?,
                     fee_amount: value
                         .get("n")
@@ -306,11 +306,11 @@ pub(crate) fn parse_user_event_value(
                     .collect::<Result<Vec<_>, _>>()?
             } else {
                 vec![Balance {
-                    asset_id: kairos_domain_types::AssetId::new(format!(
+                    asset_id: kairos_primitives::AssetId::new(format!(
                         "asset:crypto:{}",
                         value.get("a").and_then(Value::as_str).unwrap_or_default()
                     ))?,
-                    asset_code: kairos_domain_types::Currency::new(
+                    asset_code: kairos_primitives::Currency::new(
                         value.get("a").and_then(Value::as_str).unwrap_or_default(),
                     )?,
                     total: decimal(value.get("d").and_then(Value::as_str).unwrap_or("0"))?,
@@ -318,7 +318,7 @@ pub(crate) fn parse_user_event_value(
                 }]
             };
             Ok(Some(AccountEvent::Snapshot(AccountSnapshot {
-                segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
+                segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
                 balances,
                 collateral: Vec::new(),
                 positions: Vec::new(),
@@ -352,8 +352,8 @@ fn normalize_balance(value: &Value) -> Result<Balance, String> {
     let locked = decimal(value.get("l").and_then(Value::as_str).unwrap_or("0"))?;
     let scale = free.scale.max(locked.scale);
     Ok(Balance {
-        asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
-        asset_code: kairos_domain_types::Currency::new(code)?,
+        asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+        asset_code: kairos_primitives::Currency::new(code)?,
         total: DecimalValue::new(rescale(free, scale)? + rescale(locked, scale)?, scale),
         available: Some(free),
         locked: Some(locked),

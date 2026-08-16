@@ -1,12 +1,37 @@
 # Project Architecture and Agent Rules
 
-This repository uses one standard shape for every business module. The
-architecture baseline, ownership map, and Agent-specific change rules are
-maintained in this file and apply before adding, moving, or deleting code.
+This repository separates business modules, platform capabilities, and shared
+primitives. The architecture baseline, ownership map, and Agent-specific
+change rules are maintained in this file and apply before adding, moving, or
+deleting code.
+
+## Repository layout
+
+```text
+crates/
+  modules/          independently owned business modules
+    <module>/       the module's main crate
+      contract/     optional, independently depend-able process contract crate
+      src/          application, composition, domain, services, and binaries
+  platform/         infrastructure and system capabilities
+  primitives/       infrastructure-free values genuinely shared by modules
+```
+
+The main crate lives directly at `crates/modules/<module>`; do not add a
+`service`, `runtime`, `app`, or standalone `domain` crate merely to mirror an
+internal source layer. A module contract is a separate Cargo package so a
+caller can depend on `crates/modules/<module>/contract` without compiling or
+importing the main module crate. Directory nesting never implies a Cargo
+dependency.
+
+Platform crates live under `crates/platform/<capability>`. Do not put business
+state or module-owned vocabulary in platform crates. `crates/primitives` is
+not a generic common-types bucket: add a type only when its meaning and
+invariants are genuinely shared by multiple modules.
 
 ## Standard module layout
 
-Every business crate should converge on these first-level directories:
+Every main module crate should converge on these first-level directories:
 
 ```text
 src/
@@ -201,6 +226,7 @@ cargo test --workspace
 uv run pytest -q
 cargo fmt --all -- --check
 git diff --check
+python3 scripts/check/check_crate_layout.py
 ```
 
 Also run static searches for cross-module imports from `services/` or private

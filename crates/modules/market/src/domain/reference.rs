@@ -1,5 +1,5 @@
 use crate::domain::market::MarketDescriptor;
-use kairos_domain_types::{Generation, Sequence};
+use kairos_primitives::{Generation, Sequence};
 
 /// Notification that a newer Reference snapshot is available.
 ///

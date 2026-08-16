@@ -10,38 +10,38 @@ use kairos_account::domain::{
     ApplyOutcome, AssetId, Balance, ExternalAccountIdentity, FillId, FillSide, InstrumentId, Money,
     Position, SegmentKey, SignedQuantity,
 };
-use kairos_domain_types::{Price, Quantity};
+use kairos_primitives::{Price, Quantity};
 
-fn order_id(value: &str) -> kairos_domain_types::OrderId {
-    kairos_domain_types::OrderId::new(value).unwrap()
+fn order_id(value: &str) -> kairos_primitives::OrderId {
+    kairos_primitives::OrderId::new(value).unwrap()
 }
 
-fn remote_order_id(value: &str) -> kairos_domain_types::RemoteOrderId {
-    kairos_domain_types::RemoteOrderId::new(value).unwrap()
+fn remote_order_id(value: &str) -> kairos_primitives::RemoteOrderId {
+    kairos_primitives::RemoteOrderId::new(value).unwrap()
 }
 
-fn currency(value: &str) -> kairos_domain_types::Currency {
-    kairos_domain_types::Currency::new(value).unwrap()
+fn currency(value: &str) -> kairos_primitives::Currency {
+    kairos_primitives::Currency::new(value).unwrap()
 }
 
-fn nanos(value: u64) -> kairos_domain_types::UnixNanos {
-    kairos_domain_types::UnixNanos::new(value)
+fn nanos(value: u64) -> kairos_primitives::UnixNanos {
+    kairos_primitives::UnixNanos::new(value)
 }
 
 fn binding(value: &str) -> AccountSegmentBinding {
     AccountSegmentBinding::new(value, value)
 }
 
-fn account_id(value: &str) -> kairos_domain_types::AccountId {
-    kairos_domain_types::AccountId::new(value).unwrap()
+fn account_id(value: &str) -> kairos_primitives::AccountId {
+    kairos_primitives::AccountId::new(value).unwrap()
 }
 
 fn segment_key(value: &str) -> SegmentKey {
     SegmentKey::new(value).unwrap()
 }
 
-fn symbol(value: &str) -> kairos_domain_types::Symbol {
-    kairos_domain_types::Symbol::new(value).unwrap()
+fn symbol(value: &str) -> kairos_primitives::Symbol {
+    kairos_primitives::Symbol::new(value).unwrap()
 }
 use kairos_account::composition::registry::AccountRegistry;
 use kairos_account::{
@@ -94,7 +94,7 @@ fn money(mantissa: i64, scale: u8) -> Money {
 fn balance(asset_id: &str, asset_code: &str, total: SignedQuantity) -> Balance {
     Balance {
         asset_id: AssetId::new(asset_id).unwrap(),
-        asset_code: kairos_domain_types::Currency::new(asset_code).unwrap(),
+        asset_code: kairos_primitives::Currency::new(asset_code).unwrap(),
         total,
         available: None,
         locked: None,
@@ -112,7 +112,7 @@ fn position(instrument_id: &str, quantity: SignedQuantity) -> Position {
         mark_price: None,
         unrealized_pnl: None,
         realized_pnl: None,
-        updated_at_unix_nanos: kairos_domain_types::UnixNanos::new(0),
+        updated_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
     }
 }
 
@@ -900,8 +900,8 @@ fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     full.observed_at_unix_nanos = 100.into();
     assert_eq!(account.apply_snapshot(full).unwrap(), ApplyOutcome::Applied);
     account.evaluate_staleness(
-        kairos_domain_types::UnixNanos::new(200),
-        kairos_domain_types::DurationNanos::new(50),
+        kairos_primitives::UnixNanos::new(200),
+        kairos_primitives::DurationNanos::new(50),
     );
     assert!(account.state().stale());
 
@@ -916,7 +916,7 @@ fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     assert!(account.state().stale());
     assert_eq!(
         account.state().observed_at_unix_nanos(),
-        kairos_domain_types::UnixNanos::new(100)
+        kairos_primitives::UnixNanos::new(100)
     );
 }
 

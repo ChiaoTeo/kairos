@@ -11,9 +11,9 @@ provider-native connection migration described in
 - Branch: record the exact branch/tag/commit used for each migration change
 - License: LGPL-3.0; preserve notices when source is reused
 - Kairos implementation:
-  `crates/kairos-integration/src/application/participants/binance/connection.rs`,
+  `crates/platform/integration/src/application/participants/binance/connection.rs`,
   `connection/{account,execution,funding,reference,blocking}.rs`, and
-  `crates/kairos-integration/src/services/participants/binance/spot/`
+  `crates/platform/integration/src/services/participants/binance/spot/`
 
 ## Provider behavior to review
 

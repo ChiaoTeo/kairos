@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
-use kairos_domain_types::{Currency, Price, ProviderSymbol, Quantity, Symbol, UnixNanos};
+use kairos_primitives::{Currency, Price, ProviderSymbol, Quantity, Symbol, UnixNanos};
 use secrecy::{ExposeSecret, SecretString};
 use tokio_tungstenite::tungstenite::Message;
 

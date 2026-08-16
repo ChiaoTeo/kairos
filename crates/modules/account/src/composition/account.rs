@@ -981,7 +981,7 @@ fn parse_initial_balance(value: &str) -> Result<Balance, String> {
     Ok(Balance {
         asset_id: AssetId::new(format!("asset:{}", asset_code.to_ascii_lowercase()))
             .map_err(|error| error.to_string())?,
-        asset_code: kairos_domain_types::Currency::new(asset_code)
+        asset_code: kairos_primitives::Currency::new(asset_code)
             .map_err(|error| error.to_string())?,
         total,
         available: None,

@@ -9,7 +9,7 @@ use crate::application::{
     IntegrationError, MarketEvent, MarketEventKind,
 };
 use crate::services::transport::http::{AsyncPublicHttpClient, PublicHttpClient};
-use kairos_domain_types::{Price, Quantity, Sequence, Symbol};
+use kairos_primitives::{Price, Quantity, Sequence, Symbol};
 
 pub struct BinanceSpotSnapshotReader {
     http: PublicHttpClient,
@@ -306,10 +306,10 @@ mod tests {
             BinanceSpotAsyncHistoricalReader::new(format!("http://{address}")).unwrap();
         let events = connection
             .fetch(&HistoricalMarketRequest {
-                symbol: kairos_domain_types::Symbol::new("BTCUSDT").unwrap(),
+                symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
                 data_kind: MarketDataKind::Bar,
-                start_time_unix_nanos: kairos_domain_types::UnixNanos::new(1_700_000_000_000),
-                end_time_unix_nanos: kairos_domain_types::UnixNanos::new(1_800_000_000_000),
+                start_time_unix_nanos: kairos_primitives::UnixNanos::new(1_700_000_000_000),
+                end_time_unix_nanos: kairos_primitives::UnixNanos::new(1_800_000_000_000),
                 interval: Some("1m".into()),
                 adjusted: Some(false),
             })

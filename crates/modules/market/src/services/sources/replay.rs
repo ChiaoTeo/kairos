@@ -359,7 +359,7 @@ mod tests {
     use super::ReplaySource;
     use crate::composition::MarketReplayClock;
     use crate::domain::observations::{Bar, MarketObservation};
-    use kairos_domain_types::{InstrumentId, MarketId, UnixNanos};
+    use kairos_primitives::{InstrumentId, MarketId, UnixNanos};
 
     fn bar(time: u64) -> MarketObservation {
         MarketObservation::Bar(Bar {
@@ -424,7 +424,7 @@ mod tests {
         source.cursor = 1;
         source.virtual_time_unix_nanos = Some(1);
         let mut actor_snapshot = crate::domain::snapshot::MarketSnapshot::default();
-        actor_snapshot.event_sequence = kairos_domain_types::Sequence::new(1);
+        actor_snapshot.event_sequence = kairos_primitives::Sequence::new(1);
         actor_snapshot.latest.insert(
             format!("{}:{}", first.source_id(), first.market_id()),
             first,

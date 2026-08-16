@@ -14,13 +14,13 @@ slice. The long-term boundary is defined in
 ## Kairos implementation
 
 - Provider/principal construction:
-  `crates/kairos-integration/src/application/participants/okx/connection.rs`.
+  `crates/platform/integration/src/application/participants/okx/connection.rs`.
 - Async Account capability handles:
-  `crates/kairos-integration/src/application/participants/okx/connection/account.rs`.
+  `crates/platform/integration/src/application/participants/okx/connection/account.rs`.
 - Payload normalizers:
-  `crates/kairos-integration/src/services/participants/okx/mod.rs` and `stream.rs`.
+  `crates/platform/integration/src/services/participants/okx/mod.rs` and `stream.rs`.
 - Business composition and recovery:
-  `crates/business/account/service/src/composition/account.rs` and
+  `crates/modules/account/src/composition/account.rs` and
   `src/application/process.rs`.
 
 ## Mapping and deliberately uncopied areas

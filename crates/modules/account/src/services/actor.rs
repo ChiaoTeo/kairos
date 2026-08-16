@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kairos_domain_types::{Generation, Sequence};
+use kairos_primitives::{Generation, Sequence};
 
 use crate::application::{
     AccountBusinessChange, AccountBusinessEvent, AccountProjection, AccountsSnapshot,
@@ -283,7 +283,7 @@ impl AccountActor {
 
     pub fn snapshot(&self) -> AccountsSnapshot {
         AccountsSnapshot {
-            actor_id: kairos_domain_types::ActorId::new(self.actor_id.clone()).unwrap(),
+            actor_id: kairos_primitives::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
             accounts: self
                 .accounts
@@ -320,7 +320,7 @@ impl AccountActor {
             collect_business_changes(old.as_ref(), &current, changes);
             occurred_at
                 .entry(current.account_id.clone())
-                .and_modify(|value: &mut kairos_domain_types::UnixNanos| {
+                .and_modify(|value: &mut kairos_primitives::UnixNanos| {
                     *value = (*value).max(current.observed_at_unix_nanos)
                 })
                 .or_insert(current.observed_at_unix_nanos);
@@ -552,7 +552,7 @@ fn compare_snapshot(
         .iter()
         .map(|value| (value.order_id.clone(), value))
         .collect();
-    let order_keys: Vec<kairos_domain_types::OrderId> = if snapshot.kind == SnapshotKind::Delta {
+    let order_keys: Vec<kairos_primitives::OrderId> = if snapshot.kind == SnapshotKind::Delta {
         external_orders.keys().cloned().collect()
     } else {
         state

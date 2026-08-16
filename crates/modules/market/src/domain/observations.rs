@@ -1,4 +1,4 @@
-use kairos_domain_types::{
+use kairos_primitives::{
     InstrumentId, MarketId, Money, Price, Quantity, Rate as FixedRate, UnixNanos,
 };
 use serde::{Deserialize, Serialize};

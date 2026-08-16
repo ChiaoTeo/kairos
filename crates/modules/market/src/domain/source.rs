@@ -1,4 +1,4 @@
-use kairos_domain_types::{AssetClass, Exchange, MarketId, ProviderProductCode};
+use kairos_primitives::{AssetClass, Exchange, MarketId, ProviderProductCode};
 use serde::{Deserialize, Serialize};
 
 /// Stable Market-owned identity for one configured external data source.
@@ -251,7 +251,7 @@ mod tests {
         derive_readiness, MarketReadiness, SourceEpoch, SourceId, SourceState, SourceStatus,
     };
     use crate::domain::source::SourceDescriptor;
-    use kairos_domain_types::Exchange;
+    use kairos_primitives::Exchange;
 
     fn state() -> SourceState {
         SourceState::starting(

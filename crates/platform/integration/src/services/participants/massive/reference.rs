@@ -1,6 +1,6 @@
 //! Massive instrument normalization without Reference-owned canonical IDs.
 
-use kairos_domain_types::{Currency, ProviderSymbol, UnixNanos};
+use kairos_primitives::{Currency, ProviderSymbol, UnixNanos};
 
 use crate::application::capabilities::reference::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,

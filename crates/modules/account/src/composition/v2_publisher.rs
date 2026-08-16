@@ -298,7 +298,7 @@ fn encode_observed_orders_segment<'a>(
                     remote_order_id: Some(remote_order_id),
                     instrument_id: Some(instrument_id),
                     market_id: Some(market_id),
-                    side: if order.side == kairos_domain_types::OrderSide::Buy {
+                    side: if order.side == kairos_primitives::OrderSide::Buy {
                         common_fb::Side::BUY
                     } else {
                         common_fb::Side::SELL
@@ -783,7 +783,7 @@ fn encode_observed_order<'a>(
             remote_order_id: Some(remote_order_id),
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
-            side: if order.side == kairos_domain_types::OrderSide::Buy {
+            side: if order.side == kairos_primitives::OrderSide::Buy {
                 common_fb::Side::BUY
             } else {
                 common_fb::Side::SELL
@@ -848,20 +848,20 @@ fn account_model(value: AccountModel) -> account_fb::AccountModel {
 }
 
 fn observed_order_status(
-    value: kairos_domain_types::OrderStatus,
+    value: kairos_primitives::OrderStatus,
 ) -> account_fb::ObservedOrderStatus {
     match value {
-        kairos_domain_types::OrderStatus::Acknowledged
-        | kairos_domain_types::OrderStatus::Accepted => account_fb::ObservedOrderStatus::OPEN,
-        kairos_domain_types::OrderStatus::PartiallyFilled => {
+        kairos_primitives::OrderStatus::Acknowledged
+        | kairos_primitives::OrderStatus::Accepted => account_fb::ObservedOrderStatus::OPEN,
+        kairos_primitives::OrderStatus::PartiallyFilled => {
             account_fb::ObservedOrderStatus::PARTIALLY_FILLED
         }
-        kairos_domain_types::OrderStatus::Canceled
-        | kairos_domain_types::OrderStatus::Filled
-        | kairos_domain_types::OrderStatus::Rejected
-        | kairos_domain_types::OrderStatus::Expired => account_fb::ObservedOrderStatus::CLOSED,
-        kairos_domain_types::OrderStatus::Pending => account_fb::ObservedOrderStatus::OPEN,
-        kairos_domain_types::OrderStatus::Unknown => account_fb::ObservedOrderStatus::UNKNOWN,
+        kairos_primitives::OrderStatus::Canceled
+        | kairos_primitives::OrderStatus::Filled
+        | kairos_primitives::OrderStatus::Rejected
+        | kairos_primitives::OrderStatus::Expired => account_fb::ObservedOrderStatus::CLOSED,
+        kairos_primitives::OrderStatus::Pending => account_fb::ObservedOrderStatus::OPEN,
+        kairos_primitives::OrderStatus::Unknown => account_fb::ObservedOrderStatus::UNKNOWN,
     }
 }
 
