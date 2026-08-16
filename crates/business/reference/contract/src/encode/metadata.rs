@@ -5,7 +5,7 @@ use kairos_protocol::generated::kairos::common::v_2::{
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use kairos_protocol::InstanceIdentity;
 
-use crate::model::{
+use crate::transport::{
     Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, Market, MarketDataAccess,
 };
 use crate::{ContractError, ContractResult};

@@ -7,9 +7,6 @@ pub mod control;
 pub mod encode;
 pub mod error;
 pub mod event;
-pub mod model;
-pub mod projection;
-pub mod sqlite;
 pub mod transport;
 
 pub use control::{
@@ -19,12 +16,15 @@ pub use control::{
 pub use encode::{event_metadata, EncodeContext, ReferenceEncoder};
 pub use error::{ContractError, ContractResult};
 pub use event::{decode_event, ReferenceEvent, ReferenceEventFrame, ReferenceEventStream};
-pub use projection::{ReferenceHealth, ReferenceMarket};
-pub use sqlite::{
+pub use transport::{
+    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, Market, MarketDataAccess,
+};
+pub use transport::{
     ReferenceCatalogStats, ReferenceCollection, ReferenceMarketPage, ReferenceProjection,
     ReferenceSqliteReader, ReferenceWatermark, SqliteExecutionAccessQuery, SqliteInstrumentQuery,
     SqliteMarketDataAccessQuery, SqliteMarketQuery, REFERENCE_SQLITE_SCHEMA_VERSION,
 };
+pub use transport::{ReferenceHealth, ReferenceMarket};
 
 use std::path::{Path, PathBuf};
 

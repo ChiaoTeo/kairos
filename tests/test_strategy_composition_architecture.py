@@ -29,7 +29,7 @@ def test_strategy_has_no_other_module_infrastructure_construction() -> None:
     )
     for forbidden in (
         "kairospy.infrastructure",
-        "MmapMarketSnapshotReader",
+        "MarketProjection",
         "UnixJsonCommandClient",
         "StrategyClient" + "Bundle",
         "compose_strategy_" + "applications",

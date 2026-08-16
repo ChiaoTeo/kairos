@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any, cast
 
+from kairospy.application.risk.models import RiskStatus
 from kairospy.domain_types import AccountId
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
@@ -24,13 +25,15 @@ class RiskViewKey:
             raise ValueError("Risk view actor_id is required")
 
     def canonical_key(self) -> str:
-        return f"risk={self.actor_id};view=latest"
+        return "risk.latest"
 
     def resource_id(self) -> str:
-        return f"risk-{_component(self.actor_id)}-latest"
+        return "risk.latest"
 
     def resource_path(self, root: str | Path) -> Path:
-        return Path(root) / f"{self.resource_id()}.e1.mmap"
+        # Rust's RiskViewKey uses the actor id directly as the resource
+        # component; keep the Python path byte-for-byte identical.
+        return Path(root) / "risk" / self.actor_id / "latest" / "current.snapshot"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,19 +58,27 @@ class RiskViewReader:
 
     def read(self) -> RiskViewFrame:
         snapshot = self._reader.read()
+        value = decode_view(snapshot.payload)
+        metadata = value.Metadata()
+        if metadata is None:
+            raise ValueError("Risk latest view metadata is missing")
+        if _text(metadata.ViewKey()) != self.key.canonical_key():
+            raise ValueError("Risk latest view key identity mismatch")
+        if int(metadata.ResourceEpoch()) != 0:
+            raise ValueError("unsupported Risk view resource epoch")
         return RiskViewFrame(
             key=self.key,
             generation=snapshot.generation,
             payload=snapshot.payload,
-            value=decode_view(snapshot.payload),
+            value=value,
         )
 
 
-class RiskMmapProjection:
-    """Compatibility projection backed by the Risk v2 latest view."""
+class RiskProjection:
+    """Application projection backed by one v2 Risk latest view."""
 
-    def __init__(self, path: str | Path, *, retries: int = 8) -> None:
-        self._reader = SharedSnapshotReader(path, retries=retries)
+    def __init__(self, root: str | Path, key: RiskViewKey, *, retries: int = 8) -> None:
+        self._reader = RiskViewReader(root, key, retries=retries)
 
     @property
     def path(self) -> Path:
@@ -76,8 +87,8 @@ class RiskMmapProjection:
     def status(self, account_id: AccountId) -> RiskStatus:
         from kairospy.application.risk import RiskStatus, RiskViolation
 
-        snapshot = self._reader.read()
-        root = cast(Any, decode_view(snapshot.payload))
+        frame = self._reader.read()
+        root = cast(Any, frame.value)
         state = root.State()
         if state is None:
             raise ValueError("Risk latest view state is missing")
@@ -135,7 +146,7 @@ class RiskMmapProjection:
             reserved_notional=reserved,
             utilization=None if total == 0 else (total - available) / total,
             violations=violations,
-            generation=snapshot.generation,
+            generation=frame.generation,
         )
 
 
@@ -149,15 +160,6 @@ def decode_view(payload: bytes) -> Any:
     if not RiskLatestView.RiskLatestViewBufferHasIdentifier(payload, 0):
         raise ValueError("invalid Risk latest view identifier: expected b'RXV2'")
     return RiskLatestView.GetRootAs(payload, 0)
-
-
-def _component(value: str) -> str:
-    return "".join(
-        chr(byte)
-        if (byte < 128 and chr(byte).isalnum()) or byte in b"-_."
-        else f"%{byte:02X}"
-        for byte in value.encode()
-    )
 
 
 _METRIC_NOTIONAL = 1
@@ -201,7 +203,7 @@ def _decimal64(value: object | None) -> Decimal | None:
 
 
 __all__ = [
-    "RiskMmapProjection",
+    "RiskProjection",
     "RiskViewFrame",
     "RiskViewKey",
     "RiskViewReader",

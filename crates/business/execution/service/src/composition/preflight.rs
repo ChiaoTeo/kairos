@@ -24,7 +24,7 @@ use std::sync::{
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use kairos_account_contract::client::{
+use kairos_account_contract::{
     AccountContractClient, BalancesResponse, Capability, DecimalValue as AccountDecimal, Health,
     PositionsResponse,
 };
@@ -1544,7 +1544,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
     fn publish_order(&mut self, order: &ExecutionOrder) -> Result<(), String> {
         let account_id = &order.account_id;
         self.account_client(account_id)?
-            .publish_order_event(&kairos_account_contract::client::OrderEvent {
+            .publish_order_event(&kairos_account_contract::OrderEvent {
                 order_id: order.order_id.to_string(),
                 status: account_order_status(order.status).into(),
                 remote_order_id: order.remote_order_id.as_ref().map(ToString::to_string),
@@ -1579,7 +1579,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
             };
             return self
                 .account_client(&account_id)?
-                .publish_simulated_fill(&kairos_account_contract::client::SimulatedFill {
+                .publish_simulated_fill(&kairos_account_contract::SimulatedFill {
                     fill_id: fill.fill_id.to_string(),
                     order_id: fill.order_id.to_string(),
                     segment_key,
@@ -1608,7 +1608,7 @@ impl ExecutionPreflight for SocketExecutionPreflight {
                 .map_err(|error| error.to_string());
         }
         self.account_client(&account_id)?
-            .publish_fill(&kairos_account_contract::client::Fill {
+            .publish_fill(&kairos_account_contract::Fill {
                 fill_id: fill.fill_id.to_string(),
                 order_id: fill.order_id.to_string(),
                 segment_key,
@@ -1803,7 +1803,7 @@ fn account_order_status(status: ExecutionOrderStatus) -> &'static str {
 }
 
 fn find_available(
-    response: &kairos_account_contract::client::BalancesResponse,
+    response: &kairos_account_contract::BalancesResponse,
     asset: &str,
 ) -> Result<Option<Decimal>, String> {
     response
@@ -1820,7 +1820,7 @@ fn find_available(
 }
 
 fn find_position(
-    response: &kairos_account_contract::client::PositionsResponse,
+    response: &kairos_account_contract::PositionsResponse,
     instrument: &str,
 ) -> Result<Option<Decimal>, String> {
     response

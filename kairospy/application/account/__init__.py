@@ -1,8 +1,7 @@
-"""Account-facing adapters.
+"""Account-facing application models and workspace-backed commands.
 
-Account state is owned by the Rust account application. Account configuration,
-credentials, and launch leases are persisted by the Workspace layer; these
-classes remain compatibility adapters for existing Python callers.
+Account state is owned by the Rust Account application. Account configuration,
+credentials, and launch leases are persisted by the Workspace layer.
 """
 
 from __future__ import annotations

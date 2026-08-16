@@ -11,7 +11,7 @@ use std::time::Duration;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 
-use crate::model::{
+use crate::transport::{
     Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, MarketDataAccess,
 };
 use crate::{ContractError, ContractResult, ReferenceMarket};

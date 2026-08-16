@@ -267,6 +267,7 @@ fn reference_v2_wire_event_decodes_with_watermarks() {
     let mut builder = FlatBufferBuilder::new();
     let stream_id = builder.create_string("reference.lifecycle");
     let producer_id = builder.create_string("reference-1");
+    let workspace_id = builder.create_string("workspace:test");
     let event_id = builder.create_string("lifecycle-1");
     let metadata = EventMetadata::create(
         &mut builder,
@@ -274,6 +275,7 @@ fn reference_v2_wire_event_decodes_with_watermarks() {
             event_id: Some(event_id),
             stream_id: Some(stream_id),
             producer_id: Some(producer_id),
+            workspace_id: Some(workspace_id),
             sequence: 9,
             occurred_at_unix_nanos: 9,
             ..Default::default()

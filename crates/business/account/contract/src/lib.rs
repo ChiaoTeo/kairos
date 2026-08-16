@@ -4,7 +4,6 @@
 //! encode/decode capabilities. It does not expose provider payloads or the
 //! Account service's mutable state model.
 
-pub mod client;
 pub mod control;
 pub mod encode;
 pub mod error;
@@ -12,8 +11,9 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use client::{
-    AccountContractClient, BalancesResponse, Capability, DecimalValue, Health, PositionsResponse,
+pub use control::{
+    AccountContractClient, Balance, BalanceGroup, BalancesResponse, Capability, DecimalValue, Fill,
+    Health, OrderEvent, Position, PositionGroup, PositionsResponse, SimulatedFill,
 };
 pub use control::{AccountControlClient, AccountControlResponse};
 pub use encode::{

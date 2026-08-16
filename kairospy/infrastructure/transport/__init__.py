@@ -15,7 +15,7 @@ _EXPORTS = {
     "BarView": (".market", "BarView"),
     "GreeksView": (".market", "GreeksView"),
     "MarketDataView": (".market", "MarketDataView"),
-    "MmapMarketSnapshotReader": (".market", "MmapMarketSnapshotReader"),
+    "MarketProjection": (".market", "MarketProjection"),
     "AeronMarketEventSource": (".market", "AeronMarketEventSource"),
     "QuoteView": (".market", "QuoteView"),
     "TradeView": (".market", "TradeView"),

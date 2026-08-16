@@ -13,7 +13,7 @@ from kairospy.infrastructure.transport.commands import (
 )
 from kairospy.infrastructure.transport.market import (
     AeronMarketEventSource,
-    MmapMarketSnapshotReader,
+    MarketProjection,
     UnixMarketEventStream,
 )
 from kairospy.strategy import StrategyIdentity
@@ -80,7 +80,7 @@ def build_strategy_access(
     )
     application = MarketApplication(
         commands,
-        MmapMarketSnapshotReader(snapshot),
+        MarketProjection(snapshot),
         event_source,
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

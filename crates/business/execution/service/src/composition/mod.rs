@@ -4,7 +4,6 @@ use crate::application::{
     ExecutionAsyncRoute, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
     ExecutionEvent, ExecutionSnapshot,
 };
-use crate::domain::RouteProduct;
 use crate::services::gateway::{
     AsyncQueuedOrderEntry, AsyncQueuedOrderEventSource, AsyncQueuedOrderQuery,
 };
@@ -13,7 +12,7 @@ use crate::services::routing::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyn
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderEventSource, AsyncOrderQueryConnection, CommandOutcome,
     ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
-    IntegrationError,
+    IntegrationError, ParticipantInstrumentTypeRef,
 };
 use kairos_integration::application::{
     ConnectionDescriptor, ConnectionHealth, DecimalValue, OrderEntryEvent, OrderEntryRequest,
@@ -528,38 +527,16 @@ fn binance_spot_private_connection(
 
 fn okx_trading_shape(
     product: &str,
-) -> Result<(OkxInstrumentType, OkxTradingMode, RouteProduct), String> {
+) -> Result<(OkxInstrumentType, OkxTradingMode), String> {
     match product.trim().to_ascii_lowercase().as_str() {
-        "spot" => Ok((
-            OkxInstrumentType::Spot,
-            OkxTradingMode::Cash,
-            RouteProduct::Spot,
-        )),
-        "cross-margin" | "margin" => Ok((
-            OkxInstrumentType::Margin,
-            OkxTradingMode::Cross,
-            RouteProduct::CrossMargin,
-        )),
-        "isolated-margin" => Ok((
-            OkxInstrumentType::Margin,
-            OkxTradingMode::Isolated,
-            RouteProduct::IsolatedMargin,
-        )),
-        "swap" | "usd-m-futures" => Ok((
-            OkxInstrumentType::Swap,
-            OkxTradingMode::Cross,
-            RouteProduct::UsdMFutures,
-        )),
-        "futures" | "coin-m-futures" => Ok((
-            OkxInstrumentType::Futures,
-            OkxTradingMode::Cross,
-            RouteProduct::CoinMFutures,
-        )),
-        "options" => Ok((
-            OkxInstrumentType::Option,
-            OkxTradingMode::Cross,
-            RouteProduct::Options,
-        )),
+        "spot" => Ok((OkxInstrumentType::Spot, OkxTradingMode::Cash)),
+        "cross-margin" | "margin" => {
+            Ok((OkxInstrumentType::Margin, OkxTradingMode::Cross))
+        }
+        "isolated-margin" => Ok((OkxInstrumentType::Margin, OkxTradingMode::Isolated)),
+        "swap" => Ok((OkxInstrumentType::Swap, OkxTradingMode::Cross)),
+        "futures" => Ok((OkxInstrumentType::Futures, OkxTradingMode::Cross)),
+        "option" | "options" => Ok((OkxInstrumentType::Option, OkxTradingMode::Cross)),
         other => Err(format!("unsupported OKX execution product: {other}")),
     }
 }
@@ -1619,14 +1596,16 @@ mod secret_tests {
 
         assert_eq!(descriptor.binding_id, "binance.principal.test-principal");
         assert_eq!(descriptor.environment, "testnet");
-        assert!(connections.order_entry.is_some());
-        assert!(connections.order_query.is_some());
+        assert!(connections.order_entry.is_none());
+        assert!(connections.order_query.is_none());
+        assert!(connections.async_order_entry.is_some());
+        assert!(connections.async_order_query.is_some());
         assert!(connections.execution_stream.is_none());
         assert_eq!(connections.async_execution_streams.len(), 1);
     }
 
     #[test]
-    fn okx_route_projects_native_async_and_blocking_traits() {
+    fn okx_route_projects_native_async_capabilities() {
         let mut options = binance_spot_options();
         options.route_id = "okx.swap".into();
         options.provider = "okx".into();
@@ -1642,7 +1621,8 @@ mod secret_tests {
         );
         assert_eq!(descriptor.domain.as_str(), "trading");
         assert_eq!(descriptor.participant.id.as_str(), "okx");
-        assert!(connections.order_query.is_some());
+        assert!(connections.order_entry.is_none());
+        assert!(connections.order_query.is_none());
         assert!(connections.async_order_entry.is_some());
         assert!(connections.async_order_query.is_some());
         assert_eq!(connections.async_execution_streams.len(), 1);

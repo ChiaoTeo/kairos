@@ -109,7 +109,7 @@ fn account_does_not_own_execution_order_lifecycle_or_expose_raw_aggregates() {
 #[test]
 fn account_contract_does_not_expose_execution_order_planning() {
     let client = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract/src/client.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contract/src/control/account.rs"),
     )
     .expect("read account contract client");
     assert!(!client.contains("OrderPlan"));

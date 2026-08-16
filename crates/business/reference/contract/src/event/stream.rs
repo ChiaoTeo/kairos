@@ -1,4 +1,4 @@
-use super::frame_v2::ReferenceEventFrame;
+use super::frame::ReferenceEventFrame;
 use crate::{ContractError, ContractResult};
 use kairos_transport::AeronByteSubscription;
 use std::pin::Pin;

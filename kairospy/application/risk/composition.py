@@ -6,7 +6,7 @@ from pathlib import Path
 
 from kairospy.application.workspace import InstanceWorkspace
 from kairospy.application.system.binaries import resolve_binary
-from kairospy.infrastructure.contracts.risk import RiskMmapProjection
+from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
 from kairospy.infrastructure.transport.risk import AeronRiskEventSource
 from kairospy.domain_types import AccountId
 
@@ -24,7 +24,10 @@ def build_strategy_access(
 
     enabled = endpoint is not None
     return RiskApplication(
-        RiskMmapProjection(instance.snapshot("risk", "risk.snapshot"))
+        RiskProjection(
+            instance.snapshot("risk", "risk.snapshot"),
+            RiskViewKey(actor_id=f"risk:{instance.instance_id}"),
+        )
         if enabled
         else None,
         AeronRiskEventSource(

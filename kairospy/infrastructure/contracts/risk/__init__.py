@@ -7,7 +7,7 @@ from typing import Any
 _EXPORTS = {
     "RiskControlClient": (".control", "RiskControlClient"),
     "RiskContractClient": (".control", "RiskControlClient"),
-    "RiskMmapProjection": (".view", "RiskMmapProjection"),
+    "RiskProjection": (".view", "RiskProjection"),
     "RiskViewFrame": (".view", "RiskViewFrame"),
     "RiskViewKey": (".view", "RiskViewKey"),
     "RiskViewReader": (".view", "RiskViewReader"),
@@ -32,7 +32,7 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "RiskControlClient",
     "RiskContractClient",
-    "RiskMmapProjection",
+    "RiskProjection",
     "RiskViewFrame",
     "RiskViewKey",
     "RiskViewReader",

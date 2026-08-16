@@ -6,11 +6,10 @@
 //! global registry: it is a private, typed collection with current callers in
 //! Execution composition and runtime.
 
-use crate::domain::RouteProduct;
 use kairos_domain_types::{AccountId, SegmentKey};
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
-    ExternalOrder, ExternalOrderQuery, IntegrationError,
+    ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
 };
 use kairos_integration::application::{OrderEntryEvent, OrderEntryRequest};
 
@@ -19,10 +18,10 @@ pub(crate) struct ExecutionRoute<C> {
     pub(crate) route_id: String,
     pub(crate) account_id: AccountId,
     pub(crate) segment_key: SegmentKey,
-    /// Business route intent. This is deliberately not inferred from the
-    /// Integration connection domain: connection topology and instrument
-    /// product classification are different axes.
-    pub(crate) product: Option<RouteProduct>,
+    /// Exact participant-owned product discriminator for this route. It is
+    /// deliberately opaque to Execution: composition maps provider-native
+    /// types into this value and routing only compares identity.
+    pub(crate) provider_instrument_type: Option<ParticipantInstrumentTypeRef>,
     pub(crate) descriptor: ConnectionDescriptor,
     pub(crate) connection: C,
 }
@@ -32,7 +31,7 @@ impl<C> ExecutionRoute<C> {
         route_id: impl Into<String>,
         account_id: AccountId,
         segment_key: SegmentKey,
-        product: Option<RouteProduct>,
+        provider_instrument_type: Option<ParticipantInstrumentTypeRef>,
         descriptor: ConnectionDescriptor,
         connection: C,
     ) -> Result<Self, String> {
@@ -45,7 +44,7 @@ impl<C> ExecutionRoute<C> {
             route_id,
             account_id,
             segment_key,
-            product,
+            provider_instrument_type,
             descriptor,
             connection,
         })
@@ -55,31 +54,8 @@ impl<C> ExecutionRoute<C> {
         self.account_id == request.account_id
             && self.segment_key == request.segment_key
             && self.descriptor.participant == request.provider_instrument.participant
-            && product_matches(
-                self.product,
-                request.provider_instrument.instrument_type.clone(),
-            )
+            && self.provider_instrument_type == request.provider_instrument.instrument_type
     }
-}
-
-fn product_matches(
-    configured: Option<RouteProduct>,
-    requested: Option<kairos_integration::application::ParticipantInstrumentTypeRef>,
-) -> bool {
-    let Some(requested) = requested else {
-        return true;
-    };
-    let requested = match requested.as_str() {
-        "spot" => RouteProduct::Spot,
-        "cross-margin" | "margin" => RouteProduct::CrossMargin,
-        "isolated-margin" => RouteProduct::IsolatedMargin,
-        "usd-m-futures" | "swap" => RouteProduct::UsdMFutures,
-        "coin-m-futures" | "futures" => RouteProduct::CoinMFutures,
-        "options" | "option" => RouteProduct::Options,
-        "equity" | "stocks" => RouteProduct::Equity,
-        _ => return false,
-    };
-    configured == Some(requested)
 }
 
 fn validate_routes<C>(routes: &[ExecutionRoute<C>]) -> Result<(), String> {
@@ -100,7 +76,7 @@ fn validate_routes<C>(routes: &[ExecutionRoute<C>]) -> Result<(), String> {
             if route.account_id == other.account_id
                 && route.segment_key == other.segment_key
                 && route.descriptor.participant == other.descriptor.participant
-                && route.product == other.product
+                && route.provider_instrument_type == other.provider_instrument_type
             {
                 return Err(format!(
                     "ambiguous Execution route for account={}, segment={}, participant={}",
@@ -287,7 +263,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyncOrderQuery};
-    use crate::domain::RouteProduct;
     use kairos_integration::application::{
         AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
         ExternalOrder, ExternalOrderQuery, IntegrationError,
@@ -418,7 +393,7 @@ mod tests {
             route_id,
             kairos_domain_types::AccountId::new(account_id).unwrap(),
             kairos_domain_types::SegmentKey::new("spot").unwrap(),
-            Some(RouteProduct::Spot),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             descriptor(binding_id, participant),
             connection,
         )

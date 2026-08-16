@@ -595,7 +595,7 @@ impl ReferenceEventWriter {
                         .reader
                         .market(record_id)?
                         .ok_or_else(|| missing(record_kind, record_id))?;
-                    let record = kairos_reference_contract::model::Market {
+                    let record = kairos_reference_contract::Market {
                         market_id: record.market_id,
                         market_key: record.market_key,
                         instrument_id: record.instrument_id,

@@ -139,8 +139,8 @@ class MarketDataView:
         )
 
 
-class MmapMarketSnapshotReader:
-    """Read a Market current view from the Rust double-slot snapshots.
+class MarketProjection:
+    """Read Market v2 current views from Rust double-slot snapshots.
 
     The v2 path is a publisher root. Each requested view is an independent
     ``MarketViewKey`` resource; no aggregate snapshot is read or produced.

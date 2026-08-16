@@ -10,6 +10,3 @@ pub use plan::{
     split_quantity, CompletionPolicy, ExecutionLeg, ExecutionPlan, FailurePolicy, HedgePolicy,
     IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy,
 };
-mod route;
-
-pub use route::RouteProduct;

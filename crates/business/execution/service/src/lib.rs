@@ -31,7 +31,7 @@ pub use composition::{
 pub use domain::{
     CompletionPolicy, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,
     ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle,
-    MakerExecutionPolicy, OrderSide, OrderType, RouteProduct, SplitOrderPolicy,
+    MakerExecutionPolicy, OrderSide, OrderType, SplitOrderPolicy,
 };
 pub use services::sqlx_audit::SqlxExecutionAudit;
 pub use services::sqlx_persistence::SqlxExecutionStore;

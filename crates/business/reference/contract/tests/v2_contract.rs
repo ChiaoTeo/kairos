@@ -5,7 +5,7 @@ use kairos_protocol::generated::kairos::reference::v_2::{
     MarketUpsertedArgs,
 };
 use kairos_protocol::InstanceIdentity;
-use kairos_reference_contract::model::Market;
+use kairos_reference_contract::Market;
 use kairos_reference_contract::{decode_event, EncodeContext, ReferenceEncoder, ReferenceEvent};
 
 #[test]
@@ -75,7 +75,7 @@ fn rejects_non_reference_v2_payloads() {
 
 #[test]
 fn encoder_emits_typed_market_upsert_without_json_adapter() {
-    let market = kairos_reference_contract::model::Market {
+    let market = kairos_reference_contract::Market {
         market_id: "market:binance:spot:BTCUSDT".into(),
         market_key: "BTCUSDT".into(),
         instrument_id: "instrument:spot:BTC".into(),

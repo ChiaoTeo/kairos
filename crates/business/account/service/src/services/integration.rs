@@ -37,7 +37,7 @@ pub(crate) struct AccountInstrumentResolver {
     #[cfg(test)]
     fixture_markets: Arc<Vec<kairos_reference_contract::ReferenceMarket>>,
     #[cfg(test)]
-    fixture_instruments: Arc<Vec<kairos_reference_contract::model::Instrument>>,
+    fixture_instruments: Arc<Vec<kairos_reference_contract::Instrument>>,
 }
 
 impl AccountInstrumentResolver {
@@ -232,7 +232,7 @@ impl AccountInstrumentResolver {
         &self,
         symbol: &str,
         instrument_type: &str,
-    ) -> Result<Vec<kairos_reference_contract::model::Instrument>, String> {
+    ) -> Result<Vec<kairos_reference_contract::Instrument>, String> {
         #[cfg(test)]
         if self.reader.is_none() {
             return Ok(self.fixture_instruments.as_ref().clone());
@@ -255,7 +255,7 @@ impl AccountInstrumentResolver {
     #[cfg(test)]
     fn fixture(
         markets: Vec<kairos_reference_contract::ReferenceMarket>,
-        instruments: Vec<kairos_reference_contract::model::Instrument>,
+        instruments: Vec<kairos_reference_contract::Instrument>,
     ) -> Self {
         Self {
             fixture_markets: Arc::new(markets),
@@ -1037,7 +1037,7 @@ mod identity_tests {
     fn resolves_ibkr_equity_to_reference_instrument_without_fabricating_market() {
         let resolver = AccountInstrumentResolver::fixture(
             Vec::new(),
-            vec![kairos_reference_contract::model::Instrument {
+            vec![kairos_reference_contract::Instrument {
                 instrument_id: "instrument:equity:US:AAPL:common".into(),
                 symbol: "AAPL".into(),
                 instrument_type: "equity".into(),

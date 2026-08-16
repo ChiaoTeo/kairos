@@ -8,7 +8,6 @@ depend on a process client when they only need a snapshot or event contract.
 from .base import (
     CommandEnvelope,
     ContractSnapshot,
-    MmapSnapshotReader,
     QueryEnvelope,
     SnapshotMetadata,
 )
@@ -16,7 +15,6 @@ from .base import (
 __all__ = [
     "CommandEnvelope",
     "ContractSnapshot",
-    "MmapSnapshotReader",
     "QueryEnvelope",
     "SnapshotMetadata",
 ]
