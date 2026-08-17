@@ -128,7 +128,36 @@ def test_component_start_reports_early_exit_and_log_detail(
     message = str(captured.value)
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message
-    assert "kairos system logs execution" in message
+    assert "kairos system logs --component execution" in message
+
+
+def test_component_start_reuses_responsive_degraded_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        ComponentProcessApplication, "_ensure_aeron_driver", lambda _self: None
+    )
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="degraded-process"
+    )
+    socket = workspace.paths.process_socket("reference")
+    socket.parent.mkdir(parents=True, exist_ok=True)
+    socket.touch()
+
+    class DegradedControl:
+        def status(self) -> dict[str, str]:
+            return {"status": "degraded"}
+
+    control = DegradedControl()
+    monkeypatch.setattr(
+        ComponentProcessApplication,
+        "client",
+        lambda _self, _component, _socket, *, timeout: control,
+    )
+
+    result = ComponentProcessApplication(workspace).ensure_running("reference")
+
+    assert result is control
 
 
 def test_component_restart_times_out_while_process_lock_is_held(

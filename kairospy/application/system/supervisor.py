@@ -110,6 +110,7 @@ class ProcessSupervisor:
                 "ok",
                 "ready",
                 "running",
+                "degraded",
             }:
                 return health
             if asyncio.get_running_loop().time() >= deadline:

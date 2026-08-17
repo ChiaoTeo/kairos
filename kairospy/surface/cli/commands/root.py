@@ -1227,8 +1227,15 @@ def system_list(
 
 @system_app.command("logs")
 def system_logs(
-    component: str = typer.Argument(
-        ..., help="Component name, for example account or execution."
+    component_argument: str | None = typer.Argument(
+        None,
+        metavar="COMPONENT",
+        help="Component name (legacy positional form).",
+    ),
+    component: str | None = typer.Option(
+        None,
+        "--component",
+        help="Component name, for example account or execution.",
     ),
     lines: int = typer.Option(
         100, "--lines", min=0, help="Number of recent lines to show."
@@ -1240,6 +1247,18 @@ def system_logs(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """Show a component's combined stdout/stderr log."""
+    if (
+        component is not None
+        and component_argument is not None
+        and component != component_argument
+    ):
+        raise typer.BadParameter(
+            "component was specified twice with different values; "
+            "use --component COMPONENT"
+        )
+    component = component or component_argument
+    if component is None:
+        raise typer.BadParameter("component is required; use --component COMPONENT")
     components = {
         "reference",
         "market",

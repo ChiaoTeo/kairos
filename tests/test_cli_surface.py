@@ -669,6 +669,44 @@ def test_system_logs_reads_component_process_output(tmp_path) -> None:
     assert output.getvalue().strip() == "second"
 
 
+def test_system_logs_accepts_component_option(tmp_path) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    log = workspace.paths.logs / "processes" / "reference.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("ready\n", encoding="utf-8")
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "logs",
+                "--component",
+                "reference",
+                "--workspace",
+                str(tmp_path / "demo"),
+                "--format",
+                "text",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert output.getvalue().strip() == "ready"
+
+
+def test_system_logs_rejects_conflicting_component_values() -> None:
+    output = StringIO()
+
+    assert (
+        execute_argv(["system", "logs", "market", "--component", "reference"], output)
+        != 0
+    )
+    assert "specified twice with different values" in output.getvalue()
+
+
 def test_system_doctor_reports_stale_health_pid(tmp_path) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"

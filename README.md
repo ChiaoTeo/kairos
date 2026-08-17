@@ -331,8 +331,8 @@ uv run kairospy system up --workspace my-project
 uv run kairospy system status --workspace my-project
 uv run kairospy system list --workspace my-project
 uv run kairospy system doctor --workspace my-project
-uv run kairospy system logs market --lines 100 --workspace my-project
-uv run kairospy system logs market --follow --workspace my-project
+uv run kairospy system logs --component market --lines 100 --workspace my-project
+uv run kairospy system logs --component market --follow --workspace my-project
 uv run kairospy system up --component market --workspace my-project
 uv run kairospy market status --workspace my-project --format json
 uv run kairospy market snapshot --workspace my-project --format json

@@ -168,7 +168,7 @@ class ComponentProcessApplication:
         if socket.exists():
             try:
                 health = control.status()
-                if health.get("status") in {"ok", "ready", "running"}:
+                if health.get("status") in {"ok", "ready", "running", "degraded"}:
                     return control
             except Exception:
                 pass
@@ -233,7 +233,7 @@ class ComponentProcessApplication:
             f"kairos launch artifacts {runtime.launch_id} "
             f"--instance {runtime.instance_id} --workspace {self.workspace.paths.project_root}"
             if runtime is not None
-            else f"kairos system logs {component} --workspace {self.workspace.paths.project_root}"
+            else f"kairos system logs --component {component} --workspace {self.workspace.paths.project_root}"
         )
         return self._wait_ready(
             component,
@@ -723,7 +723,12 @@ class ComponentProcessApplication:
             if control.socket_path.exists():
                 try:
                     health = readiness_control.status()
-                    if health.get("status") in {"ok", "ready", "running"}:
+                    if health.get("status") in {
+                        "ok",
+                        "ready",
+                        "running",
+                        "degraded",
+                    }:
                         stream_new_logs()
                         return control
                 except Exception:
