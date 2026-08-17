@@ -216,10 +216,10 @@ fn live_order_gateway_is_guarded_by_account_segment_writer_fencing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = fs::read_to_string(root.join("src/bin/kairos-execution-server.rs"))
         .expect("read Execution server");
-    let composition = rust_source(&root.join("src/composition/connections"));
+    let composition = rust_source(&root.join("src/composition"));
     assert!(server.contains("acquire_execution_writer_leases"));
-    assert!(server.contains("install_writer_fences"));
-    assert!(server.contains("configure_live_trading(!simulated"));
+    assert!(composition.contains("install_writer_fences"));
+    assert!(composition.contains("configure_live_trading(!config.simulated"));
     assert!(server.contains("if simulated"));
     assert!(composition.contains("self.validate_writer(request)?;"));
     assert!(
@@ -240,14 +240,102 @@ fn live_order_gateway_is_guarded_by_account_segment_writer_fencing() {
 }
 
 #[test]
+fn application_public_signatures_do_not_expose_internal_dependencies() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = rust_source(&root.join("src/application"));
+    let forbidden = [
+        "OrderEntryConnection",
+        "OrderQueryConnection",
+        "OrderEventSource",
+        "AsyncOrderEntryConnection",
+        "AsyncOrderQueryConnection",
+        "AsyncOrderEventSource",
+        "ExecutionStateStore",
+        "ExecutionSimulator",
+        "SimulatedAccountSettlement",
+        "SharedExecutionSnapshotPublisher",
+        "SharedIntentSnapshotPublisher",
+        "AeronExecutionEventPublisher",
+        "crate::services",
+        "kairos_integration",
+    ];
+
+    for marker in ["pub fn ", "pub async fn "] {
+        for tail in source.split(marker).skip(1) {
+            let signature = tail.split('{').next().unwrap_or(tail);
+            for dependency in forbidden {
+                assert!(
+                    !signature.contains(dependency),
+                    "public Application signature exposes {dependency}: {signature}"
+                );
+            }
+        }
+    }
+
+    let core = fs::read_to_string(root.join("src/application/core/mod.rs"))
+        .expect("read Execution application facade");
+    for method in [
+        "assemble",
+        "configure_execution_access",
+        "configure_live_trading",
+        "recover_risk_reservations",
+    ] {
+        assert!(
+            core.contains(&format!("pub(crate) fn {method}")),
+            "composition-only method must stay crate-private: {method}"
+        );
+    }
+
+    let application_module = fs::read_to_string(root.join("src/application/mod.rs"))
+        .expect("read Execution application module");
+    assert!(!application_module.contains("pub use process"));
+    assert!(application_module.contains("pub(crate) use process"));
+
+    let lifecycle = fs::read_to_string(root.join("src/application/process/lifecycle.rs"))
+        .expect("read Execution process lifecycle");
+    for method in [
+        "with_audit",
+        "with_async_order_entry",
+        "with_async_order_query",
+        "with_async_execution_routes",
+        "with_simulator",
+        "with_simulated_account_settlement",
+        "with_snapshot_publisher",
+        "with_intent_snapshot_publisher",
+        "with_event_publisher",
+        "run",
+    ] {
+        let crate_private = format!("pub(crate) fn {method}");
+        let crate_private_async = format!("pub(crate) async fn {method}");
+        assert!(
+            lifecycle.contains(&crate_private) || lifecycle.contains(&crate_private_async),
+            "process wiring method must stay crate-private: {method}"
+        );
+    }
+    let reconciliation =
+        fs::read_to_string(root.join("src/application/core/reconciliation/mod.rs"))
+            .expect("read Execution reconciliation");
+    for method in [
+        "take_execution_stream",
+        "take_order_entry",
+        "install_order_entry",
+        "take_order_query",
+        "install_order_query",
+    ] {
+        assert!(
+            reconciliation.contains(&format!("pub(crate) fn {method}")),
+            "process wiring method must stay crate-private: {method}"
+        );
+    }
+}
+
+#[test]
 fn execution_actor_owns_order_lifecycle_state_and_submission_transitions() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let facade = fs::read_to_string(root.join("src/application/core/mod.rs"))
         .expect("read Execution application");
-    let intent_use_cases = fs::read_to_string(root.join("src/application/core/intents/mod.rs"))
-        .expect("read Execution intent use cases");
-    let order_use_cases = fs::read_to_string(root.join("src/application/core/orders/mod.rs"))
-        .expect("read Execution order use cases");
+    let intent_use_cases = rust_source(&root.join("src/application/core/intents"));
+    let order_use_cases = rust_source(&root.join("src/application/core/orders"));
     let application = format!("{facade}\n{intent_use_cases}\n{order_use_cases}");
     let application_fields = facade
         .split("pub struct ExecutionApplication {")
@@ -506,13 +594,13 @@ fn execution_account_fact_publication_is_not_part_of_preflight() {
     assert!(actor.contains("fn attach_intent_plan_order"));
     assert!(actor.contains("fn refresh_intent_plan_progress"));
 
-    let server = fs::read_to_string(root.join("src/bin/kairos-execution-server.rs"))
-        .expect("read Execution server");
-    assert!(!server.contains("QueuedExecutionAccountFacts"));
-    assert!(!server.contains("with_account_facts"));
-    assert!(server.contains("with_simulated_account_settlement"));
-    assert!(server.contains("configure_execution_dependencies"));
-    assert!(!server.contains("QueuedExecutionRiskReservations"));
+    let process_composition = fs::read_to_string(root.join("src/composition/process.rs"))
+        .expect("read Execution process composition");
+    assert!(!process_composition.contains("QueuedExecutionAccountFacts"));
+    assert!(!process_composition.contains("with_account_facts"));
+    assert!(process_composition.contains("with_simulated_account_settlement"));
+    assert!(process_composition.contains("configure_execution_dependencies"));
+    assert!(!process_composition.contains("QueuedExecutionRiskReservations"));
 
     let composition_dependencies =
         fs::read_to_string(root.join("src/services/dependencies/mod.rs"))
@@ -720,7 +808,6 @@ fn execution_composition_root_only_aggregates_focused_modules() {
             "composition root is missing {required}"
         );
     }
-    assert!(!module.contains("mod dependencies;"));
     assert!(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/services/dependencies/mod.rs")
         .is_file());

@@ -1,4 +1,4 @@
-//! Crash-recoverable historical observation recording selected by composition.
+//! Composition-owned crash-recoverable JSONL history recording.
 
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,22 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
+use crate::services::publication::HistoryQueue;
 use crate::{MarketEvent, MarketObservation};
+
+pub(crate) fn spawn_jsonl_history(
+    specs: Vec<HistoryCollectionSpec>,
+) -> Result<HistoryQueue, String> {
+    let mut recorder = JsonlMarketHistoryRecorder::spawn(specs)?;
+    let (sender, mut receiver) = mpsc::channel::<Vec<(u64, MarketEvent)>>(64);
+    let task = tokio::spawn(async move {
+        while let Some(events) = receiver.recv().await {
+            recorder.record(&events).await?;
+        }
+        recorder.shutdown().await
+    });
+    Ok(HistoryQueue::new(sender, task))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct HistoryCollectionSpec {

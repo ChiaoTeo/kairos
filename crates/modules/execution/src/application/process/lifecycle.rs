@@ -25,7 +25,8 @@ impl
         NoAsyncOrderEventSource,
     >
 {
-    pub fn new(application: ExecutionApplication, socket_path: impl Into<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(application: ExecutionApplication, socket_path: impl Into<PathBuf>) -> Self {
         Self {
             application,
             simulator: None,
@@ -46,7 +47,7 @@ impl
         }
     }
 
-    pub fn with_audit(
+    pub(crate) fn with_audit(
         application: ExecutionApplication,
         socket_path: impl Into<PathBuf>,
         audit: impl Into<ExecutionAudit>,
@@ -73,7 +74,10 @@ impl
 }
 
 impl<E, Q, S> ExecutionProcess<E, Q, S> {
-    pub fn with_async_order_entry<T>(self, connection: Option<T>) -> ExecutionProcess<T, Q, S> {
+    pub(crate) fn with_async_order_entry<T>(
+        self,
+        connection: Option<T>,
+    ) -> ExecutionProcess<T, Q, S> {
         ExecutionProcess {
             application: self.application,
             simulator: self.simulator,
@@ -94,7 +98,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         }
     }
 
-    pub fn with_async_order_query<T>(self, connection: Option<T>) -> ExecutionProcess<E, T, S> {
+    pub(crate) fn with_async_order_query<T>(
+        self,
+        connection: Option<T>,
+    ) -> ExecutionProcess<E, T, S> {
         ExecutionProcess {
             application: self.application,
             simulator: self.simulator,
@@ -115,11 +122,19 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         }
     }
 
-    pub fn with_async_execution_stream<T>(self, source: Option<T>) -> ExecutionProcess<E, Q, T> {
+    #[cfg(test)]
+    pub(crate) fn with_async_execution_stream<T>(
+        self,
+        source: Option<T>,
+    ) -> ExecutionProcess<E, Q, T> {
         self.with_async_execution_streams(source.into_iter().collect())
     }
 
-    pub fn with_async_execution_streams<T>(self, sources: Vec<T>) -> ExecutionProcess<E, Q, T> {
+    #[cfg(test)]
+    pub(crate) fn with_async_execution_streams<T>(
+        self,
+        sources: Vec<T>,
+    ) -> ExecutionProcess<E, Q, T> {
         let routes = sources
             .into_iter()
             .enumerate()
@@ -130,7 +145,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self.with_async_execution_routes(routes)
     }
 
-    pub fn with_async_execution_routes<T>(
+    pub(crate) fn with_async_execution_routes<T>(
         self,
         routes: Vec<ExecutionAsyncRoute<T>>,
     ) -> ExecutionProcess<E, Q, T> {
@@ -164,12 +179,12 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         }
     }
 
-    pub fn with_simulator(mut self, simulator: ExecutionSimulator) -> Self {
+    pub(crate) fn with_simulator(mut self, simulator: ExecutionSimulator) -> Self {
         self.simulator = Some(simulator);
         self
     }
 
-    pub fn with_simulated_account_settlement(
+    pub(crate) fn with_simulated_account_settlement(
         mut self,
         settlement: SimulatedAccountSettlement,
     ) -> Self {
@@ -177,12 +192,15 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self
     }
 
-    pub fn with_snapshot_publisher(mut self, publisher: SharedExecutionSnapshotPublisher) -> Self {
+    pub(crate) fn with_snapshot_publisher(
+        mut self,
+        publisher: SharedExecutionSnapshotPublisher,
+    ) -> Self {
         self.snapshot_publisher = Some(publisher);
         self
     }
 
-    pub fn with_intent_snapshot_publisher(
+    pub(crate) fn with_intent_snapshot_publisher(
         mut self,
         publisher: SharedIntentSnapshotPublisher,
     ) -> Self {
@@ -190,7 +208,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self
     }
 
-    pub fn with_event_publisher(mut self, publisher: AeronExecutionEventPublisher) -> Self {
+    pub(crate) fn with_event_publisher(mut self, publisher: AeronExecutionEventPublisher) -> Self {
         self.event_publisher = Some(ExecutionEventPublication::Aeron(publisher));
         self
     }
@@ -206,7 +224,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
 }
 
 impl<E, Q, S> ExecutionProcess<E, Q, S> {
-    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>>
+    pub(crate) async fn run(mut self) -> Result<(), Box<dyn std::error::Error>>
     where
         E: AsyncOrderEntryConnection + 'static,
         Q: AsyncOrderQueryConnection + 'static,

@@ -4,7 +4,7 @@ use kairos_protocol::InstanceIdentity;
 use kairos_workspace::Workspace;
 
 use crate::application::{load_replay_events, MarketProcessSettings};
-use crate::services::history::{HistoryCollectionSpec, JsonlMarketHistoryRecorder};
+use crate::composition::history::{spawn_jsonl_history, HistoryCollectionSpec};
 use crate::services::source::load_replay_checkpoint;
 use crate::{MarketApplication, MarketDataRoute, MarketProcess, ResolvedMarket, SubscriptionId};
 
@@ -376,11 +376,12 @@ pub async fn build_market_process(
         settings,
         (profile.scope != MarketRuntimeScope::Replay)
             .then(|| Box::new(ConfiguredMarketSourceActivator::new(workspace.clone())) as Box<_>),
+        crate::composition::publication::encode_event,
     )
     .map_err(MarketStartupError::new)?;
     if !history_specs.is_empty() {
         process = process.with_history_recorder(
-            JsonlMarketHistoryRecorder::spawn(history_specs).map_err(MarketStartupError::new)?,
+            spawn_jsonl_history(history_specs).map_err(MarketStartupError::new)?,
         );
     }
     // A static replay resolves subscriptions from its explicit request and

@@ -42,9 +42,9 @@ use readiness::{
 #[cfg(test)]
 use recovery::{release_recovery_barrier, resync_required};
 use recovery::{release_route_recovery_barrier, resync_targets};
-pub use streams::ExecutionAsyncRoute;
+pub(crate) use streams::ExecutionAsyncRoute;
 
-pub struct ExecutionProcess<
+pub(crate) struct ExecutionProcess<
     E = NoAsyncOrderEntryConnection,
     Q = NoAsyncOrderQueryConnection,
     S = NoAsyncOrderEventSource,

@@ -4,10 +4,18 @@
 //! capabilities. Provider selection ends here and never enters the Actor or
 //! server binary.
 
+mod activation;
 mod binance;
 mod hyperliquid;
 mod massive;
 mod okx;
+mod replay;
+mod routing;
+
+pub(crate) use activation::ConfiguredMarketSourceActivator;
+pub use replay::{
+    attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
+};
 
 use std::path::Path;
 

@@ -1,3 +1,8 @@
+//! White-box behavior tests for dependency failure, recovery, and persistence.
+//!
+//! These tests intentionally exercise private process wiring. Keeping them in
+//! the crate avoids turning test doubles into a public Application API.
+
 use kairos_execution::application::RiskCommandFailure;
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
@@ -230,7 +235,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         client_id: 0,
     })
     .unwrap();
-    let mut application = ExecutionApplication::with_dependencies(
+    let mut application = ExecutionApplication::assemble_for_test(
         "execution",
         Some(connection),
         Some(Box::new(FileExecutionStore::new(path))),
@@ -494,7 +499,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         client_id: 0,
     })
     .unwrap();
-    let mut app = ExecutionApplication::with_dependencies_and_query_and_stream(
+    let mut app = ExecutionApplication::assemble_for_test_with_query_and_stream(
         "execution",
         Some(connection),
         None,
@@ -548,7 +553,7 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
         average_fill_price: Some(decimal("100")),
         occurred_at_unix_millis: Some(UnixNanos::from(42_000_000)),
     };
-    let mut app = ExecutionApplication::with_dependencies_and_query(
+    let mut app = ExecutionApplication::assemble_for_test_with_query(
         "execution",
         None,
         Some(Box::new(RecoveryOrderQuery::new(vec![remote]))),
@@ -609,7 +614,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         client_id: 0,
     })
     .unwrap();
-    let mut app = ExecutionApplication::with_dependencies_and_query(
+    let mut app = ExecutionApplication::assemble_for_test_with_query(
         "execution",
         Some(connection),
         Some(Box::new(RecoveryOrderQuery::new(vec![remote]))),
@@ -753,7 +758,7 @@ fn unknown_remote_order_can_be_linked_to_local_order_for_recovery() {
 fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
-    let mut app = ExecutionApplication::with_dependencies_and_query_and_stream(
+    let mut app = ExecutionApplication::assemble_for_test_with_query_and_stream(
         "execution",
         None,
         None,
@@ -783,7 +788,7 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
         UnknownRemoteOrderResolution::Pending
     );
 
-    let restored = ExecutionApplication::with_dependencies_and_query_and_stream(
+    let restored = ExecutionApplication::assemble_for_test_with_query_and_stream(
         "execution",
         None,
         None,
@@ -990,7 +995,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         client_id: 0,
     })
     .unwrap();
-    let mut first = ExecutionApplication::with_dependencies(
+    let mut first = ExecutionApplication::assemble_for_test(
         "execution",
         Some(connection),
         Some(Box::new(SqlxExecutionStore::new(&path).unwrap())),
@@ -1011,7 +1016,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
             None,
         ))
         .unwrap();
-    let second = ExecutionApplication::with_dependencies(
+    let second = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(SqlxExecutionStore::new(&path).unwrap())),
@@ -1051,7 +1056,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         client_id: 0,
     })
     .unwrap();
-    let mut app = ExecutionApplication::with_dependencies(
+    let mut app = ExecutionApplication::assemble_for_test(
         "execution",
         Some(connection),
         Some(Box::new(SqlxExecutionStore::new(&path).unwrap())),
@@ -1083,7 +1088,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
 fn not_sent_submission_is_persisted_as_failed_without_reconciliation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
-    let mut app = ExecutionApplication::with_dependencies(
+    let mut app = ExecutionApplication::assemble_for_test(
         "execution",
         Some(Box::new(FailingOrderEntry::new())),
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1149,7 +1154,7 @@ fn risk_authorization_identity_is_persisted_before_an_uncertain_command_outcome(
     );
     assert!(app.commitments()[0].status.consumes_capacity());
 
-    let restored = ExecutionApplication::with_dependencies(
+    let restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1197,7 +1202,7 @@ fn risk_authorization_not_sent_is_terminal_and_does_not_enter_uncertain_recovery
 fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
-    let mut app = ExecutionApplication::with_dependencies(
+    let mut app = ExecutionApplication::assemble_for_test(
         "execution",
         Some(Box::new(FailingOrderEntry::indeterminate())),
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1231,7 +1236,7 @@ fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
         app.risk_reservations()[0].status,
         kairos_execution::application::RiskReservationSagaStatus::Active
     );
-    let restored = ExecutionApplication::with_dependencies(
+    let restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1354,7 +1359,7 @@ fn uncertain_risk_release_is_persisted_after_confirmed_order_cancel() {
         app.risk_reservations()[0].status,
         kairos_execution::application::RiskReservationSagaStatus::Uncertain
     );
-    let restored = ExecutionApplication::with_dependencies(
+    let restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1386,7 +1391,7 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
         ))
         .unwrap_err();
 
-    let mut restored = ExecutionApplication::with_dependencies(
+    let mut restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1406,7 +1411,7 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
         kairos_execution::application::RiskReservationSagaStatus::Released
     );
 
-    let verified = ExecutionApplication::with_dependencies(
+    let verified = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1438,7 +1443,7 @@ fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
         ))
         .unwrap_err();
 
-    let mut restored = ExecutionApplication::with_dependencies(
+    let mut restored = ExecutionApplication::assemble_for_test(
         "execution",
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -1950,7 +1955,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         client_id: 0,
     })
     .unwrap();
-    let mut app = ExecutionApplication::with_dependencies(
+    let mut app = ExecutionApplication::assemble_for_test(
         "execution",
         Some(connection),
         Some(Box::new(FileExecutionStore::new(path))),

@@ -1099,12 +1099,6 @@ fn encode_freshness(
     Ok(builder.finished_data().to_vec())
 }
 
-impl crate::application::MarketChangePublisher for MmapMarketChangePublisher {
-    fn publish(&mut self, change: &MarketChange) -> Result<(), String> {
-        Self::publish(self, change)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::MmapMarketChangePublisher;

@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：实施中（application capability traits 已删除；Process/control 与 composition 主要混合职责已拆分，正在收敛 Application/Services/Domain 与公开 API）
+- 状态：实施中（application capability traits 与内部依赖型公开构造 API 已删除；Process/control 与 composition 主要混合职责已拆分，正在继续收敛 Application/Services/Domain 目录）
 - 范围：`crates/modules/execution` 主 crate
 - 不包含：Execution contract wire format 重设计、Integration provider capability 重设计、业务语义重写
 - 主要目标：在不改变业务行为和状态所有权的前提下，将 Execution 整理为职责清晰、目录完整、依赖方向稳定的业务模块
@@ -504,6 +504,14 @@ Account 端只暴露 `/v1/simulation/settlements` 作为该例外的 control com
 
 实现数量不能证明抽象必要：queued worker、socket wrapper 和测试替身可能只是同一依赖的 decorator。必须从业务 owner、依赖反转、交付语义和当前调用者证明 trait；测试方便不能单独作为理由。
 
+### 7.9 Application 公共构造边界收敛（已完成）
+
+`ExecutionApplication` 不再公开接收 `OrderEntryConnection`、`OrderQueryConnection`、`OrderEventSource` 或 `ExecutionStateStore` 的依赖注入构造器。具体连接和 store 由 `composition/process.rs` 选择，经 crate-private `ExecutionApplicationWiring` 交给唯一的 `assemble` 入口；连接的 take/install、Reference execution access 安装、live 模式配置和 Risk 恢复也仅在 crate 内可见。
+
+这里的单个 entry/query gateway 是多个 account/segment/provider binding 的路由聚合，不表示进程只能控制一个账号。`ExecutionActor` 仍是唯一业务状态 owner；独立异步事件订阅继续以 route 列表接入 `ExecutionProcess`，保留各 route 的 ordering、readiness 和 recovery barrier。
+
+server 只解析启动参数、获取 Workspace/instance 资源并调用 `compose_execution_process`。需要注入失败连接、断流或 fake store 的测试已迁入 crate 内白盒测试，不再以测试便利为由扩大生产 Application API。架构测试持续拒绝 Application 的公开函数签名出现上述 Integration/persistence 依赖或 `crate::services`。
+
 ## 8. 现有文件迁移映射
 
 | 当前路径 | 目标模块 | 说明 |
@@ -574,10 +582,11 @@ mod services;
 pub use application::{
     ExecutionApplication,
     ExecutionError,
-    ExecutionProcess,
     // 经过审查的业务 request/result/event 类型
 };
 ```
+
+`ExecutionProcess` 作为 application 内部的可复用 runtime facade 保持 crate-private；部署调用者通过 `composition::compose_execution_process` 获得只暴露生命周期 `run()` 的 `ComposedExecutionProcess`，不会看到 gateway、store、publisher、simulator 或 Integration async trait。
 
 约束：
 

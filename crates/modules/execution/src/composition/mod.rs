@@ -7,6 +7,7 @@
 mod connections;
 mod dependencies;
 mod persistence;
+mod process;
 mod providers;
 
 pub use crate::services::audit::{MemoryExecutionAudit, SqlxExecutionAudit};
@@ -24,6 +25,7 @@ pub use connections::{
 };
 pub use dependencies::{configure_execution_dependencies, configure_simulated_risk};
 pub use persistence::{FileExecutionStore, MemoryStateStore, SqlxExecutionStore};
+pub use process::{compose_execution_process, ComposedExecutionProcess, ExecutionProcessConfig};
 
 pub use crate::services::simulation::{
     ExecutionSimulator, SimulatedAccountSettlement, SimulationConfig, SimulationFill,

@@ -269,14 +269,14 @@ crates/modules/market/
 
 ### 4.2 未完成证据
 
-- [ ] `application/process/runtime.rs` 仍约 1,500 行。
-- [ ] `application/sources/orchestration.rs` 仍约 1,300 行。
-- [ ] `services/actor/state.rs` 已降至约 820 行，但 Subscription、Source、Freshness、read model/event draining 仍待迁出。
+- [x] `application/process/runtime.rs` 已删除并拆分为生命周期、Actor task、typed ingress、maintenance、universe、recovery、publication、shutdown。
+- [x] `application/sources/orchestration.rs` 已删除并按 attachment/subscriptions/recovery 拆分。
+- [ ] `services/actor/state.rs` 已降至约 227 行，Source/Freshness 已迁出，read model/event draining 仍待迁出。
 - [ ] `services/publication/encoding.rs` 仍约 960 行且位于错误层。
 - [ ] `composition/publisher/mmap.rs` 仍约 1,100 行。
 - [ ] `services/source/stream.rs` 仍约 880 行。
 - [ ] `composition/config/model.rs` 仍约 600 行。
-- [ ] Domain subscription/source/freshness 与 Order Book 内部结构尚未拆分。
+- [x] Domain subscription/source/freshness 与 Order Book 内部结构已拆分。
 - [ ] tests 仍平铺在四个顶层文件中。
 
 ## 5. 执行阶段
@@ -310,34 +310,58 @@ crates/modules/market/
 
 ### Phase 2：Subscription 与 Universe
 
-- [ ] 拆分 Domain intent/member/selector/status。
-- [ ] 迁移 Actor subscriptions 与 universe 状态转换。
-- [ ] 拆分 Application static/dynamic/lifecycle/resolution。
-- [ ] 将 Universe reconciliation 与 recovery 分离。
-- [ ] 删除旧的聚合 subscription/universe 实现。
+- [x] 拆分 Domain intent/member/selector/status。
+- [x] 迁移 Actor subscriptions 与 universe 状态转换。
+- [x] 拆分 Application static/dynamic/lifecycle/resolution。
+- [x] 将 Universe reconciliation 与 recovery 分离。
+- [x] 删除旧的聚合 subscription/universe 实现。
 
 验证：static/dynamic subscribe、owner release、budget、watermark、reconciliation idempotency。
 
+完成证据（2026-08-17）：
+
+- `cargo check -p kairos-market --tests` 通过且无 warning；
+- `cargo test -p kairos-market --lib -- --test-threads=1`：48 passed；
+- Actor/architecture/Order Book/replay integration tests：10 + 21 + 4 + 2 passed；
+- architecture test 禁止 Subscription/Universe 行为回流 `services/actor/state.rs`；
+- `application/universe/resolution.rs` 已删除，市场选择解析归入 subscription resolution，watermarked replacement 与 recovery view 分别位于 Universe reconciliation/recovery。
+
 ### Phase 3：Source 与 Freshness
 
-- [ ] 拆分 Domain source identity/route/state/readiness。
-- [ ] 拆分 Domain freshness status/evaluation。
-- [ ] 迁移 Actor sources/freshness 状态转换。
-- [ ] 拆分 Application attachment/subscriptions/recovery。
-- [ ] 拆分 services source driver/normalization/recovery。
-- [ ] 在 composition 建立 routing/activation/replay。
-- [ ] 删除 `application/sources/orchestration.rs`。
+- [x] 拆分 Domain source identity/route/state/readiness。
+- [x] 拆分 Domain freshness status/evaluation。
+- [x] 迁移 Actor sources/freshness 状态转换。
+- [x] 拆分 Application attachment/subscriptions/recovery。
+- [x] 拆分 services source driver/normalization/recovery。
+- [x] 在 composition 建立 routing/activation/replay。
+- [x] 删除 `application/sources/orchestration.rs`。
 
 验证：epoch、fair polling、confirmation、reconnect、freshness、targeted Order Book resync、bounded shutdown。
 
+完成证据（2026-08-17）：
+
+- `cargo check -p kairos-market --tests` 通过且无 warning；
+- `cargo test -p kairos-market --no-fail-fast -- --test-threads=1`：50 lib、10 Actor、22 architecture、4 Order Book、2 replay 全部通过；
+- Source 测试覆盖 fair polling、订阅确认、epoch advance/stale ack、reconnect、targeted Order Book resync 与 bounded shutdown；Freshness 增加阈值边界和时钟倒退判定测试；
+- `services/source/stream.rs` 从约 880 行降至约 604 行，normalization/recovery 已成为真实独立模块；
+- architecture test 固化 Domain/Application/Actor/Services/Composition 的 Source/Freshness 路径，并禁止行为回流 `actor/state.rs` 或恢复 `application/sources/orchestration.rs`。
+
 ### Phase 4：Process 与 Control
 
-- [ ] 拆分 actor task、typed ingress、maintenance、universe、recovery、publication、shutdown。
-- [ ] 拆分 control transport/wire/ingress/response。
-- [ ] Process 不再解析 JSON。
-- [ ] 删除 `application/process/runtime.rs`。
+- [x] 拆分 actor task、typed ingress、maintenance、universe、recovery、publication、shutdown。
+- [x] 拆分 control transport/wire/ingress/response。
+- [x] Process 不再解析 JSON。
+- [x] 删除 `application/process/runtime.rs`。
 
 验证：command idempotency、owner isolation、health、pause/resume、shutdown、typed control boundary architecture test。
+
+完成证据（2026-08-17）：
+
+- `cargo check -p kairos-market --tests` 通过且无 warning；
+- Phase 4 首次完整测试中 50 lib、10 Actor、4 Order Book、2 replay 全部通过，architecture 仅两处仍读取已删除 `runtime.rs` 的旧断言失败；
+- 更新断言后 `cargo test -p kairos-market --test architecture -- --test-threads=1`：22 passed；Process command idempotency/owner isolation/pause-resume 聚焦测试：6 passed；
+- `runtime.rs` 已删除，Actor loop 的生产代码约 170 行；control transport/wire/ingress/response 均为真实模块；
+- architecture test 固化最终 Process/Control 文件集合，并静态禁止 Process 中出现 `serde_json::from_*` 或 command wire DTO。
 
 ### Phase 5：Publication、History 与 Replay
 

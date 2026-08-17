@@ -81,7 +81,7 @@ fn v2_intent_control_maps_a_contract_intent_into_the_application_request() {
 
 #[test]
 fn exchange_event_identity_is_owned_by_the_actor() {
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process = ExecutionProcess::new(application, PathBuf::from("/tmp/execution-test.sock"));
     assert!(process.application.accept_remote_event_identity("fill-1"));
@@ -91,7 +91,7 @@ fn exchange_event_identity_is_owned_by_the_actor() {
 
 #[test]
 fn initial_execution_snapshot_never_synthesizes_events() {
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let (capture, observed) = ExecutionEventPublication::memory();
     let mut process =
@@ -105,7 +105,7 @@ fn initial_execution_snapshot_never_synthesizes_events() {
 
 #[test]
 fn execution_commit_publishes_its_direct_business_event() {
-    let mut application = ExecutionApplication::with_dependencies("execution", None, None)
+    let mut application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let execution_access_id = ExecutionAccessId::new("execution-access:test").unwrap();
     application.configure_execution_access(
@@ -152,7 +152,7 @@ fn execution_commit_publishes_its_direct_business_event() {
 
 #[test]
 fn recovery_targets_only_the_binding_owned_by_the_failed_route() {
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let process = ExecutionProcess::new(
         application,
@@ -273,7 +273,7 @@ impl OrderEventSource for ReconnectingStream {
 fn stream_consumer_reconnects_after_disconnect_and_delivers_next_event() {
     let reconnects = Arc::new(AtomicUsize::new(0));
     let stream = ReconnectingStream::new(Arc::clone(&reconnects));
-    let application = ExecutionApplication::with_dependencies_and_query_and_stream(
+    let application = ExecutionApplication::assemble_for_test_with_query_and_stream(
         "execution",
         None,
         None,
@@ -381,7 +381,7 @@ impl AsyncOrderEventSource for AsyncReconnectingStream {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_stream_consumer_awaits_without_polling_and_reconnects() {
     let reconnects = Arc::new(AtomicUsize::new(0));
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process =
         ExecutionProcess::new(application, PathBuf::from("/tmp/execution-async-test.sock"))
@@ -411,7 +411,7 @@ async fn async_stream_consumer_awaits_without_polling_and_reconnects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resync_error_waits_for_reconciliation_barrier_before_reconnect() {
     let reconnects = Arc::new(AtomicUsize::new(0));
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process = ExecutionProcess::new(
         application,
@@ -455,7 +455,7 @@ async fn resync_error_waits_for_reconciliation_barrier_before_reconnect() {
 async fn resync_barrier_isolates_the_failed_route() {
     let failed_route_reconnects = Arc::new(AtomicUsize::new(0));
     let healthy_route_reconnects = Arc::new(AtomicUsize::new(0));
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process = ExecutionProcess::new(
         application,
@@ -550,7 +550,7 @@ impl AsyncOrderEventSource for UnreadyAsyncStream {
 
 #[tokio::test]
 async fn required_async_stream_must_authenticate_before_process_readiness() {
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process = ExecutionProcess::new(
         application,
@@ -567,7 +567,7 @@ async fn required_async_stream_must_authenticate_before_process_readiness() {
 
 #[tokio::test]
 async fn optional_async_stream_failure_degrades_without_blocking_readiness() {
-    let application = ExecutionApplication::with_dependencies("execution", None, None)
+    let application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
     let mut process = ExecutionProcess::new(
         application,

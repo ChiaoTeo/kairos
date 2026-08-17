@@ -1,4 +1,4 @@
-//! Typed Market v2 event encoding.
+//! Composition-owned typed Market v2 event encoding.
 //!
 //! This module is deliberately kept at the composition/service boundary:
 //! domain observations are mapped field-by-field into the contract-owned
@@ -13,7 +13,7 @@ use kairos_protocol::generated::kairos::common::v_2::{Decimal64, Side};
 use kairos_protocol::generated::kairos::market::v_2 as fb;
 use kairos_protocol::InstanceIdentity;
 
-pub(crate) fn encode_event(
+pub(super) fn encode_contract_event(
     actor_id: &str,
     identity: &InstanceIdentity,
     sequence: u64,
@@ -908,7 +908,7 @@ fn encode_orderbook_resync(
 
 #[cfg(test)]
 mod tests {
-    use super::encode_event;
+    use super::encode_contract_event as encode_event;
     use crate::domain::events::MarketEvent;
     use crate::domain::observation::{Quote, Rate};
     use kairos_market_contract::event::decode_event;

@@ -112,13 +112,13 @@ async fn run<C>(
                             let Some(market) = markets.values().find(|market| {
                                 market.route.provider_symbol.eq_ignore_ascii_case(event.symbol.as_str())
                             }) else { continue };
-                            match super::stream::normalize(&source_id, market, event) {
-                                Ok(Some(super::stream::Normalized::Observation(observation))) => {
+                            match super::normalization::normalize(&source_id, market, event) {
+                                Ok(Some(super::normalization::Normalized::Observation(observation))) => {
                                     if inputs.send(SourceInput::Observation {
                                         source_id: source_id.clone(), epoch, observation,
                                     }).await.is_err() { return; }
                                 }
-                                Ok(Some(super::stream::Normalized::OrderBook(_))) => {
+                                Ok(Some(super::normalization::Normalized::OrderBook(_))) => {
                                     fail(&inputs, &source_id, epoch, SourceFailureKind::InvalidPayload, "snapshot capability returned an order-book event".into()).await;
                                 }
                                 Ok(None) => {}

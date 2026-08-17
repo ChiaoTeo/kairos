@@ -61,7 +61,7 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
 #[test]
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
     let process = source("src/composition/process/mod.rs");
-    let runtime = source("src/application/process/runtime.rs");
+    let runtime = source("src/application/process/lifecycle.rs");
     assert!(process.contains("without_event_socket()"));
     assert!(process.contains("with_aeron_event_publisher"));
     assert!(process.contains("profile.scope != MarketRuntimeScope::Replay"));
@@ -240,7 +240,7 @@ fn actor_is_the_single_source_runtime_state_owner() {
 
 #[test]
 fn market_rest_exposes_health_as_its_only_get_query() {
-    let process = source("src/application/process/runtime.rs");
+    let process = source("src/application/process/ingress.rs");
     assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
     assert!(process.contains("Market business queries are available only through typed mmap views"));
     assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
@@ -477,6 +477,53 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
 }
 
 #[test]
+fn source_and_freshness_slices_have_owned_modules() {
+    for file in ["identity.rs", "route.rs", "state.rs", "readiness.rs"] {
+        assert!(crate_root()
+            .join(format!("src/domain/source/{file}"))
+            .is_file());
+    }
+    for file in ["status.rs", "evaluation.rs"] {
+        assert!(crate_root()
+            .join(format!("src/domain/freshness/{file}"))
+            .is_file());
+    }
+    for file in ["attachment.rs", "subscriptions.rs", "recovery.rs"] {
+        assert!(crate_root()
+            .join(format!("src/application/sources/{file}"))
+            .is_file());
+    }
+    for file in ["driver.rs", "normalization.rs", "recovery.rs"] {
+        assert!(crate_root()
+            .join(format!("src/services/source/{file}"))
+            .is_file());
+    }
+    for file in ["routing.rs", "activation.rs", "replay.rs"] {
+        assert!(crate_root()
+            .join(format!("src/composition/sources/{file}"))
+            .is_file());
+    }
+    assert!(!crate_root()
+        .join("src/application/sources/orchestration.rs")
+        .exists());
+
+    let actor_state = source("src/services/actor/state.rs");
+    for migrated in [
+        "fn register_source",
+        "fn take_source_handle",
+        "fn apply_source_status",
+        "fn apply_source_failure",
+        "fn refresh_feed_status",
+        "fn evaluate_freshness",
+    ] {
+        assert!(
+            !actor_state.contains(migrated),
+            "migrated Source/Freshness behavior remains in actor/state.rs: {migrated}"
+        );
+    }
+}
+
+#[test]
 fn domain_is_not_a_public_crate_module() {
     let root = source("src/lib.rs");
     assert!(root.contains("mod domain;"));
@@ -485,7 +532,33 @@ fn domain_is_not_a_public_crate_module() {
 
 #[test]
 fn process_does_not_decode_control_wire_records() {
-    let process = source("src/application/process/runtime.rs");
+    for file in [
+        "lifecycle.rs",
+        "actor_task.rs",
+        "ingress.rs",
+        "maintenance.rs",
+        "universe.rs",
+        "recovery.rs",
+        "publication.rs",
+        "shutdown.rs",
+    ] {
+        assert!(crate_root()
+            .join(format!("src/application/process/{file}"))
+            .is_file());
+    }
+    for file in ["transport.rs", "wire.rs", "ingress.rs", "response.rs"] {
+        assert!(crate_root()
+            .join(format!("src/services/control/{file}"))
+            .is_file());
+    }
+    assert!(!crate_root()
+        .join("src/application/process/runtime.rs")
+        .exists());
+    let process = [
+        source("src/application/process/actor_task.rs"),
+        source("src/application/process/ingress.rs"),
+    ]
+    .join("\n");
     let process = process.split("#[cfg(test)]").next().unwrap_or(&process);
     for forbidden in [
         "serde::Deserialize",
@@ -502,4 +575,45 @@ fn process_does_not_decode_control_wire_records() {
     let wire = source("src/services/control/wire.rs");
     assert!(wire.contains("struct CommandEnvelope"));
     assert!(wire.contains("parse_subscribe_command"));
+}
+
+#[test]
+fn publication_history_and_replay_implementations_have_final_owners() {
+    for file in ["fanout.rs", "queue.rs"] {
+        assert!(crate_root()
+            .join(format!("src/services/publication/{file}"))
+            .is_file());
+    }
+    for file in ["views.rs", "events.rs", "encoding.rs", "mmap.rs"] {
+        assert!(crate_root()
+            .join(format!("src/composition/publication/{file}"))
+            .is_file());
+    }
+    assert!(crate_root()
+        .join("src/composition/history/jsonl.rs")
+        .is_file());
+    for file in ["model.rs", "loader.rs"] {
+        assert!(crate_root()
+            .join(format!("src/application/replay/{file}"))
+            .is_file());
+    }
+    for old in [
+        "src/services/publication/encoding.rs",
+        "src/services/history/mod.rs",
+        "src/composition/publisher/mmap.rs",
+    ] {
+        assert!(
+            !crate_root().join(old).exists(),
+            "obsolete path remains: {old}"
+        );
+    }
+
+    let application = source("src/application/process/actor_task.rs");
+    let application = application
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or(&application);
+    let services = source("src/services/publication/queue.rs");
+    assert!(!application.contains("crate::composition"));
+    assert!(!services.contains("crate::composition"));
 }

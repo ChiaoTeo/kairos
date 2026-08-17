@@ -260,28 +260,28 @@ impl ExecutionApplication {
 
     /// Transfer ownership of the provider stream to the runtime stream
     /// consumer.  HTTP requests must not pull provider events themselves.
-    pub fn take_execution_stream(&mut self) -> Option<Box<dyn OrderEventSource>> {
+    pub(crate) fn take_execution_stream(&mut self) -> Option<Box<dyn OrderEventSource>> {
         self.execution_stream.take()
     }
 
     /// Transfer the order-entry connection to the composition-owned gateway
     /// worker.  Execution state does not own the provider connection after
     /// process startup.
-    pub fn take_order_entry(&mut self) -> Option<Box<dyn OrderEntryConnection>> {
+    pub(crate) fn take_order_entry(&mut self) -> Option<Box<dyn OrderEntryConnection>> {
         self.order_entry.take()
     }
 
-    pub fn install_order_entry(&mut self, connection: Box<dyn OrderEntryConnection>) {
+    pub(crate) fn install_order_entry(&mut self, connection: Box<dyn OrderEntryConnection>) {
         self.order_entry = Some(connection);
     }
 
     /// Transfer ownership of the provider order-query connection to the
     /// composition-owned query worker.
-    pub fn take_order_query(&mut self) -> Option<Box<dyn OrderQueryConnection>> {
+    pub(crate) fn take_order_query(&mut self) -> Option<Box<dyn OrderQueryConnection>> {
         self.order_query.take()
     }
 
-    pub fn install_order_query(&mut self, connection: Box<dyn OrderQueryConnection>) {
+    pub(crate) fn install_order_query(&mut self, connection: Box<dyn OrderQueryConnection>) {
         self.order_query = Some(connection);
     }
 

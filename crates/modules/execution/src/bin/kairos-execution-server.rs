@@ -1,12 +1,7 @@
 use clap::Parser;
-use kairos_execution::application::ExecutionApplication;
-use kairos_execution::application::ExecutionProcess;
-use kairos_execution::composition::SqlxExecutionAudit;
 use kairos_execution::composition::{
-    compose_execution_routes, configure_execution_dependencies, load_reference_execution_accesses,
-    AeronExecutionEventPublisher, ExecutionConnectionOptions, ExecutionSimulator,
-    ExecutionWriterFence, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
-    SimulatedAccountSettlement, SimulationConfig, SqlxExecutionStore,
+    compose_execution_process, ExecutionConnectionOptions, ExecutionProcessConfig,
+    ExecutionWriterFence,
 };
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
@@ -65,96 +60,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = intent_snapshot.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut connections = compose_execution_routes(&route_options)?;
-    if !simulated {
-        connections
-            .async_order_entry
-            .as_mut()
-            .ok_or("live Execution requires an async order-entry gateway")?
-            .install_writer_fences(writer_fences)?;
-    }
-    tracing::info!(
-        event = "integrations_composed",
-        component = "execution",
-        route_count = route_options.len(),
-        "execution integrations composed"
-    );
-    let async_order_entry = connections.async_order_entry;
-    let async_order_query = connections.async_order_query;
-    let async_execution_streams = connections.async_execution_streams;
-    // The SQLx persistence implementations expose a synchronous constructor
-    // because the Execution application owns a synchronous state transition
-    // API.  Their constructors bootstrap a private runtime, so initialize
-    // them outside the current Tokio worker context.
-    let state_store = tokio::task::block_in_place(|| SqlxExecutionStore::new(state))?;
-    let audit_store = tokio::task::block_in_place(|| SqlxExecutionAudit::new(audit))?;
-    let application = ExecutionApplication::with_dependencies_and_query_and_stream(
-        "execution",
-        connections.order_entry,
-        connections.order_query,
-        connections.execution_stream,
-        Some(Box::new(state_store)),
-    )?;
-    let mut application = application;
     let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
-    if reference_database.exists() {
-        for (access_id, provider_instrument) in
-            load_reference_execution_accesses(&reference_database)?
-        {
-            application.configure_execution_access(access_id, provider_instrument);
-        }
-    } else if !simulated {
-        return Err(format!(
-            "live Execution requires Reference execution accesses: {}",
-            reference_database.display()
-        )
-        .into());
-    }
     let manifest = instance.component_manifest()?;
-    configure_execution_dependencies(
-        &mut application,
-        &manifest,
-        args.launch_mode == "backtest",
-        128,
-    )?;
-    application.configure_live_trading(!simulated, args.confirm_live);
-    application.recover_risk_reservations()?;
     let socket = instance.socket("execution")?;
-    let process = ExecutionProcess::with_audit(application, socket, audit_store)
-        .with_async_order_entry(async_order_entry)
-        .with_async_order_query(async_order_query)
-        .with_async_execution_routes(async_execution_streams);
-    let process = if simulated {
-        process
-            .with_simulator(ExecutionSimulator::new(SimulationConfig::default())?)
-            .with_simulated_account_settlement(SimulatedAccountSettlement::from_manifest(
-                &manifest,
-            )?)
-    } else {
-        process
-    };
-    process
-        .with_snapshot_publisher(SharedExecutionSnapshotPublisher::create_with_identity(
-            execution_snapshot,
-            32 * 1024 * 1024,
-            format!("execution:{}", args.instance_id),
-            transport_identity.clone(),
-        )?)
-        .with_event_publisher(AeronExecutionEventPublisher::connect(
-            args.aeron_dir.as_deref(),
-            &args.aeron_channel,
-            args.execution_events_stream_id,
-            format!("execution:{}", args.instance_id),
-            transport_identity.clone(),
-        )?)
-        .with_intent_snapshot_publisher(SharedIntentSnapshotPublisher::create_with_identity(
-            intent_snapshot,
-            1024 * 1024,
-            format!("execution:{}", args.instance_id),
-            transport_identity,
-        )?)
-        .run()
-        .await
+    compose_execution_process(ExecutionProcessConfig {
+        actor_id: "execution".into(),
+        route_options,
+        writer_fences,
+        state_path: state,
+        audit_path: audit,
+        reference_database,
+        manifest_path: manifest,
+        socket_path: socket,
+        execution_snapshot_path: execution_snapshot,
+        intent_snapshot_path: intent_snapshot,
+        transport_identity,
+        source_id: format!("execution:{}", args.instance_id),
+        simulated,
+        backtest: args.launch_mode == "backtest",
+        confirm_live: args.confirm_live,
+        aeron_dir: args.aeron_dir,
+        aeron_channel: args.aeron_channel,
+        execution_events_stream_id: args.execution_events_stream_id,
+    })?
+    .run()
+    .await
 }
 
 fn acquire_exclusive_provider_process_locks(

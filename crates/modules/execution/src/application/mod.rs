@@ -26,7 +26,7 @@ pub use model::{
     RiskCommandFailure, RiskCommandResult, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,
 };
-pub use process::{ExecutionAsyncRoute, ExecutionProcess};
+pub(crate) use process::{ExecutionAsyncRoute, ExecutionProcess};
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteOrderUpdate {
     pub order_id: kairos_primitives::OrderId,

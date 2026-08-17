@@ -1,65 +1,28 @@
 use std::collections::BTreeMap;
 
 use super::ReplayCheckpoint;
-use crate::domain::events::{MarketChange, MarketEvent, MarketViewUpdate};
-use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
+use crate::domain::events::{MarketChange, MarketEvent};
+use crate::domain::freshness::{FeedStatus, MarketFreshness};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::order_book::OrderBook;
 use crate::domain::observation::MarketObservation;
-use crate::domain::source::{
-    derive_readiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
-    SourceStatus,
-};
+use crate::domain::source::{derive_readiness, SourceId, SourceState};
 use crate::domain::subscription::{SubscriptionId, SubscriptionMode, SubscriptionState};
-use crate::services::source::messages::{
-    ProviderSubscriptionId, SourceCommand, SourceInput, SourceRequestId,
-};
+use crate::services::source::messages::SourceRequestId;
 use kairos_primitives::{ActorId, Generation, Sequence};
-use tokio::sync::mpsc;
-
+#[path = "freshness.rs"]
+mod freshness_evaluation;
 #[path = "observations/mod.rs"]
 mod observations;
+#[path = "sources.rs"]
+pub(crate) mod sources;
 #[path = "subscriptions.rs"]
 mod subscriptions;
 #[path = "universe/mod.rs"]
 mod universe;
 
+use sources::{AttachedSource, PendingSourceRequest};
 use subscriptions::DynamicIntent;
-
-pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
-
-pub(crate) struct AttachedSource {
-    pub(crate) descriptor: SourceDescriptor,
-    pub(crate) commands: mpsc::Sender<SourceCommand>,
-    pub(crate) inputs: mpsc::Receiver<SourceInput>,
-    pub(crate) task: Option<tokio::task::JoinHandle<()>>,
-    pub(crate) confirmed: BTreeMap<BusinessSubscriptionKey, ProviderSubscriptionId>,
-}
-
-pub(crate) enum PendingSourceRequest {
-    Subscribe {
-        source_id: SourceId,
-        key: BusinessSubscriptionKey,
-    },
-    Unsubscribe {
-        source_id: SourceId,
-        key: BusinessSubscriptionKey,
-    },
-    ResyncOrderBook {
-        source_id: SourceId,
-        market_id: kairos_primitives::MarketId,
-    },
-}
-
-impl PendingSourceRequest {
-    pub(crate) fn source_id(&self) -> &SourceId {
-        match self {
-            Self::Subscribe { source_id, .. }
-            | Self::Unsubscribe { source_id, .. }
-            | Self::ResyncOrderBook { source_id, .. } => source_id,
-        }
-    }
-}
 
 pub struct MarketActor {
     actor_id: String,
@@ -180,94 +143,6 @@ impl MarketActor {
         })
     }
 
-    pub(crate) fn register_source(&mut self, descriptor: SourceDescriptor) -> Result<(), String> {
-        if self.sources.contains_key(&descriptor.id) {
-            return Err(format!("market source already exists: {}", descriptor.id));
-        }
-        self.sources
-            .insert(descriptor.id.clone(), SourceState::starting(descriptor));
-        self.refresh_feed_status();
-        Ok(())
-    }
-
-    pub(crate) fn take_source_handle(
-        &mut self,
-        source_id: &SourceId,
-    ) -> Result<crate::services::source::SourceHandle, String> {
-        let mut attached = self
-            .attached_sources
-            .remove(source_id)
-            .ok_or_else(|| format!("market source is not attached: {source_id}"))?;
-        self.sources.remove(source_id);
-        self.refresh_feed_status();
-        Ok(crate::services::source::SourceHandle {
-            descriptor: attached.descriptor,
-            commands: attached.commands,
-            inputs: attached.inputs,
-            task: attached
-                .task
-                .take()
-                .ok_or_else(|| format!("market source task is missing: {source_id}"))?,
-        })
-    }
-
-    pub(crate) fn source_is_stopped(&self, source_id: &SourceId) -> bool {
-        self.sources
-            .get(source_id)
-            .is_some_and(|source| source.status == SourceStatus::Stopped)
-    }
-
-    pub(crate) fn source_command_closed(&self, source_id: &SourceId) -> bool {
-        self.attached_sources
-            .get(source_id)
-            .is_some_and(|source| source.commands.is_closed())
-    }
-
-    pub(crate) fn apply_source_status(
-        &mut self,
-        source_id: &SourceId,
-        epoch: SourceEpoch,
-        status: SourceStatus,
-        error: Option<String>,
-    ) -> Result<bool, String> {
-        let source = self
-            .sources
-            .get_mut(source_id)
-            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
-        let changed = source.change_status(epoch, status, error);
-        if changed {
-            self.refresh_feed_status();
-        }
-        Ok(changed)
-    }
-
-    pub(crate) fn apply_source_failure(
-        &mut self,
-        source_id: &SourceId,
-        epoch: SourceEpoch,
-        kind: SourceFailureKind,
-        error: String,
-    ) -> Result<bool, String> {
-        let source = self
-            .sources
-            .get_mut(source_id)
-            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
-        let changed = source.fail(epoch, kind, error);
-        if changed {
-            self.refresh_feed_status();
-        }
-        Ok(changed)
-    }
-
-    fn refresh_feed_status(&mut self) {
-        self.feed_status = match derive_readiness(self.sources.values()) {
-            crate::domain::source::MarketReadiness::Ready => FeedStatus::Ready,
-            crate::domain::source::MarketReadiness::Degraded => FeedStatus::Degraded,
-            crate::domain::source::MarketReadiness::Stopped => FeedStatus::Disconnected,
-            crate::domain::source::MarketReadiness::Starting => FeedStatus::WarmingUp,
-        };
-    }
-
     pub(crate) fn drain_events(&mut self) -> Vec<(Sequence, MarketEvent)> {
         self.drain_changes()
             .into_iter()
@@ -277,39 +152,6 @@ impl MarketActor {
 
     pub(crate) fn drain_changes(&mut self) -> Vec<MarketChange> {
         std::mem::take(&mut self.pending_changes)
-    }
-
-    /// Re-evaluate receive-time freshness without performing external I/O.
-    /// This is deliberately timer driven while live ingest remains wake
-    /// driven by SourceInput.
-    pub fn evaluate_freshness(&mut self, now_unix_nanos: u64, max_age_nanos: u64) {
-        let mut changed = Vec::new();
-        for freshness in self.freshness.values_mut() {
-            let next_status = if now_unix_nanos
-                .saturating_sub(freshness.last_received_time_unix_nanos.get())
-                > max_age_nanos
-            {
-                DataFreshnessStatus::Stale
-            } else {
-                DataFreshnessStatus::Current
-            };
-            if freshness.status != next_status {
-                freshness.status = next_status;
-                self.event_sequence += 1;
-                freshness.event_sequence = self.event_sequence;
-                changed.push((self.event_sequence, freshness.clone()));
-            }
-        }
-        for (sequence, freshness) in changed {
-            if self.pending_changes.len() >= Self::MAX_PENDING_EVENTS {
-                break;
-            }
-            self.pending_changes.push(MarketChange {
-                sequence,
-                event: None,
-                view: Some(MarketViewUpdate::Freshness(freshness)),
-            });
-        }
     }
 
     pub(crate) fn drain_events_limited(&mut self, limit: usize) -> Vec<(Sequence, MarketEvent)> {

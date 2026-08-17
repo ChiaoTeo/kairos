@@ -137,6 +137,18 @@ pub struct ExecutionApplication {
     risk_recovery_error: Option<String>,
 }
 
+/// Concrete process wiring selected by Execution composition.
+///
+/// The entry and query connections may themselves route across any number of
+/// account/segment/provider bindings. They are deliberately not part of the
+/// public application contract.
+pub(crate) struct ExecutionApplicationWiring {
+    pub(crate) order_entry_gateway: Option<Box<dyn OrderEntryConnection>>,
+    pub(crate) order_query_gateway: Option<Box<dyn OrderQueryConnection>>,
+    pub(crate) legacy_execution_stream: Option<Box<dyn OrderEventSource>>,
+    pub(crate) state_store: Option<Box<dyn ExecutionStateStore>>,
+}
+
 impl ExecutionApplication {
     /// Advance the replay business clock and its composition-owned
     /// dependencies.  The application remains the state owner; concrete
@@ -149,35 +161,9 @@ impl ExecutionApplication {
         }
         Ok(())
     }
-    pub fn with_dependencies(
+    pub(crate) fn assemble(
         actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
-        store: Option<Box<dyn ExecutionStateStore>>,
-    ) -> Result<Self, ExecutionError> {
-        Self::with_dependencies_and_query(actor_id, order_entry, None, store)
-    }
-
-    pub fn with_dependencies_and_query(
-        actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn OrderQueryConnection>>,
-        store: Option<Box<dyn ExecutionStateStore>>,
-    ) -> Result<Self, ExecutionError> {
-        Self::with_dependencies_and_query_and_stream(
-            actor_id,
-            order_entry,
-            order_query,
-            None,
-            store,
-        )
-    }
-
-    pub fn with_dependencies_and_query_and_stream(
-        actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn OrderQueryConnection>>,
-        execution_stream: Option<Box<dyn OrderEventSource>>,
-        store: Option<Box<dyn ExecutionStateStore>>,
+        wiring: ExecutionApplicationWiring,
     ) -> Result<Self, ExecutionError> {
         let actor_id = actor_id.into();
         if actor_id.trim().is_empty() {
@@ -188,10 +174,10 @@ impl ExecutionApplication {
             actor: crate::services::actor::ExecutionActor::new(),
             pending_business_events: std::collections::VecDeque::new(),
             execution_accesses: BTreeMap::new(),
-            order_entry,
-            order_query,
-            execution_stream,
-            store,
+            order_entry: wiring.order_entry_gateway,
+            order_query: wiring.order_query_gateway,
+            execution_stream: wiring.legacy_execution_stream,
+            store: wiring.state_store,
             intent_planner: None,
             order_admission: None,
             risk_reservations: None,
@@ -235,10 +221,64 @@ impl ExecutionApplication {
         Ok(application)
     }
 
+    #[cfg(test)]
+    pub(crate) fn assemble_for_test(
+        actor_id: impl Into<String>,
+        order_entry: Option<Box<dyn OrderEntryConnection>>,
+        state_store: Option<Box<dyn ExecutionStateStore>>,
+    ) -> Result<Self, ExecutionError> {
+        Self::assemble(
+            actor_id,
+            ExecutionApplicationWiring {
+                order_entry_gateway: order_entry,
+                order_query_gateway: None,
+                legacy_execution_stream: None,
+                state_store,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assemble_for_test_with_query(
+        actor_id: impl Into<String>,
+        order_entry: Option<Box<dyn OrderEntryConnection>>,
+        order_query: Option<Box<dyn OrderQueryConnection>>,
+        state_store: Option<Box<dyn ExecutionStateStore>>,
+    ) -> Result<Self, ExecutionError> {
+        Self::assemble(
+            actor_id,
+            ExecutionApplicationWiring {
+                order_entry_gateway: order_entry,
+                order_query_gateway: order_query,
+                legacy_execution_stream: None,
+                state_store,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assemble_for_test_with_query_and_stream(
+        actor_id: impl Into<String>,
+        order_entry: Option<Box<dyn OrderEntryConnection>>,
+        order_query: Option<Box<dyn OrderQueryConnection>>,
+        execution_stream: Option<Box<dyn OrderEventSource>>,
+        state_store: Option<Box<dyn ExecutionStateStore>>,
+    ) -> Result<Self, ExecutionError> {
+        Self::assemble(
+            actor_id,
+            ExecutionApplicationWiring {
+                order_entry_gateway: order_entry,
+                order_query_gateway: order_query,
+                legacy_execution_stream: execution_stream,
+                state_store,
+            },
+        )
+    }
+
     /// Install Reference-owned provider addresses for explicit execution
     /// access IDs. The application never reconstructs these addresses from a
     /// canonical MarketId or provider symbol.
-    pub fn configure_execution_access(
+    pub(crate) fn configure_execution_access(
         &mut self,
         access_id: ExecutionAccessId,
         provider_instrument: kairos_integration::application::ProviderInstrumentRef,
@@ -297,7 +337,7 @@ impl ExecutionApplication {
         self.pending_business_events.pop_front();
     }
 
-    pub fn configure_live_trading(&mut self, enabled: bool, confirmed: bool) {
+    pub(crate) fn configure_live_trading(&mut self, enabled: bool, confirmed: bool) {
         self.live_trading = enabled;
         self.live_confirmed = confirmed;
         // A live writer must reconcile provider state after acquiring its
@@ -347,7 +387,7 @@ impl ExecutionApplication {
     /// typed mmap current view. A missing or stale observation keeps the live
     /// admission barrier closed; recovery never retries an uncertain money or
     /// capacity command merely because Execution restarted.
-    pub fn recover_risk_reservations(&mut self) -> Result<(), ExecutionError> {
+    pub(crate) fn recover_risk_reservations(&mut self) -> Result<(), ExecutionError> {
         let pending: Vec<_> = self
             .actor
             .risk_reservations()

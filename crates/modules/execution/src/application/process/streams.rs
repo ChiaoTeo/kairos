@@ -13,7 +13,7 @@ pub struct ExecutionAsyncRoute<S> {
 }
 
 impl<S> ExecutionAsyncRoute<S> {
-    pub fn new(route_id: impl Into<String>, required: bool, source: S) -> Self {
+    pub(crate) fn new(route_id: impl Into<String>, required: bool, source: S) -> Self {
         Self {
             route_id: route_id.into(),
             required,
@@ -22,7 +22,7 @@ impl<S> ExecutionAsyncRoute<S> {
         }
     }
 
-    pub fn with_binding_id(mut self, binding_id: impl Into<String>) -> Self {
+    pub(crate) fn with_binding_id(mut self, binding_id: impl Into<String>) -> Self {
         self.binding_id = Some(binding_id.into());
         self
     }

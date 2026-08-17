@@ -29,16 +29,6 @@ impl ExecutionAudit {
             Self::Sqlx(audit) => audit.publish_batch(events, intents),
         }
     }
-
-    pub fn query(
-        &mut self,
-        query: &ExecutionAuditQuery,
-    ) -> Result<Vec<ExecutionAuditEvent>, String> {
-        match self {
-            Self::Memory(audit) => audit.query(query),
-            Self::Sqlx(audit) => audit.query(query),
-        }
-    }
 }
 
 impl From<MemoryExecutionAudit> for ExecutionAudit {
