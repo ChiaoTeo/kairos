@@ -1,4 +1,4 @@
-from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
+from kairospy.strategy import BarEvent, QuoteEvent, Strategy, StrategyContext
 
 
 class PrintAaplMulti(Strategy):
@@ -26,10 +26,8 @@ class PrintAaplMulti(Strategy):
                 flush=True,
             )
 
-    def on_market(self, context: StrategyContext, event: QuoteEvent) -> None:
+    def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         del context
-        if not isinstance(event, QuoteEvent):
-            return
         quote = event.data
         source = quote.source_id or str(quote.market_id)
         print(
@@ -37,5 +35,16 @@ class PrintAaplMulti(Strategy):
             f"market={quote.market_id} instrument={quote.instrument.id} "
             f"bid={quote.bid_price if quote.bid_price is not None else '-'} "
             f"ask={quote.ask_price if quote.ask_price is not None else '-'}",
+            flush=True,
+        )
+
+    def on_bar(self, context: StrategyContext, event: BarEvent) -> None:
+        del context
+        bar = event.data
+        source = bar.source_id or str(bar.market_id)
+        print(
+            f"AAPL bar source={source} "
+            f"market={bar.market_id} instrument={bar.instrument.id} "
+            f"timeframe={bar.timeframe} close={bar.close}",
             flush=True,
         )

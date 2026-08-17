@@ -11,7 +11,7 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use control::{AccountContractClient, DecimalValue, Fill, Health, OrderEvent, SimulatedFill};
+pub use control::{AccountContractClient, DecimalValue, Health, SimulatedSettlement};
 pub use control::{AccountControlClient, AccountControlResponse};
 pub use encode::{
     event_metadata, view_metadata, BalanceEncoder, EncodeContext, ObservedOrderEncoder,

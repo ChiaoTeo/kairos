@@ -1,7 +1,7 @@
 use flatbuffers::FlatBufferBuilder;
 use kairos_market::{
-    MarketApplication, MarketDescriptor, MarketObservation, MarketSelectionQuery, Quote, Rate,
-    ReferenceChanged, SubscriptionId,
+    MarketApplication, MarketDataRoute, MarketObservation, MarketSelectionQuery,
+    ObservationSelector, Quote, Rate, ReconcileMarketUniverse, ResolvedMarket, SubscriptionId,
 };
 use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, EventMetadataArgs};
 use kairos_protocol::generated::kairos::reference::v_2::{
@@ -9,8 +9,15 @@ use kairos_protocol::generated::kairos::reference::v_2::{
     MarketUpserted as MarketUpsertedMessage, MarketUpsertedArgs,
 };
 
-fn market(id: &str, symbol: &str) -> MarketDescriptor {
-    MarketDescriptor::new(id, format!("instrument:{id}"), "binance", "spot", symbol).unwrap()
+fn market(id: &str, symbol: &str) -> ResolvedMarket {
+    ResolvedMarket::new(
+        id,
+        format!("instrument:{id}"),
+        kairos_primitives::InstrumentKind::Spot,
+        "binance",
+        MarketDataRoute::new(format!("test:{id}"), "binance", "spot", symbol).unwrap(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -45,10 +52,7 @@ fn rate_observation_has_a_qualified_view_and_freshness_watermark() {
         freshness.last_event_time_unix_nanos,
         kairos_primitives::UnixNanos::new(7)
     );
-    assert_eq!(
-        freshness.event_sequence,
-        kairos_primitives::Sequence::new(1)
-    );
+    assert_eq!(actor.event_sequence(), 1);
 }
 
 #[test]
@@ -65,8 +69,8 @@ fn actor_owns_sequence_and_latest_observation() {
         source_id: "test".into(),
     });
     assert_eq!(actor.ingest(value).unwrap(), 1);
-    assert_eq!(actor.snapshot().event_sequence, 1.into());
-    assert!(actor.snapshot().latest.contains_key("test:market:btc"));
+    assert_eq!(actor.event_sequence(), 1);
+    assert_eq!(actor.current_view().views.len(), 1);
 }
 
 #[test]
@@ -77,7 +81,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
             SubscriptionId::new("quote-only").unwrap(),
             "strategy",
             market("market:btc", "BTCUSDT"),
-            vec!["quote".into()],
+            vec![ObservationSelector::parse("quote").unwrap()],
         )
         .unwrap();
     let quote = MarketObservation::Quote(Quote {
@@ -139,6 +143,27 @@ fn out_of_order_observation_does_not_regress_current_projection() {
 }
 
 #[test]
+fn source_agnostic_typed_query_rejects_ambiguous_views() {
+    let mut actor = MarketApplication::new("market-1", 10).unwrap();
+    for source_id in ["source-a", "source-b"] {
+        actor
+            .ingest(MarketObservation::Quote(Quote {
+                market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+                bid_price: Some("100".parse().unwrap()),
+                bid_quantity: None,
+                ask_price: None,
+                ask_quantity: None,
+                observed_at_unix_nanos: kairos_primitives::UnixNanos::new(10),
+                source_id: source_id.into(),
+            }))
+            .unwrap();
+    }
+    assert!(actor.query().latest_quote("market:btc").is_none());
+    assert_eq!(actor.current_view().views.len(), 2);
+}
+
+#[test]
 fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let first = market("market:one", "ONE");
     let second = market("market:two", "TWO");
@@ -147,7 +172,7 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let id = SubscriptionId::new("dynamic-1").unwrap();
     let query = MarketSelectionQuery {
         exchange_id: Some(kairos_primitives::Exchange::new("binance").unwrap()),
-        market_type: Some(kairos_primitives::ProviderProductCode::new("spot").unwrap()),
+        provider_product: Some(kairos_primitives::ProviderProductCode::new("spot").unwrap()),
         active_only: true,
         ..Default::default()
     };
@@ -162,13 +187,23 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     assert_eq!(initial.added, vec!["market:one", "market:two"]);
 
     let changes = actor
-        .reconcile_reference(vec![second.clone(), third.clone()])
+        .reconcile_market_universe(ReconcileMarketUniverse {
+            generation: 1.into(),
+            event_sequence: 1.into(),
+            markets: vec![second.clone(), third.clone()],
+        })
         .unwrap();
     let result = changes.get(&id).unwrap();
     assert_eq!(result.added, vec!["market:three"]);
     assert_eq!(result.removed, vec!["market:one"]);
 
-    let repeated = actor.reconcile_reference(vec![second, third]).unwrap();
+    let repeated = actor
+        .reconcile_market_universe(ReconcileMarketUniverse {
+            generation: 2.into(),
+            event_sequence: 2.into(),
+            markets: vec![second, third],
+        })
+        .unwrap();
     assert!(repeated.get(&id).unwrap().added.is_empty());
     assert!(repeated.get(&id).unwrap().removed.is_empty());
 }
@@ -191,8 +226,14 @@ fn static_subscription_is_not_changed_by_reference_reconcile() {
             vec![first],
         )
         .unwrap();
-    actor.reconcile_reference(vec![second]).unwrap();
-    let snapshot = actor.snapshot();
+    actor
+        .reconcile_market_universe(ReconcileMarketUniverse {
+            generation: 1.into(),
+            event_sequence: 1.into(),
+            markets: vec![second],
+        })
+        .unwrap();
+    let snapshot = actor.current_view();
     let static_state = snapshot
         .subscriptions
         .iter()
@@ -217,7 +258,11 @@ fn dynamic_budget_rejection_keeps_previous_members() {
         )
         .unwrap();
     let result = actor
-        .reconcile_reference(vec![first, second, third])
+        .reconcile_market_universe(ReconcileMarketUniverse {
+            generation: 1.into(),
+            event_sequence: 1.into(),
+            markets: vec![first, second, third],
+        })
         .unwrap();
     assert!(result
         .get(&id)
@@ -225,7 +270,7 @@ fn dynamic_budget_rejection_keeps_previous_members() {
         .rejected
         .as_deref()
         .is_some_and(|value| value.contains("member limit")));
-    let state = actor.snapshot().subscriptions.remove(0);
+    let state = actor.current_view().subscriptions.remove(0);
     assert_eq!(state.members.len(), 2);
 }
 
@@ -244,21 +289,21 @@ fn stale_reference_changes_are_ignored_by_watermark() {
         )
         .unwrap();
     actor
-        .apply_reference_change(ReferenceChanged {
+        .reconcile_market_universe(ReconcileMarketUniverse {
             generation: 2.into(),
             event_sequence: 3.into(),
             markets: vec![second.clone()],
         })
         .unwrap();
     let ignored = actor
-        .apply_reference_change(ReferenceChanged {
+        .reconcile_market_universe(ReconcileMarketUniverse {
             generation: 1.into(),
             event_sequence: 99.into(),
             markets: vec![first],
         })
         .unwrap();
     assert!(ignored.is_empty());
-    let state = actor.snapshot().subscriptions.remove(0);
+    let state = actor.current_view().subscriptions.remove(0);
     assert!(state.members.contains_key(second.market_id.as_str()));
 }
 

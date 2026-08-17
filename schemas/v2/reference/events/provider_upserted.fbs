@@ -1,6 +1,0 @@
-include "../../common/metadata.fbs";
-include "../types/provider.fbs";
-namespace kairos.reference.v2;
-table ProviderUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; provider:Provider (required); }
-root_type ProviderUpserted;
-file_identifier "RPU2";

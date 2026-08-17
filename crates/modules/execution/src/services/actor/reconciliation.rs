@@ -1,0 +1,146 @@
+use super::*;
+use crate::application::RemoteOrderUpdate;
+
+impl ExecutionActor {
+    pub(crate) fn observe_remote_time(&mut self, observed_at: u64) {
+        self.exchange_event_watermark_unix_nanos =
+            self.exchange_event_watermark_unix_nanos.max(observed_at);
+    }
+
+    pub(crate) fn remote_watermark(&self) -> u64 {
+        self.exchange_event_watermark_unix_nanos
+    }
+
+    pub(crate) fn find_remote_order(
+        &self,
+        remote_or_client_order_id: &str,
+    ) -> Option<ExecutionOrder> {
+        self.orders
+            .values()
+            .find(|order| {
+                order.order_id.as_str() == remote_or_client_order_id
+                    || order.remote_order_id.as_deref() == Some(remote_or_client_order_id)
+            })
+            .cloned()
+    }
+
+    pub(crate) fn reconcile_order(
+        &mut self,
+        local_order_id: &str,
+        remote_order_id: &str,
+        status: ExecutionOrderStatus,
+        occurred_at: u64,
+        reason: String,
+    ) -> Result<(ExecutionOrder, ExecutionEvent), String> {
+        let mut order = self
+            .order(local_order_id)
+            .cloned()
+            .ok_or_else(|| "reconciled order disappeared".to_string())?;
+        order.remote_order_id = Some(crate::domain::RemoteOrderId::new(
+            remote_order_id.to_owned(),
+        )?);
+        order.status = status;
+        order.updated_at_unix_nanos = UnixNanos::new(occurred_at);
+        order.reason = reason.clone();
+        let event = order_event(&order, occurred_at, reason);
+        self.orders.insert(order.order_id.clone(), order.clone());
+        Ok((order, event))
+    }
+
+    pub(crate) fn resolve_unknown_remote_order(
+        &mut self,
+        remote_order_id: &str,
+        resolution: UnknownRemoteOrderResolution,
+        reason: String,
+        now: u64,
+    ) -> Result<(), String> {
+        let order = self
+            .unknown_remote_orders
+            .get_mut(remote_order_id)
+            .ok_or_else(|| format!("unknown remote order does not exist: {remote_order_id}"))?;
+        order.resolution = resolution;
+        order.reason = reason;
+        order.last_seen_at_unix_nanos = now.into();
+        Ok(())
+    }
+
+    pub(crate) fn link_unknown_remote_order(
+        &mut self,
+        remote_order_id: &str,
+        local_order_id: &str,
+    ) -> Result<(UnknownRemoteOrder, ExecutionOrder, ExecutionEvent), String> {
+        let unknown = self
+            .unknown_remote_orders
+            .get(remote_order_id)
+            .cloned()
+            .ok_or_else(|| format!("unknown remote order does not exist: {remote_order_id}"))?;
+        let (order, event) = self.reconcile_order(
+            local_order_id,
+            remote_order_id,
+            unknown.status,
+            unknown.last_seen_at_unix_nanos.get(),
+            "linked from unknown remote order reconciliation".into(),
+        )?;
+        self.resolve_unknown_remote_order(
+            remote_order_id,
+            UnknownRemoteOrderResolution::LinkedToLocalOrder,
+            format!("linked to local order {local_order_id}"),
+            unknown.last_seen_at_unix_nanos.get(),
+        )?;
+        Ok((unknown, order, event))
+    }
+
+    pub(crate) fn attach_plan_identity(
+        &mut self,
+        order_id: &str,
+        plan_id: crate::domain::PlanId,
+        leg_id: crate::domain::LegId,
+    ) {
+        if let Some(order) = self.orders.get_mut(order_id) {
+            order.plan_id = Some(plan_id);
+            order.leg_id = Some(leg_id);
+        }
+    }
+
+    pub(crate) fn commit_event(&mut self, event: ExecutionEvent) -> ExecutionEvent {
+        self.event_sequence += 1;
+        self.generation += 1;
+        self.events.push(event.clone());
+        self.pending_events.push(event.clone());
+        event
+    }
+
+    pub(crate) fn record_unknown_remote_order(
+        &mut self,
+        event: &RemoteOrderUpdate,
+    ) -> Result<(), String> {
+        let remote_order_id = crate::domain::RemoteOrderId::new(event.order_id.to_string())?;
+        let entry = self
+            .unknown_remote_orders
+            .entry(event.order_id.to_string())
+            .or_insert_with(|| UnknownRemoteOrder {
+                remote_order_id: remote_order_id.clone(),
+                symbol: event.symbol.clone(),
+                status: event.status,
+                execution_id: event.execution_id.clone(),
+                fill_quantity: event.fill_quantity,
+                fill_price: event.fill_price,
+                fee_currency: event.fee_currency.clone(),
+                fee_amount: event.fee_amount,
+                first_seen_at_unix_nanos: event.occurred_at_unix_nanos,
+                last_seen_at_unix_nanos: event.occurred_at_unix_nanos,
+                resolution: UnknownRemoteOrderResolution::Pending,
+                reason: event.reason.clone(),
+            });
+        entry.symbol = event.symbol.clone();
+        entry.status = event.status;
+        entry.execution_id = event.execution_id.clone();
+        entry.fill_quantity = event.fill_quantity;
+        entry.fill_price = event.fill_price;
+        entry.fee_currency = event.fee_currency.clone();
+        entry.fee_amount = event.fee_amount;
+        entry.last_seen_at_unix_nanos = event.occurred_at_unix_nanos;
+        entry.reason = event.reason.clone();
+        Ok(())
+    }
+}

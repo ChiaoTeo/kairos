@@ -6,22 +6,23 @@
 
 use crate::domain::LifecycleEvent;
 use crate::domain::ProviderHealth;
-use crate::domain::{Asset, Instrument, Listing, ReferenceResult};
+use crate::domain::ReferenceResult;
 #[cfg(test)]
 use crate::domain::{Market, ReferenceError};
 
 use crate::application::queries::{LifecycleQuery, ReferenceQuery, ReferenceRecord};
 #[cfg(test)]
 use crate::application::queries::{MarketQuery, ReferenceKind};
+use crate::application::{UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand};
 use crate::services::actor::ReferenceActor;
-use crate::services::providers::ReferenceSource;
-use crate::services::store::CatalogStore;
+use crate::services::source::ReferenceSource;
+use crate::services::sqlx_storage::SqlxCatalogStore;
 use kairos_primitives::{Generation, Sequence};
 use tracing::{info, warn};
 
 /// Public application boundary for reference data.
-pub struct ReferenceApplication<S, C> {
-    actor: ReferenceActor<S, C>,
+pub struct ReferenceApplication {
+    actor: ReferenceActor,
 }
 
 /// Immutable read-side view. It contains no provider, SQLite connection, or
@@ -38,19 +39,6 @@ pub struct ReferenceReadModel {
     outbox_depth: usize,
 }
 
-/// Complete immutable state used by the typed mmap publisher. This is an
-/// application-owned read model, not a persistence record and not a second
-/// mutable owner.
-#[derive(Clone)]
-pub struct ReferenceCurrentView {
-    pub actor_id: String,
-    pub generation: Generation,
-    pub event_sequence: Sequence,
-    pub catalog: crate::domain::ReferenceCatalog,
-    pub provider_health: Vec<ProviderHealth>,
-    pub option_underlyings: Vec<String>,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceRefreshResult {
     pub generation: Generation,
@@ -60,17 +48,37 @@ pub struct ReferenceRefreshResult {
     pub events: Vec<LifecycleEvent>,
 }
 
-#[allow(private_bounds)]
-impl<S, C> ReferenceApplication<S, C>
-where
-    S: ReferenceSource,
-    C: CatalogStore,
-{
-    pub(crate) async fn new(
+/// Exact revisioned wire event committed with the catalog transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferencePublication {
+    event_id: String,
+    sequence: u64,
+    payload: Vec<u8>,
+}
+
+impl ReferencePublication {
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+}
+
+impl ReferenceApplication {
+    pub(crate) async fn new<S>(
         actor_id: impl Into<String>,
         source: S,
-        store: C,
-    ) -> ReferenceResult<Self> {
+        store: SqlxCatalogStore,
+    ) -> ReferenceResult<Self>
+    where
+        S: ReferenceSource + 'static,
+    {
         Ok(Self {
             actor: ReferenceActor::new(actor_id, source, store).await?,
         })
@@ -90,17 +98,6 @@ where
             provider_health: self.provider_health(),
             outbox_depth: self.actor.pending_event_count().await.unwrap_or(0),
         }
-    }
-
-    pub async fn current_view(&mut self) -> ReferenceResult<ReferenceCurrentView> {
-        Ok(ReferenceCurrentView {
-            actor_id: self.actor_id().to_owned(),
-            generation: self.actor.metadata.generation,
-            event_sequence: self.actor.metadata.event_sequence,
-            catalog: self.actor.current_catalog().await?,
-            provider_health: self.provider_health(),
-            option_underlyings: self.option_underlyings(),
-        })
     }
 
     pub fn source_id(&self) -> &str {
@@ -228,7 +225,11 @@ where
         })
     }
 
-    pub async fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<Generation> {
+    pub async fn upsert_asset(
+        &mut self,
+        command: UpsertAssetCommand,
+    ) -> ReferenceResult<Generation> {
+        let asset = crate::domain::Asset::from(command);
         info!(event = "reference_asset_upsert_started", component = "reference", asset_id = %asset.asset_id, "reference asset upsert started");
         self.actor.upsert_asset(asset).await?;
         let generation = self.actor.metadata.generation;
@@ -243,19 +244,37 @@ where
 
     pub async fn upsert_instrument(
         &mut self,
-        instrument: Instrument,
+        command: UpsertInstrumentCommand,
     ) -> ReferenceResult<Generation> {
+        let instrument = crate::domain::Instrument::from(command);
         self.actor.upsert_instrument(instrument).await?;
         Ok(self.actor.metadata.generation)
     }
 
-    pub async fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<Generation> {
+    pub async fn upsert_listing(
+        &mut self,
+        command: UpsertListingCommand,
+    ) -> ReferenceResult<Generation> {
+        let listing = crate::domain::Listing::from(command);
         self.actor.upsert_listing(listing).await?;
         Ok(self.actor.metadata.generation)
     }
 
-    pub async fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.actor.pending_events(limit).await
+    pub async fn pending_publications(
+        &mut self,
+        limit: usize,
+    ) -> ReferenceResult<Vec<ReferencePublication>> {
+        Ok(self
+            .actor
+            .pending_publications(limit)
+            .await?
+            .into_iter()
+            .map(|value| ReferencePublication {
+                event_id: value.event_id,
+                sequence: value.sequence,
+                payload: value.payload,
+            })
+            .collect())
     }
 
     /// Read a bounded lifecycle page from the durable event history. This is
@@ -358,11 +377,8 @@ where
         .await
     }
 
-    pub async fn acknowledge_published_events(
-        &mut self,
-        event_ids: &[String],
-    ) -> ReferenceResult<()> {
-        let result = self.actor.acknowledge_pending_events(event_ids).await;
+    pub async fn acknowledge_publications(&mut self, event_ids: &[String]) -> ReferenceResult<()> {
+        let result = self.actor.acknowledge_publications(event_ids).await;
         match &result {
             Ok(()) => info!(
                 event = "reference_events_acknowledged",
@@ -422,7 +438,7 @@ where
                         query.matches_status(value.status.as_str())
                             && query.matches_text(&[
                                 &value.entity_id,
-                                &value.entity_type,
+                                value.entity_type.as_str(),
                                 &value.name,
                             ])
                             && query
@@ -534,25 +550,6 @@ where
                     .map(ReferenceRecord::Market),
             );
         }
-        if include(ReferenceKind::FinancialProduct) {
-            records.extend(
-                self.actor
-                    .catalog
-                    .financial_products
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.product_id,
-                                &value.provider_product_id,
-                                &value.product_type,
-                                &value.name,
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::FinancialProduct),
-            );
-        }
         if include(ReferenceKind::ExecutionAccess) {
             records.extend(
                 self.actor
@@ -656,9 +653,6 @@ where
         if let Some(value) = self.actor.catalog.markets.get(identifier) {
             matches.push(ReferenceRecord::Market(value.clone()));
         }
-        if let Some(value) = self.actor.catalog.financial_products.get(identifier) {
-            matches.push(ReferenceRecord::FinancialProduct(value.clone()));
-        }
         if let Some(value) = self.actor.catalog.execution_accesses.get(identifier) {
             matches.push(ReferenceRecord::ExecutionAccess(value.clone()));
         }
@@ -684,12 +678,7 @@ where
 }
 
 #[cfg(test)]
-#[allow(private_bounds)]
-impl<S, C> ReferenceApplication<S, C>
-where
-    S: ReferenceSource,
-    C: CatalogStore,
-{
+impl ReferenceApplication {
     fn recent_lifecycle_events(&self, query: &LifecycleQuery) -> Vec<LifecycleEvent> {
         let mut events = self
             .actor

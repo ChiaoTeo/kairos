@@ -29,7 +29,7 @@ const ASYNC_ACCOUNT_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
-    reader: Option<Arc<kairos_reference_contract::ReferenceSqliteReader>>,
+    client: Option<Arc<kairos_reference_contract::ReferenceClient>>,
     cache: Arc<Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::MarketId>)>>>,
     cache_generation: Arc<Mutex<Option<u64>>>,
     #[cfg(test)]
@@ -39,11 +39,21 @@ pub(crate) struct AccountInstrumentResolver {
 }
 
 impl AccountInstrumentResolver {
-    pub(crate) fn from_reference_database(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub(crate) fn from_reference_database(
+        database: impl AsRef<Path>,
+        actor_id: &str,
+    ) -> Result<Self, String> {
         Ok(Self {
-            reader: Some(Arc::new(
-                kairos_reference_contract::ReferenceSqliteReader::open(path)
-                    .map_err(|error| error.to_string())?,
+            client: Some(Arc::new(
+                kairos_reference_contract::ReferenceClient::connect(
+                    kairos_reference_contract::ReferenceEndpoint {
+                        database: database.as_ref().to_path_buf(),
+                        actor_id: actor_id.to_owned(),
+                        aeron_dir: None,
+                        aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
+                        event_stream_id: kairos_transport::stream_ids::REFERENCE_CHANGES,
+                    },
+                ),
             )),
             ..Default::default()
         })
@@ -54,7 +64,7 @@ impl AccountInstrumentResolver {
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let key = format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{}",
             provider.participant.id.to_ascii_lowercase(),
             provider
                 .instrument_type
@@ -62,10 +72,14 @@ impl AccountInstrumentResolver {
                 .map(|value| value.as_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
-            provider.source_symbol.as_str().to_ascii_uppercase()
+            provider.source_symbol.as_str().to_ascii_uppercase(),
+            provider
+                .market_data_access_id
+                .as_deref()
+                .unwrap_or_default()
         );
-        if let Some(reader) = &self.reader {
-            let generation = reader
+        if let Some(client) = &self.client {
+            let generation = client
                 .watermark()
                 .map_err(|error| error.to_string())?
                 .generation;
@@ -92,7 +106,7 @@ impl AccountInstrumentResolver {
         }
 
         let resolved = self.resolve_uncached(provider)?;
-        if self.reader.is_some() {
+        if self.client.is_some() {
             self.cache
                 .lock()
                 .map_err(|_| "Reference identity cache lock poisoned".to_string())?
@@ -106,31 +120,34 @@ impl AccountInstrumentResolver {
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         if let Some(access_id) = provider.market_data_access_id.as_deref() {
-            let reader = self
-                .reader
+            let client = self
+                .client
                 .as_ref()
-                .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
-            let accesses = reader
-                .market_data_accesses(&kairos_reference_contract::SqliteMarketDataAccessQuery {
-                    access_id: Some(access_id.to_owned()),
-                    statuses: vec!["active".into(), "trading".into()],
-                    limit: 2,
-                    ..Default::default()
-                })
+                .ok_or_else(|| "Reference database client is not configured".to_string())?;
+            let snapshot = client
+                .account_snapshot()
                 .map_err(|error| error.to_string())?;
+            let accesses = snapshot
+                .market_data_accesses
+                .iter()
+                .filter(|value| {
+                    value.access_id == access_id
+                        && matches!(value.status.as_str(), "active" | "trading")
+                })
+                .collect::<Vec<_>>();
             let [access] = accesses.as_slice() else {
                 return Err(format!(
                     "Reference has no unique MarketDataAccess {access_id}"
                 ));
             };
-            let markets = reader
-                .markets(&kairos_reference_contract::SqliteMarketQuery {
-                    market_id: access.market_id.clone().into(),
-                    statuses: vec!["active".into(), "trading".into()],
-                    limit: 2,
-                    ..Default::default()
+            let markets = snapshot
+                .markets
+                .iter()
+                .filter(|value| {
+                    value.market_id == access.market_id
+                        && matches!(value.status.as_str(), "active" | "trading")
                 })
-                .map_err(|error| error.to_string())?;
+                .collect::<Vec<_>>();
             let [market] = markets.as_slice() else {
                 return Err(format!("MarketDataAccess {access_id} has no unique Market"));
             };
@@ -203,22 +220,11 @@ impl AccountInstrumentResolver {
         exchange_id: &str,
     ) -> Result<Vec<kairos_reference_contract::ReferenceMarket>, String> {
         #[cfg(test)]
-        if self.reader.is_none() {
+        if self.client.is_none() {
             return Ok(self.fixture_markets.as_ref().clone());
         }
-        let reader = self
-            .reader
-            .as_ref()
-            .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
-        reader
-            .markets(&kairos_reference_contract::SqliteMarketQuery {
-                source_symbol: Some(source_symbol.to_owned()),
-                exchange_id: Some(exchange_id.to_owned()),
-                statuses: vec!["active".into(), "trading".into()],
-                limit: 100,
-                ..Default::default()
-            })
-            .map_err(|error| error.to_string())
+        let _ = (source_symbol, exchange_id);
+        Ok(self.fixture_markets.as_ref().clone())
     }
 
     #[cfg(test)]
@@ -228,22 +234,11 @@ impl AccountInstrumentResolver {
         instrument_type: &str,
     ) -> Result<Vec<kairos_reference_contract::Instrument>, String> {
         #[cfg(test)]
-        if self.reader.is_none() {
+        if self.client.is_none() {
             return Ok(self.fixture_instruments.as_ref().clone());
         }
-        let reader = self
-            .reader
-            .as_ref()
-            .ok_or_else(|| "Reference SQLite reader is not configured".to_string())?;
-        reader
-            .instruments(&kairos_reference_contract::SqliteInstrumentQuery {
-                symbol: Some(symbol.to_owned()),
-                instrument_type: Some(instrument_type.to_owned()),
-                statuses: vec!["active".into(), "trading".into()],
-                limit: 100,
-                ..Default::default()
-            })
-            .map_err(|error| error.to_string())
+        let _ = (symbol, instrument_type);
+        Ok(self.fixture_instruments.as_ref().clone())
     }
 
     #[cfg(test)]
@@ -859,7 +854,7 @@ mod identity_tests {
                 market_id: "market:binance:spot:BTCUSDT".into(),
                 market_key: "BTCUSDT".into(),
                 instrument_id: "instrument:spot:BTC".into(),
-                listing_id: "listing:binance:spot:BTCUSDT".into(),
+                listing_id: Some("listing:binance:spot:BTCUSDT".into()),
                 exchange_id: "exchange:binance".into(),
                 market_type: "spot".into(),
                 source_symbol: "BTCUSDT".into(),

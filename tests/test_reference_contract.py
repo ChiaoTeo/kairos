@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from io import StringIO
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -14,47 +16,64 @@ from kairospy.application.reference import (
 )
 from kairospy.domain_types import MarketId
 from kairospy.infrastructure.contracts.reference import ReferenceClient
+from kairospy.surface.cli.commands.reference import _observe_reference_stream
 
 
-class _Market:
-    MarketId = lambda self: b"market:binance:spot:BTCUSDT"
-    MarketKey = lambda self: b"BTCUSDT"
-    InstrumentId = lambda self: b"instrument:spot:BTC"
-    ListingId = lambda self: b"listing:binance:spot:BTCUSDT"
-    ExchangeId = lambda self: b"exchange:binance"
-    MarketType = lambda self: b"spot"
-    AssetType = lambda self: None
-    SourceSymbol = lambda self: b"BTCUSDT"
-    BaseAssetId = lambda self: None
-    QuoteAssetId = lambda self: None
-    UnderlyingInstrumentId = lambda self: None
-    Status = lambda self: 2
-    PriceTick = lambda self: None
-    QuantityTick = lambda self: None
-    MinimumQuantity = lambda self: None
-    MinimumNotional = lambda self: None
-    ContractSize = lambda self: None
+def _reference_database(tmp_path: Path) -> Path:
+    path = tmp_path / "reference.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE reference_meta(
+            id INTEGER PRIMARY KEY, generation INTEGER, event_sequence INTEGER
+        );
+        INSERT INTO reference_meta VALUES(1, 3, 7);
+        CREATE TABLE reference_entities_current(entity_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_markets_current(
+            market_id TEXT PRIMARY KEY, source_symbol TEXT, exchange_id TEXT,
+            market_type TEXT, asset_type TEXT, status TEXT, payload TEXT
+        );
+        CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);
+        CREATE TABLE reference_option_coverage(
+            provider TEXT, underlying TEXT, enabled INTEGER
+        );
+        """
+    )
+    market = {
+        "market_id": "market:binance:spot:BTCUSDT",
+        "market_key": "BTCUSDT",
+        "instrument_id": "instrument:spot:BTC",
+        "listing_id": "listing:binance:spot:BTCUSDT",
+        "exchange_id": "exchange:binance",
+        "market_type": "spot",
+        "asset_type": None,
+        "source_symbol": "BTCUSDT",
+        "status": "active",
+    }
+    connection.execute(
+        "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?)",
+        (
+            market["market_id"],
+            market["source_symbol"],
+            market["exchange_id"],
+            market["market_type"],
+            market["asset_type"],
+            market["status"],
+            json.dumps(market),
+        ),
+    )
+    connection.commit()
+    connection.close()
+    return path
 
 
-class _State:
-    MarketsLength = lambda self: 1
-    Markets = lambda self, index: _Market()
-    EntitiesLength = AssetsLength = InstrumentsLength = ListingsLength = lambda self: 0
-    FinancialProductsLength = ExecutionAccessesLength = MarketDataAccessesLength = lambda self: 0
-    ProviderHealthLength = OptionUnderlyingsLength = LifecycleEventsLength = lambda self: 0
-
-
-class _Client(ReferenceClient):
-    def _view(self):
-        return SimpleNamespace(
-            generation=3,
-            event_sequence=7,
-            value=SimpleNamespace(State=lambda: _State()),
-        )
-
-
-def test_reference_mmap_client_reads_watermark_and_scoped_markets() -> None:
-    client = _Client()
+def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) -> None:
+    client = ReferenceClient(database_path=_reference_database(tmp_path))
     assert client.catalog()["generation"] == 3
     assert client.catalog()["catalog"]["market_count"] == 1
     assert (
@@ -63,8 +82,10 @@ def test_reference_mmap_client_reads_watermark_and_scoped_markets() -> None:
     )
 
 
-def test_reference_application_reads_concrete_mmap_client() -> None:
-    application = ReferenceApplication(_Client())
+def test_reference_application_reads_concrete_sqlite_client(tmp_path) -> None:
+    application = ReferenceApplication(
+        ReferenceClient(database_path=_reference_database(tmp_path))
+    )
 
     markets = application.find_markets(
         symbol="BTCUSDT", exchange="binance", market_type="spot"
@@ -94,6 +115,9 @@ def test_reference_application_has_no_callable_or_compatibility_facade() -> None
     public_api = (root / "kairospy/application/reference/__init__.py").read_text(
         encoding="utf-8"
     )
+    contract_client = (
+        root / "kairospy/infrastructure/contracts/reference/client.py"
+    ).read_text(encoding="utf-8")
 
     assert "Callable" not in application
     assert "Protocol" not in (
@@ -103,6 +127,10 @@ def test_reference_application_has_no_callable_or_compatibility_facade() -> None
     assert "ReferenceClient" not in public_api
     assert not (root / "kairospy/application/reference/client.py").exists()
     assert not (root / "kairospy/infrastructure/contracts/reference.py").exists()
+    assert "financial-products" not in contract_client
+    assert "routing_mode" not in contract_client
+    assert "destination_market_id" not in contract_client
+    assert "broker_id" not in contract_client
 
 
 def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
@@ -117,7 +145,6 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
         "instruments",
         "listings",
         "markets",
-        "financial_products",
         "execution_accesses",
         "lifecycle_events",
         "generation",
@@ -128,9 +155,8 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
 def test_reference_client_reads_lifecycle_events_by_sequence(
     tmp_path,
 ) -> None:
-    result = _Client().events(
-        sequence_from=4, sequence_to=8, limit=9
-    )
+    client = ReferenceClient(database_path=_reference_database(tmp_path))
+    result = client.events(sequence_from=4, sequence_to=8, limit=9)
 
     assert result["event_sequence"] == 7
     assert result["events"] == []
@@ -149,7 +175,10 @@ def test_reference_client_scopes_refresh_and_provider_controls(
     monkeypatch.setattr(
         "kairospy.infrastructure.transport.commands.request_sync", request_sync
     )
-    client = _Client(socket_path=tmp_path / "reference.sock")
+    client = ReferenceClient(
+        socket_path=tmp_path / "reference.sock",
+        database_path=_reference_database(tmp_path),
+    )
 
     client.refresh(source="massive-options")
     client.set_source_paused("massive-options", True)
@@ -300,3 +329,63 @@ def test_reference_validate_cli_returns_nonzero_when_a_required_gate_fails(
 
     assert exit_code == 1
     assert '"status": "failed"' in output.getvalue()
+
+
+class _ReferenceEventSource:
+    def __init__(self, events: tuple[SimpleNamespace, ...], *, remain_open: bool) -> None:
+        self.events = events
+        self.remain_open = remain_open
+        self.closed = False
+
+    async def subscribe_live(self):
+        for event in self.events:
+            yield event
+        if self.remain_open:
+            await asyncio.sleep(60)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_reference_stream_observer_uses_native_events_and_stops_when_idle() -> None:
+    source = _ReferenceEventSource(
+        (
+            SimpleNamespace(event_id="event-1", catalog_revision=4, sequence=8),
+            SimpleNamespace(event_id="event-2", catalog_revision=5, sequence=9),
+        ),
+        remain_open=True,
+    )
+
+    result = asyncio.run(
+        _observe_reference_stream(
+            source,
+            timeout_seconds=1,
+            idle_timeout_seconds=0.01,
+        )
+    )
+
+    assert result == {
+        "status": "received",
+        "batches": 2,
+        "events": 2,
+        "generation": 5,
+        "event_sequence": 9,
+        "first_event_id": "event-1",
+        "last_event_id": "event-2",
+    }
+    assert source.closed
+
+
+def test_reference_stream_observer_rejects_an_empty_stream() -> None:
+    source = _ReferenceEventSource((), remain_open=True)
+
+    with pytest.raises(RuntimeError, match="before timeout"):
+        asyncio.run(
+            _observe_reference_stream(
+                source,
+                timeout_seconds=0.01,
+                idle_timeout_seconds=0.01,
+            )
+        )
+
+    assert source.closed

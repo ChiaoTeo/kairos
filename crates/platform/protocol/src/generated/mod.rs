@@ -30,14 +30,6 @@ pub mod kairos {
             pub use asset_generated::*;
             mod entity_generated;
             pub use entity_generated::*;
-            mod financial_product_generated;
-            pub use financial_product_generated::*;
-            mod broker_generated;
-            pub use broker_generated::*;
-            mod exchange_generated;
-            pub use exchange_generated::*;
-            mod provider_generated;
-            pub use provider_generated::*;
             mod instrument_generated;
             pub use instrument_generated::*;
             mod listing_generated;
@@ -70,18 +62,6 @@ pub mod kairos {
             pub use asset_updated_generated::*;
             mod asset_upserted_generated;
             pub use asset_upserted_generated::*;
-            mod exchange_updated_generated;
-            pub use exchange_updated_generated::*;
-            mod exchange_upserted_generated;
-            pub use exchange_upserted_generated::*;
-            mod provider_updated_generated;
-            pub use provider_updated_generated::*;
-            mod provider_upserted_generated;
-            pub use provider_upserted_generated::*;
-            mod broker_updated_generated;
-            pub use broker_updated_generated::*;
-            mod broker_upserted_generated;
-            pub use broker_upserted_generated::*;
             mod execution_access_updated_generated;
             pub use execution_access_updated_generated::*;
             mod execution_access_upserted_generated;
@@ -94,18 +74,6 @@ pub mod kairos {
             pub use entity_updated_generated::*;
             mod entity_upserted_generated;
             pub use entity_upserted_generated::*;
-            mod financial_product_updated_generated;
-            pub use financial_product_updated_generated::*;
-            mod financial_product_upserted_generated;
-            pub use financial_product_upserted_generated::*;
-            mod lifecycle_entry_generated;
-            pub use lifecycle_entry_generated::*;
-            mod provider_health_state_generated;
-            pub use provider_health_state_generated::*;
-            mod reference_latest_state_generated;
-            pub use reference_latest_state_generated::*;
-            mod reference_latest_view_generated;
-            pub use reference_latest_view_generated::*;
         }
     }
 

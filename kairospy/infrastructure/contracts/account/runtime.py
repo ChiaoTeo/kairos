@@ -28,22 +28,18 @@ from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
 
 
 class AccountContractClient:
-    """Low-frequency Account query and command facade."""
+    """Low-frequency Account health and simulation-control facade.
+
+    Live Account facts enter through Account-owned Integration capabilities.
+    This client deliberately exposes no order/fill mutation API, and simulated
+    fill settlement is private to Execution's durable settlement service.
+    """
 
     def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
         self._client = UnixJsonCommandClient(socket_path, timeout=timeout)
 
     def health(self) -> Mapping[str, Any]:
         return self._get("/v1/health")
-
-    def publish_order_event(self, event: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._post("/v1/order-event", event)
-
-    def publish_fill(self, fill: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._post("/v1/fill", fill)
-
-    def apply_simulated_fill(self, fill: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._post("/v1/simulated-fill", fill)
 
     def mark_to_market(self, update: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._post("/v1/mark-to-market", update)

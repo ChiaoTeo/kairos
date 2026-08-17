@@ -47,34 +47,7 @@ impl<'de> Deserialize<'de> for DecimalValue {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OrderEvent {
-    pub order_id: String,
-    pub status: String,
-    pub remote_order_id: Option<String>,
-    pub filled_quantity: DecimalValue,
-    pub occurred_at_unix_nanos: u64,
-    #[serde(default)]
-    pub reason: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Fill {
-    pub fill_id: String,
-    pub order_id: String,
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub quantity: DecimalValue,
-    pub price: DecimalValue,
-    pub side: String,
-    pub occurred_at_unix_nanos: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_asset: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_amount: Option<DecimalValue>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SimulatedFill {
+pub struct SimulatedSettlement {
     pub fill_id: String,
     pub order_id: String,
     pub segment_key: String,
@@ -109,14 +82,11 @@ impl AccountContractClient {
         self.get("/v1/health")
     }
 
-    pub fn publish_order_event(&self, event: &OrderEvent) -> ContractResult<()> {
-        self.post("/v1/order-event", event)
-    }
-    pub fn publish_fill(&self, fill: &Fill) -> ContractResult<()> {
-        self.post("/v1/fill", fill)
-    }
-    pub fn publish_simulated_fill(&self, fill: &SimulatedFill) -> ContractResult<()> {
-        self.post("/v1/simulated-fill", fill)
+    pub fn apply_simulated_settlement(
+        &self,
+        settlement: &SimulatedSettlement,
+    ) -> ContractResult<()> {
+        self.post("/v1/simulation/settlements", settlement)
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> ContractResult<T> {

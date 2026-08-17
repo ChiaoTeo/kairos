@@ -24,9 +24,52 @@ pub struct Entity {
     #[serde(default)]
     pub source_id: Option<String>,
     pub entity_id: String,
-    pub entity_type: String,
+    pub entity_type: EntityKind,
     pub name: String,
     pub status: ReferenceStatus,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    Exchange,
+    Broker,
+    DataProvider,
+    Issuer,
+    #[default]
+    Unknown,
+}
+
+impl EntityKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::Broker => "broker",
+            Self::DataProvider => "data_provider",
+            Self::Issuer => "issuer",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl From<&str> for EntityKind {
+    fn from(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "exchange" => Self::Exchange,
+            "broker" => Self::Broker,
+            "data_provider" | "provider" => Self::DataProvider,
+            "issuer" => Self::Issuer,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl From<String> for EntityKind {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -81,7 +124,8 @@ pub struct Market {
     pub market_id: MarketId,
     pub market_key: String,
     pub instrument_id: InstrumentId,
-    pub listing_id: ListingId,
+    #[serde(default)]
+    pub listing_id: Option<ListingId>,
     pub exchange_id: Exchange,
     /// Provider/venue product surface. The legacy field name is retained only
     /// for persisted/wire compatibility; this is not a canonical market kind.
@@ -127,30 +171,6 @@ pub struct LifecycleEvent {
     pub operation: Option<String>,
     #[serde(default)]
     pub generation: Generation,
-    #[serde(default)]
-    pub record_payload_json: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FinancialProduct {
-    #[serde(default)]
-    pub source_id: Option<String>,
-    pub product_id: String,
-    pub product_type: String,
-    pub name: String,
-    pub asset_id: AssetId,
-    pub provider_product_id: String,
-    pub provider_id: Option<String>,
-    pub issuer_id: Option<IssuerId>,
-    pub currency_asset_id: Option<AssetId>,
-    pub min_amount: Option<String>,
-    pub max_amount: Option<String>,
-    pub apr: Option<String>,
-    pub lock_period_days: i32,
-    pub maturity_at_unix_nanos: Option<UnixNanos>,
-    pub status: ReferenceStatus,
-    pub effective_from_unix_nanos: UnixNanos,
-    pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
 /// A provider-specific execution path for a canonical instrument.
@@ -163,19 +183,12 @@ pub struct ExecutionAccess {
     #[serde(default)]
     pub source_id: Option<String>,
     pub access_id: ExecutionAccessId,
-    /// `direct` targets one Market; `smart` selects a route for an Instrument.
-    #[serde(default = "default_execution_routing_mode")]
-    pub routing_mode: String,
     #[serde(default)]
     pub instrument_id: Option<InstrumentId>,
     #[serde(default)]
     pub listing_id: Option<ListingId>,
     #[serde(default)]
     pub market_id: Option<MarketId>,
-    #[serde(default)]
-    pub destination_market_id: Option<MarketId>,
-    #[serde(default)]
-    pub broker_id: Option<String>,
     pub provider_id: ProviderId,
     /// Provider-owned request discriminator, not a canonical product family.
     #[serde(rename = "product_family")]
@@ -185,10 +198,6 @@ pub struct ExecutionAccess {
     pub status: ReferenceStatus,
     pub effective_from_unix_nanos: UnixNanos,
     pub effective_to_unix_nanos: Option<UnixNanos>,
-}
-
-fn default_execution_routing_mode() -> String {
-    "direct".into()
 }
 
 /// Provider-specific market-data address for a canonical Market.
@@ -234,12 +243,9 @@ impl Default for ExecutionAccess {
         Self {
             source_id: None,
             access_id: ExecutionAccessId::new("access:default").expect("valid access ID"),
-            routing_mode: default_execution_routing_mode(),
             instrument_id: None,
             listing_id: None,
             market_id: Some(MarketId::new("market:default").expect("valid market ID")),
-            destination_market_id: None,
-            broker_id: None,
             provider_id: ProviderId::new("provider:unknown").expect("valid default provider"),
             provider_product: ProviderProductCode::new("unknown")
                 .expect("valid default provider product"),
@@ -259,13 +265,117 @@ pub struct ProviderCatalog {
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
-    pub financial_products: Vec<FinancialProduct>,
     pub execution_accesses: Vec<ExecutionAccess>,
     #[serde(default)]
     pub market_data_accesses: Vec<MarketDataAccess>,
 }
 
 impl ProviderCatalog {
+    /// Merge independently authoritative provider projections into one
+    /// canonical candidate. This is a Reference domain rule: persistence and
+    /// provider composition must not each invent their own conflict policy.
+    pub fn merge<'a>(
+        catalogs: impl IntoIterator<Item = &'a ProviderCatalog>,
+    ) -> ReferenceResult<Self> {
+        let mut entities = std::collections::BTreeMap::new();
+        let mut assets = std::collections::BTreeMap::new();
+        let mut instruments = std::collections::BTreeMap::new();
+        let mut listings = std::collections::BTreeMap::new();
+        let mut markets = std::collections::BTreeMap::new();
+        let mut execution_accesses = std::collections::BTreeMap::new();
+        let mut market_data_accesses = std::collections::BTreeMap::new();
+        let mut conflicts = Vec::new();
+
+        macro_rules! merge_exact {
+            ($catalog:expr, $field:ident, $key:expr, $label:literal) => {
+                for value in &$catalog.$field {
+                    let key = $key(value);
+                    if $field
+                        .insert(key.clone(), value.clone())
+                        .is_some_and(|previous| previous != *value)
+                    {
+                        conflicts.push(format!(
+                            concat!("irreconcilable canonical ", $label, " conflict for {}"),
+                            key
+                        ));
+                    }
+                }
+            };
+        }
+
+        for catalog in catalogs {
+            merge_exact!(
+                catalog,
+                entities,
+                |value: &Entity| value.entity_id.clone(),
+                "entity"
+            );
+            merge_exact!(
+                catalog,
+                assets,
+                |value: &Asset| value.asset_id.clone(),
+                "asset"
+            );
+            for value in &catalog.instruments {
+                if let Some(previous) = instruments.get_mut(&value.instrument_id) {
+                    if previous != value {
+                        merge_instrument(previous, value).map_err(|reason| {
+                            ReferenceError::Invalid(format!(
+                                "canonical instrument conflict for {}: {reason}",
+                                value.instrument_id
+                            ))
+                        })?;
+                    }
+                } else {
+                    instruments.insert(value.instrument_id.clone(), value.clone());
+                }
+            }
+            merge_exact!(
+                catalog,
+                listings,
+                |value: &Listing| value.listing_id.clone(),
+                "listing"
+            );
+            merge_exact!(
+                catalog,
+                markets,
+                |value: &Market| value.market_id.clone(),
+                "market"
+            );
+            merge_exact!(
+                catalog,
+                execution_accesses,
+                |value: &ExecutionAccess| value.access_id.clone(),
+                "execution_access"
+            );
+            merge_exact!(
+                catalog,
+                market_data_accesses,
+                |value: &MarketDataAccess| value.access_id.clone(),
+                "market_data_access"
+            );
+        }
+
+        if !conflicts.is_empty() {
+            let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
+            return Err(ReferenceError::Invalid(format!(
+                "providers returned {} canonical record conflicts (sample: {})",
+                conflicts.len(),
+                sample.join(", ")
+            )));
+        }
+        let candidate = Self {
+            entities: entities.into_values().collect(),
+            assets: assets.into_values().collect(),
+            instruments: instruments.into_values().collect(),
+            listings: listings.into_values().collect(),
+            markets: markets.into_values().collect(),
+            execution_accesses: execution_accesses.into_values().collect(),
+            market_data_accesses: market_data_accesses.into_values().collect(),
+        };
+        Ok(candidate)
+    }
+
     /// Validate the provider boundary before any actor-owned state is changed.
     pub fn validate(&self) -> ReferenceResult<()> {
         fn required(value: &str, label: &str) -> ReferenceResult<()> {
@@ -325,9 +435,6 @@ impl ProviderCatalog {
         })?;
         unique(&self.listings, "listing", |value| &value.listing_id)?;
         unique(&self.markets, "market", |value| &value.market_id)?;
-        unique(&self.financial_products, "financial product", |value| {
-            &value.product_id
-        })?;
         unique(&self.execution_accesses, "execution access", |value| {
             &value.access_id
         })?;
@@ -336,10 +443,12 @@ impl ProviderCatalog {
         })?;
 
         for entity in &self.entities {
-            required(
-                &entity.entity_type,
-                &format!("entity {} type", entity.entity_id),
-            )?;
+            if entity.entity_type == EntityKind::Unknown {
+                return Err(ReferenceError::Invalid(format!(
+                    "entity {} has unknown kind",
+                    entity.entity_id
+                )));
+            }
             required(&entity.name, &format!("entity {} name", entity.entity_id))?;
             required(
                 entity.status.as_str(),
@@ -551,30 +660,24 @@ impl ProviderCatalog {
                     market.market_id, market.instrument_id
                 )));
             }
-            if !listing_ids.contains(market.listing_id.as_str()) {
-                return Err(ReferenceError::Invalid(format!(
-                    "market {} references missing listing {}",
-                    market.market_id, market.listing_id
-                )));
-            }
-            let Some(listing) = self
-                .listings
-                .iter()
-                .find(|value| value.listing_id == market.listing_id)
-            else {
-                return Err(ReferenceError::Invalid(format!(
-                    "market {} references missing listing {}",
-                    market.market_id, market.listing_id
-                )));
-            };
-            if listing.instrument_id != market.instrument_id {
-                return Err(ReferenceError::Invalid(format!(
-                    "market {} instrument {} disagrees with listing {} instrument {}",
-                    market.market_id,
-                    market.instrument_id,
-                    market.listing_id,
-                    listing.instrument_id
-                )));
+            if let Some(listing_id) = market.listing_id.as_ref() {
+                if !listing_ids.contains(listing_id.as_str()) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "market {} references missing listing {}",
+                        market.market_id, listing_id
+                    )));
+                }
+                let listing = self
+                    .listings
+                    .iter()
+                    .find(|value| &value.listing_id == listing_id)
+                    .expect("validated listing id must resolve");
+                if listing.instrument_id != market.instrument_id {
+                    return Err(ReferenceError::Invalid(format!(
+                        "market {} instrument {} disagrees with listing {} instrument {}",
+                        market.market_id, market.instrument_id, listing_id, listing.instrument_id
+                    )));
+                }
             }
             if !entity_ids.contains(market.exchange_id.as_str()) {
                 return Err(ReferenceError::Invalid(format!(
@@ -608,12 +711,6 @@ impl ProviderCatalog {
             }
         }
         for access in &self.execution_accesses {
-            if !matches!(access.routing_mode.as_str(), "direct" | "smart") {
-                return Err(ReferenceError::Invalid(format!(
-                    "execution access {} has unsupported routing mode {}",
-                    access.access_id, access.routing_mode
-                )));
-            }
             required(
                 access.provider_id.as_str(),
                 &format!("execution access {} provider", access.access_id),
@@ -630,26 +727,9 @@ impl ProviderCatalog {
                 access.status.as_str(),
                 &format!("execution access {} status", access.access_id),
             )?;
-            if access.routing_mode == "direct" {
-                let destination = access
-                    .destination_market_id
-                    .as_ref()
-                    .or(access.market_id.as_ref())
-                    .ok_or_else(|| {
-                        ReferenceError::Invalid(format!(
-                            "direct execution access {} requires a destination market",
-                            access.access_id
-                        ))
-                    })?;
-                if !market_ids.contains(destination.as_str()) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing market {}",
-                        access.access_id, destination
-                    )));
-                }
-            } else if access.instrument_id.is_none() {
+            if access.instrument_id.is_none() && access.market_id.is_none() {
                 return Err(ReferenceError::Invalid(format!(
-                    "smart execution access {} requires an instrument",
+                    "execution access {} requires an instrument or market",
                     access.access_id
                 )));
             }
@@ -669,11 +749,11 @@ impl ProviderCatalog {
                     )));
                 }
             }
-            if let Some(destination) = access.destination_market_id.as_ref() {
-                if !market_ids.contains(destination.as_str()) {
+            if let Some(market_id) = access.market_id.as_ref() {
+                if !market_ids.contains(market_id.as_str()) {
                     return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing destination market {}",
-                        access.access_id, destination
+                        "execution access {} references missing market {}",
+                        access.access_id, market_id
                     )));
                 }
             }
@@ -728,76 +808,87 @@ impl ProviderCatalog {
                 )));
             }
         }
-        for product in &self.financial_products {
-            required(
-                &product.product_type,
-                &format!("financial product {} type", product.product_id),
-            )?;
-            required(
-                &product.name,
-                &format!("financial product {} name", product.product_id),
-            )?;
-            required(
-                &product.provider_product_id,
-                &format!(
-                    "financial product {} provider product id",
-                    product.product_id
-                ),
-            )?;
-            required(
-                product.status.as_str(),
-                &format!("financial product {} status", product.product_id),
-            )?;
-            if product.lock_period_days < 0 {
-                return Err(ReferenceError::Invalid(format!(
-                    "financial product {} lock period must not be negative",
-                    product.product_id
-                )));
-            }
-            non_negative_decimal(
-                product.min_amount.as_deref(),
-                &format!("financial product {} min amount", product.product_id),
-            )?;
-            non_negative_decimal(
-                product.max_amount.as_deref(),
-                &format!("financial product {} max amount", product.product_id),
-            )?;
-            non_negative_decimal(
-                product.apr.as_deref(),
-                &format!("financial product {} apr", product.product_id),
-            )?;
-            if !asset_ids.contains(product.asset_id.as_str()) {
-                return Err(ReferenceError::Invalid(format!(
-                    "financial product {} references missing asset {}",
-                    product.product_id, product.asset_id
-                )));
-            }
-            if let Some(currency_asset_id) = product.currency_asset_id.as_deref() {
-                if !asset_ids.contains(currency_asset_id) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "financial product {} references missing currency asset {}",
-                        product.product_id, currency_asset_id
-                    )));
-                }
-            }
-            if let Some(issuer_id) = product.issuer_id.as_deref() {
-                if !entity_ids.contains(issuer_id) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "financial product {} references missing issuer {}",
-                        product.product_id, issuer_id
-                    )));
-                }
-            }
-            if product
-                .effective_to_unix_nanos
-                .is_some_and(|end| end <= product.effective_from_unix_nanos)
-            {
-                return Err(ReferenceError::Invalid(format!(
-                    "financial product {} has an invalid effective interval",
-                    product.product_id
-                )));
-            }
-        }
         Ok(())
+    }
+}
+
+pub(crate) fn reconcile_instruments(values: &mut Vec<Instrument>) -> ReferenceResult<()> {
+    let mut reconciled = std::collections::BTreeMap::new();
+    for value in std::mem::take(values) {
+        if let Some(previous) = reconciled.get_mut(&value.instrument_id) {
+            merge_instrument(previous, &value).map_err(|reason| {
+                ReferenceError::Invalid(format!(
+                    "provider produced conflicting canonical instrument {}: {reason}",
+                    value.instrument_id
+                ))
+            })?;
+        } else {
+            reconciled.insert(value.instrument_id.clone(), value);
+        }
+    }
+    *values = reconciled.into_values().collect();
+    Ok(())
+}
+
+pub(crate) fn merge_instrument(
+    previous: &mut Instrument,
+    incoming: &Instrument,
+) -> Result<(), String> {
+    let status = merged_instrument_status(previous.status, incoming.status);
+    let mut left = previous.clone();
+    let mut right = incoming.clone();
+    left.source_id = None;
+    right.source_id = None;
+    left.status = status;
+    right.status = status;
+    if left != right {
+        let mut fields = Vec::new();
+        if left.symbol != right.symbol {
+            fields.push("symbol");
+        }
+        if left.instrument_type != right.instrument_type {
+            fields.push("instrument_type");
+        }
+        if left.primary_currency_asset_id != right.primary_currency_asset_id {
+            fields.push("primary_currency_asset_id");
+        }
+        if left.underlying_instrument_id != right.underlying_instrument_id {
+            fields.push("underlying_instrument_id");
+        }
+        if left.expiry_unix_nanos != right.expiry_unix_nanos {
+            fields.push("expiry_unix_nanos");
+        }
+        if left.strike != right.strike {
+            fields.push("strike");
+        }
+        if left.option_right != right.option_right {
+            fields.push("option_right");
+        }
+        if fields.is_empty() {
+            fields.push("canonical attributes");
+        }
+        return Err(format!("different {}", fields.join(", ")));
+    }
+    *previous = left;
+    Ok(())
+}
+
+fn merged_instrument_status(
+    left: kairos_primitives::ReferenceStatus,
+    right: kairos_primitives::ReferenceStatus,
+) -> kairos_primitives::ReferenceStatus {
+    use kairos_primitives::ReferenceStatus;
+    if matches!(left, ReferenceStatus::Active | ReferenceStatus::Trading)
+        || matches!(right, ReferenceStatus::Active | ReferenceStatus::Trading)
+    {
+        ReferenceStatus::Active
+    } else if left == right {
+        left
+    } else if left == ReferenceStatus::Unknown {
+        right
+    } else if right == ReferenceStatus::Unknown {
+        left
+    } else {
+        ReferenceStatus::Inactive
     }
 }

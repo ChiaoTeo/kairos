@@ -1,15 +1,13 @@
 use clap::Parser;
 use kairos_execution::application::ExecutionApplication;
+use kairos_execution::application::ExecutionProcess;
+use kairos_execution::composition::SqlxExecutionAudit;
 use kairos_execution::composition::{
-    compose_execution_routes, load_reference_execution_accesses, AeronExecutionEventPublisher,
-    ExecutionConnectionOptions, ExecutionSimulator, ExecutionWriterFence,
-    QueuedExecutionAccountFacts, QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission,
-    QueuedExecutionRiskReservations, SharedExecutionSnapshotPublisher,
-    SharedIntentSnapshotPublisher, SimulationConfig, SocketExecutionAccountFacts,
-    SocketExecutionIntentPlanner, SocketExecutionOrderAdmission, SocketExecutionRiskReservations,
-    SqlxExecutionStore,
+    compose_execution_routes, configure_execution_dependencies, load_reference_execution_accesses,
+    AeronExecutionEventPublisher, ExecutionConnectionOptions, ExecutionSimulator,
+    ExecutionWriterFence, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
+    SimulatedAccountSettlement, SimulationConfig, SqlxExecutionStore,
 };
-use kairos_execution::{ExecutionProcess, SqlxExecutionAudit};
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use secrecy::ExposeSecret;
@@ -98,51 +96,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some(Box::new(state_store)),
     )?;
     let mut application = application;
-    let reference_view_root = workspace.child(&["snapshots", "v2"])?;
-    if reference_view_root.exists() {
+    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
+    if reference_database.exists() {
         for (access_id, provider_instrument) in
-            load_reference_execution_accesses(&reference_view_root, "reference-actor")?
+            load_reference_execution_accesses(&reference_database)?
         {
             application.configure_execution_access(access_id, provider_instrument);
         }
     } else if !simulated {
         return Err(format!(
             "live Execution requires Reference execution accesses: {}",
-            reference_view_root.display()
+            reference_database.display()
         )
         .into());
     }
     let manifest = instance.component_manifest()?;
-    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest(&manifest)?;
-    let mut order_admission = SocketExecutionOrderAdmission::from_manifest(&manifest)?;
-    if args.launch_mode == "backtest" {
-        intent_planner = intent_planner.without_market_snapshot();
-        order_admission = order_admission
-            .without_market_snapshot()
-            .with_backtest_reservation_window()
-            .with_backtest_reference_without_projection(true)
-            .with_backtest_balance_without_projection(true);
-    }
-    let account_facts =
-        SocketExecutionAccountFacts::from_manifest(&manifest)?.with_simulated_settlement(simulated);
-    let risk_reservations: SocketExecutionRiskReservations =
-        order_admission.risk_reservations_adapter()?;
-    application.attach_intent_planner(Box::new(QueuedExecutionIntentPlanner::start(
-        intent_planner,
+    configure_execution_dependencies(
+        &mut application,
+        &manifest,
+        args.launch_mode == "backtest",
         128,
-    )?));
-    application.attach_order_admission(Box::new(QueuedExecutionOrderAdmission::start(
-        order_admission,
-        128,
-    )?));
-    application.attach_risk_reservations(Box::new(QueuedExecutionRiskReservations::start(
-        Box::new(risk_reservations),
-        128,
-    )?));
-    application.attach_account_facts(Box::new(QueuedExecutionAccountFacts::start(
-        Box::new(account_facts),
-        128,
-    )?));
+    )?;
     application.configure_live_trading(!simulated, args.confirm_live);
     application.recover_risk_reservations()?;
     let socket = instance.socket("execution")?;
@@ -151,7 +125,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_async_order_query(async_order_query)
         .with_async_execution_routes(async_execution_streams);
     let process = if simulated {
-        process.with_simulator(ExecutionSimulator::new(SimulationConfig::default())?)
+        process
+            .with_simulator(ExecutionSimulator::new(SimulationConfig::default())?)
+            .with_simulated_account_settlement(SimulatedAccountSettlement::from_manifest(
+                &manifest,
+            )?)
     } else {
         process
     };

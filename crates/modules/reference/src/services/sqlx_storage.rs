@@ -8,13 +8,21 @@ use sqlx::{
     Row, Sqlite, SqlitePool,
 };
 
-use super::store::{CatalogState, CatalogStore, NormalizedRefresh, ProviderSyncStore};
+use super::publication::StoredPublication;
 use crate::domain::{
-    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, LifecycleEvent, Listing, Market,
-    ProviderCatalog, ReferenceCatalog, ReferenceError, ReferenceResult,
+    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog,
+    ReferenceCatalog, ReferenceError, ReferenceResult,
 };
 
 const LIFECYCLE_LIMIT: i64 = 4096;
+
+#[derive(Clone, Copy, Default)]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) struct CatalogState {
+    pub generation: kairos_primitives::Generation,
+    pub event_sequence: kairos_primitives::Sequence,
+    pub market_count: usize,
+}
 
 pub struct SqlxCatalogStore {
     pool: SqlitePool,
@@ -42,7 +50,6 @@ fn provider_records(
             + catalog.instruments.len()
             + catalog.listings.len()
             + catalog.markets.len()
-            + catalog.financial_products.len()
             + catalog.execution_accesses.len(),
     );
     macro_rules! push_records {
@@ -72,11 +79,6 @@ fn provider_records(
         .market_id
         .to_string());
     push_records!(
-        "financial_product",
-        &catalog.financial_products,
-        |value: &FinancialProduct| value.product_id.clone()
-    );
-    push_records!(
         "execution_access",
         &catalog.execution_accesses,
         |value: &ExecutionAccess| value.access_id.to_string()
@@ -100,7 +102,6 @@ fn push_provider_record(
         "instrument" => catalog.instruments.push(decode(payload)?),
         "listing" => catalog.listings.push(decode(payload)?),
         "market" => catalog.markets.push(decode(payload)?),
-        "financial_product" => catalog.financial_products.push(decode(payload)?),
         "execution_access" => catalog.execution_accesses.push(decode(payload)?),
         "market_data_access" => catalog.market_data_accesses.push(decode(payload)?),
         other => return Err(persistence(format!("unknown provider record kind {other}"))),
@@ -145,11 +146,41 @@ impl SqlxCatalogStore {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{CatalogStore, ProviderSyncStore, SqlxCatalogStore, SqlxProviderSyncStore};
+    use super::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::domain::{
         Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
     };
     use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+
+    #[derive(Debug)]
+    struct TestRefresh {
+        generation: kairos_primitives::Generation,
+        event_sequence: kairos_primitives::Sequence,
+        market_count: usize,
+        changed: bool,
+        event_count: usize,
+    }
+
+    async fn reconcile_candidate(
+        store: &mut SqlxCatalogStore,
+        overlay: &ProviderCatalog,
+        now: u64,
+    ) -> crate::domain::ReferenceResult<TestRefresh> {
+        let incoming = store.load_provider_candidate(overlay).await?;
+        let mut catalog = store.load().await?.unwrap_or_default();
+        let previous_generation = catalog.generation;
+        let events = catalog.apply(incoming, now.into());
+        let result = TestRefresh {
+            generation: catalog.generation,
+            event_sequence: catalog.event_sequence,
+            market_count: catalog.markets.len(),
+            changed: catalog.generation != previous_generation,
+            event_count: events.len(),
+        };
+        let publications = crate::services::publication::encode_publications(&catalog, &events)?;
+        store.save_refresh(&catalog, &events, &publications).await?;
+        Ok(result)
+    }
 
     #[tokio::test]
     async fn sqlx_catalog_round_trips_state_and_outbox() {
@@ -160,6 +191,11 @@ mod tests {
             event_type: "listed".into(),
             ..Default::default()
         }];
+        let publications = vec![crate::services::publication::StoredPublication {
+            event_id: events[0].event_id.clone(),
+            sequence: 1,
+            payload: vec![1, 2, 3],
+        }];
         let catalog = ReferenceCatalog {
             lifecycle_events: events.clone(),
             generation: 1.into(),
@@ -168,7 +204,10 @@ mod tests {
         };
         {
             let mut store = SqlxCatalogStore::open(&path).await.unwrap();
-            store.save_refresh(&catalog, &events).await.unwrap();
+            store
+                .save_refresh(&catalog, &events, &publications)
+                .await
+                .unwrap();
         }
 
         let mut reopened = SqlxCatalogStore::open(&path).await.unwrap();
@@ -176,19 +215,82 @@ mod tests {
         assert_eq!(reopened.pending_event_count().await.unwrap(), 1);
         // Idempotent refresh persistence must not inflate the materialized
         // counter when the event ID already exists in the outbox.
-        reopened.save_refresh(&catalog, &events).await.unwrap();
-        assert_eq!(reopened.pending_event_count().await.unwrap(), 1);
-        assert_eq!(reopened.pending_events(10).await.unwrap(), events);
         reopened
-            .acknowledge_pending_events(&["reference:unknown".into()])
+            .save_refresh(&catalog, &events, &publications)
+            .await
+            .unwrap();
+        assert_eq!(reopened.pending_event_count().await.unwrap(), 1);
+        assert_eq!(
+            reopened.pending_publications(10).await.unwrap(),
+            publications
+        );
+        reopened
+            .acknowledge_publications(&["reference:unknown".into()])
             .await
             .unwrap();
         assert_eq!(reopened.pending_event_count().await.unwrap(), 1);
         reopened
-            .acknowledge_pending_events(&["reference:00000000000000000001".into()])
+            .acknowledge_publications(&["reference:00000000000000000001".into()])
             .await
             .unwrap();
         assert_eq!(reopened.pending_event_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn publication_outbox_preserves_each_committed_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let asset = |status| crate::domain::Asset {
+            asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
+            code: "BTC".into(),
+            asset_class: kairos_primitives::AssetClass::Crypto,
+            status,
+            ..Default::default()
+        };
+        let mut catalog = ReferenceCatalog::default();
+        let first = catalog.apply(
+            ProviderCatalog {
+                assets: vec![asset(kairos_primitives::ReferenceStatus::Active)],
+                ..Default::default()
+            },
+            10.into(),
+        );
+        let first_publication =
+            crate::services::publication::encode_publications(&catalog, &first).unwrap();
+        let mut store = SqlxCatalogStore::open(&path).await.unwrap();
+        store
+            .save_refresh(&catalog, &first, &first_publication)
+            .await
+            .unwrap();
+
+        let second = catalog.apply(
+            ProviderCatalog {
+                assets: vec![asset(kairos_primitives::ReferenceStatus::Inactive)],
+                ..Default::default()
+            },
+            20.into(),
+        );
+        let second_publication =
+            crate::services::publication::encode_publications(&catalog, &second).unwrap();
+        store
+            .save_refresh(&catalog, &second, &second_publication)
+            .await
+            .unwrap();
+
+        let pending = store.pending_publications(10).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        match kairos_reference_contract::decode_event(&pending[0].payload).unwrap() {
+            kairos_reference_contract::ReferenceEvent::AssetUpserted(event) => {
+                assert_eq!(event.asset().status().variant_name(), Some("ACTIVE"));
+            }
+            _ => panic!("unexpected first event kind"),
+        }
+        match kairos_reference_contract::decode_event(&pending[1].payload).unwrap() {
+            kairos_reference_contract::ReferenceEvent::AssetUpdated(event) => {
+                assert_eq!(event.asset().status().variant_name(), Some("INACTIVE"));
+            }
+            _ => panic!("unexpected second event kind"),
+        }
     }
 
     #[tokio::test]
@@ -209,7 +311,7 @@ mod tests {
             market_id: market_id.clone(),
             market_key: "btc-usdt".into(),
             instrument_id: instrument_id.clone(),
-            listing_id: ListingId::new("listing:binance:btc-usdt").unwrap(),
+            listing_id: Some(ListingId::new("listing:binance:btc-usdt").unwrap()),
             exchange_id: Exchange::new("binance").unwrap(),
             market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
             source_symbol: Symbol::new("BTCUSDT").unwrap(),
@@ -224,7 +326,7 @@ mod tests {
             ..Default::default()
         };
         let mut store = SqlxCatalogStore::open(&path).await.unwrap();
-        store.save_refresh(&catalog, &[]).await.unwrap();
+        store.save_refresh(&catalog, &[], &[]).await.unwrap();
         sqlx::query("CREATE TABLE reconcile_updates(count INTEGER NOT NULL)")
             .execute(&store.pool)
             .await
@@ -233,7 +335,7 @@ mod tests {
             .execute(&store.pool)
             .await
             .unwrap();
-        store.save_refresh(&catalog, &[]).await.unwrap();
+        store.save_refresh(&catalog, &[], &[]).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reconcile_updates")
                 .fetch_one(&store.pool)
@@ -363,8 +465,7 @@ mod tests {
         store.save_last_good("provider-a", &catalog).await.unwrap();
         assert!(store.load_last_good("provider-a").await.unwrap().is_none());
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
-        catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 1.into())
+        reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 1)
             .await
             .unwrap();
         assert_eq!(
@@ -409,8 +510,7 @@ mod tests {
             .await
             .unwrap();
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
-        catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 1.into())
+        reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 1)
             .await
             .unwrap();
         store
@@ -428,8 +528,7 @@ mod tests {
             Some(page("provider:old", "active"))
         );
         assert!(!store.staged_pages("provider-a").await.unwrap().is_empty());
-        catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 2.into())
+        reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 2)
             .await
             .unwrap();
         assert_eq!(
@@ -477,7 +576,7 @@ mod tests {
                 market_id,
                 market_key: "test.TEST".into(),
                 instrument_id,
-                listing_id,
+                listing_id: Some(listing_id),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
                 market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
                 source_symbol: Symbol::new("TEST").unwrap(),
@@ -493,28 +592,23 @@ mod tests {
             .await
             .unwrap();
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
-        let first = catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 10.into())
+        let first = reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 10)
             .await
-            .unwrap()
             .unwrap();
         assert!(first.changed);
         assert_eq!(first.event_count, 4);
         assert_eq!(first.generation.get(), 1);
         assert_eq!(first.event_sequence.get(), 4);
         assert_eq!(first.market_count, 1);
-        let events = catalog_store.pending_events(10).await.unwrap();
-        assert_eq!(events.len(), 4);
-        assert!(events.iter().all(|event| {
-            event.operation.as_deref() == Some("upsert")
-                && event.generation.get() == 1
-                && event.record_payload_json.is_some()
+        let publications = catalog_store.pending_publications(10).await.unwrap();
+        assert_eq!(publications.len(), 4);
+        assert!(publications.iter().all(|event| {
+            event.event_id.starts_with("reference:")
+                && kairos_reference_contract::decode_event(&event.payload).is_ok()
         }));
 
-        let second = catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 20.into())
+        let second = reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 20)
             .await
-            .unwrap()
             .unwrap();
         assert!(!second.changed);
         assert_eq!(second.event_count, 0);
@@ -542,8 +636,7 @@ mod tests {
             .save_last_good("provider-a", &catalog("active"))
             .await
             .unwrap();
-        catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 1.into())
+        reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 1)
             .await
             .unwrap();
         provider_store
@@ -551,8 +644,7 @@ mod tests {
             .await
             .unwrap();
 
-        let error = catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 2.into())
+        let error = reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 2)
             .await
             .unwrap_err()
             .to_string();
@@ -605,10 +697,8 @@ mod tests {
         let before = process_rss_kib();
         let started = std::time::Instant::now();
         let mut catalog_store = SqlxCatalogStore::open(&path).await.unwrap();
-        let result = catalog_store
-            .reconcile_provider_facts(&ProviderCatalog::default(), 1.into())
+        let result = reconcile_candidate(&mut catalog_store, &ProviderCatalog::default(), 1)
             .await
-            .unwrap()
             .unwrap();
         let after = process_rss_kib();
         eprintln!(
@@ -751,12 +841,12 @@ impl SqlxProviderSyncStore {
     }
 }
 
-impl ProviderSyncStore for SqlxProviderSyncStore {
-    fn supports_normalized_promotion(&self) -> bool {
+impl SqlxProviderSyncStore {
+    pub(crate) fn supports_normalized_promotion(&self) -> bool {
         self.normalized_promotion
     }
 
-    async fn load_state(
+    pub(crate) async fn load_state(
         &mut self,
         provider: &str,
     ) -> ReferenceResult<Option<(Option<String>, Option<ProviderCatalog>)>> {
@@ -775,7 +865,8 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn save_state(
+    #[cfg(test)]
+    pub(crate) async fn save_state(
         &mut self,
         provider: &str,
         cursor: Option<&str>,
@@ -804,7 +895,11 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn load_last_good(&mut self, provider: &str) -> ReferenceResult<Option<ProviderCatalog>> {
+    #[cfg(test)]
+    pub(crate) async fn load_last_good(
+        &mut self,
+        provider: &str,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.run(|pool| async move {
             let rows = sqlx::query(
                 "SELECT record_kind, payload FROM reference_provider_records WHERE provider = ? ORDER BY record_kind, record_id",
@@ -829,7 +924,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn has_last_good(&mut self, provider: &str) -> ReferenceResult<bool> {
+    pub(crate) async fn has_last_good(&mut self, provider: &str) -> ReferenceResult<bool> {
         self.run(|pool| async move {
             Ok(sqlx::query_scalar::<_, i64>(
                 "SELECT EXISTS(\
@@ -855,7 +950,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn save_last_good(
+    pub(crate) async fn save_last_good(
         &mut self,
         provider: &str,
         catalog: &ProviderCatalog,
@@ -896,7 +991,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn append_staged_page(
+    pub(crate) async fn append_staged_page(
         &mut self,
         provider: &str,
         cursor: Option<&str>,
@@ -928,7 +1023,10 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn staged_pages(&mut self, provider: &str) -> ReferenceResult<Vec<ProviderCatalog>> {
+    pub(crate) async fn staged_pages(
+        &mut self,
+        provider: &str,
+    ) -> ReferenceResult<Vec<ProviderCatalog>> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             let rows = sqlx::query(
@@ -956,7 +1054,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn clear_staged_pages(&mut self, provider: &str) -> ReferenceResult<()> {
+    pub(crate) async fn clear_staged_pages(&mut self, provider: &str) -> ReferenceResult<()> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             let mut tx = pool.begin().await?;
@@ -974,7 +1072,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn promote_staged(&mut self, provider: &str) -> ReferenceResult<()> {
+    pub(crate) async fn promote_staged(&mut self, provider: &str) -> ReferenceResult<()> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             let mut tx = pool.begin().await?;
@@ -990,7 +1088,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn remove_last_good(&mut self, provider: &str) -> ReferenceResult<()> {
+    pub(crate) async fn remove_last_good(&mut self, provider: &str) -> ReferenceResult<()> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             let mut tx = pool.begin().await?;
@@ -1001,7 +1099,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn paused_sources(&mut self) -> ReferenceResult<Vec<String>> {
+    pub(crate) async fn paused_sources(&mut self) -> ReferenceResult<Vec<String>> {
         self.run(|pool| async move {
             sqlx::query_scalar::<_, String>(
                 "SELECT provider FROM reference_provider_control WHERE paused = 1 ORDER BY provider",
@@ -1012,7 +1110,11 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn set_source_paused(&mut self, provider: &str, paused: bool) -> ReferenceResult<()> {
+    pub(crate) async fn set_source_paused(
+        &mut self,
+        provider: &str,
+        paused: bool,
+    ) -> ReferenceResult<()> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             sqlx::query("INSERT INTO reference_provider_control(provider, paused, updated_at_unix_nanos) VALUES (?, ?, ?) ON CONFLICT(provider) DO UPDATE SET paused = excluded.paused, updated_at_unix_nanos = excluded.updated_at_unix_nanos")
@@ -1026,7 +1128,10 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn option_underlyings(&mut self, provider: &str) -> ReferenceResult<Vec<String>> {
+    pub(crate) async fn option_underlyings(
+        &mut self,
+        provider: &str,
+    ) -> ReferenceResult<Vec<String>> {
         let provider = provider.to_owned();
         self.run(|pool| async move {
             sqlx::query_scalar::<_, String>(
@@ -1039,7 +1144,7 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
         .await
     }
 
-    async fn set_option_underlying(
+    pub(crate) async fn set_option_underlying(
         &mut self,
         provider: &str,
         underlying: &str,
@@ -1061,8 +1166,8 @@ impl ProviderSyncStore for SqlxProviderSyncStore {
     }
 }
 
-impl CatalogStore for SqlxCatalogStore {
-    async fn load_state(&mut self) -> ReferenceResult<CatalogState> {
+impl SqlxCatalogStore {
+    pub(crate) async fn load_state(&mut self) -> ReferenceResult<CatalogState> {
         self.run(|pool| async move {
             let (generation, event_sequence, market_count) = sqlx::query_as::<_, (i64, i64, i64)>(
                 "SELECT generation,event_sequence,(SELECT COUNT(*) FROM reference_markets_current) FROM reference_meta WHERE id=1",
@@ -1078,7 +1183,7 @@ impl CatalogStore for SqlxCatalogStore {
         .await
     }
 
-    async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
+    pub(crate) async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
         self.run(|pool| async move {
             let meta =
                 sqlx::query("SELECT generation,event_sequence FROM reference_meta WHERE id = 1")
@@ -1119,11 +1224,6 @@ impl CatalogStore for SqlxCatalogStore {
                 instruments: records!("reference_instruments_current", instrument_id, Instrument),
                 listings: records!("reference_listings_current", listing_id, Listing),
                 markets: records!("reference_markets_current", market_id, Market),
-                financial_products: records!(
-                    "reference_financial_products_current",
-                    product_id,
-                    FinancialProduct
-                ),
                 execution_accesses: records!(
                     "reference_execution_accesses_current",
                     access_id,
@@ -1157,10 +1257,51 @@ impl CatalogStore for SqlxCatalogStore {
         .await
     }
 
-    async fn save_refresh(
+    pub(crate) async fn load_provider_candidate(
+        &mut self,
+        overlay: &ProviderCatalog,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let catalogs = self
+            .run(|pool| async move {
+                let rows = sqlx::query(
+                    "WITH effective AS ( \
+                       SELECT r.provider,r.record_kind,r.record_id,r.payload \
+                       FROM reference_provider_records r \
+                       WHERE NOT EXISTS (SELECT 1 FROM reference_provider_pending_promotion p WHERE p.provider=r.provider) \
+                       UNION ALL \
+                       SELECT s.provider,s.record_kind,s.record_id,s.payload \
+                       FROM reference_provider_staging s \
+                       JOIN reference_provider_pending_promotion p ON p.provider=s.provider AND p.operation='promote' \
+                       WHERE NOT EXISTS (SELECT 1 FROM reference_provider_staging newer \
+                         WHERE newer.provider=s.provider AND newer.record_kind=s.record_kind \
+                           AND newer.record_id=s.record_id AND newer.ordinal>s.ordinal) \
+                     ) \
+                     SELECT provider,record_kind,payload FROM effective \
+                     ORDER BY provider,record_kind,record_id",
+                )
+                .fetch_all(&pool)
+                .await?;
+                let mut catalogs = std::collections::BTreeMap::<String, ProviderCatalog>::new();
+                for row in rows {
+                    let provider = row.try_get::<String, _>("provider")?;
+                    let kind = row.try_get::<String, _>("record_kind")?;
+                    let payload = row.try_get::<String, _>("payload")?;
+                    push_provider_record(catalogs.entry(provider).or_default(), &kind, payload)
+                        .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                }
+                Ok(catalogs.into_values().collect::<Vec<_>>())
+            })
+            .await?;
+        let mut inputs = catalogs.iter().collect::<Vec<_>>();
+        inputs.push(overlay);
+        ProviderCatalog::merge(inputs)
+    }
+
+    pub(crate) async fn save_refresh(
         &mut self,
         catalog: &ReferenceCatalog,
         events: &[LifecycleEvent],
+        publications: &[StoredPublication],
     ) -> ReferenceResult<()> {
         let event_payloads = events
             .iter()
@@ -1171,6 +1312,7 @@ impl CatalogStore for SqlxCatalogStore {
         let result = self
             .run(|pool| async move {
             let mut tx = pool.begin().await?;
+            commit_pending_provider_promotions(&mut tx).await?;
             replace_current_state(&mut tx, catalog).await?;
             for (offset, (event, payload)) in event_payloads.into_iter().enumerate() {
                 let market_id = event.market_id.as_ref().map(ToString::to_string);
@@ -1182,6 +1324,14 @@ impl CatalogStore for SqlxCatalogStore {
                     .saturating_add(offset as u64 + 1) as i64;
                 sqlx::query("INSERT OR IGNORE INTO reference_lifecycle(sequence,event_type,record_kind,record_id,market_id,exchange_id,event_time_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?)")
                     .bind(sequence).bind(&event.event_type).bind(&event.record_kind).bind(&event.record_id).bind(market_id).bind(exchange_id).bind(event.event_time_unix_nanos.get() as i64).bind(&payload).execute(&mut *tx).await?;
+            }
+            for publication in publications {
+                sqlx::query("INSERT OR IGNORE INTO reference_publication_outbox(sequence,event_id,payload) VALUES (?,?,?)")
+                    .bind(publication.sequence as i64)
+                    .bind(&publication.event_id)
+                    .bind(&publication.payload)
+                    .execute(&mut *tx)
+                    .await?;
             }
             tx.commit().await
             })
@@ -1198,35 +1348,40 @@ impl CatalogStore for SqlxCatalogStore {
         result
     }
 
-    async fn reconcile_provider_facts(
+    pub(crate) async fn pending_publications(
         &mut self,
-        overlay: &ProviderCatalog,
-        now: kairos_primitives::UnixNanos,
-    ) -> ReferenceResult<Option<NormalizedRefresh>> {
-        let overlay = provider_records(overlay)?;
+        limit: usize,
+    ) -> ReferenceResult<Vec<StoredPublication>> {
         self.run(|pool| async move {
-            reconcile_normalized_provider_facts(&pool, overlay, now.get() as i64).await
-        })
-        .await
-        .map(Some)
-    }
-
-    async fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.payloads(
-            "SELECT payload FROM reference_lifecycle WHERE sequence > (SELECT published_sequence FROM reference_publication_state WHERE id = 1) ORDER BY sequence LIMIT ?",
-            limit as i64,
-        )
-        .await
-    }
-    async fn pending_event_count(&mut self) -> ReferenceResult<usize> {
-        self.run(|pool| async move {
-            Ok(sqlx::query_scalar::<_, i64>("SELECT MAX(0, (SELECT event_sequence FROM reference_meta WHERE id = 1) - published_sequence) FROM reference_publication_state WHERE id = 1")
-                .fetch_one(&pool)
-                .await? as usize)
+            let rows = sqlx::query(
+                "SELECT sequence,event_id,payload FROM reference_publication_outbox ORDER BY sequence LIMIT ?",
+            )
+            .bind(limit as i64)
+            .fetch_all(&pool)
+            .await?;
+            rows.into_iter()
+                .map(|row| {
+                    Ok(StoredPublication {
+                        sequence: row.try_get::<i64, _>("sequence")? as u64,
+                        event_id: row.try_get("event_id")?,
+                        payload: row.try_get("payload")?,
+                    })
+                })
+                .collect::<Result<Vec<_>, sqlx::Error>>()
         })
         .await
     }
-    async fn lifecycle_events(
+    pub(crate) async fn pending_event_count(&mut self) -> ReferenceResult<usize> {
+        self.run(|pool| async move {
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reference_publication_outbox")
+                    .fetch_one(&pool)
+                    .await? as usize,
+            )
+        })
+        .await
+    }
+    pub(crate) async fn lifecycle_events(
         &mut self,
         from: Option<u64>,
         to: Option<u64>,
@@ -1234,7 +1389,7 @@ impl CatalogStore for SqlxCatalogStore {
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         self.lifecycle_payloads(from, to, None, None, limit).await
     }
-    async fn lifecycle_events_filtered(
+    pub(crate) async fn lifecycle_events_filtered(
         &mut self,
         from: Option<u64>,
         to: Option<u64>,
@@ -1245,7 +1400,10 @@ impl CatalogStore for SqlxCatalogStore {
         self.lifecycle_payloads(from, to, time_from, time_to, limit)
             .await
     }
-    async fn acknowledge_pending_events(&mut self, event_ids: &[String]) -> ReferenceResult<()> {
+    pub(crate) async fn acknowledge_publications(
+        &mut self,
+        event_ids: &[String],
+    ) -> ReferenceResult<()> {
         let mut sequences = event_ids
             .iter()
             .filter_map(|id| id.rsplit(':').next()?.parse::<i64>().ok())
@@ -1274,6 +1432,10 @@ impl CatalogStore for SqlxCatalogStore {
                 .bind(next)
                 .execute(&mut *tx)
                 .await?;
+                sqlx::query("DELETE FROM reference_publication_outbox WHERE sequence <= ?")
+                    .bind(next)
+                    .execute(&mut *tx)
+                    .await?;
             }
             tx.commit().await
         })
@@ -1281,37 +1443,13 @@ impl CatalogStore for SqlxCatalogStore {
     }
 }
 
-async fn reconcile_normalized_provider_facts(
-    pool: &SqlitePool,
-    overlay: Vec<(&'static str, String, String)>,
-    now: i64,
-) -> sqlx::Result<NormalizedRefresh> {
-    let mut tx = pool.begin().await?;
-    for statement in [
-        "CREATE TEMP TABLE IF NOT EXISTS reference_canonical_candidate(record_kind TEXT NOT NULL,record_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(record_kind,record_id)) WITHOUT ROWID",
-        "CREATE TEMP TABLE IF NOT EXISTS reference_current_records(record_kind TEXT NOT NULL,record_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(record_kind,record_id)) WITHOUT ROWID",
-        "CREATE TEMP TABLE IF NOT EXISTS reference_reconcile_changes(record_kind TEXT NOT NULL,record_id TEXT NOT NULL,operation TEXT NOT NULL,previous_payload TEXT,next_payload TEXT,PRIMARY KEY(record_kind,record_id)) WITHOUT ROWID",
-        "DELETE FROM reference_canonical_candidate",
-        "DELETE FROM reference_current_records",
-        "DELETE FROM reference_reconcile_changes",
-        "INSERT INTO reference_current_records SELECT 'entity',entity_id,payload FROM reference_entities_current",
-        "INSERT INTO reference_current_records SELECT 'asset',asset_id,payload FROM reference_assets_current",
-        "INSERT INTO reference_current_records SELECT 'instrument',instrument_id,payload FROM reference_instruments_current",
-        "INSERT INTO reference_current_records SELECT 'listing',listing_id,payload FROM reference_listings_current",
-        "INSERT INTO reference_current_records SELECT 'market',market_id,payload FROM reference_markets_current",
-        "INSERT INTO reference_current_records SELECT 'financial_product',product_id,payload FROM reference_financial_products_current",
-        "INSERT INTO reference_current_records SELECT 'execution_access',access_id,payload FROM reference_execution_accesses_current",
-        "INSERT INTO reference_current_records SELECT 'market_data_access',access_id,payload FROM reference_market_data_accesses_current",
-    ] {
-        sqlx::query(statement).execute(&mut *tx).await?;
-    }
-
-    // Consume completed provider scans inside the canonical commit. Until
-    // this transaction succeeds, prior last-known-good facts remain visible.
+async fn commit_pending_provider_promotions(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+) -> sqlx::Result<()> {
     sqlx::query(
         "DELETE FROM reference_provider_records WHERE provider IN (SELECT provider FROM reference_provider_pending_promotion)",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     sqlx::query(
         "INSERT INTO reference_provider_records(provider,record_kind,record_id,payload) \
@@ -1321,196 +1459,22 @@ async fn reconcile_normalized_provider_facts(
            WHERE newer.provider=s.provider AND newer.record_kind=s.record_kind \
              AND newer.record_id=s.record_id AND newer.ordinal>s.ordinal)",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     sqlx::query(
         "DELETE FROM reference_provider_staging WHERE provider IN (SELECT provider FROM reference_provider_pending_promotion)",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     sqlx::query(
         "DELETE FROM reference_provider_sync WHERE provider IN (SELECT provider FROM reference_provider_pending_promotion WHERE operation='delete')",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     sqlx::query("DELETE FROM reference_provider_pending_promotion")
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-
-    let conflict = sqlx::query(
-        "SELECT record_kind,record_id FROM reference_provider_records \
-         WHERE record_kind <> 'instrument' GROUP BY record_kind,record_id \
-         HAVING COUNT(DISTINCT payload) > 1 LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(row) = conflict {
-        return Err(sqlx::Error::Protocol(format!(
-            "irreconcilable canonical {} conflict for {}",
-            row.try_get::<String, _>("record_kind")?,
-            row.try_get::<String, _>("record_id")?
-        )));
-    }
-    let instrument_conflict = sqlx::query(
-        "SELECT record_id FROM reference_provider_records WHERE record_kind='instrument' \
-         GROUP BY record_id HAVING COUNT(DISTINCT json_remove(payload,'$.source_id','$.status')) > 1 LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(row) = instrument_conflict {
-        return Err(sqlx::Error::Protocol(format!(
-            "irreconcilable canonical instrument conflict for {}",
-            row.try_get::<String, _>("record_id")?
-        )));
-    }
-
-    sqlx::query(
-        "INSERT INTO reference_canonical_candidate(record_kind,record_id,payload) \
-         SELECT record_kind,record_id,MIN(payload) FROM reference_provider_records \
-         WHERE record_kind <> 'instrument' GROUP BY record_kind,record_id",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO reference_canonical_candidate(record_kind,record_id,payload) \
-         SELECT 'instrument',record_id,json_set(MIN(payload),'$.source_id',NULL,'$.status', \
-           CASE \
-             WHEN SUM(json_extract(payload,'$.status') IN ('active','trading')) > 0 THEN 'active' \
-             WHEN COUNT(DISTINCT json_extract(payload,'$.status')) = 1 THEN MIN(json_extract(payload,'$.status')) \
-             WHEN SUM(json_extract(payload,'$.status') = 'unknown') > 0 AND COUNT(DISTINCT json_extract(payload,'$.status')) = 2 \
-               THEN MAX(CASE WHEN json_extract(payload,'$.status') <> 'unknown' THEN json_extract(payload,'$.status') END) \
-             ELSE 'inactive' END) \
-         FROM reference_provider_records WHERE record_kind='instrument' GROUP BY record_id",
-    )
-    .execute(&mut *tx)
-    .await?;
-    for (kind, id, payload) in overlay {
-        sqlx::query("INSERT INTO reference_canonical_candidate(record_kind,record_id,payload) VALUES (?,?,?) ON CONFLICT(record_kind,record_id) DO UPDATE SET payload=excluded.payload")
-            .bind(kind).bind(id).bind(payload).execute(&mut *tx).await?;
-    }
-
-    // Markets remain resolvable after disappearance. The first missing scan
-    // turns them into tombstoned delisted rows; later scans preserve them.
-    sqlx::query(
-        "INSERT OR IGNORE INTO reference_canonical_candidate(record_kind,record_id,payload) \
-         SELECT 'market',record_id,CASE WHEN json_extract(payload,'$.status')='delisted' THEN payload \
-           ELSE json_set(payload,'$.status','delisted','$.effective_to_unix_nanos',?) END \
-         FROM reference_current_records WHERE record_kind='market'",
-    )
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
-
-    let invalid = sqlx::query_scalar::<_, String>(
-        "SELECT problem FROM ( \
-          SELECT 'listing missing instrument: '||record_id AS problem FROM reference_canonical_candidate c WHERE record_kind='listing' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.instrument_id')) \
-          UNION ALL SELECT 'listing missing exchange: '||record_id FROM reference_canonical_candidate c WHERE record_kind='listing' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate e WHERE e.record_kind='entity' AND e.record_id=json_extract(c.payload,'$.exchange_id')) \
-          UNION ALL SELECT 'listing invalid interval: '||record_id FROM reference_canonical_candidate c WHERE record_kind='listing' AND json_extract(c.payload,'$.effective_to_unix_nanos') IS NOT NULL AND json_extract(c.payload,'$.effective_to_unix_nanos')<=json_extract(c.payload,'$.effective_from_unix_nanos') \
-          UNION ALL SELECT 'instrument missing underlying: '||record_id FROM reference_canonical_candidate c WHERE record_kind='instrument' AND json_extract(c.payload,'$.underlying_instrument_id') IS NOT NULL AND (json_extract(c.payload,'$.underlying_instrument_id')=record_id OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.underlying_instrument_id'))) \
-          UNION ALL SELECT 'option instrument incomplete: '||record_id FROM reference_canonical_candidate c WHERE record_kind='instrument' AND lower(json_extract(c.payload,'$.instrument_type')) IN ('option','options') AND (json_extract(c.payload,'$.expiry_unix_nanos') IS NULL OR json_extract(c.payload,'$.strike') IS NULL OR lower(json_extract(c.payload,'$.option_right')) NOT IN ('call','put','c','p')) \
-          UNION ALL SELECT 'market missing instrument/listing/exchange: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND (NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.instrument_id')) OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate l WHERE l.record_kind='listing' AND l.record_id=json_extract(c.payload,'$.listing_id')) OR NOT EXISTS (SELECT 1 FROM reference_canonical_candidate e WHERE e.record_kind='entity' AND e.record_id=json_extract(c.payload,'$.exchange_id'))) \
-          UNION ALL SELECT 'market disagrees with listing: '||c.record_id FROM reference_canonical_candidate c JOIN reference_canonical_candidate l ON l.record_kind='listing' AND l.record_id=json_extract(c.payload,'$.listing_id') WHERE c.record_kind='market' AND json_extract(c.payload,'$.instrument_id')<>json_extract(l.payload,'$.instrument_id') \
-          UNION ALL SELECT 'market missing underlying: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.underlying_instrument_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.underlying_instrument_id')) \
-          UNION ALL SELECT 'market missing base asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.base_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.base_asset_id')) \
-          UNION ALL SELECT 'market missing quote asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.quote_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.quote_asset_id')) \
-          UNION ALL SELECT 'market invalid interval: '||record_id FROM reference_canonical_candidate c WHERE record_kind='market' AND json_extract(c.payload,'$.effective_to_unix_nanos') IS NOT NULL AND json_extract(c.payload,'$.effective_to_unix_nanos')<=json_extract(c.payload,'$.effective_from_unix_nanos') \
-          UNION ALL SELECT 'financial product missing asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.asset_id')) \
-          UNION ALL SELECT 'financial product missing currency asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='financial_product' AND json_extract(c.payload,'$.currency_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.currency_asset_id')) \
-          UNION ALL SELECT 'direct execution access missing market: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND COALESCE(json_extract(c.payload,'$.routing_mode'),'direct')='direct' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate m WHERE m.record_kind='market' AND m.record_id=COALESCE(json_extract(c.payload,'$.destination_market_id'),json_extract(c.payload,'$.market_id'))) \
-          UNION ALL SELECT 'smart execution access missing instrument: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND json_extract(c.payload,'$.routing_mode')='smart' AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate i WHERE i.record_kind='instrument' AND i.record_id=json_extract(c.payload,'$.instrument_id')) \
-          UNION ALL SELECT 'execution access missing settlement asset: '||record_id FROM reference_canonical_candidate c WHERE record_kind='execution_access' AND json_extract(c.payload,'$.settlement_asset_id') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM reference_canonical_candidate a WHERE a.record_kind='asset' AND a.record_id=json_extract(c.payload,'$.settlement_asset_id')) \
-        ) LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(problem) = invalid {
-        return Err(sqlx::Error::Protocol(problem));
-    }
-
-    sqlx::query(
-        "INSERT INTO reference_reconcile_changes(record_kind,record_id,operation,previous_payload,next_payload) \
-         SELECT n.record_kind,n.record_id,'upsert',c.payload,n.payload FROM reference_canonical_candidate n \
-         LEFT JOIN reference_current_records c USING(record_kind,record_id) WHERE c.payload IS NULL OR c.payload<>n.payload",
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO reference_reconcile_changes(record_kind,record_id,operation,previous_payload,next_payload) \
-         SELECT c.record_kind,c.record_id,'delete',c.payload,NULL FROM reference_current_records c \
-         LEFT JOIN reference_canonical_candidate n USING(record_kind,record_id) WHERE n.payload IS NULL",
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    let event_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reference_reconcile_changes")
-            .fetch_one(&mut *tx)
-            .await?;
-    let (old_generation, old_sequence) = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT generation,event_sequence FROM reference_meta WHERE id=1",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    let generation = old_generation + i64::from(event_count > 0);
-    let event_sequence = old_sequence + event_count;
-
-    if event_count > 0 {
-        sqlx::query(
-            "WITH ordered AS ( \
-               SELECT *,ROW_NUMBER() OVER (ORDER BY CASE record_kind WHEN 'entity' THEN 1 WHEN 'asset' THEN 2 WHEN 'instrument' THEN 3 WHEN 'listing' THEN 4 WHEN 'financial_product' THEN 5 WHEN 'execution_access' THEN 6 WHEN 'market' THEN 7 ELSE 8 END,record_id) AS offset \
-               FROM reference_reconcile_changes) \
-             INSERT INTO reference_lifecycle(sequence,event_type,record_kind,record_id,market_id,exchange_id,event_time_unix_nanos,payload) \
-             SELECT ?+offset, \
-               CASE WHEN record_kind='market' THEN CASE WHEN previous_payload IS NULL THEN 'listed' WHEN json_extract(previous_payload,'$.source_symbol')<>json_extract(next_payload,'$.source_symbol') THEN 'symbol_changed' WHEN json_extract(previous_payload,'$.status')<>json_extract(next_payload,'$.status') THEN 'status_changed' ELSE 'market_changed' END \
-                    ELSE record_kind||CASE WHEN operation='delete' THEN '_removed' WHEN previous_payload IS NULL THEN '_added' ELSE '_changed' END END, \
-               record_kind,record_id,CASE WHEN record_kind='market' THEN record_id END, \
-               CASE WHEN record_kind='market' THEN json_extract(COALESCE(next_payload,previous_payload),'$.exchange_id') END,?, \
-               json_object('event_id',printf('reference:%020d',?+offset),'event_type',CASE WHEN record_kind='market' THEN CASE WHEN previous_payload IS NULL THEN 'listed' WHEN json_extract(previous_payload,'$.source_symbol')<>json_extract(next_payload,'$.source_symbol') THEN 'symbol_changed' WHEN json_extract(previous_payload,'$.status')<>json_extract(next_payload,'$.status') THEN 'status_changed' ELSE 'market_changed' END ELSE record_kind||CASE WHEN operation='delete' THEN '_removed' WHEN previous_payload IS NULL THEN '_added' ELSE '_changed' END END,'event_time_unix_nanos',?,'record_kind',record_kind,'record_id',record_id,'market_id',CASE WHEN record_kind='market' THEN record_id END,'instrument_id',CASE WHEN record_kind='market' THEN json_extract(COALESCE(next_payload,previous_payload),'$.instrument_id') END,'listing_id',CASE WHEN record_kind='market' THEN json_extract(COALESCE(next_payload,previous_payload),'$.listing_id') END,'exchange_id',CASE WHEN record_kind='market' THEN json_extract(COALESCE(next_payload,previous_payload),'$.exchange_id') END,'source_symbol',CASE WHEN record_kind='market' THEN json_extract(COALESCE(next_payload,previous_payload),'$.source_symbol') END,'previous_status',CASE WHEN record_kind='market' THEN json_extract(previous_payload,'$.status') END,'current_status',CASE WHEN record_kind='market' THEN json_extract(next_payload,'$.status') END,'previous_symbol',CASE WHEN record_kind='market' THEN json_extract(previous_payload,'$.source_symbol') END,'current_symbol',CASE WHEN record_kind='market' THEN json_extract(next_payload,'$.source_symbol') END,'operation',operation,'generation',?,'record_payload_json',next_payload) \
-             FROM ordered",
-        )
-        .bind(old_sequence)
-        .bind(now)
-        .bind(old_sequence)
-        .bind(now)
-        .bind(generation)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    for statement in [
-        "INSERT INTO reference_entities_current(entity_id,entity_type,status,payload) SELECT record_id,json_extract(payload,'$.entity_type'),json_extract(payload,'$.status'),payload FROM reference_canonical_candidate WHERE record_kind='entity' ON CONFLICT(entity_id) DO UPDATE SET entity_type=excluded.entity_type,status=excluded.status,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_assets_current(asset_id,code,asset_class,status,payload) SELECT record_id,json_extract(payload,'$.code'),json_extract(payload,'$.asset_class'),json_extract(payload,'$.status'),payload FROM reference_canonical_candidate WHERE record_kind='asset' ON CONFLICT(asset_id) DO UPDATE SET code=excluded.code,asset_class=excluded.asset_class,status=excluded.status,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_instruments_current(instrument_id,symbol,instrument_type,product_family,underlying_instrument_id,expiry_unix_nanos,status,payload) SELECT record_id,json_extract(payload,'$.symbol'),json_extract(payload,'$.instrument_type'),json_extract(payload,'$.product_family'),json_extract(payload,'$.underlying_instrument_id'),json_extract(payload,'$.expiry_unix_nanos'),json_extract(payload,'$.status'),payload FROM reference_canonical_candidate WHERE record_kind='instrument' ON CONFLICT(instrument_id) DO UPDATE SET symbol=excluded.symbol,instrument_type=excluded.instrument_type,product_family=excluded.product_family,underlying_instrument_id=excluded.underlying_instrument_id,expiry_unix_nanos=excluded.expiry_unix_nanos,status=excluded.status,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_listings_current(listing_id,instrument_id,exchange_id,exchange_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.instrument_id'),json_extract(payload,'$.exchange_id'),json_extract(payload,'$.exchange_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='listing' ON CONFLICT(listing_id) DO UPDATE SET instrument_id=excluded.instrument_id,exchange_id=excluded.exchange_id,exchange_symbol=excluded.exchange_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_markets_current(market_id,source_id,market_key,instrument_id,listing_id,exchange_id,market_type,asset_type,underlying_instrument_id,source_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.source_id'),json_extract(payload,'$.market_key'),json_extract(payload,'$.instrument_id'),json_extract(payload,'$.listing_id'),json_extract(payload,'$.exchange_id'),json_extract(payload,'$.market_type'),json_extract(payload,'$.asset_type'),json_extract(payload,'$.underlying_instrument_id'),json_extract(payload,'$.source_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='market' ON CONFLICT(market_id) DO UPDATE SET source_id=excluded.source_id,market_key=excluded.market_key,instrument_id=excluded.instrument_id,listing_id=excluded.listing_id,exchange_id=excluded.exchange_id,market_type=excluded.market_type,asset_type=excluded.asset_type,underlying_instrument_id=excluded.underlying_instrument_id,source_symbol=excluded.source_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_financial_products_current(product_id,provider_id,provider_product_id,asset_id,product_type,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.provider_id'),json_extract(payload,'$.provider_product_id'),json_extract(payload,'$.asset_id'),json_extract(payload,'$.product_type'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='financial_product' ON CONFLICT(product_id) DO UPDATE SET provider_id=excluded.provider_id,provider_product_id=excluded.provider_product_id,asset_id=excluded.asset_id,product_type=excluded.product_type,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_execution_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.market_id'),json_extract(payload,'$.provider_id'),json_extract(payload,'$.product_family'),json_extract(payload,'$.provider_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='execution_access' ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
-        "INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) SELECT record_id,json_extract(payload,'$.market_id'),json_extract(payload,'$.provider_id'),json_extract(payload,'$.product_family'),json_extract(payload,'$.provider_symbol'),json_extract(payload,'$.status'),json_extract(payload,'$.effective_to_unix_nanos'),payload FROM reference_canonical_candidate WHERE record_kind='market_data_access' ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE payload<>excluded.payload",
-        "DELETE FROM reference_entities_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='entity' AND record_id=entity_id)",
-        "DELETE FROM reference_assets_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='asset' AND record_id=asset_id)",
-        "DELETE FROM reference_instruments_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='instrument' AND record_id=instrument_id)",
-        "DELETE FROM reference_listings_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='listing' AND record_id=listing_id)",
-        "DELETE FROM reference_financial_products_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='financial_product' AND record_id=product_id)",
-        "DELETE FROM reference_execution_accesses_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='execution_access' AND record_id=access_id)",
-        "DELETE FROM reference_market_data_accesses_current WHERE NOT EXISTS(SELECT 1 FROM reference_canonical_candidate WHERE record_kind='market_data_access' AND record_id=access_id)",
-    ] {
-        sqlx::query(statement).execute(&mut *tx).await?;
-    }
-    sqlx::query("UPDATE reference_meta SET schema_version=?,generation=?,event_sequence=?,committed_at_unix_nanos=? WHERE id=1")
-        .bind(i64::from(kairos_reference_contract::REFERENCE_SQLITE_SCHEMA_VERSION))
-        .bind(generation).bind(event_sequence).bind(now).execute(&mut *tx).await?;
-    let market_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reference_markets_current")
-            .fetch_one(&mut *tx)
-            .await?;
-    tx.commit().await?;
-    Ok(NormalizedRefresh {
-        generation: (generation as u64).into(),
-        event_sequence: (event_sequence as u64).into(),
-        market_count: market_count as usize,
-        changed: event_count > 0,
-        event_count: event_count as usize,
-    })
+    Ok(())
 }
 
 async fn replace_current_state(
@@ -1538,7 +1502,7 @@ async fn replace_current_state(
         track!("entity", &entity.entity_id);
         sqlx::query("INSERT INTO reference_entities_current(entity_id,entity_type,status,payload) VALUES (?,?,?,?) ON CONFLICT(entity_id) DO UPDATE SET entity_type=excluded.entity_type,status=excluded.status,payload=excluded.payload WHERE reference_entities_current.payload<>excluded.payload")
             .bind(&entity.entity_id)
-            .bind(&entity.entity_type)
+            .bind(entity.entity_type.as_str())
             .bind(entity.status.as_str())
             .bind(serde_json::to_string(entity).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
             .execute(&mut **tx)
@@ -1589,7 +1553,7 @@ async fn replace_current_state(
             .bind(&market.source_id)
             .bind(&market.market_key)
             .bind(market.instrument_id.as_str())
-            .bind(market.listing_id.as_str())
+            .bind(market.listing_id.as_ref().map(|value| value.as_str()))
             .bind(market.exchange_id.as_str())
             .bind(market.market_type.as_str())
             .bind(market.asset_type.map(|value| value.as_str()))
@@ -1598,20 +1562,6 @@ async fn replace_current_state(
             .bind(market.status.as_str())
             .bind(market.effective_to_unix_nanos.map(|value| value.get() as i64))
             .bind(serde_json::to_string(market).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
-            .execute(&mut **tx)
-            .await?;
-    }
-    for product in catalog.financial_products.values() {
-        track!("financial_product", &product.product_id);
-        sqlx::query("INSERT INTO reference_financial_products_current(product_id,provider_id,provider_product_id,asset_id,product_type,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET provider_id=excluded.provider_id,provider_product_id=excluded.provider_product_id,asset_id=excluded.asset_id,product_type=excluded.product_type,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_financial_products_current.payload<>excluded.payload")
-            .bind(&product.product_id)
-            .bind(&product.provider_id)
-            .bind(&product.provider_product_id)
-            .bind(product.asset_id.as_str())
-            .bind(&product.product_type)
-            .bind(product.status.as_str())
-            .bind(product.effective_to_unix_nanos.map(|value| value.get() as i64))
-            .bind(serde_json::to_string(product).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
             .execute(&mut **tx)
             .await?;
     }
@@ -1649,7 +1599,6 @@ async fn replace_current_state(
         "DELETE FROM reference_instruments_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='instrument' AND k.record_id=reference_instruments_current.instrument_id)",
         "DELETE FROM reference_listings_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='listing' AND k.record_id=reference_listings_current.listing_id)",
         "DELETE FROM reference_markets_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market' AND k.record_id=reference_markets_current.market_id)",
-        "DELETE FROM reference_financial_products_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='financial_product' AND k.record_id=reference_financial_products_current.product_id)",
         "DELETE FROM reference_execution_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='execution_access' AND k.record_id=reference_execution_accesses_current.access_id)",
         "DELETE FROM reference_market_data_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market_data_access' AND k.record_id=reference_market_data_accesses_current.access_id)",
     ] {
@@ -1671,22 +1620,6 @@ async fn replace_current_state(
 }
 
 impl SqlxCatalogStore {
-    async fn payloads(
-        &self,
-        query: &'static str,
-        limit: i64,
-    ) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.run(|pool| async move {
-            let rows = sqlx::query(query).bind(limit).fetch_all(&pool).await?;
-            rows.into_iter()
-                .map(|row| {
-                    decode(row.try_get("payload")?)
-                        .map_err(|error| sqlx::Error::Protocol(error.to_string()))
-                })
-                .collect()
-        })
-        .await
-    }
     async fn lifecycle_payloads(
         &self,
         from: Option<u64>,

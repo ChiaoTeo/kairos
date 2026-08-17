@@ -97,6 +97,11 @@ def test_project_init_backtest_template_creates_complete_offline_starter(
         "kairos_demo.strategy:DemoBacktest", root=project, params={}
     )
     assert entrypoint.strategy.strategy_id == "demo-backtest"
+    strategy_source = (project / "kairos_demo" / "strategy.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def on_bar(" in strategy_source
+    assert "def on_market(" not in strategy_source
     assert "kairos project doctor" in (project / "KAIROS_QUICKSTART.md").read_text(
         encoding="utf-8"
     )

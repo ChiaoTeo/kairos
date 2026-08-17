@@ -1,10 +1,7 @@
 use clap::{Args, Parser, Subcommand};
-use kairos_execution::{
-    application::{
-        BacktestApplication, BacktestRequest, ExecutionFillReport, ExecutionOrderOptions,
-        SubmitOrder,
-    },
-    domain::{OrderSide, OrderType},
+use kairos_execution::application::{
+    BacktestApplication, BacktestRequest, ExecutionFillReport, ExecutionOrderOptions, OrderSide,
+    OrderType, SubmitOrder,
 };
 use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewReader};
 use kairos_primitives::{

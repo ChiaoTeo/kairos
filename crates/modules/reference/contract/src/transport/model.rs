@@ -56,7 +56,7 @@ pub struct Market {
     pub market_id: String,
     pub market_key: String,
     pub instrument_id: String,
-    pub listing_id: String,
+    pub listing_id: Option<String>,
     pub exchange_id: String,
     pub market_type: ProviderProductCode,
     pub asset_type: Option<AssetClass>,
@@ -77,40 +77,14 @@ pub struct Market {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FinancialProduct {
-    pub product_id: String,
-    pub product_type: String,
-    pub name: String,
-    pub asset_id: String,
-    pub provider_product_id: String,
-    pub provider_id: Option<String>,
-    pub issuer_id: Option<String>,
-    pub currency_asset_id: Option<String>,
-    pub min_amount: Option<String>,
-    pub max_amount: Option<String>,
-    pub apr: Option<String>,
-    pub lock_period_days: i32,
-    pub maturity_at_unix_nanos: Option<u64>,
-    pub status: String,
-    pub effective_from_unix_nanos: u64,
-    pub effective_to_unix_nanos: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAccess {
     pub access_id: String,
-    #[serde(default)]
-    pub routing_mode: String,
     #[serde(default)]
     pub instrument_id: Option<String>,
     #[serde(default)]
     pub listing_id: Option<String>,
     #[serde(default)]
     pub market_id: Option<String>,
-    #[serde(default)]
-    pub destination_market_id: Option<String>,
-    #[serde(default)]
-    pub broker_id: Option<String>,
     pub provider_id: String,
     #[serde(rename = "product_family")]
     pub provider_product: String,
@@ -152,7 +126,7 @@ pub struct LifecycleEntry {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ReferenceLatestSnapshot {
+pub struct ReferenceProjectionSnapshot {
     pub actor_id: String,
     pub workspace_id: String,
     pub launch_id: Option<String>,
@@ -164,10 +138,128 @@ pub struct ReferenceLatestSnapshot {
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
-    pub financial_products: Vec<FinancialProduct>,
     pub execution_accesses: Vec<ExecutionAccess>,
     pub market_data_accesses: Vec<MarketDataAccess>,
     pub provider_health: Vec<ProviderHealthState>,
     pub option_underlyings: Vec<String>,
     pub lifecycle_events: Vec<LifecycleEntry>,
+}
+
+impl ReferenceProjectionSnapshot {
+    /// Projection consumed by Market. Operational health, history and
+    /// unrelated catalog records are deliberately excluded.
+    pub fn market_projection(&self) -> Self {
+        let markets = self
+            .markets
+            .iter()
+            .filter(|value| active(&value.status))
+            .cloned()
+            .collect::<Vec<_>>();
+        let market_ids = markets
+            .iter()
+            .map(|value| value.market_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let instrument_ids = markets
+            .iter()
+            .map(|value| value.instrument_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.projection_base(
+            self.instruments
+                .iter()
+                .filter(|value| instrument_ids.contains(value.instrument_id.as_str()))
+                .cloned()
+                .collect(),
+            markets,
+            Vec::new(),
+            self.market_data_accesses
+                .iter()
+                .filter(|value| {
+                    active(&value.status) && market_ids.contains(value.market_id.as_str())
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// Projection consumed by Execution for admission and provider address
+    /// resolution.
+    pub fn execution_projection(&self) -> Self {
+        let markets = self
+            .markets
+            .iter()
+            .filter(|value| active(&value.status))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.projection_base(
+            Vec::new(),
+            markets,
+            self.execution_accesses
+                .iter()
+                .filter(|value| active(&value.status))
+                .cloned()
+                .collect(),
+            Vec::new(),
+        )
+    }
+
+    /// Projection consumed by Account to map provider observations to
+    /// canonical instrument and market identity.
+    pub fn account_projection(&self) -> Self {
+        let accesses = self
+            .market_data_accesses
+            .iter()
+            .filter(|value| active(&value.status))
+            .cloned()
+            .collect::<Vec<_>>();
+        let market_ids = accesses
+            .iter()
+            .map(|value| value.market_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let markets = self
+            .markets
+            .iter()
+            .filter(|value| active(&value.status) && market_ids.contains(value.market_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let instrument_ids = markets
+            .iter()
+            .map(|value| value.instrument_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.projection_base(
+            self.instruments
+                .iter()
+                .filter(|value| instrument_ids.contains(value.instrument_id.as_str()))
+                .cloned()
+                .collect(),
+            markets,
+            Vec::new(),
+            accesses,
+        )
+    }
+
+    fn projection_base(
+        &self,
+        instruments: Vec<Instrument>,
+        markets: Vec<Market>,
+        execution_accesses: Vec<ExecutionAccess>,
+        market_data_accesses: Vec<MarketDataAccess>,
+    ) -> Self {
+        Self {
+            actor_id: self.actor_id.clone(),
+            workspace_id: self.workspace_id.clone(),
+            launch_id: self.launch_id.clone(),
+            instance_id: self.instance_id.clone(),
+            generation: self.generation,
+            event_sequence: self.event_sequence,
+            instruments,
+            markets,
+            execution_accesses,
+            market_data_accesses,
+            ..Default::default()
+        }
+    }
+}
+
+fn active(status: &str) -> bool {
+    matches!(status, "active" | "trading")
 }

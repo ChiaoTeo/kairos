@@ -27,19 +27,10 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Reference | event | `AssetUpdated` | `RAD2` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `EntityUpserted` | `RENU` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `EntityUpdated` | `REND` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `FinancialProductUpserted` | `RFPU` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `FinancialProductUpdated` | `RFPD` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ExchangeUpserted` | `REU2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ExchangeUpdated` | `RED2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ProviderUpserted` | `RPU2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ProviderUpdated` | `RPD2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `BrokerUpserted` | `RBU2` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `BrokerUpdated` | `RBD2` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `ExecutionAccessUpserted` | `RXU2` | Reference Actor | Execution consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `ExecutionAccessUpdated` | `RXD2` | Reference Actor | Execution consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `MarketDataAccessUpserted` | `RMDA` | Reference Actor | Market consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `MarketDataAccessUpdated` | `RMDD` | Reference Actor | Market consumers | owner event stream / retained target |
-| DRAFT | Reference | current view | `ReferenceLatestView` | `RFV2` | Reference Actor | Execution, Market, Strategy, operations | KSS1 mmap / one writer |
 | DRAFT | Market | event | `QuoteUpdated` | `MQU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `TradeOccurred` | `MTO2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |

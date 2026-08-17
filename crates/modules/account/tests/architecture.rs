@@ -129,15 +129,43 @@ fn account_application_does_not_expose_provider_capability_or_fee_queries() {
 }
 
 #[test]
-fn account_process_separates_live_fills_from_paper_settlement() {
+fn account_process_has_one_live_fact_source_and_mode_gated_paper_settlement() {
     let process = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/process.rs"),
     )
     .expect("read account process");
-    assert!(process.contains("\"/v1/fill\""));
-    assert!(process.contains("\"/v1/order-event\""));
-    assert!(process.contains("\"/v1/simulated-fill\""));
-    assert!(process.contains("AccountEvent::Fill"));
+    assert!(!process.contains("\"/v1/fill\""));
+    assert!(!process.contains("\"/v1/order-event\""));
+    assert!(process.contains("\"/v1/simulation/settlements\""));
+    assert!(process.contains("if self.simulation_commands_enabled"));
+    assert!(process.contains("simulation settlement is disabled"));
+    assert!(process.contains("simulation command is disabled"));
+    assert!(process.contains("fn simulated_account_fill"));
+    assert!(process.contains("SimulatedSettlement"));
+    let composition = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/composition/account.rs"),
+    )
+    .expect("read Account composition");
+    assert!(composition.contains("with_simulation_commands_enabled"));
+    assert!(composition.contains("\"paper\" | \"simulated\""));
+
+    let integration = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services/integration.rs"),
+    )
+    .expect("read Account Integration ingress");
+    assert!(integration.contains("ExternalAccountEvent::Order"));
+    assert!(integration.contains("ExternalAccountEvent::Fill"));
+}
+
+#[test]
+fn account_contract_exposes_no_live_fact_mutation() {
+    let contract = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contract/src/control/account.rs"),
+    )
+    .expect("read Account control contract");
+    assert!(!contract.contains("publish_order_event"));
+    assert!(!contract.contains("publish_fill"));
+    assert!(contract.contains("apply_simulated_settlement"));
 }
 
 #[test]
@@ -393,7 +421,10 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
 
     let adapter = fs::read_to_string(account_root.join("src/services/integration.rs"))
         .expect("read Account Integration adapter");
-    assert!(adapter.contains("ReferenceSqliteReader"));
+    assert!(adapter.contains("ReferenceClient"));
+    assert!(!adapter.contains("ReferenceViewReader"));
+    assert!(!adapter.contains("rusqlite"));
+    assert!(!adapter.contains("reference_markets_current"));
     assert!(adapter.contains("Reference identity resolution expected one match"));
 
     let server = fs::read_to_string(account_root.join("src/bin/kairos-account-server.rs"))

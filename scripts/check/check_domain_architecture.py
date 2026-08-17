@@ -55,12 +55,10 @@ TYPED_FIELDS = {
         r"pub market_id: Option<MarketId>",
         r"pub source_symbol: Option<Symbol>",
     ],
-    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "reference.rs": [
+    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "view" / "mod.rs": [
         r"pub generation: Generation",
-        r"pub event_sequence: Sequence",
     ],
-    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "snapshot.rs": [
-        r"pub generation: Generation",
+    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "freshness" / "mod.rs": [
         r"pub event_sequence: Sequence",
     ],
     ROOT / "crates" / "modules" / "execution" / "src" / "application" / "mod.rs": [
@@ -70,7 +68,7 @@ TYPED_FIELDS = {
         r"pub fill_price: Option<kairos_primitives::Price>",
         r"pub occurred_at_unix_nanos: kairos_primitives::UnixNanos",
     ],
-    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "service.rs": [
+    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "model": [
         r"pub instrument_id: InstrumentId",
         r"pub market_id: Option<MarketId>",
         r"pub bid_price: Option<Price>",
@@ -87,9 +85,8 @@ TYPED_FIELDS = {
         r"pub ask_price: Price",
         r"pub quote_observed_at: UnixNanos",
         r"pub order_id: Option<OrderId>",
-        r"pub remote_order_id: Option<kairos_primitives::RemoteOrderId>",
+        r"pub remote_order_id: Option<RemoteOrderId>",
         r"pub since_unix_nanos: Option<UnixNanos>",
-        r"pub until_unix_nanos: Option<UnixNanos>",
         r"pub sequence: Sequence",
         r"pub remote_order_id: kairos_primitives::RemoteOrderId",
         r"pub symbol: Symbol",
@@ -138,7 +135,7 @@ TYPED_FIELDS = {
         r"pub leader_leg_id: LegId",
         r"pub hedge_leg_id: LegId",
     ],
-    ROOT / "crates" / "modules" / "execution" / "src" / "services" / "simulator.rs": [
+    ROOT / "crates" / "modules" / "execution" / "src" / "services" / "simulation" / "model.rs": [
         r"pub order_id: OrderId",
         r"pub instrument_id: InstrumentId",
         r"pub quantity: Quantity",
@@ -151,7 +148,7 @@ TYPED_FIELDS = {
         r"pub fee: Money",
         r"pub occurred_at_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "backtest.rs": [
+    ROOT / "crates" / "modules" / "execution" / "src" / "application" / "backtest" / "mod.rs": [
         r"pub observed_at_unix_nanos: UnixNanos",
         r"pub equity: Money",
         r"pub instrument_id: InstrumentId",
@@ -166,16 +163,8 @@ TYPED_FIELDS = {
         r"pub generation: Generation",
         r"pub event_sequence: Sequence",
     ],
-    ROOT / "crates" / "modules" / "account" / "src" / "domain" / "market_profile.rs": [
-        r"pub account_id: AccountId",
-        r"pub market_id: MarketId",
-        r"pub fee_currency: Option<Currency>",
-        r"pub observed_at_unix_nanos: UnixNanos",
-    ],
     ROOT / "crates" / "modules" / "account" / "src" / "application" / "result.rs": [
         r"pub account_id: AccountId",
-        r"pub settlement_assets: Vec<Currency>",
-        r"pub currency: Option<Currency>",
     ],
 }
 
@@ -224,7 +213,11 @@ def main() -> int:
             failures.append(f"duplicate canonical {name}: {', '.join(map(str, paths))}")
 
     for path, patterns in TYPED_FIELDS.items():
-        text = path.read_text()
+        text = (
+            "\n".join(source.read_text() for source in sorted(path.glob("*.rs")))
+            if path.is_dir()
+            else path.read_text()
+        )
         for pattern in patterns:
             if not re.search(pattern, text):
                 failures.append(f"required typed field is missing: {path} / {pattern}")

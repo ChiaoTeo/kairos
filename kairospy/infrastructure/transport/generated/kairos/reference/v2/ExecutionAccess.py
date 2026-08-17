@@ -32,98 +32,77 @@ class ExecutionAccess(object):
         return None
 
     # ExecutionAccess
-    def RoutingMode(self):
+    def InstrumentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def InstrumentId(self):
+    def ListingId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def ListingId(self):
+    def MarketId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def MarketId(self):
+    def ProviderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def DestinationMarketId(self):
+    def ProductFamily(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def BrokerId(self):
+    def ProviderSymbol(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def ProviderId(self):
+    def SettlementAssetId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # ExecutionAccess
-    def ProductFamily(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # ExecutionAccess
-    def ProviderSymbol(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # ExecutionAccess
-    def SettlementAssetId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # ExecutionAccess
     def Status(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionAccess
     def EffectiveFromUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # ExecutionAccess
     def EffectiveToUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def ExecutionAccessStart(builder):
-    builder.StartObject(14)
+    builder.StartObject(11)
 
 def Start(builder):
     ExecutionAccessStart(builder)
@@ -134,80 +113,62 @@ def ExecutionAccessAddAccessId(builder, accessId):
 def AddAccessId(builder, accessId):
     ExecutionAccessAddAccessId(builder, accessId)
 
-def ExecutionAccessAddRoutingMode(builder, routingMode):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(routingMode), 0)
-
-def AddRoutingMode(builder, routingMode):
-    ExecutionAccessAddRoutingMode(builder, routingMode)
-
 def ExecutionAccessAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
 
 def AddInstrumentId(builder, instrumentId):
     ExecutionAccessAddInstrumentId(builder, instrumentId)
 
 def ExecutionAccessAddListingId(builder, listingId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
 
 def AddListingId(builder, listingId):
     ExecutionAccessAddListingId(builder, listingId)
 
 def ExecutionAccessAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
 
 def AddMarketId(builder, marketId):
     ExecutionAccessAddMarketId(builder, marketId)
 
-def ExecutionAccessAddDestinationMarketId(builder, destinationMarketId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(destinationMarketId), 0)
-
-def AddDestinationMarketId(builder, destinationMarketId):
-    ExecutionAccessAddDestinationMarketId(builder, destinationMarketId)
-
-def ExecutionAccessAddBrokerId(builder, brokerId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(brokerId), 0)
-
-def AddBrokerId(builder, brokerId):
-    ExecutionAccessAddBrokerId(builder, brokerId)
-
 def ExecutionAccessAddProviderId(builder, providerId):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(providerId), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(providerId), 0)
 
 def AddProviderId(builder, providerId):
     ExecutionAccessAddProviderId(builder, providerId)
 
 def ExecutionAccessAddProductFamily(builder, productFamily):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(productFamily), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(productFamily), 0)
 
 def AddProductFamily(builder, productFamily):
     ExecutionAccessAddProductFamily(builder, productFamily)
 
 def ExecutionAccessAddProviderSymbol(builder, providerSymbol):
-    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(providerSymbol), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(providerSymbol), 0)
 
 def AddProviderSymbol(builder, providerSymbol):
     ExecutionAccessAddProviderSymbol(builder, providerSymbol)
 
 def ExecutionAccessAddSettlementAssetId(builder, settlementAssetId):
-    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(settlementAssetId), 0)
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(settlementAssetId), 0)
 
 def AddSettlementAssetId(builder, settlementAssetId):
     ExecutionAccessAddSettlementAssetId(builder, settlementAssetId)
 
 def ExecutionAccessAddStatus(builder, status):
-    builder.PrependUint8Slot(11, status, 0)
+    builder.PrependUint8Slot(8, status, 0)
 
 def AddStatus(builder, status):
     ExecutionAccessAddStatus(builder, status)
 
 def ExecutionAccessAddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos):
-    builder.PrependUint64Slot(12, effectiveFromUnixNanos, 0)
+    builder.PrependUint64Slot(9, effectiveFromUnixNanos, 0)
 
 def AddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos):
     ExecutionAccessAddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos)
 
 def ExecutionAccessAddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
-    builder.PrependUint64Slot(13, effectiveToUnixNanos, 0)
+    builder.PrependUint64Slot(10, effectiveToUnixNanos, 0)
 
 def AddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
     ExecutionAccessAddEffectiveToUnixNanos(builder, effectiveToUnixNanos)

@@ -1,0 +1,36 @@
+use std::collections::BTreeMap;
+
+use kairos_primitives::{ActorId, Generation, MarketId};
+use serde::{Deserialize, Serialize};
+
+use super::{
+    freshness::{DataFreshnessStatus, FeedStatus},
+    observation::{order_book::OrderBook, MarketObservation, ObservationKind},
+    source::{MarketReadiness, SourceId, SourceState},
+    subscription::SubscriptionState,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketViewFreshness {
+    pub source_id: String,
+    pub market_id: MarketId,
+    pub data_kind: ObservationKind,
+    pub last_event_time_unix_nanos: kairos_primitives::UnixNanos,
+    pub last_received_time_unix_nanos: kairos_primitives::UnixNanos,
+    pub status: DataFreshnessStatus,
+}
+
+/// Pure current state. Stream positions and replay cursors are deliberately
+/// excluded; those belong to events and ReplayCheckpoint respectively.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarketView {
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub views: BTreeMap<String, MarketObservation>,
+    pub order_books: BTreeMap<String, OrderBook>,
+    pub freshness: BTreeMap<String, MarketViewFreshness>,
+    pub subscriptions: Vec<SubscriptionState>,
+    pub sources: BTreeMap<SourceId, SourceState>,
+    pub readiness: MarketReadiness,
+    pub feed_status: FeedStatus,
+}

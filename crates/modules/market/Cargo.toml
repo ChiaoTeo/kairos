@@ -16,6 +16,7 @@ kairos-primitives = { path = "../../primitives" }
 kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
+futures-util = "0.3"
 kairos-protocol = { path = "../../platform/protocol" }
 kairos-integration = { path = "../../platform/integration" }
 kairos-transport = { path = "../../platform/transport" }
@@ -32,8 +33,6 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
-rusqlite.workspace = true
-rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 tempfile = "3"
 
 [[bench]]

@@ -79,7 +79,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
         market_id: "market:binance:spot:BTCUSDT".into(),
         market_key: "BTCUSDT".into(),
         instrument_id: "instrument:spot:BTC".into(),
-        listing_id: "listing:binance:spot:BTCUSDT".into(),
+        listing_id: Some("listing:binance:spot:BTCUSDT".into()),
         exchange_id: "exchange:binance".into(),
         market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
         source_symbol: "BTCUSDT".into(),
@@ -110,55 +110,72 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
 }
 
 #[test]
-fn reference_latest_view_round_trips_through_mmap() {
-    let root = tempfile::tempdir().unwrap();
-    let actor_id = "reference:global";
-    let mut publisher = kairos_reference_contract::MmapReferenceLatestPublisher::create(
-        root.path(),
-        actor_id,
-        1024 * 1024,
-    )
-    .unwrap();
-    publisher
-        .publish(&kairos_reference_contract::ReferenceLatestSnapshot {
-            actor_id: actor_id.into(),
-            workspace_id: "workspace:test".into(),
-            generation: 7,
-            event_sequence: 11,
-            markets: vec![Market {
-                market_id: "market:binance:spot:BTCUSDT".into(),
-                market_key: "BTCUSDT".into(),
-                instrument_id: "instrument:spot:BTC".into(),
-                listing_id: "listing:binance:spot:BTCUSDT".into(),
-                exchange_id: "exchange:binance".into(),
-                market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-                source_symbol: "BTCUSDT".into(),
+fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
+    let active_market = Market {
+        market_id: "market:active".into(),
+        instrument_id: "instrument:active".into(),
+        status: "active".into(),
+        ..Default::default()
+    };
+    let inactive_market = Market {
+        market_id: "market:inactive".into(),
+        instrument_id: "instrument:inactive".into(),
+        status: "inactive".into(),
+        ..Default::default()
+    };
+    let snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
+        actor_id: "reference-actor".into(),
+        generation: 9,
+        event_sequence: 14,
+        instruments: vec![
+            kairos_reference_contract::Instrument {
+                instrument_id: "instrument:active".into(),
                 status: "active".into(),
-                ..Market::default()
-            }],
-            provider_health: vec![kairos_reference_contract::ProviderHealthState {
-                provider_id: "binance".into(),
-                status: "ready".into(),
-                updated_at_unix_nanos: 9,
                 ..Default::default()
-            }],
-            option_underlyings: vec!["AAPL".into()],
+            },
+            kairos_reference_contract::Instrument {
+                instrument_id: "instrument:inactive".into(),
+                status: "inactive".into(),
+                ..Default::default()
+            },
+        ],
+        markets: vec![active_market, inactive_market],
+        execution_accesses: vec![kairos_reference_contract::ExecutionAccess {
+            access_id: "execution:active".into(),
+            market_id: Some("market:active".into()),
+            status: "active".into(),
             ..Default::default()
-        })
-        .unwrap();
-    let frame = kairos_reference_contract::ReferenceViewReader::open(
-        root.path(),
-        kairos_reference_contract::ReferenceViewKey::latest(actor_id),
-    )
-    .unwrap()
-    .read()
-    .unwrap();
-    assert_eq!(frame.generation(), 7);
-    assert_eq!(frame.envelope_metadata().applied_event_sequence, 11);
-    let view = frame.decode().unwrap();
-    assert_eq!(view.metadata().generation(), 7);
-    assert_eq!(view.state().markets().len(), 1);
-    assert_eq!(view.state().markets().get(0).source_symbol(), "BTCUSDT");
-    assert_eq!(view.state().provider_health().get(0).status(), "ready");
-    assert_eq!(view.state().option_underlyings().get(0), "AAPL");
+        }],
+        market_data_accesses: vec![kairos_reference_contract::MarketDataAccess {
+            access_id: "market-data:active".into(),
+            market_id: "market:active".into(),
+            status: "active".into(),
+            ..Default::default()
+        }],
+        provider_health: vec![kairos_reference_contract::ProviderHealthState::default()],
+        option_underlyings: vec!["SPY".into()],
+        lifecycle_events: vec![kairos_reference_contract::LifecycleEntry::default()],
+        ..Default::default()
+    };
+
+    let market = snapshot.market_projection();
+    assert_eq!((market.generation, market.event_sequence), (9, 14));
+    assert_eq!(market.markets.len(), 1);
+    assert_eq!(market.instruments.len(), 1);
+    assert_eq!(market.market_data_accesses.len(), 1);
+    assert!(market.execution_accesses.is_empty());
+    assert!(market.provider_health.is_empty());
+    assert!(market.option_underlyings.is_empty());
+    assert!(market.lifecycle_events.is_empty());
+
+    let execution = snapshot.execution_projection();
+    assert_eq!(execution.markets.len(), 1);
+    assert_eq!(execution.execution_accesses.len(), 1);
+    assert!(execution.market_data_accesses.is_empty());
+
+    let account = snapshot.account_projection();
+    assert_eq!(account.markets.len(), 1);
+    assert_eq!(account.instruments.len(), 1);
+    assert_eq!(account.market_data_accesses.len(), 1);
+    assert!(account.execution_accesses.is_empty());
 }

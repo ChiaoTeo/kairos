@@ -478,7 +478,7 @@ class LaunchRuntimeApplication:
                     {
                         "socket": str(self.workspace.paths.process_socket("reference")),
                         "health": str(self.workspace.paths.health_file("reference")),
-                        "snapshot": str(self.workspace.paths.child("snapshots", "v2")),
+                        "database": str(self.workspace.paths.reference_database()),
                         "actor_id": "reference-actor",
                         "required": True,
                     }

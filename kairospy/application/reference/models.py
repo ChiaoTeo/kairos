@@ -38,7 +38,7 @@ class TradingRules:
 class Market:
     id: MarketId
     instrument: InstrumentRef
-    listing_id: ListingId
+    listing_id: ListingId | None
     exchange_id: ExchangeId
     symbol: str
     market_type: str

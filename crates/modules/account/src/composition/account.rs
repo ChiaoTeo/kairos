@@ -51,8 +51,7 @@ pub struct AccountOptions {
     /// Provider-native symbol owned by this Account binding for Binance
     /// isolated margin. It is never inferred from a canonical Market ID.
     pub isolated_margin_symbol: Option<String>,
-    /// Workspace Reference SQLite database used read-only to resolve provider
-    /// symbols into canonical business identity.
+    /// Reference's canonical SQLite database, opened read-only by its contract client.
     pub reference_database: Option<PathBuf>,
 }
 
@@ -94,6 +93,10 @@ impl AccountComposition {
         health_file: Option<PathBuf>,
         publisher: Option<Box<dyn AccountSnapshotPublisher>>,
     ) -> Result<AccountProcess, String> {
+        let simulation_account = matches!(
+            self.provider.trim().to_ascii_lowercase().as_str(),
+            "paper" | "simulated"
+        );
         AccountProcess::new(
             self.application,
             account_id,
@@ -103,9 +106,14 @@ impl AccountComposition {
             publisher,
         )
         .map(|process| {
-            process
+            let process = process
                 .with_async_account_streams(self.async_account_streams)
-                .with_instrument_resolver(self.instrument_resolver)
+                .with_instrument_resolver(self.instrument_resolver);
+            if simulation_account {
+                process.with_simulation_commands_enabled()
+            } else {
+                process
+            }
         })
     }
 }
@@ -969,7 +977,9 @@ fn load_instrument_resolver(options: &AccountOptions) -> Result<AccountInstrumen
     options
         .reference_database
         .as_ref()
-        .map(AccountInstrumentResolver::from_reference_database)
+        .map(|database| {
+            AccountInstrumentResolver::from_reference_database(database, "reference-actor")
+        })
         .transpose()
         .map(|value| value.unwrap_or_default())
 }

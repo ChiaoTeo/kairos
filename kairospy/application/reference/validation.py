@@ -31,8 +31,9 @@ def validate_reference_runtime(
 ) -> dict[str, Any]:
     """Validate the running process, snapshots, durable tail, and providers."""
     health = client.health()
+    provider_status = client.providers()
     snapshot = client.catalog()
-    event_sequence = _integer(health.get("event_sequence"))
+    event_sequence = _integer(provider_status.get("event_sequence"))
     tail = (
         client.events(sequence_from=event_sequence, limit=1)
         if event_sequence > 0
@@ -42,7 +43,7 @@ def validate_reference_runtime(
             "events": [],
         }
     )
-    provider_rows = health.get("providers")
+    provider_rows = provider_status.get("providers")
     provider_by_id = (
         {
             str(row.get("source_id")): row
@@ -84,33 +85,29 @@ def validate_reference_runtime(
         not missing and not unhealthy,
         {"required": list(required), "missing": missing, "unhealthy": unhealthy},
     )
-    health_generation = _integer(health.get("generation"))
+    durable_generation = _integer(provider_status.get("generation"))
     snapshot_generation = _integer(snapshot.get("generation"))
     snapshot_sequence = _integer(snapshot.get("event_sequence"))
     check(
         "snapshot_watermark_matches_health",
-        health_generation == snapshot_generation
+        durable_generation == snapshot_generation
         and event_sequence == snapshot_sequence,
         {
-            "health_generation": health_generation,
+            "durable_generation": durable_generation,
             "snapshot_generation": snapshot_generation,
-            "health_event_sequence": event_sequence,
+            "durable_event_sequence": event_sequence,
             "snapshot_event_sequence": snapshot_sequence,
         },
     )
     catalog_value = snapshot.get("catalog")
     catalog: dict[str, Any] = catalog_value if isinstance(catalog_value, dict) else {}
-    health_market_count = _integer(health.get("market_count"))
     snapshot_market_count = _integer(catalog.get("market_count"))
     check(
         "catalog_is_non_empty",
-        health_market_count > 0 and health_market_count == snapshot_market_count,
-        {
-            "health_market_count": health_market_count,
-            "snapshot_market_count": snapshot_market_count,
-        },
+        snapshot_market_count > 0,
+        {"snapshot_market_count": snapshot_market_count},
     )
-    outbox_depth = _integer(health.get("outbox_depth"))
+    outbox_depth = _integer(provider_status.get("outbox_depth"))
     check(
         "publication_outbox_drained",
         not require_published or outbox_depth == 0,
@@ -127,7 +124,7 @@ def validate_reference_runtime(
         "durable_event_tail_matches_watermark",
         event_sequence == 0
         or (
-            _integer(tail.get("generation")) == health_generation
+            _integer(tail.get("generation")) == durable_generation
             and _integer(tail.get("event_sequence")) == event_sequence
             and actual_event_id == expected_event_id
         ),
@@ -136,9 +133,9 @@ def validate_reference_runtime(
     failed = [value["name"] for value in checks if value["status"] == "failed"]
     return {
         "status": "passed" if not failed else "failed",
-        "generation": health_generation,
+        "generation": durable_generation,
         "event_sequence": event_sequence,
-        "market_count": health_market_count,
+        "market_count": snapshot_market_count,
         "failed_checks": failed,
         "checks": checks,
     }

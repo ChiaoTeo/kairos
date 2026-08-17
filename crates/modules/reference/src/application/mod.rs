@@ -1,19 +1,15 @@
 //! Public reference use-case boundary.
 
 mod app;
+mod commands;
 pub mod control;
-mod datasets;
 mod queries;
 
 #[cfg(test)]
 mod tests;
 
 pub use app::{
-    ReferenceApplication, ReferenceCurrentView, ReferenceReadModel, ReferenceRefreshResult,
+    ReferenceApplication, ReferencePublication, ReferenceReadModel, ReferenceRefreshResult,
 };
-pub use datasets::{
-    CashDividendDatasetRecord, CashDividendDatasetRequest, CashDividendDatasetResult,
-    CashDividendInput, OptionContractDatasetRecord, OptionContractInput,
-    OptionContractSnapshotRequest, OptionContractSnapshotResult, ReferenceDatasetApplication,
-};
+pub use commands::{UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand};
 pub use queries::{LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceRecord};

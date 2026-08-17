@@ -5,21 +5,20 @@
 
 use clap::{Args, Parser, Subcommand};
 use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
-use kairos_reference::application::{ReferenceKind, ReferenceQuery};
-use kairos_reference::composition::{
-    build_application, ensure_database_parent, prepare_massive_cash_dividends,
-    prepare_massive_option_contract_snapshot, ComposedReferenceApplication,
-    MassiveReferenceDatasetConfig, ReferenceCompositionConfig, ReferenceEventWriter,
+use kairos_reference::application::{
+    ReferenceKind, ReferenceQuery, UpsertAssetCommand, UpsertInstrumentCommand,
+    UpsertListingCommand,
 };
-use kairos_reference::domain::{Asset, Instrument, Listing};
-use kairos_reference::{CashDividendDatasetRequest, OptionContractSnapshotRequest};
+use kairos_reference::composition::{
+    build_application, ensure_database_parent, ComposedReferenceApplication,
+    ReferenceCompositionConfig, ReferenceEventWriter,
+};
 use kairos_reference_contract::{
-    decode_reference_latest, ReferenceLatestSnapshot, ReferenceViewKey, ReferenceViewReader,
+    ReferenceCollection, ReferenceProjectionSnapshot, ReferenceSqliteReader,
 };
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
-use std::io::Write;
 use std::str::FromStr;
 
 #[tokio::main(flavor = "current_thread")]
@@ -27,7 +26,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let workspace = Workspace::open(&args.workspace)?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
-    let view_root = workspace.child(&["snapshots", "v2"])?;
     ensure_database_parent(&database)?;
     let output = args.output.unwrap_or_else(|| {
         workspace
@@ -35,18 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .parse()
             .expect("workspace output format validated when opened")
     });
-    if let Command::PrepareOptionContracts(command) = &args.command {
-        let value = prepare_option_contracts(&workspace, command).await?;
-        println!("{}", render(&value, output));
-        return Ok(());
-    }
-    if let Command::PrepareDividends(command) = &args.command {
-        let value = prepare_dividends(&workspace, command).await?;
-        println!("{}", render(&value, output));
-        return Ok(());
-    }
     if !args.command.requires_publication() {
-        let value = execute_read(&view_root, args.command)?;
+        let value = execute_read(&database, args.command)?;
         println!("{}", render(&value, output));
         return Ok(());
     }
@@ -70,22 +58,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn execute_read(
-    view_root: &std::path::Path,
+    database: &std::path::Path,
     command: Command,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let reader = ReferenceViewReader::open(view_root, ReferenceViewKey::latest("reference-actor"))?;
-    let frame = reader.read()?;
-    let published_at_unix_nanos = frame.envelope_metadata().published_at_unix_nanos;
-    let snapshot = decode_reference_latest(&frame)?;
-    let value = match command {
-        Command::Status | Command::Snapshot => json!({
+    let reader = ReferenceSqliteReader::open(database)?;
+    if matches!(command, Command::Status | Command::Snapshot) {
+        let watermark = reader.watermark()?;
+        let counts = reader.stats()?;
+        return Ok(json!({
             "status": "ready",
-            "generation": snapshot.generation,
-            "event_sequence": snapshot.event_sequence,
-            "published_at_unix_nanos": published_at_unix_nanos,
-            "counts": snapshot_counts(&snapshot),
-            "note": "business queries are served by the typed Reference mmap view",
-        }),
+            "generation": watermark.generation,
+            "event_sequence": watermark.event_sequence,
+            "committed_at_unix_nanos": watermark.committed_at_unix_nanos,
+            "counts": counts,
+            "note": "diagnostic query read from the Reference-owned catalog",
+        }));
+    }
+    let snapshot = diagnostic_snapshot(&reader)?;
+    let value = match command {
+        Command::Status | Command::Snapshot => unreachable!("handled before catalog reads"),
         Command::Assets { command } => match command {
             AssetCommand::List(args) => {
                 let mut values = json_records(&snapshot.assets)?;
@@ -195,17 +186,45 @@ fn execute_read(
         | Command::Sync
         | Command::Publish
         | Command::Instruments { .. }
-        | Command::Listings { .. }
-        | Command::PrepareOptionContracts(_)
-        | Command::PrepareDividends(_) => {
+        | Command::Listings { .. } => {
             unreachable!("write or acquisition command routed to its application")
         }
     };
     Ok(value)
 }
 
+fn diagnostic_snapshot(
+    reader: &ReferenceSqliteReader,
+) -> Result<ReferenceProjectionSnapshot, Box<dyn std::error::Error>> {
+    fn records<T: serde::de::DeserializeOwned>(
+        reader: &ReferenceSqliteReader,
+        collection: ReferenceCollection,
+    ) -> Result<Vec<T>, Box<dyn std::error::Error>> {
+        reader
+            .records(collection, 10_000)?
+            .into_iter()
+            .map(|value| serde_json::from_value(value).map_err(Into::into))
+            .collect()
+    }
+
+    let watermark = reader.watermark()?;
+    Ok(ReferenceProjectionSnapshot {
+        generation: watermark.generation,
+        event_sequence: watermark.event_sequence,
+        entities: records(reader, ReferenceCollection::Entities)?,
+        assets: records(reader, ReferenceCollection::Assets)?,
+        instruments: records(reader, ReferenceCollection::Instruments)?,
+        listings: records(reader, ReferenceCollection::Listings)?,
+        markets: records(reader, ReferenceCollection::Markets)?,
+        execution_accesses: records(reader, ReferenceCollection::ExecutionAccesses)?,
+        market_data_accesses: records(reader, ReferenceCollection::MarketDataAccesses)?,
+        lifecycle_events: records(reader, ReferenceCollection::LifecycleEvents)?,
+        ..Default::default()
+    })
+}
+
 fn read_query(
-    snapshot: &ReferenceLatestSnapshot,
+    snapshot: &ReferenceProjectionSnapshot,
     kind: ReferenceKind,
     query: ReferenceQuery,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -242,7 +261,7 @@ fn read_query(
 }
 
 fn snapshot_collections(
-    snapshot: &ReferenceLatestSnapshot,
+    snapshot: &ReferenceProjectionSnapshot,
     kind: ReferenceKind,
 ) -> Result<Vec<Vec<Value>>, serde_json::Error> {
     let mut all = Vec::new();
@@ -258,7 +277,6 @@ fn snapshot_collections(
     include!(Instrument, instruments);
     include!(Listing, listings);
     include!(Market, markets);
-    include!(FinancialProduct, financial_products);
     include!(ExecutionAccess, execution_accesses);
     include!(MarketDataAccess, market_data_accesses);
     include!(Event, lifecycle_events);
@@ -270,7 +288,7 @@ fn json_records<T: serde::Serialize>(records: &[T]) -> Result<Vec<Value>, serde_
 }
 
 fn find_record(
-    snapshot: &ReferenceLatestSnapshot,
+    snapshot: &ReferenceProjectionSnapshot,
     identifier: &str,
 ) -> Result<Option<Value>, serde_json::Error> {
     Ok(snapshot_collections(snapshot, ReferenceKind::All)?
@@ -290,21 +308,6 @@ fn find_record(
             .into_iter()
             .any(|field| value.get(field).and_then(Value::as_str) == Some(identifier))
         }))
-}
-
-fn snapshot_counts(snapshot: &ReferenceLatestSnapshot) -> Value {
-    json!({
-        "entities": snapshot.entities.len(),
-        "assets": snapshot.assets.len(),
-        "instruments": snapshot.instruments.len(),
-        "listings": snapshot.listings.len(),
-        "markets": snapshot.markets.len(),
-        "financial_products": snapshot.financial_products.len(),
-        "execution_accesses": snapshot.execution_accesses.len(),
-        "market_data_accesses": snapshot.market_data_accesses.len(),
-        "provider_health": snapshot.provider_health.len(),
-        "lifecycle_events": snapshot.lifecycle_events.len(),
-    })
 }
 
 fn matches_json(value: &Value, text: Option<&str>) -> bool {
@@ -351,7 +354,7 @@ async fn execute(
         Command::Instruments { command } => match command {
             InstrumentCommand::Add(args) => {
                 let generation = application
-                    .upsert_instrument(Instrument {
+                    .upsert_instrument(UpsertInstrumentCommand {
                         instrument_id: InstrumentId::try_from(args.instrument_id)?,
                         symbol: Symbol::try_from(args.symbol)?,
                         name: args.name,
@@ -364,7 +367,9 @@ async fn execute(
                         strike: args.strike,
                         option_right: args.option_right,
                         status: args.status.into(),
-                        ..Default::default()
+                        issuer_id: None,
+                        share_class: None,
+                        primary_currency_asset_id: None,
                     })
                     .await?;
                 publish_pending(writer, application).await?;
@@ -374,8 +379,7 @@ async fn execute(
         Command::Listings { command } => match command {
             ListingCommand::Add(args) => {
                 let generation = application
-                    .upsert_listing(Listing {
-                        source_id: None,
+                    .upsert_listing(UpsertListingCommand {
                         listing_id: ListingId::try_from(args.listing_id)?,
                         instrument_id: InstrumentId::try_from(args.instrument_id)?,
                         exchange_id: Exchange::new(args.exchange_id).expect("valid exchange id"),
@@ -432,26 +436,18 @@ async fn execute(
         Command::Query(_) | Command::Search(_) | Command::Show { .. } => {
             unreachable!("read command routed to SQLite")
         }
-        Command::PrepareOptionContracts(_) | Command::PrepareDividends(_) => {
-            unreachable!("acquisition command routed before mutable composition")
-        }
     };
     Ok(value)
 }
 
 fn publish(
     writer: Option<&mut ReferenceEventWriter>,
-    application: &ComposedReferenceApplication,
-    events: &[kairos_reference::domain::LifecycleEvent],
+    publications: &[kairos_reference::ReferencePublication],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(writer) = writer else {
         return Err("reference publication is not configured for this command".into());
     };
-    writer.publish(
-        application.generation(),
-        application.event_sequence(),
-        events,
-    )?;
+    writer.publish(publications)?;
     Ok(())
 }
 
@@ -460,138 +456,17 @@ async fn publish_pending(
     application: &mut ComposedReferenceApplication,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        let events = application.pending_events(256).await?;
-        if events.is_empty() {
+        let publications = application.pending_publications(256).await?;
+        if publications.is_empty() {
             break;
         }
-        publish(writer.as_deref_mut(), application, &events)?;
-        let event_ids = events
+        publish(writer.as_deref_mut(), &publications)?;
+        let event_ids = publications
             .iter()
-            .map(|event| event.event_id.clone())
+            .map(|event| event.event_id().to_owned())
             .collect::<Vec<_>>();
-        application.acknowledge_published_events(&event_ids).await?;
+        application.acknowledge_publications(&event_ids).await?;
     }
-    Ok(())
-}
-
-async fn prepare_option_contracts(
-    workspace: &Workspace,
-    args: &PrepareOptionContractsArgs,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let reference = kairos_reference::composition::ReferenceConfig::load(workspace)?;
-    let endpoint = args
-        .endpoint
-        .clone()
-        .or_else(|| {
-            reference
-                .providers
-                .get("massive")
-                .and_then(|value| value.endpoint.clone())
-        })
-        .unwrap_or_else(|| kairos_reference::composition::default_endpoint("massive").into());
-    let request = OptionContractSnapshotRequest {
-        underlying: args.underlying.clone(),
-        as_of: args.as_of.clone(),
-        expiration_start: args.expiration_start.clone(),
-        expiration_end: args.expiration_end.clone(),
-        option_right: Some(args.option_right.clone()),
-    };
-    let result = prepare_massive_option_contract_snapshot(
-        workspace,
-        &MassiveReferenceDatasetConfig {
-            credential_id: args.credential_id.clone(),
-            endpoint,
-        },
-        &request,
-    )
-    .await?;
-    if let Some(parent) = args.file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = args.file.with_extension("jsonl.tmp");
-    let mut output = std::fs::File::create(&temporary)?;
-    for record in &result.records {
-        serde_json::to_writer(&mut output, record)?;
-        output.write_all(b"\n")?;
-    }
-    output.sync_all()?;
-    std::fs::rename(&temporary, &args.file)?;
-    Ok(json!({
-        "status": "prepared",
-        "snapshot_id": result.snapshot_id,
-        "observed_at_unix_nanos": result.observed_at_unix_nanos,
-        "record_count": result.records.len(),
-        "file": args.file,
-        "source": "massive",
-        "credential_id": args.credential_id,
-        "point_in_time": {
-            "as_of": args.as_of,
-            "expiration_start": args.expiration_start,
-            "expiration_end": args.expiration_end,
-            "option_right": args.option_right,
-        },
-    }))
-}
-
-async fn prepare_dividends(
-    workspace: &Workspace,
-    args: &PrepareDividendsArgs,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let reference = kairos_reference::composition::ReferenceConfig::load(workspace)?;
-    let endpoint = args
-        .endpoint
-        .clone()
-        .or_else(|| {
-            reference
-                .providers
-                .get("massive")
-                .and_then(|value| value.endpoint.clone())
-        })
-        .unwrap_or_else(|| kairos_reference::composition::default_endpoint("massive").into());
-    let request = CashDividendDatasetRequest {
-        ticker: args.ticker.clone(),
-        start_date: args.start_date.clone(),
-        end_date: args.end_date.clone(),
-    };
-    let result = prepare_massive_cash_dividends(
-        workspace,
-        &MassiveReferenceDatasetConfig {
-            credential_id: args.credential_id.clone(),
-            endpoint,
-        },
-        &request,
-    )
-    .await?;
-    write_json_lines_atomically(&args.file, &result.records)?;
-    Ok(json!({
-        "status": "prepared",
-        "record_count": result.records.len(),
-        "file": args.file,
-        "source": "massive",
-        "credential_id": args.credential_id,
-        "coverage": {
-            "ticker": args.ticker,
-            "start_date": args.start_date,
-            "end_date": args.end_date,
-        },
-    }))
-}
-
-fn write_json_lines_atomically<T: serde::Serialize>(
-    file: &std::path::Path,
-    records: &[T],
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = file.with_extension("jsonl.tmp");
-    let mut output = std::fs::File::create(&temporary)?;
-    for record in records {
-        serde_json::to_writer(&mut output, record)?;
-        output.write_all(b"\n")?;
-    }
-    output.sync_all()?;
-    std::fs::rename(&temporary, file)?;
     Ok(())
 }
 
@@ -602,13 +477,12 @@ async fn assets(
     match command {
         AssetCommand::Add(args) => {
             let generation = application
-                .upsert_asset(Asset {
+                .upsert_asset(UpsertAssetCommand {
                     asset_id: AssetId::try_from(args.asset_id)?,
                     code: args.code,
                     name: args.name,
                     asset_class: args.asset_class.parse()?,
                     status: args.status.into(),
-                    ..Default::default()
                 })
                 .await?;
             Ok(json!({ "generation": generation }))
@@ -706,8 +580,6 @@ enum Command {
     Refresh,
     Sync,
     Publish,
-    PrepareOptionContracts(PrepareOptionContractsArgs),
-    PrepareDividends(PrepareDividendsArgs),
     Assets {
         #[command(subcommand)]
         command: AssetCommand,
@@ -734,42 +606,6 @@ enum Command {
     Show {
         identifier: String,
     },
-}
-
-#[derive(Debug, Args)]
-struct PrepareOptionContractsArgs {
-    #[arg(long)]
-    underlying: String,
-    #[arg(long)]
-    as_of: String,
-    #[arg(long)]
-    expiration_start: String,
-    #[arg(long)]
-    expiration_end: String,
-    #[arg(long, default_value = "put")]
-    option_right: String,
-    #[arg(long, default_value = "massive-readonly")]
-    credential_id: String,
-    #[arg(long)]
-    endpoint: Option<String>,
-    #[arg(long)]
-    file: std::path::PathBuf,
-}
-
-#[derive(Debug, Args)]
-struct PrepareDividendsArgs {
-    #[arg(long)]
-    ticker: String,
-    #[arg(long)]
-    start_date: String,
-    #[arg(long)]
-    end_date: String,
-    #[arg(long, default_value = "massive-readonly")]
-    credential_id: String,
-    #[arg(long)]
-    endpoint: Option<String>,
-    #[arg(long)]
-    file: std::path::PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -965,7 +801,6 @@ impl QueryArgs {
             "instrument" => ReferenceKind::Instrument,
             "listing" => ReferenceKind::Listing,
             "market" => ReferenceKind::Market,
-            "financial-product" | "financial_product" => ReferenceKind::FinancialProduct,
             "execution-access" | "execution_access" | "access" => ReferenceKind::ExecutionAccess,
             "market-data-access" | "market_data_access" | "data-access" => {
                 ReferenceKind::MarketDataAccess

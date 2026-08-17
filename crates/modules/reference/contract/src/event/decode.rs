@@ -4,16 +4,8 @@ use kairos_protocol::generated::kairos::reference::v_2 as fb;
 pub enum ReferenceEvent<'a> {
     EntityUpserted(fb::EntityUpserted<'a>),
     EntityUpdated(fb::EntityUpdated<'a>),
-    FinancialProductUpserted(fb::FinancialProductUpserted<'a>),
-    FinancialProductUpdated(fb::FinancialProductUpdated<'a>),
     AssetUpserted(fb::AssetUpserted<'a>),
     AssetUpdated(fb::AssetUpdated<'a>),
-    ExchangeUpserted(fb::ExchangeUpserted<'a>),
-    ExchangeUpdated(fb::ExchangeUpdated<'a>),
-    ProviderUpserted(fb::ProviderUpserted<'a>),
-    ProviderUpdated(fb::ProviderUpdated<'a>),
-    BrokerUpserted(fb::BrokerUpserted<'a>),
-    BrokerUpdated(fb::BrokerUpdated<'a>),
     ExecutionAccessUpserted(fb::ExecutionAccessUpserted<'a>),
     ExecutionAccessUpdated(fb::ExecutionAccessUpdated<'a>),
     MarketDataAccessUpserted(fb::MarketDataAccessUpserted<'a>),
@@ -47,16 +39,6 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
         EntityUpdated
     );
     decode!(
-        financial_product_upserted_buffer_has_identifier,
-        root_as_financial_product_upserted,
-        FinancialProductUpserted
-    );
-    decode!(
-        financial_product_updated_buffer_has_identifier,
-        root_as_financial_product_updated,
-        FinancialProductUpdated
-    );
-    decode!(
         asset_upserted_buffer_has_identifier,
         root_as_asset_upserted,
         AssetUpserted
@@ -65,36 +47,6 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
         asset_updated_buffer_has_identifier,
         root_as_asset_updated,
         AssetUpdated
-    );
-    decode!(
-        exchange_upserted_buffer_has_identifier,
-        root_as_exchange_upserted,
-        ExchangeUpserted
-    );
-    decode!(
-        exchange_updated_buffer_has_identifier,
-        root_as_exchange_updated,
-        ExchangeUpdated
-    );
-    decode!(
-        provider_upserted_buffer_has_identifier,
-        root_as_provider_upserted,
-        ProviderUpserted
-    );
-    decode!(
-        provider_updated_buffer_has_identifier,
-        root_as_provider_updated,
-        ProviderUpdated
-    );
-    decode!(
-        broker_upserted_buffer_has_identifier,
-        root_as_broker_upserted,
-        BrokerUpserted
-    );
-    decode!(
-        broker_updated_buffer_has_identifier,
-        root_as_broker_updated,
-        BrokerUpdated
     );
     decode!(
         execution_access_upserted_buffer_has_identifier,

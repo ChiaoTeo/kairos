@@ -1,8 +1,8 @@
 //! Read-only SQLite data plane for the Reference catalog.
 //!
-//! Reference is the only writer. Consumers open short-lived read-only
-//! connections through this contract so the service's private persistence
-//! implementation and SQL records do not leak across module boundaries.
+//! Reference is the only writer. Cross-module callers access this adapter only
+//! through the contract-owned `ReferenceClient`; table names and SQL remain
+//! private to this crate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,8 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 
 use crate::transport::{
-    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, MarketDataAccess,
+    Asset, Entity, ExecutionAccess, Instrument, Listing, MarketDataAccess,
+    ReferenceProjectionSnapshot,
 };
 use crate::{ContractError, ContractResult, ReferenceMarket};
 
@@ -34,7 +35,6 @@ pub struct ReferenceCatalogStats {
     pub listings: u64,
     pub markets: u64,
     pub active_markets: u64,
-    pub financial_products: u64,
     pub execution_accesses: u64,
     pub market_data_accesses: u64,
     pub lifecycle_events: u64,
@@ -47,7 +47,6 @@ pub enum ReferenceCollection {
     Instruments,
     Listings,
     Markets,
-    FinancialProducts,
     ExecutionAccesses,
     MarketDataAccesses,
     LifecycleEvents,
@@ -136,6 +135,81 @@ impl ReferenceSqliteReader {
         &self.path
     }
 
+    pub(crate) fn market_snapshot(
+        &self,
+        actor_id: &str,
+    ) -> ContractResult<ReferenceProjectionSnapshot> {
+        Ok(self
+            .scoped_snapshot(actor_id, true, false, true)?
+            .market_projection())
+    }
+
+    pub(crate) fn execution_snapshot(
+        &self,
+        actor_id: &str,
+    ) -> ContractResult<ReferenceProjectionSnapshot> {
+        Ok(self
+            .scoped_snapshot(actor_id, false, true, false)?
+            .execution_projection())
+    }
+
+    pub(crate) fn account_snapshot(
+        &self,
+        actor_id: &str,
+    ) -> ContractResult<ReferenceProjectionSnapshot> {
+        Ok(self
+            .scoped_snapshot(actor_id, true, false, true)?
+            .account_projection())
+    }
+
+    fn scoped_snapshot(
+        &self,
+        actor_id: &str,
+        include_instruments: bool,
+        include_execution_accesses: bool,
+        include_market_data_accesses: bool,
+    ) -> ContractResult<ReferenceProjectionSnapshot> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction().map_err(transport)?;
+        let watermark = read_watermark(&transaction)?;
+        let snapshot = ReferenceProjectionSnapshot {
+            actor_id: actor_id.to_owned(),
+            generation: watermark.generation,
+            event_sequence: watermark.event_sequence,
+            instruments: if include_instruments {
+                read_all(
+                    &transaction,
+                    "reference_instruments_current",
+                    "instrument_id",
+                )?
+            } else {
+                Vec::new()
+            },
+            markets: read_all(&transaction, "reference_markets_current", "market_id")?,
+            execution_accesses: if include_execution_accesses {
+                read_all(
+                    &transaction,
+                    "reference_execution_accesses_current",
+                    "access_id",
+                )?
+            } else {
+                Vec::new()
+            },
+            market_data_accesses: if include_market_data_accesses {
+                read_all(
+                    &transaction,
+                    "reference_market_data_accesses_current",
+                    "access_id",
+                )?
+            } else {
+                Vec::new()
+            },
+            ..ReferenceProjectionSnapshot::default()
+        };
+        transaction.commit().map_err(transport)?;
+        Ok(snapshot)
+    }
+
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {
         let connection = self.connection()?;
         read_watermark(&connection)
@@ -143,7 +217,7 @@ impl ReferenceSqliteReader {
 
     pub fn stats(&self) -> ContractResult<ReferenceCatalogStats> {
         let connection = self.connection()?;
-        let values: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = connection
+        let values: (i64, i64, i64, i64, i64, i64, i64, i64, i64) = connection
             .query_row(
                 "SELECT \
                  (SELECT COUNT(*) FROM reference_entities_current), \
@@ -152,7 +226,6 @@ impl ReferenceSqliteReader {
                  (SELECT COUNT(*) FROM reference_listings_current), \
                  (SELECT COUNT(*) FROM reference_markets_current), \
                  (SELECT COUNT(*) FROM reference_markets_current WHERE status = 'active'), \
-                 (SELECT COUNT(*) FROM reference_financial_products_current), \
                  (SELECT COUNT(*) FROM reference_execution_accesses_current), \
                  (SELECT COUNT(*) FROM reference_market_data_accesses_current), \
                  (SELECT COUNT(*) FROM reference_lifecycle)",
@@ -168,7 +241,6 @@ impl ReferenceSqliteReader {
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
-                        row.get(9)?,
                     ))
                 },
             )
@@ -180,16 +252,14 @@ impl ReferenceSqliteReader {
             listings: non_negative(values.3, "listings")?,
             markets: non_negative(values.4, "markets")?,
             active_markets: non_negative(values.5, "active_markets")?,
-            financial_products: non_negative(values.6, "financial_products")?,
-            execution_accesses: non_negative(values.7, "execution_accesses")?,
-            market_data_accesses: non_negative(values.8, "market_data_accesses")?,
-            lifecycle_events: non_negative(values.9, "lifecycle_events")?,
+            execution_accesses: non_negative(values.6, "execution_accesses")?,
+            market_data_accesses: non_negative(values.7, "market_data_accesses")?,
+            lifecycle_events: non_negative(values.8, "lifecycle_events")?,
         })
     }
 
     /// Read a bounded collection as contract-neutral JSON payloads. This is
-    /// intended for inspection surfaces; business modules should use typed,
-    /// scoped methods such as `markets` and `projection`.
+    /// intended only for Reference-owned inspection surfaces.
     pub fn records(
         &self,
         collection: ReferenceCollection,
@@ -215,7 +285,6 @@ impl ReferenceSqliteReader {
             ReferenceCollection::Instruments,
             ReferenceCollection::Listings,
             ReferenceCollection::Markets,
-            ReferenceCollection::FinancialProducts,
             ReferenceCollection::ExecutionAccesses,
             ReferenceCollection::MarketDataAccesses,
             ReferenceCollection::LifecycleEvents,
@@ -274,15 +343,6 @@ impl ReferenceSqliteReader {
         )
     }
 
-    pub fn financial_product(&self, product_id: &str) -> ContractResult<Option<FinancialProduct>> {
-        let connection = self.connection()?;
-        read_payload_optional(
-            &connection,
-            "SELECT payload FROM reference_financial_products_current WHERE product_id = ?",
-            product_id,
-        )
-    }
-
     pub fn listing(&self, listing_id: &str) -> ContractResult<Option<Listing>> {
         let connection = self.connection()?;
         read_payload_optional(
@@ -310,9 +370,7 @@ impl ReferenceSqliteReader {
         )
     }
 
-    /// Read a bounded, typed set of execution paths. Execution consumers use
-    /// this before preflight; they must not inspect the generic JSON collection
-    /// or infer a provider address from a MarketId.
+    /// Read a bounded, typed set of execution paths for migration diagnostics.
     pub fn execution_accesses(
         &self,
         query: &SqliteExecutionAccessQuery,
@@ -457,8 +515,8 @@ impl ReferenceSqliteReader {
             .collect()
     }
 
-    /// Read a consumer-scoped market projection and all referenced
-    /// instruments from one SQLite snapshot transaction.
+    /// Read a diagnostic market projection and all referenced instruments
+    /// from one SQLite snapshot transaction.
     pub fn projection(&self, query: &SqliteMarketQuery) -> ContractResult<ReferenceProjection> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction().map_err(transport)?;
@@ -528,9 +586,6 @@ fn collection_table(collection: ReferenceCollection) -> (&'static str, &'static 
         ReferenceCollection::Instruments => ("reference_instruments_current", "instrument_id"),
         ReferenceCollection::Listings => ("reference_listings_current", "listing_id"),
         ReferenceCollection::Markets => ("reference_markets_current", "market_id"),
-        ReferenceCollection::FinancialProducts => {
-            ("reference_financial_products_current", "product_id")
-        }
         ReferenceCollection::ExecutionAccesses => {
             ("reference_execution_accesses_current", "access_id")
         }
@@ -694,6 +749,20 @@ fn read_payload_optional<T: serde::de::DeserializeOwned>(
     payload.map(|payload| decode_payload(&payload)).transpose()
 }
 
+fn read_all<T: serde::de::DeserializeOwned>(
+    connection: &Connection,
+    table: &str,
+    key: &str,
+) -> ContractResult<Vec<T>> {
+    let sql = format!("SELECT payload FROM {table} ORDER BY {key}");
+    let mut statement = connection.prepare(&sql).map_err(transport)?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(transport)?;
+    rows.map(|row| decode_payload(&row.map_err(transport)?))
+        .collect()
+}
+
 fn decode_payload<T: serde::de::DeserializeOwned>(payload: &str) -> ContractResult<T> {
     serde_json::from_str(payload)
         .map_err(|error| ContractError::Invalid(format!("decode Reference SQLite row: {error}")))
@@ -735,6 +804,9 @@ mod tests {
                     status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);\
                  CREATE TABLE reference_instruments_current(\
                     instrument_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_entities_current(entity_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);\
+                 CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, payload TEXT);\
                  CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);\
                  CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);\
                  CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);",
@@ -799,6 +871,12 @@ mod tests {
         assert_eq!(projection.watermark.generation, 7);
         assert_eq!(projection.markets.len(), 1);
         assert_eq!(projection.instruments.len(), 1);
+
+        let scoped = reader.market_snapshot("reference-actor").unwrap();
+        assert_eq!((scoped.generation, scoped.event_sequence), (7, 11));
+        assert_eq!(scoped.markets.len(), 1);
+        assert_eq!(scoped.instruments.len(), 1);
+        assert!(scoped.execution_accesses.is_empty());
     }
 
     #[test]
@@ -818,7 +896,6 @@ mod tests {
                  CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
-                 CREATE TABLE reference_financial_products_current(product_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_market_data_accesses_current(access_id TEXT PRIMARY KEY, status TEXT, payload TEXT);
                  CREATE TABLE reference_lifecycle(sequence INTEGER PRIMARY KEY, payload TEXT);

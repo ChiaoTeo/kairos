@@ -24,13 +24,16 @@ use crate::application::{
     AccountApplication, AccountBusinessEvent, AccountRefreshReport, AccountsSnapshot, MarkToMarket,
     RefreshAccount,
 };
-use crate::domain::{AccountFill, AccountOrderObservation};
+use crate::domain::{
+    AccountFill, FillId, InstrumentId, OrderSide, Price, Quantity, SegmentKey, SignedQuantity,
+};
 use crate::services::integration::{
     AccountAsyncEventSource, AccountAsyncSnapshotGateway, AccountInstrumentResolver,
 };
 use crate::services::refresh::RefreshFetch;
+use kairos_account_contract::SimulatedSettlement;
 use kairos_integration::application::{ConnectionHealth, ConnectionLifecycle, IntegrationError};
-use kairos_primitives::AccountId;
+use kairos_primitives::{AccountId, Currency, OrderId, UnixNanos};
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -64,6 +67,7 @@ pub struct AccountProcess {
     recovery_overflowed: bool,
     async_event_queue_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     business_time_unix_nanos: Option<u64>,
+    simulation_commands_enabled: bool,
 }
 
 /// Application-owned publication capability. Concrete transport publishers
@@ -94,24 +98,6 @@ struct AsyncRefreshCompletion {
 struct AsyncStreamHealthUpdate {
     binding_id: String,
     health: ConnectionHealth,
-}
-
-/// Transport-local request for the legacy control route. The wire shape is
-/// kept here; Account contract types describe v2 events and must not become a
-/// bag of unrelated control payloads.
-#[derive(serde::Deserialize)]
-struct AccountOrderEventRequest {
-    order_id: String,
-    remote_order_id: Option<String>,
-    status: String,
-    filled_quantity: DecimalParts,
-    occurred_at_unix_nanos: u64,
-}
-
-#[derive(serde::Deserialize)]
-struct DecimalParts {
-    mantissa: i64,
-    scale: u8,
 }
 
 impl AccountProcess {
@@ -161,6 +147,7 @@ impl AccountProcess {
             recovery_overflowed: false,
             async_event_queue_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             business_time_unix_nanos: None,
+            simulation_commands_enabled: false,
         })
     }
 }
@@ -190,6 +177,14 @@ impl AccountProcess {
 
     pub(crate) fn with_instrument_resolver(mut self, resolver: AccountInstrumentResolver) -> Self {
         self.instrument_resolver = resolver;
+        self
+    }
+
+    /// Enables the Account-owned paper settlement command. Composition may
+    /// call this only for a local paper/simulated Account; live provider
+    /// processes deliberately have no external business-state write ingress.
+    pub(crate) fn with_simulation_commands_enabled(mut self) -> Self {
+        self.simulation_commands_enabled = true;
         self
     }
 
@@ -829,23 +824,33 @@ impl AccountProcess {
         }
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_json()),
-            "/v1/simulated-fill" => self.json_command(body, |application, body| {
-                let fill: AccountFill =
-                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .apply_simulated_fill(fill)
-                    .map(|_| json!({"status":"applied"}))
-                    .map_err(|error| error.to_string())
-            }),
-            "/v1/mark-to-market" => self.json_command(body, |application, body| {
-                let value: MarkToMarket =
-                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .mark_to_market(value)
-                    .map(|_| json!({"status":"applied"}))
-                    .map_err(|error| error.to_string())
-            }),
-            "/v1/time/advance" => {
+            "/v1/simulation/settlements" if self.simulation_commands_enabled => {
+                self.json_command(body, |application, body| {
+                    let settlement: SimulatedSettlement =
+                        serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                    application
+                        .apply_simulated_fill(simulated_account_fill(settlement)?)
+                        .map(|_| json!({"status":"applied"}))
+                        .map_err(|error| error.to_string())
+                })
+            }
+            "/v1/simulation/settlements" => (
+                403,
+                json!({
+                    "error":"simulation settlement is disabled for this Account process"
+                }),
+            ),
+            "/v1/mark-to-market" if self.simulation_commands_enabled => {
+                self.json_command(body, |application, body| {
+                    let value: MarkToMarket =
+                        serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                    application
+                        .mark_to_market(value)
+                        .map(|_| json!({"status":"applied"}))
+                        .map_err(|error| error.to_string())
+                })
+            }
+            "/v1/time/advance" if self.simulation_commands_enabled => {
                 let event_time = serde_json::from_str::<Value>(body)
                     .ok()
                     .and_then(|value| value.get("event_time_unix_nanos").and_then(Value::as_u64));
@@ -868,74 +873,12 @@ impl AccountProcess {
                     None => (400, json!({"error":"event_time_unix_nanos is required"})),
                 }
             }
-            "/v1/fill" => self.json_command(body, |application, body| {
-                let fill: AccountFill =
-                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                application
-                    .apply_event(crate::domain::AccountEvent::Fill(fill))
-                    .map(|applied| json!({"status":"applied", "events": applied}))
-                    .map_err(|error| error.to_string())
-            }),
-            "/v1/order-event" => self.json_command(body, |application, body| {
-                let event: AccountOrderEventRequest =
-                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
-                let active = matches!(
-                    event.status.to_ascii_lowercase().as_str(),
-                    "acknowledged" | "partially_filled" | "open" | "new"
-                );
-                let observation = AccountOrderObservation {
-                    order_id: kairos_primitives::OrderId::new(event.order_id)
-                        .map_err(|error| error.to_string())?,
-                    remote_order_id: event
-                        .remote_order_id
-                        .map(kairos_primitives::RemoteOrderId::new)
-                        .transpose()
-                        .map_err(|error| error.to_string())?,
-                    status: match event.status.to_ascii_lowercase().as_str() {
-                        "pending" => kairos_primitives::OrderStatus::Pending,
-                        "acknowledged" | "new" | "open" => {
-                            kairos_primitives::OrderStatus::Acknowledged
-                        }
-                        "accepted" => kairos_primitives::OrderStatus::Accepted,
-                        "partially_filled" | "partial" => {
-                            kairos_primitives::OrderStatus::PartiallyFilled
-                        }
-                        "filled" => kairos_primitives::OrderStatus::Filled,
-                        "canceled" | "cancelled" => kairos_primitives::OrderStatus::Canceled,
-                        "rejected" => kairos_primitives::OrderStatus::Rejected,
-                        "expired" => kairos_primitives::OrderStatus::Expired,
-                        _ => kairos_primitives::OrderStatus::Unknown,
-                    },
-                    filled_quantity: Some(
-                        kairos_primitives::Quantity::new(
-                            event.filled_quantity.mantissa,
-                            event.filled_quantity.scale,
-                        )
-                        .map_err(|error| error.to_string())?,
-                    ),
-                    active,
-                    observed_at_unix_nanos: kairos_primitives::UnixNanos::new(
-                        event.occurred_at_unix_nanos,
-                    ),
-                };
-                application
-                    .apply_event(crate::domain::AccountEvent::OrderObserved(observation))
-                    .map(|applied| json!({"status":"applied", "events": applied}))
-                    .map_err(|error| error.to_string())
-            }),
-            "/v1/fills" => match serde_json::from_str::<AccountFill>(body) {
-                Ok(fill) => match self
-                    .application
-                    .apply_event(crate::domain::AccountEvent::Fill(fill))
-                {
-                    Ok(applied) => (202, json!({"status": "accepted", "events": applied})),
-                    Err(error) => (422, json!({"error": error.to_string()})),
-                },
-                Err(error) => (
-                    400,
-                    json!({"error": format!("invalid account fill: {error}")}),
-                ),
-            },
+            "/v1/mark-to-market" | "/v1/time/advance" => (
+                403,
+                json!({
+                    "error":"simulation command is disabled for this Account process"
+                }),
+            ),
             "/v1/refresh" => {
                 self.schedule_refresh(async_refresh_sender);
                 (
@@ -1111,6 +1054,45 @@ impl AccountProcess {
         tokio::fs::write(&temporary, payload).await?;
         tokio::fs::rename(temporary, path).await
     }
+}
+
+fn simulated_account_fill(value: SimulatedSettlement) -> Result<AccountFill, String> {
+    Ok(AccountFill {
+        fill_id: FillId::new(value.fill_id).map_err(|error| error.to_string())?,
+        order_id: Some(OrderId::new(value.order_id).map_err(|error| error.to_string())?),
+        segment_key: SegmentKey::new(value.segment_key).map_err(|error| error.to_string())?,
+        instrument_id: InstrumentId::new(value.instrument_id).map_err(|error| error.to_string())?,
+        quantity: Quantity::new(value.quantity.mantissa, value.quantity.scale)
+            .map_err(|error| error.to_string())?,
+        price: Price::new(value.price.mantissa, value.price.scale)
+            .map_err(|error| error.to_string())?,
+        side: match value.side.trim().to_ascii_lowercase().as_str() {
+            "buy" => OrderSide::Buy,
+            "sell" => OrderSide::Sell,
+            _ => return Err("simulated settlement side must be buy or sell".into()),
+        },
+        settlement_asset: Some(
+            Currency::new(value.settlement_asset).map_err(|error| error.to_string())?,
+        ),
+        settlement_delta: Some(
+            SignedQuantity::new(
+                value.settlement_delta.mantissa,
+                value.settlement_delta.scale,
+            )
+            .map_err(|error| error.to_string())?,
+        ),
+        fee_asset: value
+            .fee_asset
+            .map(Currency::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        fee_amount: value
+            .fee_amount
+            .map(|amount| SignedQuantity::new(amount.mantissa, amount.scale))
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        occurred_at_unix_nanos: UnixNanos::new(value.occurred_at_unix_nanos),
+    })
 }
 
 fn external_account_event_kind(
@@ -1445,6 +1427,22 @@ mod tests {
             .apply_external_event(envelope(3, "three"))
             .unwrap_err();
         assert!(error.contains("sequence gap"));
+    }
+
+    #[test]
+    fn simulation_settlement_route_is_disabled_by_default() {
+        let mut process = process();
+        let (sender, _receiver) = mpsc::channel(1);
+        let (status, _) = process
+            .handle_request("POST", "/v1/simulation/settlements", "{}", &sender)
+            .unwrap();
+        assert_eq!(status, 403);
+
+        process.simulation_commands_enabled = true;
+        let (status, _) = process
+            .handle_request("POST", "/v1/simulation/settlements", "{}", &sender)
+            .unwrap();
+        assert_eq!(status, 422);
     }
 
     #[test]

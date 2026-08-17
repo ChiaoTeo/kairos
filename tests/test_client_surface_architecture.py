@@ -70,3 +70,24 @@ def test_research_business_use_cases_are_owned_by_application() -> None:
         "plan",
     ):
         assert operation in ResearchApplication.__dict__
+
+
+def test_python_does_not_expose_account_fact_mutation_or_legacy_backtest_settlement() -> None:
+    account_contract = (
+        ROOT / "kairospy/infrastructure/contracts/account/runtime.py"
+    ).read_text(encoding="utf-8")
+    for forbidden in (
+        "publish_order_event",
+        "publish_fill",
+        "apply_simulated_fill",
+        '"/v1/order-event"',
+        '"/v1/fill"',
+        '"/v1/simulated-fill"',
+    ):
+        assert forbidden not in account_contract
+
+    assert not (ROOT / "kairospy/application/backtest.py").exists()
+    application_exports = (ROOT / "kairospy/application/__init__.py").read_text(
+        encoding="utf-8"
+    )
+    assert "run_backtest" not in application_exports

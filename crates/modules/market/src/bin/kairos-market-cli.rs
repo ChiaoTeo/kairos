@@ -13,7 +13,9 @@ use kairos_market::composition::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
     attach_replay_source, default_endpoint, MarketProduct,
 };
-use kairos_market::{load_replay_events_many, MarketApplication, MarketDescriptor, SubscriptionId};
+use kairos_market::{
+    load_replay_events_many, MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId,
+};
 use kairos_primitives::{InstrumentId, MarketId};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
@@ -327,7 +329,7 @@ async fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>>
     runtime.subscribe_static(SubscriptionId::new("cli-once")?, "cli", market)?;
     runtime.sync_source_subscriptions().await?;
     while runtime.drive_next_source_input().await? == 0 {}
-    Ok(serde_json::to_value(runtime.snapshot())?)
+    Ok(serde_json::to_value(runtime.current_view())?)
 }
 
 async fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Error>> {
@@ -347,10 +349,10 @@ async fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Err
     while !runtime.sources_complete() {
         count += runtime.drive_next_source_input().await?;
     }
-    Ok(json!({"events_applied": count, "snapshot": runtime.snapshot()}))
+    Ok(json!({"events_applied": count, "snapshot": runtime.current_view()}))
 }
 
-fn descriptor(command: &DescriptorArgs) -> Result<MarketDescriptor, String> {
+fn descriptor(command: &DescriptorArgs) -> Result<ResolvedMarket, String> {
     descriptor_from_values(
         command.market_id.clone(),
         command.instrument_id.clone(),
@@ -366,13 +368,28 @@ fn descriptor_from_values(
     exchange_id: String,
     market_type: String,
     source_symbol: String,
-) -> Result<MarketDescriptor, String> {
-    MarketDescriptor::new(
-        market_id,
-        instrument_id,
-        exchange_id,
+) -> Result<ResolvedMarket, String> {
+    let instrument_kind = match market_type.as_str() {
+        "equity" => kairos_primitives::InstrumentKind::Equity,
+        "spot" => kairos_primitives::InstrumentKind::Spot,
+        "perpetual" | "swap" => kairos_primitives::InstrumentKind::Perpetual,
+        "future" | "futures" => kairos_primitives::InstrumentKind::Future,
+        "option" | "options" => kairos_primitives::InstrumentKind::Option,
+        "index" => kairos_primitives::InstrumentKind::Index,
+        _ => return Err(format!("unsupported market type {market_type}")),
+    };
+    let route = MarketDataRoute::new(
+        format!("cli:{market_id}"),
+        "cli",
         market_type,
         source_symbol,
+    )?;
+    ResolvedMarket::new(
+        market_id,
+        instrument_id,
+        instrument_kind,
+        exchange_id,
+        route,
     )
 }
 

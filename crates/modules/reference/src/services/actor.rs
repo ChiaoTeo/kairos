@@ -1,20 +1,21 @@
 //! Single-owner Reference actor.
 
-use super::providers::ReferenceSource;
-use super::store::CatalogStore;
+use super::publication::{encode_publications, StoredPublication};
+use super::source::ReferenceSource;
+use super::sqlx_storage::SqlxCatalogStore;
 use crate::domain::{
     unix_nanos, Asset, Instrument, LifecycleEvent, Listing, ProviderCatalog, ProviderHealth,
     ReferenceCatalog, ReferenceResult,
 };
 use tracing::info;
 
-pub struct ReferenceActor<S, C> {
+pub struct ReferenceActor {
     pub actor_id: String,
     pub metadata: CatalogMetadata,
     #[cfg(test)]
     pub catalog: ReferenceCatalog,
-    source: S,
-    store: C,
+    source: Box<dyn ReferenceSource>,
+    store: SqlxCatalogStore,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,16 +35,15 @@ impl From<&ReferenceCatalog> for CatalogMetadata {
     }
 }
 
-impl<S, C> ReferenceActor<S, C>
-where
-    S: ReferenceSource,
-    C: CatalogStore,
-{
-    pub async fn new(
+impl ReferenceActor {
+    pub async fn new<S>(
         actor_id: impl Into<String>,
         source: S,
-        mut store: C,
-    ) -> ReferenceResult<Self> {
+        mut store: SqlxCatalogStore,
+    ) -> ReferenceResult<Self>
+    where
+        S: ReferenceSource + 'static,
+    {
         #[cfg(test)]
         let catalog = store.load().await?.unwrap_or_default();
         #[cfg(test)]
@@ -70,7 +70,7 @@ where
             metadata,
             #[cfg(test)]
             catalog,
-            source,
+            source: Box::new(source),
             store,
         })
     }
@@ -81,13 +81,6 @@ where
 
     pub fn provider_health(&self) -> Vec<ProviderHealth> {
         self.source.provider_health()
-    }
-
-    pub async fn current_catalog(&mut self) -> ReferenceResult<ReferenceCatalog> {
-        self.store
-            .load()
-            .await
-            .map(|value| value.unwrap_or_default())
     }
 
     pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
@@ -122,40 +115,8 @@ where
         started: std::time::Instant,
     ) -> ReferenceResult<RefreshResult> {
         overlay.validate()?;
-        let result = self
-            .store
-            .reconcile_provider_facts(&overlay, unix_nanos())
-            .await?
-            .ok_or_else(|| {
-                crate::domain::ReferenceError::Persistence(
-                    "normalized source requires a normalized catalog store".into(),
-                )
-            })?;
-        self.metadata = CatalogMetadata {
-            generation: result.generation,
-            event_sequence: result.event_sequence,
-            market_count: result.market_count,
-        };
-        info!(
-            event = "reference_reconcile_completed",
-            component = "reference",
-            generation = result.generation.get(),
-            event_sequence = result.event_sequence.get(),
-            changed = result.changed,
-            event_count = result.event_count,
-            duration_ms = started.elapsed().as_millis() as u64,
-            mode = "sqlite_normalized",
-            "reference normalized source facts reconciled"
-        );
-        Ok(RefreshResult {
-            generation: result.generation,
-            event_sequence: result.event_sequence,
-            changed: result.changed,
-            event_count: result.event_count,
-            // Publication reads bounded durable lifecycle batches. Returning
-            // all refresh events would recreate the full-change memory spike.
-            events: Vec::new(),
-        })
+        let candidate = self.store.load_provider_candidate(&overlay).await?;
+        self.reconcile_candidate(candidate, started, true).await
     }
 
     pub async fn set_source_paused(
@@ -190,6 +151,15 @@ where
         incoming: ProviderCatalog,
         started: std::time::Instant,
     ) -> ReferenceResult<RefreshResult> {
+        self.reconcile_candidate(incoming, started, false).await
+    }
+
+    async fn reconcile_candidate(
+        &mut self,
+        incoming: ProviderCatalog,
+        started: std::time::Instant,
+        commit_provider_promotions: bool,
+    ) -> ReferenceResult<RefreshResult> {
         incoming.validate()?;
         let mut candidate = self.store.load().await?.unwrap_or_default();
         let previous_generation = candidate.generation;
@@ -200,8 +170,11 @@ where
             candidate.lifecycle_events.drain(..keep_from);
         }
         let changed = previous_generation != candidate.generation || !events.is_empty();
-        if changed {
-            self.store.save_refresh(&candidate, &events).await?;
+        if changed || commit_provider_promotions {
+            let publications = encode_publications(&candidate, &events)?;
+            self.store
+                .save_refresh(&candidate, &events, &publications)
+                .await?;
         }
         self.metadata = CatalogMetadata::from(&candidate);
         #[cfg(test)]
@@ -252,14 +225,13 @@ where
             record_id: Some(asset_id.to_string()),
             operation: Some("upsert".into()),
             generation: next.generation.get().into(),
-            record_payload_json: next
-                .assets
-                .get(asset_id.as_str())
-                .and_then(|value| serde_json::to_string(value).ok()),
             ..LifecycleEvent::default()
         };
         next.lifecycle_events.push(event.clone());
-        self.store.save_refresh(&next, &[event]).await?;
+        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
+        self.store
+            .save_refresh(&next, std::slice::from_ref(&event), &publications)
+            .await?;
         self.metadata = CatalogMetadata::from(&next);
         #[cfg(test)]
         {
@@ -293,14 +265,13 @@ where
             record_id: Some(instrument_id.to_string()),
             operation: Some("upsert".into()),
             generation: next.generation.get().into(),
-            record_payload_json: next
-                .instruments
-                .get(&instrument_id)
-                .and_then(|value| serde_json::to_string(value).ok()),
             ..LifecycleEvent::default()
         };
         next.lifecycle_events.push(event.clone());
-        self.store.save_refresh(&next, &[event]).await?;
+        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
+        self.store
+            .save_refresh(&next, std::slice::from_ref(&event), &publications)
+            .await?;
         self.metadata = CatalogMetadata::from(&next);
         #[cfg(test)]
         {
@@ -334,14 +305,13 @@ where
             record_id: Some(listing_id.to_string()),
             operation: Some("upsert".into()),
             generation: next.generation.get().into(),
-            record_payload_json: next
-                .listings
-                .get(&listing_id)
-                .and_then(|value| serde_json::to_string(value).ok()),
             ..LifecycleEvent::default()
         };
         next.lifecycle_events.push(event.clone());
-        self.store.save_refresh(&next, &[event]).await?;
+        let publications = encode_publications(&next, std::slice::from_ref(&event))?;
+        self.store
+            .save_refresh(&next, std::slice::from_ref(&event), &publications)
+            .await?;
         self.metadata = CatalogMetadata::from(&next);
         #[cfg(test)]
         {
@@ -350,8 +320,11 @@ where
         Ok(())
     }
 
-    pub async fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.store.pending_events(limit).await
+    pub async fn pending_publications(
+        &mut self,
+        limit: usize,
+    ) -> ReferenceResult<Vec<StoredPublication>> {
+        self.store.pending_publications(limit).await
     }
 
     pub async fn pending_event_count(&mut self) -> ReferenceResult<usize> {
@@ -436,11 +409,8 @@ where
         Ok(events)
     }
 
-    pub async fn acknowledge_pending_events(
-        &mut self,
-        event_ids: &[String],
-    ) -> ReferenceResult<()> {
-        self.store.acknowledge_pending_events(event_ids).await
+    pub async fn acknowledge_publications(&mut self, event_ids: &[String]) -> ReferenceResult<()> {
+        self.store.acknowledge_publications(event_ids).await
     }
 }
 
@@ -451,7 +421,6 @@ fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
         instruments: catalog.instruments.values().cloned().collect(),
         listings: catalog.listings.values().cloned().collect(),
         markets: catalog.markets.values().cloned().collect(),
-        financial_products: catalog.financial_products.values().cloned().collect(),
         execution_accesses: catalog.execution_accesses.values().cloned().collect(),
         market_data_accesses: catalog.market_data_accesses.values().cloned().collect(),
     }

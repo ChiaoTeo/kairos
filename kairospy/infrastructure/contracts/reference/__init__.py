@@ -1,10 +1,8 @@
 """Python implementation of the Reference v2 cross-process contract.
 
-Reference exposes typed event payloads, typed mmap queries, and REST control
-commands. Business callers do not read its persistence database directly.
+Reference exposes typed event payloads, contract-owned SQLite queries, and
+REST control commands. Business callers never know its persistence schema.
 """
-
-from .view import ReferenceViewKey, ReferenceViewReader
 
 
 def __getattr__(name: str):
@@ -26,7 +24,5 @@ def __getattr__(name: str):
 __all__ = [
     "ReferenceControlClient",
     "ReferenceClient",
-    "ReferenceViewKey",
-    "ReferenceViewReader",
     "decode_event",
 ]

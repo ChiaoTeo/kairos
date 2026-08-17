@@ -6,33 +6,19 @@
 
 pub mod application;
 pub mod composition;
-pub mod domain;
+mod domain;
 mod services;
 
-pub use application::market_input::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
 pub use application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
-    BacktestRunResult, CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,
-    ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
-    ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionProcess,
-    ExecutionSnapshot, ExecutionSnapshotPublisher, ExpireIntent, HedgeRequirement, IntentEvent,
-    IntentLegRequest, IntentSnapshotPublisher, IntentState, IntentStatus, QuoteObservation,
-    RefreshQuoteIntent, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
-    UnknownRemoteOrderResolution,
+    BacktestRunResult, Bar, CancelIntent, CancelOrder, CommitmentBasis, CommitmentResource,
+    CommitmentStatus, CompletionPolicy, DependencyWatermarks, ExecuteStrategyIntent,
+    ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionError, ExecutionEvent,
+    ExecutionFill, ExecutionFillReport, ExecutionLeg, ExecutionOrder, ExecutionOrderOptions,
+    ExecutionOrderStatus, ExecutionPlan, ExecutionProcess, ExecutionSnapshot, ExpireIntent,
+    FailurePolicy, HedgePolicy, HedgeRequirement, IntentEvent, IntentLegRequest, IntentLifecycle,
+    IntentState, IntentStatus, IntentType, LegLifecycle, MakerExecutionPolicy, MarketObservation,
+    OrderCommitment, OrderSide, OrderType, Quote, QuoteBar, QuoteObservation, RefreshQuoteIntent,
+    ReplaceOrder, RiskReservationSagaStatus, SnapshotWatermark, SplitOrderPolicy, SubmitOrder,
+    TradeBar, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
-pub use composition::{
-    compose_execution_connections, compose_order_entry, ExecutionConnectionOptions,
-    ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionAccountFacts,
-    QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission, QueuedExecutionRiskReservations,
-    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulatedOrderEntry,
-    SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
-    SimulationOrderStatus, SimulationResult, SocketExecutionAccountFacts,
-    SocketExecutionIntentPlanner, SocketExecutionOrderAdmission, SocketExecutionRiskReservations,
-};
-pub use domain::{
-    CompletionPolicy, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,
-    ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle, IntentType, LegLifecycle,
-    MakerExecutionPolicy, OrderSide, OrderType, SplitOrderPolicy,
-};
-pub use services::sqlx_audit::SqlxExecutionAudit;
-pub use services::sqlx_persistence::SqlxExecutionStore;

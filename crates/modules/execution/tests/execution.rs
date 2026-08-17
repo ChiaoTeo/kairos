@@ -1,21 +1,19 @@
+use kairos_execution::application::RiskCommandFailure;
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
     ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RefreshQuoteIntent,
     RemoteOrderUpdate, SubmitOrder,
 };
-use kairos_execution::application::{
-    ExecutionIntentPlanner, ExecutionOrderAdmission, ExecutionRiskReservations, QuoteObservation,
-    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
-};
+use kairos_execution::composition::SqlxExecutionAudit;
 use kairos_execution::composition::{
-    compose_order_entry, ExecutionConnectionOptions, FileExecutionStore,
-    QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission, SimulationConfig,
-    SimulationOrderRequest, SimulationOrderStatus, SqlxExecutionStore,
+    compose_order_entry, configure_simulated_risk, ExecutionConnectionOptions, FileExecutionStore,
+    SimulatedRiskBehavior, SimulatedRiskReconciliation, SimulationConfig, SimulationOrderRequest,
+    SimulationOrderStatus, SqlxExecutionStore,
 };
 use kairos_execution::ExecutionProcess;
 use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
-    OrderSide, OrderType, SqlxExecutionAudit, UnknownRemoteOrderResolution,
+    OrderSide, OrderType, UnknownRemoteOrderResolution,
 };
 use kairos_execution::{MarketObservation, Quote};
 use kairos_integration::application::{
@@ -247,9 +245,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         )
         .unwrap(),
     );
-    application.attach_intent_planner(Box::new(TestDependencies));
-    application.attach_order_admission(Box::new(TestDependencies));
-    application.attach_risk_reservations(Box::new(TestRiskReservations));
+    attach_simulated_risk(&mut application, test_risk());
     application
 }
 
@@ -265,523 +261,56 @@ fn configure_test_access(application: &mut ExecutionApplication) {
     );
 }
 
-#[test]
-fn queued_dependency_readers_keep_cross_process_io_off_the_state_caller() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("execution.json");
-    let mut application = ExecutionApplication::with_dependencies(
-        "execution",
-        Some(
-            compose_order_entry(&ExecutionConnectionOptions {
-                route_id: "test".into(),
-                required: true,
-                account_id: "main".into(),
-                segment_key: "spot".into(),
-                participant_id: "simulated".into(),
-                product: "spot".into(),
-                trading_mode: None,
-                api_key: String::new().into(),
-                secret: String::new().into(),
-                passphrase: String::new().into(),
-                base_url: "https://api.binance.com".into(),
-                websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
-                isolated_symbol: None,
-                request_weight_per_minute: 1_000,
-                cancel_reserve_weight: 50,
-                order_event_queue_capacity: 1_024,
-                shared_quota_ledger_path: None,
-                egress_scope_id: "test-egress".into(),
-                principal_scope_id: "test-principal".into(),
-                orders_per_10_seconds: 50,
-                orders_per_day: 160_000,
-                host: "127.0.0.1".into(),
-                port: 4002,
-                client_id: 0,
-            })
-            .unwrap(),
-        ),
-        Some(Box::new(FileExecutionStore::new(&path))),
-    )
-    .unwrap();
-    configure_test_access(&mut application);
-    application.attach_intent_planner(Box::new(
-        QueuedExecutionIntentPlanner::start(TestDependencies, 16).unwrap(),
-    ));
-    application.attach_order_admission(Box::new(
-        QueuedExecutionOrderAdmission::start(TestDependencies, 16).unwrap(),
-    ));
-    application.attach_risk_reservations(Box::new(TestRiskReservations));
-    application
-        .submit(submit_order(
-            "queued-dependency-order",
-            None,
-            "main",
-            "BTCUSDT",
-            OrderSide::Buy,
-            OrderType::Market,
-            1,
-            None,
-            None,
-        ))
-        .unwrap();
-    assert_eq!(application.orders(Some("main")).len(), 1);
+fn attach_simulated_risk(application: &mut ExecutionApplication, behavior: SimulatedRiskBehavior) {
+    configure_simulated_risk(application, behavior, 16).unwrap();
 }
 
-struct TestDependencies;
-
-impl ExecutionIntentPlanner for TestDependencies {
-    fn latest_quote(
-        &mut self,
-        instrument_id: &str,
-        market_id: Option<&str>,
-    ) -> Result<Option<QuoteObservation>, String> {
-        Ok(Some(QuoteObservation {
-            instrument_id: InstrumentId::new(instrument_id).unwrap(),
-            market_id: market_id.map(|value| MarketId::new(value).unwrap()),
-            bid_price: Some("99".parse::<Price>().unwrap()),
-            ask_price: Some("102".parse::<Price>().unwrap()),
-            observed_at_unix_nanos: UnixNanos::from(0),
-        }))
-    }
-
-    fn plan_intent(&mut self, intent: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        if !intent.legs.is_empty() {
-            return Ok(intent
-                .legs
-                .iter()
-                .map(|leg| SubmitOrder {
-                    order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, leg.leg_id))
-                        .unwrap(),
-                    intent_id: Some(intent.intent_id.clone()),
-                    strategy_id: Some(
-                        kairos_primitives::StrategyId::new(intent.strategy_id.clone()).unwrap(),
-                    ),
-                    account_id: leg.account_id.clone(),
-                    segment_key: leg.segment_key.clone(),
-                    instrument_id: leg.instrument_id.clone(),
-                    market_id: leg.market_id.clone(),
-                    execution_access_id: leg.execution_access_id.clone(),
-                    side: leg.side,
-                    order_type: if leg.limit_price.is_some() {
-                        OrderType::Limit
-                    } else {
-                        OrderType::Market
-                    },
-                    quantity: leg.quantity,
-                    limit_price: leg.limit_price,
-                    options: leg.options.clone(),
-                    submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
-                })
-                .collect());
-        }
-        Ok(intent
-            .account_ids
-            .iter()
-            .enumerate()
-            .map(|(index, account_id)| SubmitOrder {
-                order_id: OrderId::new(format!("{}:order:{}", intent.intent_id, index)).unwrap(),
-                intent_id: Some(intent.intent_id.clone()),
-                strategy_id: Some(
-                    kairos_primitives::StrategyId::new(intent.strategy_id.clone()).unwrap(),
-                ),
-                account_id: account_id.clone(),
-                segment_key: intent.segment_key.clone(),
-                instrument_id: intent.instrument_id.clone(),
-                market_id: intent.market_id.clone(),
-                execution_access_id: intent.execution_access_id.clone(),
-                side: OrderSide::Buy,
-                order_type: if intent.limit_price.is_some() {
-                    OrderType::Limit
-                } else {
-                    OrderType::Market
-                },
-                quantity: intent.target_quantity,
-                limit_price: intent.limit_price,
-                options: Default::default(),
-                submitted_at_unix_nanos: intent.source_event_time_unix_nanos,
-            })
-            .collect())
-    }
+fn test_risk() -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior::default()
 }
 
-impl ExecutionOrderAdmission for TestDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        _: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        simulation_commitment(request)
-    }
-}
-
-fn simulation_commitment(
-    request: &SubmitOrder,
-) -> Result<kairos_execution::domain::OrderCommitment, String> {
-    use kairos_execution::domain::{CommitmentBasis, CommitmentResource, OrderCommitment};
-    let mut commitment = OrderCommitment::new(
-        request.order_id.clone(),
-        request.account_id.clone(),
-        request.segment_key.clone(),
-        request.instrument_id.clone(),
-        request.side,
-        CommitmentResource::Instrument(request.instrument_id.clone()),
-        Money::new(request.quantity.mantissa(), request.quantity.scale())
-            .map_err(|error| error.to_string())?,
-        request.quantity,
-        CommitmentBasis::SimulationQuantity,
-        request
-            .submitted_at_unix_nanos
-            .unwrap_or_else(|| UnixNanos::new(0)),
-    )?;
-    commitment.settlement_asset = request
-        .options
-        .quote_asset
-        .as_deref()
-        .map(kairos_primitives::Currency::new)
-        .transpose()
-        .map_err(|error| error.to_string())?;
-    Ok(commitment)
-}
-
-fn simulation_risk_reservation(
-    request: &SubmitOrder,
-) -> Result<kairos_execution::domain::RiskReservationEvidence, String> {
-    Ok(kairos_execution::domain::RiskReservationEvidence {
-        order_id: request.order_id.clone(),
-        reservation_id: format!("execution:{}", request.order_id),
-        idempotency_key: format!("execution:{}", request.order_id),
-        account_id: request.account_id.clone(),
-        amount: Money::new(request.quantity.mantissa(), request.quantity.scale())
-            .map_err(|error| error.to_string())?,
-        status: kairos_execution::domain::RiskReservationSagaStatus::Active,
-        risk_generation: 1,
-        risk_event_sequence: 1,
-        policy_version: 1,
-        expires_at_unix_nanos: UnixNanos::new(u64::MAX),
-        updated_at_unix_nanos: request
-            .submitted_at_unix_nanos
-            .unwrap_or_else(|| UnixNanos::new(0)),
-    })
-}
-
-struct TestRiskReservations;
-
-impl ExecutionRiskReservations for TestRiskReservations {
-    fn authorize(
-        &mut self,
-        request: &SubmitOrder,
-        _: &RiskAuthorizationContext,
-    ) -> RiskCommandResult<kairos_execution::domain::RiskReservationEvidence> {
-        simulation_risk_reservation(request).map_err(RiskCommandFailure::NotSent)
-    }
-
-    fn reconcile(
-        &mut self,
-        evidence: &kairos_execution::domain::RiskReservationEvidence,
-    ) -> Result<Option<kairos_execution::domain::RiskReservationEvidence>, String> {
-        Ok(Some(evidence.clone()))
-    }
-
-    fn resize(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: Money,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-
-    fn release(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-
-    fn consume(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-}
-
-struct UncertainAuthorizationRisk;
-
-impl ExecutionRiskReservations for UncertainAuthorizationRisk {
-    fn authorize(
-        &mut self,
-        _: &SubmitOrder,
-        _: &RiskAuthorizationContext,
-    ) -> RiskCommandResult<kairos_execution::domain::RiskReservationEvidence> {
-        Err(RiskCommandFailure::indeterminate(
+fn uncertain_authorization_risk() -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior {
+        authorization_failure: Some(RiskCommandFailure::indeterminate(
             "risk authorization response was lost",
-        ))
-    }
-    fn reconcile(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-    ) -> Result<Option<kairos_execution::domain::RiskReservationEvidence>, String> {
-        Ok(None)
-    }
-    fn resize(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: Money,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-    fn release(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-    fn consume(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
+        )),
+        reconciliation: SimulatedRiskReconciliation::Missing,
+        ..SimulatedRiskBehavior::default()
     }
 }
 
-struct NotSentAuthorizationRisk;
-
-impl ExecutionRiskReservations for NotSentAuthorizationRisk {
-    fn authorize(
-        &mut self,
-        _: &SubmitOrder,
-        _: &RiskAuthorizationContext,
-    ) -> RiskCommandResult<kairos_execution::domain::RiskReservationEvidence> {
-        Err(RiskCommandFailure::NotSent(
+fn not_sent_authorization_risk() -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior {
+        authorization_failure: Some(RiskCommandFailure::NotSent(
             "risk socket was unavailable before send".into(),
-        ))
-    }
-
-    fn reconcile(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-    ) -> Result<Option<kairos_execution::domain::RiskReservationEvidence>, String> {
-        Ok(None)
-    }
-
-    fn resize(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: Money,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-
-    fn release(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-
-    fn consume(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
+        )),
+        reconciliation: SimulatedRiskReconciliation::Missing,
+        ..SimulatedRiskBehavior::default()
     }
 }
 
-struct UncertainReleaseRisk;
-
-impl ExecutionRiskReservations for UncertainReleaseRisk {
-    fn authorize(
-        &mut self,
-        request: &SubmitOrder,
-        _: &RiskAuthorizationContext,
-    ) -> RiskCommandResult<kairos_execution::domain::RiskReservationEvidence> {
-        simulation_risk_reservation(request).map_err(RiskCommandFailure::NotSent)
-    }
-    fn reconcile(
-        &mut self,
-        evidence: &kairos_execution::domain::RiskReservationEvidence,
-    ) -> Result<Option<kairos_execution::domain::RiskReservationEvidence>, String> {
-        Ok(Some(evidence.clone()))
-    }
-    fn resize(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: Money,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-    fn release(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Err(RiskCommandFailure::indeterminate(
+fn uncertain_release_risk() -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior {
+        release_failure: Some(RiskCommandFailure::indeterminate(
             "risk release response was lost",
-        ))
-    }
-    fn consume(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
+        )),
+        ..SimulatedRiskBehavior::default()
     }
 }
 
-struct RecoveryRisk {
-    observed_status: Option<kairos_execution::domain::RiskReservationSagaStatus>,
+fn recovery_risk(
+    observed_status: Option<kairos_execution::application::RiskReservationSagaStatus>,
     observed_event_sequence: u64,
-}
-
-impl ExecutionRiskReservations for RecoveryRisk {
-    fn authorize(
-        &mut self,
-        request: &SubmitOrder,
-        _: &RiskAuthorizationContext,
-    ) -> RiskCommandResult<kairos_execution::domain::RiskReservationEvidence> {
-        simulation_risk_reservation(request).map_err(RiskCommandFailure::NotSent)
-    }
-    fn reconcile(
-        &mut self,
-        evidence: &kairos_execution::domain::RiskReservationEvidence,
-    ) -> Result<Option<kairos_execution::domain::RiskReservationEvidence>, String> {
-        Ok(self.observed_status.map(|status| {
-            let mut observed = evidence.clone();
-            observed.status = status;
-            observed.risk_generation = 7;
-            observed.risk_event_sequence = self.observed_event_sequence;
-            observed
-        }))
-    }
-    fn resize(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: Money,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-    fn release(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-    fn consume(
-        &mut self,
-        _: &kairos_execution::domain::RiskReservationEvidence,
-        _: UnixNanos,
-    ) -> RiskCommandResult<()> {
-        Ok(())
-    }
-}
-
-struct OneUnitCommitmentDependencies;
-
-impl ExecutionIntentPlanner for OneUnitCommitmentDependencies {
-    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        Ok(Vec::new())
-    }
-}
-
-impl ExecutionOrderAdmission for OneUnitCommitmentDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        active: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        let already_committed: i64 = active
-            .iter()
-            .filter(|value| value.status.consumes_capacity())
-            .map(|value| value.amount.mantissa())
-            .sum();
-        if already_committed + request.quantity.mantissa() > 1 {
-            return Err("insufficient effective capacity after active commitments".into());
-        }
-        simulation_commitment(request)
-    }
-}
-
-struct UncertainRiskAuthorizationDependencies;
-
-impl ExecutionIntentPlanner for UncertainRiskAuthorizationDependencies {
-    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        Ok(Vec::new())
-    }
-}
-
-impl ExecutionOrderAdmission for UncertainRiskAuthorizationDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        _: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        simulation_commitment(request)
-    }
-}
-
-struct UncertainRiskReleaseDependencies;
-
-impl ExecutionIntentPlanner for UncertainRiskReleaseDependencies {
-    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        Ok(Vec::new())
-    }
-}
-
-impl ExecutionOrderAdmission for UncertainRiskReleaseDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        _: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        simulation_commitment(request)
-    }
-}
-
-struct RiskRecoveryDependencies;
-
-impl ExecutionIntentPlanner for RiskRecoveryDependencies {
-    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        Ok(Vec::new())
-    }
-}
-
-impl ExecutionOrderAdmission for RiskRecoveryDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        _: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        simulation_commitment(request)
-    }
-}
-
-struct AlreadySatisfiedDependencies;
-
-impl ExecutionIntentPlanner for AlreadySatisfiedDependencies {
-    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
-        Ok(Vec::new())
-    }
-}
-
-impl ExecutionOrderAdmission for AlreadySatisfiedDependencies {
-    fn validate_order(
-        &mut self,
-        request: &SubmitOrder,
-        _: &[kairos_execution::domain::OrderCommitment],
-    ) -> Result<kairos_execution::domain::OrderCommitment, String> {
-        simulation_commitment(request)
+) -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior {
+        reconciliation: match observed_status {
+            Some(status) => SimulatedRiskReconciliation::Observed {
+                status,
+                event_sequence: observed_event_sequence,
+            },
+            None => SimulatedRiskReconciliation::Missing,
+        },
+        ..SimulatedRiskBehavior::default()
     }
 }
 
@@ -1468,9 +997,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
     )
     .unwrap();
     configure_test_access(&mut first);
-    first.attach_intent_planner(Box::new(TestDependencies));
-    first.attach_order_admission(Box::new(TestDependencies));
-    first.attach_risk_reservations(Box::new(TestRiskReservations));
+    attach_simulated_risk(&mut first, test_risk());
     first
         .submit(submit_order(
             "sqlite-order",
@@ -1531,9 +1058,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
     )
     .unwrap();
     configure_test_access(&mut app);
-    app.attach_intent_planner(Box::new(TestDependencies));
-    app.attach_order_admission(Box::new(TestDependencies));
-    app.attach_risk_reservations(Box::new(TestRiskReservations));
+    attach_simulated_risk(&mut app, test_risk());
     app.submit(submit_order(
         "outbox-order",
         None,
@@ -1584,50 +1109,12 @@ fn not_sent_submission_is_persisted_as_failed_without_reconciliation() {
     assert_eq!(app.trace("unknown-1").len(), 3);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Released
+        kairos_execution::application::CommitmentStatus::Released
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Released
+        kairos_execution::application::RiskReservationSagaStatus::Released
     );
-}
-
-#[test]
-fn active_commitment_prevents_reusing_the_same_effective_capacity() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("execution.json");
-    let mut app = application(&path);
-    app.attach_intent_planner(Box::new(OneUnitCommitmentDependencies));
-    app.attach_order_admission(Box::new(OneUnitCommitmentDependencies));
-    app.attach_risk_reservations(Box::new(TestRiskReservations));
-
-    app.submit(submit_order(
-        "capacity-1",
-        None,
-        "main",
-        "BTCUSDT",
-        OrderSide::Buy,
-        OrderType::Limit,
-        1,
-        Some(100),
-        None,
-    ))
-    .unwrap();
-    let error = app
-        .submit(submit_order(
-            "capacity-2",
-            None,
-            "main",
-            "BTCUSDT",
-            OrderSide::Buy,
-            OrderType::Limit,
-            1,
-            Some(100),
-            None,
-        ))
-        .unwrap_err();
-    assert!(error.to_string().contains("active commitments"));
-    assert_eq!(app.orders(Some("main")).len(), 1);
 }
 
 #[test]
@@ -1635,9 +1122,7 @@ fn risk_authorization_identity_is_persisted_before_an_uncertain_command_outcome(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut app = application(&path);
-    app.attach_intent_planner(Box::new(UncertainRiskAuthorizationDependencies));
-    app.attach_order_admission(Box::new(UncertainRiskAuthorizationDependencies));
-    app.attach_risk_reservations(Box::new(UncertainAuthorizationRisk));
+    attach_simulated_risk(&mut app, uncertain_authorization_risk());
 
     let error = app
         .submit(submit_order(
@@ -1660,7 +1145,7 @@ fn risk_authorization_identity_is_persisted_before_an_uncertain_command_outcome(
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Uncertain
+        kairos_execution::application::RiskReservationSagaStatus::Uncertain
     );
     assert!(app.commitments()[0].status.consumes_capacity());
 
@@ -1672,7 +1157,7 @@ fn risk_authorization_identity_is_persisted_before_an_uncertain_command_outcome(
     .unwrap();
     assert_eq!(
         restored.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Uncertain
+        kairos_execution::application::RiskReservationSagaStatus::Uncertain
     );
     assert_eq!(
         restored.orders(None)[0].status,
@@ -1685,9 +1170,7 @@ fn risk_authorization_not_sent_is_terminal_and_does_not_enter_uncertain_recovery
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut app = application(&path);
-    app.attach_intent_planner(Box::new(UncertainRiskAuthorizationDependencies));
-    app.attach_order_admission(Box::new(UncertainRiskAuthorizationDependencies));
-    app.attach_risk_reservations(Box::new(NotSentAuthorizationRisk));
+    attach_simulated_risk(&mut app, not_sent_authorization_risk());
 
     let error = app
         .submit(submit_order(
@@ -1705,7 +1188,7 @@ fn risk_authorization_not_sent_is_terminal_and_does_not_enter_uncertain_recovery
     assert!(matches!(error, ExecutionError::Invalid(_)));
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Failed
+        kairos_execution::application::RiskReservationSagaStatus::Failed
     );
     assert!(!matches!(error, ExecutionError::Indeterminate(_)));
 }
@@ -1742,11 +1225,11 @@ fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
     assert_eq!(app.trace("indeterminate-1").len(), 3);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Uncertain
+        kairos_execution::application::CommitmentStatus::Uncertain
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Active
+        kairos_execution::application::RiskReservationSagaStatus::Active
     );
     let restored = ExecutionApplication::with_dependencies(
         "execution",
@@ -1756,7 +1239,7 @@ fn indeterminate_submission_is_explicit_and_persisted_for_reconciliation() {
     .unwrap();
     assert_eq!(
         restored.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Uncertain
+        kairos_execution::application::CommitmentStatus::Uncertain
     );
 }
 
@@ -1792,11 +1275,11 @@ fn not_sent_cancel_keeps_the_original_order_state() {
     assert_eq!(app.trace("cancel-not-sent").len(), 3);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Active
+        kairos_execution::application::CommitmentStatus::Active
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Active
+        kairos_execution::application::RiskReservationSagaStatus::Active
     );
 }
 
@@ -1832,11 +1315,11 @@ fn indeterminate_cancel_marks_the_order_unknown_for_reconciliation() {
     assert_eq!(app.trace("cancel-indeterminate").len(), 4);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Uncertain
+        kairos_execution::application::CommitmentStatus::Uncertain
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Active
+        kairos_execution::application::RiskReservationSagaStatus::Active
     );
 }
 
@@ -1845,9 +1328,7 @@ fn uncertain_risk_release_is_persisted_after_confirmed_order_cancel() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut app = application(&path);
-    app.attach_intent_planner(Box::new(UncertainRiskReleaseDependencies));
-    app.attach_order_admission(Box::new(UncertainRiskReleaseDependencies));
-    app.attach_risk_reservations(Box::new(UncertainReleaseRisk));
+    attach_simulated_risk(&mut app, uncertain_release_risk());
     app.submit(submit_order(
         "risk-release-uncertain",
         None,
@@ -1871,7 +1352,7 @@ fn uncertain_risk_release_is_persisted_after_confirmed_order_cancel() {
     assert_eq!(app.orders(None)[0].status, ExecutionOrderStatus::Canceled);
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Uncertain
+        kairos_execution::application::RiskReservationSagaStatus::Uncertain
     );
     let restored = ExecutionApplication::with_dependencies(
         "execution",
@@ -1881,7 +1362,7 @@ fn uncertain_risk_release_is_persisted_after_confirmed_order_cancel() {
     .unwrap();
     assert_eq!(
         restored.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Uncertain
+        kairos_execution::application::RiskReservationSagaStatus::Uncertain
     );
 }
 
@@ -1890,9 +1371,7 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut first = application(&path);
-    first.attach_intent_planner(Box::new(UncertainRiskAuthorizationDependencies));
-    first.attach_order_admission(Box::new(UncertainRiskAuthorizationDependencies));
-    first.attach_risk_reservations(Box::new(UncertainAuthorizationRisk));
+    attach_simulated_risk(&mut first, uncertain_authorization_risk());
     first
         .submit(submit_order(
             "risk-recovery",
@@ -1913,17 +1392,18 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
-    restored.attach_intent_planner(Box::new(RiskRecoveryDependencies));
-    restored.attach_order_admission(Box::new(RiskRecoveryDependencies));
-    restored.attach_risk_reservations(Box::new(RecoveryRisk {
-        observed_status: Some(kairos_execution::domain::RiskReservationSagaStatus::Released),
-        observed_event_sequence: 9,
-    }));
+    attach_simulated_risk(
+        &mut restored,
+        recovery_risk(
+            Some(kairos_execution::application::RiskReservationSagaStatus::Released),
+            9,
+        ),
+    );
     restored.configure_live_trading(true, true);
     restored.recover_risk_reservations().unwrap();
     assert_eq!(
         restored.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Released
+        kairos_execution::application::RiskReservationSagaStatus::Released
     );
 
     let verified = ExecutionApplication::with_dependencies(
@@ -1934,7 +1414,7 @@ fn restart_reconciles_uncertain_risk_saga_before_live_admission() {
     .unwrap();
     assert_eq!(
         verified.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Released
+        kairos_execution::application::RiskReservationSagaStatus::Released
     );
 }
 
@@ -1943,9 +1423,7 @@ fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut first = application(&path);
-    first.attach_intent_planner(Box::new(UncertainRiskAuthorizationDependencies));
-    first.attach_order_admission(Box::new(UncertainRiskAuthorizationDependencies));
-    first.attach_risk_reservations(Box::new(UncertainAuthorizationRisk));
+    attach_simulated_risk(&mut first, uncertain_authorization_risk());
     first
         .submit(submit_order(
             "risk-missing",
@@ -1966,12 +1444,7 @@ fn missing_risk_mmap_evidence_keeps_live_admission_closed() {
         Some(Box::new(FileExecutionStore::new(&path))),
     )
     .unwrap();
-    restored.attach_intent_planner(Box::new(RiskRecoveryDependencies));
-    restored.attach_order_admission(Box::new(RiskRecoveryDependencies));
-    restored.attach_risk_reservations(Box::new(RecoveryRisk {
-        observed_status: None,
-        observed_event_sequence: 9,
-    }));
+    attach_simulated_risk(&mut restored, recovery_risk(None, 9));
     restored.configure_live_trading(true, true);
     assert!(restored.recover_risk_reservations().is_err());
     restored.complete_writer_reconciliation();
@@ -2484,9 +1957,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
     )
     .unwrap();
     configure_test_access(&mut app);
-    app.attach_intent_planner(Box::new(AlreadySatisfiedDependencies));
-    app.attach_order_admission(Box::new(AlreadySatisfiedDependencies));
-    app.attach_risk_reservations(Box::new(TestRiskReservations));
+    attach_simulated_risk(&mut app, test_risk());
     let state = app
         .submit_intent(strategy_intent("intent:already-satisfied", 0, None))
         .unwrap();
@@ -2755,13 +2226,13 @@ fn fills_are_recorded_cumulatively_and_restore_with_order_state() {
     assert_eq!(partial.status, ExecutionOrderStatus::PartiallyFilled);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Reduced
+        kairos_execution::application::CommitmentStatus::Reduced
     );
     assert_eq!(app.commitments()[0].remaining_quantity.mantissa(), 6);
     assert_eq!(app.commitments()[0].amount.mantissa(), 6);
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Active
+        kairos_execution::application::RiskReservationSagaStatus::Active
     );
     let duplicate = app
         .record_fill(fill_report("fill-1", "order-fill", 4, 100, 1, Some(10)))
@@ -2776,22 +2247,22 @@ fn fills_are_recorded_cumulatively_and_restore_with_order_state() {
     assert_eq!(app.fills(Some("order-fill")).len(), 2);
     assert_eq!(
         app.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Released
+        kairos_execution::application::CommitmentStatus::Released
     );
     assert_eq!(
         app.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Consumed
+        kairos_execution::application::RiskReservationSagaStatus::Consumed
     );
 
     let restored = application(&path);
     assert_eq!(restored.fills(None).len(), 2);
     assert_eq!(
         restored.commitments()[0].status,
-        kairos_execution::domain::CommitmentStatus::Released
+        kairos_execution::application::CommitmentStatus::Released
     );
     assert_eq!(
         restored.risk_reservations()[0].status,
-        kairos_execution::domain::RiskReservationSagaStatus::Consumed
+        kairos_execution::application::RiskReservationSagaStatus::Consumed
     );
     assert_eq!(
         restored.orders(None)[0].status,

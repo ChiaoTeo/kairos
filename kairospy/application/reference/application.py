@@ -115,7 +115,11 @@ def _market_from_row(row: Mapping[str, object]) -> Market:
     return Market(
         id=MarketId(required("market_id")),
         instrument=InstrumentRef(InstrumentId(instrument_id), symbol),
-        listing_id=ListingId(required("listing_id")),
+        listing_id=(
+            ListingId(str(row["listing_id"]))
+            if row.get("listing_id") is not None
+            else None
+        ),
         exchange_id=ExchangeId(required("exchange_id")),
         symbol=symbol,
         market_type=required("market_type"),

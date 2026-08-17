@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-import json
-import subprocess
+import time
+from typing import Any
 import typer
 
 from kairospy.application.workspace import WorkspaceApplication
@@ -19,7 +20,7 @@ def _client(workspace: Path | None) -> ReferenceClient:
     owner = WorkspaceApplication().open(workspace)
     return ReferenceClient(
         socket_path=owner.paths.reference_socket(),
-        view_root=owner.paths.child("snapshots", "v2"),
+        database_path=owner.paths.reference_database(),
     )
 
 
@@ -71,7 +72,7 @@ def reference_validate(
     from kairospy.surface.cli.options import OutputFormat, render
 
     client = _client(workspace)
-    provider_rows = client.health().get("providers", [])
+    provider_rows = client.providers().get("providers", [])
     configured_sources = tuple(
         str(value["source_id"])
         for value in provider_rows
@@ -121,24 +122,80 @@ def reference_stream(
     output: str = typer.Option("json", "--output", "--format"),
 ) -> None:
     """Observe pushed Aeron lifecycle batches until the stream becomes idle."""
-    from kairospy.application.system.binaries import resolve_binary
+    from kairospy.infrastructure.transport.reference import AeronReferenceEventSource
     from kairospy.surface.cli.options import OutputFormat, render
 
-    command = [
-        resolve_binary("kairos-reference-event-cli"),
-        "--timeout-seconds",
-        str(timeout_seconds),
-        "--idle-timeout-seconds",
-        str(idle_timeout_seconds),
-    ]
-    if aeron_dir is not None:
-        command.extend(("--aeron-dir", str(aeron_dir)))
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(
-            result.stderr.strip() or "Reference stream observation failed"
+    result = asyncio.run(
+        _observe_reference_stream(
+            AeronReferenceEventSource(aeron_dir=aeron_dir),
+            timeout_seconds=timeout_seconds,
+            idle_timeout_seconds=idle_timeout_seconds,
         )
-    typer.echo(render(json.loads(result.stdout), OutputFormat(output)))
+    )
+    typer.echo(render(result, OutputFormat(output)))
+
+
+async def _observe_reference_stream(
+    source: Any,
+    *,
+    timeout_seconds: int,
+    idle_timeout_seconds: int,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    idle_deadline: float | None = None
+    events = 0
+    generation: int | None = None
+    event_sequence: int | None = None
+    first_event_id: str | None = None
+    last_event_id: str | None = None
+    stream = source.subscribe_live().__aiter__()
+    try:
+        while True:
+            now = time.monotonic()
+            next_deadline = min(
+                deadline,
+                idle_deadline if idle_deadline is not None else deadline,
+            )
+            remaining = next_deadline - now
+            if remaining <= 0:
+                if idle_deadline is not None and now >= idle_deadline:
+                    break
+                raise RuntimeError("no Reference event was received before timeout")
+            try:
+                event = await asyncio.wait_for(anext(stream), timeout=remaining)
+            except TimeoutError:
+                now = time.monotonic()
+                if idle_deadline is not None and now >= idle_deadline:
+                    break
+                if events == 0 and now >= deadline:
+                    raise RuntimeError(
+                        "no Reference event was received before timeout"
+                    ) from None
+                continue
+            except StopAsyncIteration:
+                if events == 0:
+                    raise RuntimeError(
+                        "Reference event stream ended before receiving an event"
+                    ) from None
+                break
+            events += 1
+            generation = event.catalog_revision
+            event_sequence = event.sequence
+            if first_event_id is None:
+                first_event_id = event.event_id
+            last_event_id = event.event_id
+            idle_deadline = time.monotonic() + idle_timeout_seconds
+    finally:
+        await source.close()
+    return {
+        "status": "received",
+        "batches": events,
+        "events": events,
+        "generation": generation,
+        "event_sequence": event_sequence,
+        "first_event_id": first_event_id,
+        "last_event_id": last_event_id,
+    }
 
 
 @reference_app.command("refresh")
@@ -291,14 +348,6 @@ def reference_listings(
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
     _reference_collection_command("listings", workspace, output)
-
-
-@reference_app.command("financial-products")
-def reference_financial_products(
-    workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("table", "--output", "--format"),
-) -> None:
-    _reference_collection_command("financial-products", workspace, output)
 
 
 @reference_app.command("execution-accesses")

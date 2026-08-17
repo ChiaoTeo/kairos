@@ -11,13 +11,13 @@ name = "kairos_reference"
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 axum = "0.8"
 kairos-primitives = { path = "../../primitives" }
 kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
 kairos-transport = { path = "../../platform/transport" }
 clap = { version = "4", features = ["derive", "env"] }
-flatbuffers = "25.12.19"
 futures-util = "0.3"
 kairos-integration = { path = "../../platform/integration" }
 kairos-protocol = { path = "../../platform/protocol" }
@@ -39,7 +39,3 @@ path = "src/bin/kairos-reference-server.rs"
 [[bin]]
 name = "kairos-reference-cli"
 path = "src/bin/kairos-reference-cli.rs"
-
-[[bin]]
-name = "kairos-reference-event-cli"
-path = "src/bin/kairos-reference-event-cli.rs"

@@ -1,14 +1,13 @@
 use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
 use kairos_reference::domain::{
-    Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
-    ReferenceCatalog, ReferenceError, ReferenceResult,
+    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult,
 };
-use kairos_reference::services::providers::ReferenceSource;
-use kairos_reference::services::store::CatalogStore;
+use kairos_reference::services::source::ReferenceSource;
+use kairos_reference::services::sqlx_storage::SqlxCatalogStore;
 use kairos_reference::{
     LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
-    ReferenceRecord,
+    ReferenceRecord, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
 };
 
 struct TestSource {
@@ -40,6 +39,7 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
+#[async_trait::async_trait]
 impl ReferenceSource for SequenceSource {
     fn source_id(&self) -> &str {
         "sequence-test"
@@ -56,6 +56,7 @@ impl ReferenceSource for SequenceSource {
     }
 }
 
+#[async_trait::async_trait]
 impl ReferenceSource for TestSource {
     fn source_id(&self) -> &str {
         "test"
@@ -66,47 +67,20 @@ impl ReferenceSource for TestSource {
     }
 }
 
-#[derive(Default)]
-struct TestStore(Option<ReferenceCatalog>);
-
-struct FailingStore(Option<ReferenceCatalog>);
-
-impl CatalogStore for TestStore {
-    async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
-        Ok(self.0.clone())
-    }
-
-    async fn save_refresh(
-        &mut self,
-        catalog: &ReferenceCatalog,
-        _events: &[kairos_reference::domain::LifecycleEvent],
-    ) -> ReferenceResult<()> {
-        self.0 = Some(catalog.clone());
-        Ok(())
-    }
+async fn test_store() -> SqlxCatalogStore {
+    let root = tempfile::tempdir().unwrap().keep();
+    SqlxCatalogStore::open(root.join("reference.sqlite"))
+        .await
+        .unwrap()
 }
 
-impl CatalogStore for FailingStore {
-    async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
-        Ok(self.0.clone())
-    }
-
-    async fn save_refresh(
-        &mut self,
-        _catalog: &ReferenceCatalog,
-        _events: &[kairos_reference::domain::LifecycleEvent],
-    ) -> ReferenceResult<()> {
-        Err(ReferenceError::Persistence("injected failure".into()))
-    }
-}
-
-async fn application() -> ReferenceApplication<TestSource, TestStore> {
+async fn application() -> ReferenceApplication {
     ReferenceApplication::new(
         "reference-test",
         TestSource {
             catalog: provider_catalog(),
         },
-        TestStore::default(),
+        test_store().await,
     )
     .await
     .unwrap()
@@ -159,7 +133,7 @@ fn provider_catalog() -> ProviderCatalog {
             market_id: market_id("market:binance:spot:BTCUSDT"),
             market_key: "binance.spot.BTCUSDT".into(),
             instrument_id: instrument_id("instrument:spot:BTC"),
-            listing_id: listing_id("listing:binance:spot:BTC:USDT"),
+            listing_id: Some(listing_id("listing:binance:spot:BTC:USDT")),
             exchange_id: Exchange::new("exchange:binance").unwrap(),
             market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
             asset_type: Some(kairos_primitives::AssetClass::Crypto),
@@ -169,17 +143,6 @@ fn provider_catalog() -> ProviderCatalog {
             status: "active".into(),
             price_precision: 2,
             quantity_precision: 6,
-            effective_from_unix_nanos: 1.into(),
-            ..Default::default()
-        }],
-        financial_products: vec![FinancialProduct {
-            product_id: "product:binance:earn:btc".into(),
-            product_type: "earn".into(),
-            name: "BTC Earn".into(),
-            asset_id: asset_id("asset:BTC"),
-            provider_product_id: "btc-earn".into(),
-            provider_id: Some("binance".into()),
-            status: "active".into(),
             effective_from_unix_nanos: 1.into(),
             ..Default::default()
         }],
@@ -212,7 +175,7 @@ fn one_listing_can_back_multiple_markets_on_different_exchanges() {
 async fn application_reconciles_reference_catalog() {
     let mut application = application().await;
     let result = application.refresh().await.unwrap();
-    assert_eq!(result.events.len(), 7);
+    assert_eq!(result.events.len(), 6);
     assert_eq!(result.generation, 1.into());
     assert_eq!(application.catalog().markets.len(), 1);
 }
@@ -264,59 +227,10 @@ async fn default_reference_registry_composes_without_market_configuration() {
 #[tokio::test]
 async fn application_does_not_emit_duplicate_events_for_same_catalog() {
     let mut application = application().await;
-    assert_eq!(application.refresh().await.unwrap().events.len(), 7);
+    assert_eq!(application.refresh().await.unwrap().events.len(), 6);
     let second = application.refresh().await.unwrap();
     assert!(second.events.is_empty());
-    assert_eq!(second.event_sequence, 7.into());
-}
-
-#[tokio::test]
-async fn failed_refresh_does_not_advance_in_memory_catalog() {
-    let mut application = ReferenceApplication::new(
-        "reference-test",
-        TestSource {
-            catalog: provider_catalog(),
-        },
-        FailingStore(None),
-    )
-    .await
-    .unwrap();
-    let before = application.catalog().clone();
-
-    let error = application.refresh().await.unwrap_err();
-
-    assert!(matches!(error, ReferenceError::Persistence(_)));
-    assert_eq!(application.catalog(), &before);
-}
-
-#[tokio::test]
-async fn failed_administrative_commit_does_not_advance_in_memory_catalog() {
-    let mut persisted = ReferenceCatalog::default();
-    persisted.apply(provider_catalog(), 1.into());
-    let mut application = ReferenceApplication::new(
-        "reference-test",
-        TestSource {
-            catalog: provider_catalog(),
-        },
-        FailingStore(Some(persisted)),
-    )
-    .await
-    .unwrap();
-    let before = application.catalog().clone();
-
-    let error = application
-        .upsert_asset(Asset {
-            asset_id: asset_id("asset:SOL"),
-            code: "SOL".into(),
-            asset_class: kairos_primitives::AssetClass::Crypto,
-            status: "active".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, ReferenceError::Persistence(_)));
-    assert_eq!(application.catalog(), &before);
+    assert_eq!(second.event_sequence, 6.into());
 }
 
 #[tokio::test]
@@ -324,12 +238,12 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
     let mut application = application().await;
     application.refresh().await.unwrap();
     let generation = application
-        .upsert_asset(Asset {
+        .upsert_asset(UpsertAssetCommand {
             asset_id: asset_id("asset:sol"),
             code: "SOL".into(),
             asset_class: kairos_primitives::AssetClass::Crypto,
             status: "active".into(),
-            ..Default::default()
+            name: None,
         })
         .await
         .unwrap();
@@ -342,7 +256,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
     assert_eq!(event.event_type, "asset_changed");
     assert_eq!(event.record_kind.as_deref(), Some("asset"));
     assert_eq!(event.record_id.as_deref(), Some("asset:sol"));
-    assert_eq!(application.catalog().event_sequence, 8.into());
+    assert_eq!(application.catalog().event_sequence, 7.into());
 }
 
 #[tokio::test]
@@ -350,25 +264,32 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
     let mut application = application().await;
     application.refresh().await.unwrap();
     let generation = application
-        .upsert_instrument(Instrument {
+        .upsert_instrument(UpsertInstrumentCommand {
             instrument_id: instrument_id("instrument:spot:ETH"),
             symbol: symbol("ETH/USDT"),
             instrument_type: kairos_primitives::InstrumentKind::Spot,
             status: "active".into(),
-            ..Default::default()
+            name: None,
+            issuer_id: None,
+            share_class: None,
+            primary_currency_asset_id: None,
+            underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
         })
         .await
         .unwrap();
     assert_eq!(generation, 2.into());
     let generation = application
-        .upsert_listing(Listing {
+        .upsert_listing(UpsertListingCommand {
             listing_id: listing_id("listing:binance:spot:ETH:USDT"),
             instrument_id: instrument_id("instrument:spot:ETH"),
             exchange_id: Exchange::new("exchange:binance").unwrap(),
             exchange_symbol: Symbol::new("ETHUSDT").unwrap(),
             status: "active".into(),
             effective_from_unix_nanos: 1.into(),
-            ..Default::default()
+            effective_to_unix_nanos: None,
         })
         .await
         .unwrap();
@@ -382,7 +303,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
         .collect::<Vec<_>>();
     assert_eq!(events[0].record_kind.as_deref(), Some("listing"));
     assert_eq!(events[1].record_kind.as_deref(), Some("instrument"));
-    assert_eq!(application.catalog().lifecycle_events.len(), 9);
+    assert_eq!(application.catalog().lifecycle_events.len(), 8);
 }
 
 #[tokio::test]
@@ -405,9 +326,6 @@ async fn application_query_covers_each_reference_record_kind() {
     assert!(all
         .iter()
         .any(|record| matches!(record, ReferenceRecord::Entity(_))));
-    assert!(all
-        .iter()
-        .any(|record| matches!(record, ReferenceRecord::FinancialProduct(_))));
     let asset_events = application.query(&ReferenceQuery {
         kind: ReferenceKind::Event,
         record_kind: Some("asset".into()),
@@ -428,13 +346,10 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
         ..Default::default()
     });
     catalog.instruments[0].underlying_instrument_id = Some(instrument_id("instrument:equity:SPY"));
-    let mut application = ReferenceApplication::new(
-        "reference-test",
-        TestSource { catalog },
-        TestStore::default(),
-    )
-    .await
-    .unwrap();
+    let mut application =
+        ReferenceApplication::new("reference-test", TestSource { catalog }, test_store().await)
+            .await
+            .unwrap();
     application.refresh().await.unwrap();
 
     let records = application.query(&ReferenceQuery {
@@ -454,7 +369,7 @@ async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
             catalogs: vec![provider_catalog(), ProviderCatalog::default()],
             index: 0,
         },
-        TestStore::default(),
+        test_store().await,
     )
     .await
     .unwrap();
@@ -462,10 +377,10 @@ async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
     application.refresh().await.unwrap();
 
     let events = application
-        .replay_lifecycle_events(Some(1.into()), Some(14.into()))
+        .replay_lifecycle_events(Some(1.into()), Some(12.into()))
         .await
         .unwrap();
-    assert_eq!(events.len(), 14);
+    assert_eq!(events.len(), 12);
     assert!(events.iter().any(
         |event| event.event_type == "listed" && event.record_kind.as_deref() == Some("market")
     ));

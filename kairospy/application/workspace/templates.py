@@ -121,7 +121,7 @@ _BACKTEST_STRATEGY = '''from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import BarEvent, MarketEvent, Strategy, StrategyContext
+from kairospy.strategy import BarEvent, Strategy, StrategyContext
 
 
 class DemoBacktest(Strategy):
@@ -138,9 +138,7 @@ class DemoBacktest(Strategy):
         )
         ctx.market.subscribe_bars(market, timeframe="1m")
 
-    def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
-        if not isinstance(event, BarEvent):
-            return
+    def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
         bars = ctx.state.increment("bars")
         if bars == 1:
             ctx.execution.target_position(

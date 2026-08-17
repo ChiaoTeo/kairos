@@ -279,6 +279,27 @@ Strategy 的行情订阅返回 owner-scoped `SubscriptionLease`，实例停止�
 批量释放。需要独立于策略长期采集的行情，应在 Workspace manifest 中配置
 `[market.collections.<name>]`；它由 Workspace 而不是 Strategy 拥有，数据持续追加到
 `data/market/collections/<name>/events.jsonl`。完整的 Context 能力与配置示例见
+[`examples/backtest`](examples/backtest)。
+
+Strategy Runtime 对行情只调用一次 domain-level `on_market`。继承 `Strategy` 的普通策略
+可以直接覆盖具体类型的便利回调，获得准确的事件类型和 IDE 补全：
+
+```python
+from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
+
+
+class QuoteStrategy(Strategy):
+    strategy_id = "quote-strategy"
+
+    def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
+        quote = event.data
+        ctx.logger.info("quote", bid=quote.bid_price, ask=quote.ask_price)
+```
+
+需要统一处理所有行情类型时，可以覆盖 `on_market(ctx, event: MarketEvent)` 接管分发；
+如果还希望继续执行 `on_quote`、`on_bar`、`on_trade` 或 `on_greeks`，应在自定义
+`on_market` 中显式调用 `super().on_market(ctx, event)`。Runtime 不会分别调用两个层级，
+因此一个事件不会被框架重复处理。
 
 `launch status` 返回 launch 整体状态，同时包含策略状态、依赖组件状态以及异常组件；
 mode 由 launch 配置和 instance identity 决定，查询、日志和停止命令不需要重复传入
@@ -364,7 +385,7 @@ uv run kairospy launch instance timeline export \
 Reference 验证 CLI
 
 Reference CLI 是一次性控制/读取客户端，所有结构化结果写入 stdout。查询和刷新连接
-Workspace 中正在运行的 Reference server；snapshot/catalog 命令读取其发布的 mmap
+Workspace 中正在运行的 Reference server；snapshot/catalog 命令通过 contract-owned client 只读查询 Reference SQLite
 projection：
 
 ```bash

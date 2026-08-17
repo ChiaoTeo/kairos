@@ -1,8 +1,10 @@
 pub mod actor;
-pub(crate) mod control_transport;
+pub mod audit;
+pub(crate) mod control;
+pub(crate) mod dependencies;
 pub(crate) mod gateway;
 pub(crate) mod persistence;
+pub(crate) mod publication;
+pub(crate) mod risk;
 pub(crate) mod routing;
-pub mod simulator;
-pub(crate) mod sqlx_audit;
-pub(crate) mod sqlx_persistence;
+pub mod simulation;

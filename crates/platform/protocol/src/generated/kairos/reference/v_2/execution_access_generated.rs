@@ -21,19 +21,16 @@ impl<'a> ::flatbuffers::Follow<'a> for ExecutionAccess<'a> {
 
 impl<'a> ExecutionAccess<'a> {
     pub const VT_ACCESS_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_ROUTING_MODE: ::flatbuffers::VOffsetT = 6;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_DESTINATION_MARKET_ID: ::flatbuffers::VOffsetT = 14;
-    pub const VT_BROKER_ID: ::flatbuffers::VOffsetT = 16;
-    pub const VT_PROVIDER_ID: ::flatbuffers::VOffsetT = 18;
-    pub const VT_PRODUCT_FAMILY: ::flatbuffers::VOffsetT = 20;
-    pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 22;
-    pub const VT_SETTLEMENT_ASSET_ID: ::flatbuffers::VOffsetT = 24;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 26;
-    pub const VT_EFFECTIVE_FROM_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
-    pub const VT_EFFECTIVE_TO_UNIX_NANOS: ::flatbuffers::VOffsetT = 30;
+    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_PROVIDER_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_PRODUCT_FAMILY: ::flatbuffers::VOffsetT = 14;
+    pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 16;
+    pub const VT_SETTLEMENT_ASSET_ID: ::flatbuffers::VOffsetT = 18;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_EFFECTIVE_FROM_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_EFFECTIVE_TO_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -64,12 +61,6 @@ impl<'a> ExecutionAccess<'a> {
         if let Some(x) = args.provider_id {
             builder.add_provider_id(x);
         }
-        if let Some(x) = args.broker_id {
-            builder.add_broker_id(x);
-        }
-        if let Some(x) = args.destination_market_id {
-            builder.add_destination_market_id(x);
-        }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
         }
@@ -78,9 +69,6 @@ impl<'a> ExecutionAccess<'a> {
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
-        }
-        if let Some(x) = args.routing_mode {
-            builder.add_routing_mode(x);
         }
         if let Some(x) = args.access_id {
             builder.add_access_id(x);
@@ -98,16 +86,6 @@ impl<'a> ExecutionAccess<'a> {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAccess::VT_ACCESS_ID, None)
                 .unwrap()
-        }
-    }
-    #[inline]
-    pub fn routing_mode(&self) -> Option<&'a str> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAccess::VT_ROUTING_MODE, None)
         }
     }
     #[inline]
@@ -140,28 +118,6 @@ impl<'a> ExecutionAccess<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAccess::VT_MARKET_ID, None)
-        }
-    }
-    #[inline]
-    pub fn destination_market_id(&self) -> Option<&'a str> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
-                ExecutionAccess::VT_DESTINATION_MARKET_ID,
-                None,
-            )
-        }
-    }
-    #[inline]
-    pub fn broker_id(&self) -> Option<&'a str> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionAccess::VT_BROKER_ID, None)
         }
     }
     #[inline]
@@ -266,11 +222,6 @@ impl ::flatbuffers::Verifiable for ExecutionAccess<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "routing_mode",
-                Self::VT_ROUTING_MODE,
-                false,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "instrument_id",
                 Self::VT_INSTRUMENT_ID,
                 false,
@@ -283,16 +234,6 @@ impl ::flatbuffers::Verifiable for ExecutionAccess<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "market_id",
                 Self::VT_MARKET_ID,
-                false,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "destination_market_id",
-                Self::VT_DESTINATION_MARKET_ID,
-                false,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "broker_id",
-                Self::VT_BROKER_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -332,12 +273,9 @@ impl ::flatbuffers::Verifiable for ExecutionAccess<'_> {
 }
 pub struct ExecutionAccessArgs<'a> {
     pub access_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub routing_mode: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub listing_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub destination_market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub broker_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub product_family: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub provider_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -351,12 +289,9 @@ impl<'a> Default for ExecutionAccessArgs<'a> {
     fn default() -> Self {
         ExecutionAccessArgs {
             access_id: None, // required field
-            routing_mode: None,
             instrument_id: None,
             listing_id: None,
             market_id: None,
-            destination_market_id: None,
-            broker_id: None,
             provider_id: None,     // required field
             product_family: None,  // required field
             provider_symbol: None, // required field
@@ -381,13 +316,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionAccessBuilder<'a, 'b
         );
     }
     #[inline]
-    pub fn add_routing_mode(&mut self, routing_mode: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            ExecutionAccess::VT_ROUTING_MODE,
-            routing_mode,
-        );
-    }
-    #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             ExecutionAccess::VT_INSTRUMENT_ID,
@@ -406,23 +334,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionAccessBuilder<'a, 'b
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             ExecutionAccess::VT_MARKET_ID,
             market_id,
-        );
-    }
-    #[inline]
-    pub fn add_destination_market_id(
-        &mut self,
-        destination_market_id: ::flatbuffers::WIPOffset<&'b str>,
-    ) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            ExecutionAccess::VT_DESTINATION_MARKET_ID,
-            destination_market_id,
-        );
-    }
-    #[inline]
-    pub fn add_broker_id(&mut self, broker_id: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            ExecutionAccess::VT_BROKER_ID,
-            broker_id,
         );
     }
     #[inline]
@@ -509,12 +420,9 @@ impl ::core::fmt::Debug for ExecutionAccess<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("ExecutionAccess");
         ds.field("access_id", &self.access_id());
-        ds.field("routing_mode", &self.routing_mode());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("listing_id", &self.listing_id());
         ds.field("market_id", &self.market_id());
-        ds.field("destination_market_id", &self.destination_market_id());
-        ds.field("broker_id", &self.broker_id());
         ds.field("provider_id", &self.provider_id());
         ds.field("product_family", &self.product_family());
         ds.field("provider_symbol", &self.provider_symbol());

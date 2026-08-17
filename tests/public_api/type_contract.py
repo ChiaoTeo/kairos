@@ -46,3 +46,17 @@ class TypeContractStrategy(Strategy):
         elif isinstance(event, QuoteEvent):
             assert_type(event.data, Quote)
             assert_type(event.data.ask_price, Decimal | None)
+
+
+class TypedMarketHookStrategy(Strategy):
+    """The convenience hooks expose concrete event and payload types."""
+
+    strategy_id = "typed-market-hooks"
+
+    def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
+        assert_type(event.data, Bar)
+        assert_type(event.data.close, Decimal)
+
+    def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
+        assert_type(event.data, Quote)
+        assert_type(event.data.ask_price, Decimal | None)

@@ -11,7 +11,7 @@ pub struct ReferenceMarket {
     pub market_key: String,
     pub instrument_id: String,
     #[serde(default)]
-    pub listing_id: String,
+    pub listing_id: Option<String>,
     pub exchange_id: String,
     pub market_type: String,
     #[serde(default)]

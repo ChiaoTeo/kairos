@@ -6,7 +6,7 @@ use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use kairos_protocol::InstanceIdentity;
 
 use crate::transport::{
-    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, Listing, Market, MarketDataAccess,
+    Asset, Entity, ExecutionAccess, Instrument, Listing, Market, MarketDataAccess,
 };
 use crate::{ContractError, ContractResult};
 
@@ -84,21 +84,6 @@ impl ReferenceEncoder {
     ) -> ContractResult<Vec<u8>> {
         encode_entity(record, context, occurred_at_unix_nanos, true)
     }
-    pub fn financial_product_upserted(
-        record: &FinancialProduct,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_financial_product(record, context, occurred_at_unix_nanos, false)
-    }
-    pub fn financial_product_updated(
-        record: &FinancialProduct,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_financial_product(record, context, occurred_at_unix_nanos, true)
-    }
-
     pub fn asset_upserted(
         record: &Asset,
         context: &EncodeContext,
@@ -231,60 +216,6 @@ fn encode_entity(
             },
         );
         fb::finish_entity_upserted_buffer(&mut builder, root);
-    }
-    Ok(builder.finished_data().to_vec())
-}
-
-fn encode_financial_product(
-    record: &FinancialProduct,
-    context: &EncodeContext,
-    occurred_at_unix_nanos: u64,
-    updated: bool,
-) -> ContractResult<Vec<u8>> {
-    let mut builder = FlatBufferBuilder::new();
-    let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
-    let min_amount = decimal(record.min_amount.as_deref())?;
-    let max_amount = decimal(record.max_amount.as_deref())?;
-    let apr = decimal(record.apr.as_deref())?;
-    let args = fb::FinancialProductArgs {
-        product_id: Some(builder.create_string(&record.product_id)),
-        product_type: Some(builder.create_string(&record.product_type)),
-        name: Some(builder.create_string(&record.name)),
-        asset_id: Some(builder.create_string(&record.asset_id)),
-        provider_product_id: Some(builder.create_string(&record.provider_product_id)),
-        provider_id: optional_string(&mut builder, record.provider_id.as_deref()),
-        issuer_id: optional_string(&mut builder, record.issuer_id.as_deref()),
-        currency_asset_id: optional_string(&mut builder, record.currency_asset_id.as_deref()),
-        min_amount: min_amount.as_ref(),
-        max_amount: max_amount.as_ref(),
-        apr: apr.as_ref(),
-        lock_period_days: record.lock_period_days,
-        maturity_at_unix_nanos: record.maturity_at_unix_nanos.unwrap_or_default(),
-        status: status(&record.status)?,
-        effective_from_unix_nanos: record.effective_from_unix_nanos,
-        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default(),
-    };
-    let product = fb::FinancialProduct::create(&mut builder, &args);
-    if updated {
-        let root = fb::FinancialProductUpdated::create(
-            &mut builder,
-            &fb::FinancialProductUpdatedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                product: Some(product),
-            },
-        );
-        fb::finish_financial_product_updated_buffer(&mut builder, root);
-    } else {
-        let root = fb::FinancialProductUpserted::create(
-            &mut builder,
-            &fb::FinancialProductUpsertedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                product: Some(product),
-            },
-        );
-        fb::finish_financial_product_upserted_buffer(&mut builder, root);
     }
     Ok(builder.finished_data().to_vec())
 }
@@ -451,7 +382,7 @@ fn encode_market(
     let market_id = builder.create_string(&record.market_id);
     let market_key = builder.create_string(&record.market_key);
     let instrument_id = builder.create_string(&record.instrument_id);
-    let listing_id = builder.create_string(&record.listing_id);
+    let listing_id = optional_string(&mut builder, record.listing_id.as_deref());
     let exchange_id = builder.create_string(&record.exchange_id);
     let market_type = builder.create_string(record.market_type.as_str());
     let source_symbol = builder.create_string(&record.source_symbol);
@@ -467,7 +398,7 @@ fn encode_market(
         market_id: Some(market_id),
         market_key: Some(market_key),
         instrument_id: Some(instrument_id),
-        listing_id: Some(listing_id),
+        listing_id,
         exchange_id: Some(exchange_id),
         market_type: Some(market_type),
         source_symbol: Some(source_symbol),
@@ -521,15 +452,9 @@ fn encode_execution_access(
     let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
     let args = fb::ExecutionAccessArgs {
         access_id: Some(builder.create_string(&record.access_id)),
-        routing_mode: optional_string(&mut builder, Some(&record.routing_mode)),
         instrument_id: optional_string(&mut builder, record.instrument_id.as_deref()),
         listing_id: optional_string(&mut builder, record.listing_id.as_deref()),
         market_id: optional_string(&mut builder, record.market_id.as_deref()),
-        destination_market_id: optional_string(
-            &mut builder,
-            record.destination_market_id.as_deref(),
-        ),
-        broker_id: optional_string(&mut builder, record.broker_id.as_deref()),
         provider_id: Some(builder.create_string(&record.provider_id)),
         product_family: Some(builder.create_string(&record.provider_product)),
         provider_symbol: Some(builder.create_string(&record.provider_symbol)),
@@ -620,7 +545,7 @@ fn status(value: &str) -> ContractResult<fb::ReferenceLifecycleStatus> {
         "trading" => Ok(fb::ReferenceLifecycleStatus::TRADING),
         "suspended" => Ok(fb::ReferenceLifecycleStatus::SUSPENDED),
         "inactive" => Ok(fb::ReferenceLifecycleStatus::INACTIVE),
-        "retired" => Ok(fb::ReferenceLifecycleStatus::RETIRED),
+        "retired" | "delisted" => Ok(fb::ReferenceLifecycleStatus::RETIRED),
         "expired" => Ok(fb::ReferenceLifecycleStatus::EXPIRED),
         "" | "unspecified" => Ok(fb::ReferenceLifecycleStatus::UNSPECIFIED),
         other => Err(ContractError::Invalid(format!(

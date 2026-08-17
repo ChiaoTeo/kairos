@@ -1,12 +1,17 @@
 use kairos_market::composition::{attach_replay_source, attach_replay_source_with_checkpoint};
 use kairos_market::{
-    MarketApplication, MarketDescriptor, MarketObservation, Quote, SubscriptionId,
+    MarketApplication, MarketDataRoute, MarketObservation, Quote, ResolvedMarket, SubscriptionId,
 };
 
-fn fixture() -> (MarketDescriptor, Vec<MarketObservation>) {
-    let descriptor =
-        MarketDescriptor::new("market:btc", "instrument:btc", "binance", "spot", "BTCUSDT")
-            .unwrap();
+fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
+    let descriptor = ResolvedMarket::new(
+        "market:btc",
+        "instrument:btc",
+        kairos_primitives::InstrumentKind::Spot,
+        "binance",
+        MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
+    )
+    .unwrap();
     let events = (1..=2)
         .map(|time| {
             MarketObservation::Quote(Quote {
@@ -38,7 +43,7 @@ async fn replay_source_wakes_actor_and_completes_without_polling() {
         applied += runtime.drive_next_source_input().await.unwrap();
     }
     assert_eq!(applied, 2);
-    assert_eq!(runtime.snapshot().event_sequence.get(), 2);
+    assert_eq!(runtime.event_sequence(), 2);
 }
 
 #[tokio::test]
@@ -71,5 +76,5 @@ async fn replay_checkpoint_resumes_completed_cursor() {
     while !resumed.sources_complete() {
         resumed.drive_next_source_input().await.unwrap();
     }
-    assert_eq!(resumed.snapshot().event_sequence.get(), 0);
+    assert_eq!(resumed.event_sequence(), 0);
 }

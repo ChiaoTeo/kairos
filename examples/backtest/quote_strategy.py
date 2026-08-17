@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import MarketEvent, QuoteEvent, Strategy, StrategyContext
+from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
 
 
 class BtcusdtQuoteStrategy(Strategy):
@@ -17,9 +17,7 @@ class BtcusdtQuoteStrategy(Strategy):
         )
         ctx.market.subscribe_quotes(market)
 
-    def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
-        if not isinstance(event, QuoteEvent):
-            return
+    def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
         quote = event.data
         if quote.ask_price is None or quote.bid_price is None:
             return

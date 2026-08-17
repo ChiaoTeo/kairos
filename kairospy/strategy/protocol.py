@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, assert_never
 
 from kairospy.application.account import AccountApplication, AccountEvent
 from kairospy.application.execution import ExecutionApplication, ExecutionEvent
-from kairospy.application.market import MarketApplication, MarketEvent
+from kairospy.application.market import (
+    BarEvent,
+    GreeksEvent,
+    MarketApplication,
+    MarketEvent,
+    QuoteEvent,
+    TradeEvent,
+)
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication, RiskEvent
 
@@ -61,7 +68,13 @@ class StrategyProtocol(Protocol):
 
 
 class Strategy:
-    """Convenience base implementing the complete typed lifecycle."""
+    """Convenience base implementing the complete typed lifecycle.
+
+    Runtime dispatch remains domain-oriented and invokes ``on_market`` once.
+    The default implementation then selects one optional typed market hook.
+    Override ``on_market`` to take full control, or override the typed hooks
+    for the common case.
+    """
 
     strategy_id = "strategy"
     log_on_market = False
@@ -70,6 +83,34 @@ class Strategy:
         return None
 
     def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
+        if isinstance(event, QuoteEvent):
+            return self.on_quote(ctx, event)
+        if isinstance(event, BarEvent):
+            return self.on_bar(ctx, event)
+        if isinstance(event, TradeEvent):
+            return self.on_trade(ctx, event)
+        if isinstance(event, GreeksEvent):
+            return self.on_greeks(ctx, event)
+        assert_never(event)
+
+    def on_quote(self, ctx: StrategyContext, event: QuoteEvent) -> None:
+        """Handle one quote when using the default market dispatcher."""
+
+        return None
+
+    def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
+        """Handle one bar when using the default market dispatcher."""
+
+        return None
+
+    def on_trade(self, ctx: StrategyContext, event: TradeEvent) -> None:
+        """Handle one trade when using the default market dispatcher."""
+
+        return None
+
+    def on_greeks(self, ctx: StrategyContext, event: GreeksEvent) -> None:
+        """Handle one option-greeks observation using the default dispatcher."""
+
         return None
 
     def on_account(self, ctx: StrategyContext, event: AccountEvent) -> None:

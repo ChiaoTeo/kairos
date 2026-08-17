@@ -10,8 +10,8 @@ use kairos_primitives::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, LifecycleEvent, Listing, Market,
-    MarketDataAccess, ProviderCatalog,
+    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, MarketDataAccess,
+    ProviderCatalog,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -21,7 +21,6 @@ pub struct ReferenceCatalog {
     pub instruments: BTreeMap<InstrumentId, Instrument>,
     pub listings: BTreeMap<ListingId, Listing>,
     pub markets: BTreeMap<MarketId, Market>,
-    pub financial_products: BTreeMap<String, FinancialProduct>,
     #[serde(default)]
     pub execution_accesses: BTreeMap<ExecutionAccessId, ExecutionAccess>,
     #[serde(default)]
@@ -38,7 +37,6 @@ impl ReferenceCatalog {
         let previous_instruments = std::mem::take(&mut self.instruments);
         let previous_listings = std::mem::take(&mut self.listings);
         let previous_markets = std::mem::take(&mut self.markets);
-        let previous_financial_products = std::mem::take(&mut self.financial_products);
         let previous_execution_accesses = std::mem::take(&mut self.execution_accesses);
         let previous_market_data_accesses = std::mem::take(&mut self.market_data_accesses);
         self.entities = incoming
@@ -61,11 +59,6 @@ impl ReferenceCatalog {
             .into_iter()
             .map(|v| (v.listing_id.clone(), v))
             .collect();
-        self.financial_products = incoming
-            .financial_products
-            .into_iter()
-            .map(|v| (v.product_id.clone(), v))
-            .collect();
         self.execution_accesses = incoming
             .execution_accesses
             .into_iter()
@@ -76,6 +69,60 @@ impl ReferenceCatalog {
             .into_iter()
             .map(|v| (v.access_id.clone(), v))
             .collect();
+
+        // Canonical identity is retained after a provider withdrawal. A
+        // missing provider fact is expressed as an effective lifecycle
+        // transition, never as a hard delete that makes historical identity
+        // or an already-committed event impossible to resolve.
+        for (id, previous) in &previous_entities {
+            self.entities.entry(id.clone()).or_insert_with(|| {
+                let mut retained = previous.clone();
+                retained.status = ReferenceStatus::Inactive;
+                retained
+            });
+        }
+        for (id, previous) in &previous_assets {
+            self.assets.entry(id.clone()).or_insert_with(|| {
+                let mut retained = previous.clone();
+                retained.status = ReferenceStatus::Inactive;
+                retained
+            });
+        }
+        for (id, previous) in &previous_instruments {
+            self.instruments.entry(id.clone()).or_insert_with(|| {
+                let mut retained = previous.clone();
+                retained.status = ReferenceStatus::Inactive;
+                retained
+            });
+        }
+        for (id, previous) in &previous_listings {
+            self.listings.entry(id.clone()).or_insert_with(|| {
+                let mut retained = previous.clone();
+                retained.status = ReferenceStatus::Inactive;
+                retained.effective_to_unix_nanos.get_or_insert(now);
+                retained
+            });
+        }
+        for (id, previous) in &previous_execution_accesses {
+            self.execution_accesses
+                .entry(id.clone())
+                .or_insert_with(|| {
+                    let mut retained = previous.clone();
+                    retained.status = ReferenceStatus::Inactive;
+                    retained.effective_to_unix_nanos.get_or_insert(now);
+                    retained
+                });
+        }
+        for (id, previous) in &previous_market_data_accesses {
+            self.market_data_accesses
+                .entry(id.clone())
+                .or_insert_with(|| {
+                    let mut retained = previous.clone();
+                    retained.status = ReferenceStatus::Inactive;
+                    retained.effective_to_unix_nanos.get_or_insert(now);
+                    retained
+                });
+        }
 
         let mut next_markets: BTreeMap<_, _> = incoming
             .markets
@@ -102,17 +149,6 @@ impl ReferenceCatalog {
                         ));
                     }
                 }
-                for id in $previous.keys() {
-                    if !$current.contains_key(id) {
-                        events.push(record_event(
-                            $kind,
-                            concat!($kind, "_removed"),
-                            id,
-                            now,
-                            self.event_sequence.get() + events.len() as u64 + 1,
-                        ));
-                    }
-                }
             };
         }
 
@@ -120,11 +156,6 @@ impl ReferenceCatalog {
         diff_records!("asset", previous_assets, self.assets);
         diff_records!("instrument", previous_instruments, self.instruments);
         diff_records!("listing", previous_listings, self.listings);
-        diff_records!(
-            "financial_product",
-            previous_financial_products,
-            self.financial_products
-        );
         diff_records!(
             "execution_access",
             previous_execution_accesses,
@@ -162,7 +193,7 @@ impl ReferenceCatalog {
                         record_id: Some(id.to_string()),
                         market_id: Some(id.clone()),
                         instrument_id: Some(next.instrument_id.clone()),
-                        listing_id: Some(next.listing_id.clone()),
+                        listing_id: next.listing_id.clone(),
                         exchange_id: Some(next.exchange_id.clone()),
                         source_symbol: Some(next.source_symbol.clone()),
                         previous_status: Some(previous.status),
@@ -192,7 +223,7 @@ impl ReferenceCatalog {
                     record_id: Some(id.to_string()),
                     market_id: Some(id.clone()),
                     instrument_id: Some(previous.instrument_id.clone()),
-                    listing_id: Some(previous.listing_id.clone()),
+                    listing_id: previous.listing_id.clone(),
                     exchange_id: Some(previous.exchange_id.clone()),
                     source_symbol: Some(previous.source_symbol.clone()),
                     previous_status: Some(previous.status),
@@ -219,26 +250,14 @@ impl ReferenceCatalog {
             || previous_instruments != self.instruments
             || previous_listings != self.listings
             || previous_markets != self.markets
-            || previous_financial_products != self.financial_products
             || previous_execution_accesses != self.execution_accesses
+            || previous_market_data_accesses != self.market_data_accesses
         {
             self.generation = Generation::new(self.generation.get().saturating_add(1));
         }
         for event in &mut events {
-            event.operation = Some(
-                if event.event_type.ends_with("_removed") {
-                    "delete"
-                } else {
-                    "upsert"
-                }
-                .into(),
-            );
+            event.operation = Some("upsert".into());
             event.generation = self.generation;
-            event.record_payload_json = event
-                .record_kind
-                .as_deref()
-                .zip(event.record_id.as_deref())
-                .and_then(|(kind, id)| record_payload(self, kind, id));
         }
         self.lifecycle_events.extend(events.iter().cloned());
         events
@@ -257,28 +276,10 @@ impl ReferenceCatalog {
     }
 }
 
-fn record_payload(catalog: &ReferenceCatalog, kind: &str, id: &str) -> Option<String> {
-    let value = match kind {
-        "entity" => serde_json::to_value(catalog.entities.get(id)?).ok()?,
-        "asset" => serde_json::to_value(catalog.assets.get(id)?).ok()?,
-        "instrument" => serde_json::to_value(catalog.instruments.get(id)?).ok()?,
-        "listing" => serde_json::to_value(catalog.listings.get(id)?).ok()?,
-        "market" => serde_json::to_value(catalog.markets.get(id)?).ok()?,
-        "financial_product" => serde_json::to_value(catalog.financial_products.get(id)?).ok()?,
-        "execution_access" => serde_json::to_value(catalog.execution_accesses.get(id)?).ok()?,
-        "market_data_access" => serde_json::to_value(catalog.market_data_accesses.get(id)?).ok()?,
-        _ => return None,
-    };
-    serde_json::to_string(&value).ok()
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{
-        Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
-        ReferenceCatalog,
-    };
+    use super::{Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog};
     use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
     fn instrument_id(value: &str) -> InstrumentId {
@@ -316,7 +317,7 @@ mod tests {
                 market_id: market_id("market:test"),
                 market_key: "test.spot.TEST".into(),
                 instrument_id: instrument_id("instrument:test"),
-                listing_id: listing_id("listing:test"),
+                listing_id: Some(listing_id("listing:test")),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
                 market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
                 source_symbol: kairos_primitives::Symbol::new("TEST").unwrap(),
@@ -371,34 +372,35 @@ mod tests {
     #[test]
     fn validation_rejects_unresolved_reference_relationships() {
         let catalog = ProviderCatalog {
-            assets: vec![Asset {
-                asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
-                code: "BTC".into(),
-                asset_class: kairos_primitives::AssetClass::Crypto,
+            listings: vec![Listing {
+                listing_id: listing_id("listing:missing"),
+                instrument_id: instrument_id("instrument:missing"),
+                exchange_id: Exchange::new("exchange:missing").unwrap(),
+                exchange_symbol: Symbol::new("MISSING").unwrap(),
                 status: "active".into(),
-                ..Default::default()
-            }],
-            instruments: vec![Instrument {
-                instrument_id: instrument_id("instrument:option"),
-                symbol: kairos_primitives::Symbol::new("BTC-OPT").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Spot,
-                status: "active".into(),
-                underlying_instrument_id: None,
-                ..Default::default()
-            }],
-            financial_products: vec![FinancialProduct {
-                product_id: "product:earn".into(),
-                product_type: "earn".into(),
-                name: "Earn".into(),
-                asset_id: kairos_primitives::AssetId::new("asset:missing").unwrap(),
-                provider_product_id: "earn".into(),
-                status: "active".into(),
+                effective_from_unix_nanos: 1.into(),
                 ..Default::default()
             }],
             ..Default::default()
         };
         let error = catalog.validate().unwrap_err().to_string();
-        assert!(error.contains("missing asset"));
+        assert!(error.contains("missing instrument"));
+    }
+
+    #[test]
+    fn validation_accepts_a_non_listing_market() {
+        let mut catalog = catalog_with_market("active");
+        catalog.listings.clear();
+        catalog.markets[0].listing_id = None;
+        catalog.instruments[0] = Instrument {
+            instrument_id: instrument_id("instrument:test"),
+            symbol: Symbol::new("TEST").unwrap(),
+            instrument_type: kairos_primitives::InstrumentKind::Spot,
+            status: "active".into(),
+            ..Default::default()
+        };
+
+        catalog.validate().unwrap();
     }
 
     #[test]
@@ -430,7 +432,7 @@ impl LifecycleEvent {
             record_id: Some(market.market_id.to_string()),
             market_id: Some(market.market_id.clone()),
             instrument_id: Some(market.instrument_id.clone()),
-            listing_id: Some(market.listing_id.clone()),
+            listing_id: market.listing_id.clone(),
             exchange_id: Some(market.exchange_id.clone()),
             source_symbol: Some(market.source_symbol.clone()),
             current_status: Some(market.status),

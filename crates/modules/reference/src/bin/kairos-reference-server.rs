@@ -7,13 +7,13 @@ use axum::{
 };
 use clap::Parser;
 use kairos_reference::application::control;
-use kairos_reference::application::ReferenceReadModel;
+use kairos_reference::application::{
+    ReferenceReadModel, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
+};
 use kairos_reference::composition::{
     build_application, ensure_database_parent, ComposedReferenceApplication,
-    ReferenceCompositionConfig, ReferenceCurrentViewPublisher, ReferenceEventWriter,
-    ReferenceEventWriterConfig,
+    ReferenceCompositionConfig, ReferenceEventWriter, ReferenceEventWriterConfig,
 };
-use kairos_reference::domain::{Asset, Instrument, Listing};
 use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -96,37 +96,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let composition = build_application(&config, true).await?;
     let mut application = composition.application;
     let mut event_writer = composition.event_writer;
-    let reference_view_root = workspace.child(&["snapshots", "v2"])?;
-    let reference_identity = kairos_protocol::InstanceIdentity::new(workspace.id(), "", "");
-    let mut current_view_publisher = ReferenceCurrentViewPublisher::create(
-        &reference_view_root,
-        32 * 1024 * 1024,
-        application.actor_id(),
-        reference_identity,
-    )?;
-
     if args.run_mode == "once" {
         let refresh = application.refresh().await?;
-        current_view_publisher.publish(&application.current_view().await?)?;
         if let Some(writer) = event_writer.as_mut() {
             loop {
-                let events = application.pending_events(EVENT_BATCH_LIMIT).await?;
-                if events.is_empty() {
+                let publications = application.pending_publications(EVENT_BATCH_LIMIT).await?;
+                if publications.is_empty() {
                     break;
                 }
                 // Aeron is a best-effort notification stream. A successful
                 // publish also includes the normal no-subscriber drop case;
                 // SQLite is the recovery source for late consumers.
-                writer.publish(
-                    application.generation(),
-                    application.event_sequence(),
-                    &events,
-                )?;
-                let event_ids = events
+                writer.publish(&publications)?;
+                let event_ids = publications
                     .iter()
-                    .map(|event| event.event_id.clone())
+                    .map(|event| event.event_id().to_owned())
                     .collect::<Vec<_>>();
-                application.acknowledge_published_events(&event_ids).await?;
+                application.acknowledge_publications(&event_ids).await?;
             }
         }
         tracing::info!(
@@ -161,7 +147,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         aeron_dir,
         aeron_channel,
         reference_changes_stream,
-        database: config.database.clone(),
     });
     run_process(
         application,
@@ -170,7 +155,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         health_file,
         args.refresh_interval,
         true,
-        current_view_publisher,
     )
     .await
 }
@@ -182,7 +166,6 @@ async fn run_process(
     health_file: Option<PathBuf>,
     refresh_interval: Duration,
     initial_refresh: bool,
-    mut current_view_publisher: ReferenceCurrentViewPublisher,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event_publisher = event_writer_config.map(EventPublisherRuntime::new);
     tracing::info!(event = "process_starting", component = "reference", socket = %socket.display(), refresh_interval_secs = refresh_interval.as_secs(), "reference process starting");
@@ -243,7 +226,6 @@ async fn run_process(
             }
         };
         *read_model.write().await = application.read_model().await;
-        current_view_publisher.publish(&application.current_view().await?)?;
         *health_status.write().await = status.to_owned();
         write_health(&health_file, &application, status).await?;
     }
@@ -274,10 +256,6 @@ async fn run_process(
                     let _ = request.response.send(response.map_err(|error| error.to_string()));
                 }
                 *read_model.write().await = application.read_model().await;
-                if let Err(error) = application.current_view().await.and_then(|view| current_view_publisher.publish(&view)) {
-                    tracing::error!(event = "snapshot_publish_failed", component = "reference", error = %error, "Reference typed mmap publication failed");
-                    *health_status.write().await = "degraded".into();
-                }
             }
             _ = interval.tick() => {
                 let refresh_started = Instant::now();
@@ -307,10 +285,6 @@ async fn run_process(
                     }
                 };
                 *read_model.write().await = application.read_model().await;
-                if let Err(error) = application.current_view().await.and_then(|view| current_view_publisher.publish(&view)) {
-                    tracing::error!(event = "snapshot_publish_failed", component = "reference", error = %error, "Reference typed mmap publication failed");
-                    *health_status.write().await = "degraded".into();
-                }
                 *health_status.write().await = status.to_owned();
                 write_health(&health_file, &application, status).await?;
             }
@@ -348,9 +322,7 @@ struct ReferenceHttpRequest {
 }
 
 struct PublishRequest {
-    generation: kairos_primitives::Generation,
-    event_sequence: kairos_primitives::Sequence,
-    events: Vec<kairos_reference::domain::LifecycleEvent>,
+    publications: Vec<kairos_reference::ReferencePublication>,
     response: SyncSender<Result<(), String>>,
 }
 
@@ -369,7 +341,7 @@ impl EventPublisherRuntime {
                     .expect("connect reference event publisher worker");
                 while let Ok(request) = receiver.recv() {
                     let result = writer
-                        .publish(request.generation, request.event_sequence, &request.events)
+                        .publish(&request.publications)
                         .map_err(|error| error.to_string());
                     let _ = request.response.send(result);
                 }
@@ -380,11 +352,9 @@ impl EventPublisherRuntime {
 
     fn publish(
         &self,
-        generation: kairos_primitives::Generation,
-        event_sequence: kairos_primitives::Sequence,
-        events: &[kairos_reference::domain::LifecycleEvent],
+        publications: &[kairos_reference::ReferencePublication],
     ) -> kairos_reference::domain::ReferenceResult<()> {
-        let receiver = self.enqueue(generation, event_sequence, events)?;
+        let receiver = self.enqueue(publications)?;
         receiver
             .recv()
             .map_err(|error| {
@@ -395,15 +365,11 @@ impl EventPublisherRuntime {
 
     fn enqueue(
         &self,
-        generation: kairos_primitives::Generation,
-        event_sequence: kairos_primitives::Sequence,
-        events: &[kairos_reference::domain::LifecycleEvent],
+        publications: &[kairos_reference::ReferencePublication],
     ) -> kairos_reference::domain::ReferenceResult<std_mpsc::Receiver<Result<(), String>>> {
         let (response, receiver) = std_mpsc::sync_channel(1);
         match self.requests.try_send(PublishRequest {
-            generation,
-            event_sequence,
-            events: events.to_vec(),
+            publications: publications.to_vec(),
             response,
         }) {
             Ok(()) => Ok(receiver),
@@ -493,7 +459,7 @@ async fn reference_http_handler_inner(state: ReferenceServerState, request: Requ
     if method == "GET" && path != control::HEALTH {
         return (
             StatusCode::METHOD_NOT_ALLOWED,
-            Json(json!({"error":"Reference business queries are available only through typed mmap views"})),
+            Json(json!({"error":"Reference business queries use the contract-owned read-only SQLite client"})),
         )
             .into_response();
     }
@@ -665,7 +631,7 @@ async fn handle_request(
                 Err(error) => (400, json!({"error": error.to_string()}), false),
             }
         }
-        control::ASSETS => match serde_json::from_str::<Asset>(body) {
+        control::ASSETS => match serde_json::from_str::<UpsertAssetCommand>(body) {
             Ok(asset) => match application.upsert_asset(asset).await {
                 Ok(generation) => match publish_pending(writer, application).await {
                     Ok(events) => (
@@ -683,7 +649,7 @@ async fn handle_request(
                 false,
             ),
         },
-        control::INSTRUMENTS => match serde_json::from_str::<Instrument>(body) {
+        control::INSTRUMENTS => match serde_json::from_str::<UpsertInstrumentCommand>(body) {
             Ok(instrument) => match application.upsert_instrument(instrument).await {
                 Ok(generation) => match publish_pending(writer, application).await {
                     Ok(events) => (
@@ -701,7 +667,7 @@ async fn handle_request(
                 false,
             ),
         },
-        control::LISTINGS => match serde_json::from_str::<Listing>(body) {
+        control::LISTINGS => match serde_json::from_str::<UpsertListingCommand>(body) {
             Ok(listing) => match application.upsert_listing(listing).await {
                 Ok(generation) => match publish_pending(writer, application).await {
                     Ok(events) => (
@@ -743,20 +709,15 @@ fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
 fn publish(
     writer: Option<&EventPublisherRuntime>,
     application: &ComposedReferenceApplication,
-    events: &[kairos_reference::domain::LifecycleEvent],
+    publications: &[kairos_reference::ReferencePublication],
 ) -> kairos_reference::domain::ReferenceResult<()> {
-    publish_events(
-        writer,
-        application.generation(),
-        application.event_sequence(),
-        events,
-    )?;
+    publish_events(writer, publications)?;
     tracing::info!(
         event = "reference_changes_published",
         component = "reference",
         generation = application.generation().get(),
         event_sequence = application.event_sequence().get(),
-        change_count = events.len(),
+        change_count = publications.len(),
         "reference changes published"
     );
     Ok(())
@@ -764,16 +725,14 @@ fn publish(
 
 fn publish_events(
     writer: Option<&EventPublisherRuntime>,
-    generation: kairos_primitives::Generation,
-    event_sequence: kairos_primitives::Sequence,
-    events: &[kairos_reference::domain::LifecycleEvent],
+    publications: &[kairos_reference::ReferencePublication],
 ) -> kairos_reference::domain::ReferenceResult<()> {
     let writer = writer.ok_or_else(|| {
         kairos_reference::domain::ReferenceError::Publication(
             "reference publication is not configured".into(),
         )
     })?;
-    writer.publish(generation, event_sequence, events)
+    writer.publish(publications)
 }
 
 async fn publish_pending(
@@ -794,17 +753,17 @@ async fn publish_pending_batch(
     writer: Option<&EventPublisherRuntime>,
     application: &mut ComposedReferenceApplication,
 ) -> kairos_reference::domain::ReferenceResult<usize> {
-    let events = application.pending_events(EVENT_BATCH_LIMIT).await?;
-    if events.is_empty() {
+    let publications = application.pending_publications(EVENT_BATCH_LIMIT).await?;
+    if publications.is_empty() {
         return Ok(0);
     }
-    publish(writer, application, &events)?;
-    let event_ids = events
+    publish(writer, application, &publications)?;
+    let event_ids = publications
         .iter()
-        .map(|event| event.event_id.clone())
+        .map(|event| event.event_id().to_owned())
         .collect::<Vec<_>>();
-    application.acknowledge_published_events(&event_ids).await?;
-    Ok(events.len())
+    application.acknowledge_publications(&event_ids).await?;
+    Ok(publications.len())
 }
 
 async fn refresh_cycle(

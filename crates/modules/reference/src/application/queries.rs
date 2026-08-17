@@ -8,8 +8,7 @@ use kairos_primitives::{Exchange, MarketId, Sequence, Symbol, UnixNanos};
 use serde::Serialize;
 
 use crate::domain::{
-    Asset, Entity, ExecutionAccess, FinancialProduct, Instrument, LifecycleEvent, Listing, Market,
-    MarketDataAccess,
+    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, MarketDataAccess,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -19,7 +18,6 @@ pub enum ReferenceKind {
     Instrument,
     Listing,
     Market,
-    FinancialProduct,
     ExecutionAccess,
     MarketDataAccess,
     Event,
@@ -92,7 +90,6 @@ pub enum ReferenceRecord {
     Instrument(Instrument),
     Listing(Listing),
     Market(Market),
-    FinancialProduct(FinancialProduct),
     ExecutionAccess(ExecutionAccess),
     MarketDataAccess(MarketDataAccess),
     Event(LifecycleEvent),

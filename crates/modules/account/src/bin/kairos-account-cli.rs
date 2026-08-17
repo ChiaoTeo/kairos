@@ -1130,6 +1130,9 @@ async fn run_direct(
         return Ok(());
     }
     if let Command::Fill { fill } = &command {
+        if !paper {
+            return Err("simulated fill is available only for paper/simulated Account".into());
+        }
         composition
             .application
             .apply_simulated_fill(fill.to_domain()?)?;

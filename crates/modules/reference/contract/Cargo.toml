@@ -24,5 +24,4 @@ tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
 
 [dev-dependencies]
-rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 tempfile = "3"

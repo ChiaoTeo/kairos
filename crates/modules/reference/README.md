@@ -1,15 +1,19 @@
 # Kairos Reference
 
-Reference owns the workspace-wide reference universe: entities, exchanges,
-assets, instruments, listings, markets, financial products, and their
-lifecycle facts.
+Reference is Kairos's authority for canonical tradable identity, effective
+reference relationships, provider access addresses, and their lifecycle. It
+maps Integration-owned provider facts into stable assets, instruments,
+listings, markets, market-data accesses, and execution accesses.
+
+Reference does not own provider networking, market observations, execution
+routing policy, account facts, workspace resources, or research datasets.
 
 ## Synchronization rule
 
-Reference synchronization is full-universe synchronization. A provider
-adapter must return every reference record available for its configured
-provider/product. A concrete underlying such as `SPY` or `NVDA` must never be
-a Reference-wide synchronization filter.
+Reference synchronization covers the complete explicitly configured scope of
+each provider/product. A source may use durable, explicit coverage (for
+example selected option underlyings), but an ad-hoc consumer query must never
+silently narrow authoritative synchronization.
 
 An instrument may still contain `underlying_instrument_id`; that is a domain
 relationship describing the instrument, not a provider query option. Consumers
@@ -103,10 +107,19 @@ therefore identifies the canonical instrument as a US equity and records Binance
 as the execution provider without asserting that every returned symbol is listed
 on Nasdaq.
 
-If no Aeron consumer is running, refresh remains committed in SQLite. Durable
-lifecycle rows and the publication cursor allow the publisher to resume without
-copying every event payload into a second outbox table. Consumers recover their
-bounded projections from the read-only SQLite contract.
+If no Aeron consumer is running, refresh remains committed in SQLite. Every
+lifecycle publication is encoded as typed FlatBuffers and stored in the same
+transaction as its exact catalog revision. The publisher retries those bytes
+until acknowledgement; it never reconstructs an old event from a newer current
+row.
+
+Current business state is read through the contract-owned, read-only SQLite
+client as three bounded typed projections with one transaction-consistent
+generation/event-sequence watermark: Market receives active markets,
+instruments, and market-data accesses; Execution receives active markets and
+execution accesses; Account receives only the identity facts needed to map
+provider observations. Business modules never issue Reference SQL or depend on
+its table names and persistence records.
 
 Normal process control does not require a provider flag. The default registry
 skips credential files with no resolved API key, includes credentialed sources
@@ -117,22 +130,24 @@ reports the resulting source mode through `reference providers`. Use
 ## Architecture
 
 ```text
-bin -> composition -> application -> services -> domain
-                         |             |
-                    Integration      SQLite/Aeron
+bin -> composition -> application -> services
+          |                 |             |
+     Integration         domain         SQLite
+          |
+    typed publishers
 ```
 
 `ReferenceApplication` is the public use-case facade. `ReferenceActor` is the
-single owner of mutable catalog state. Composition selects provider, storage,
-and publication implementations. The server owns transport and process
-lifecycle; it is not a second catalog state owner.
+single owner of mutable catalog state. Composition selects concrete
+Integration clients, storage, and publication implementations. The server
+adapts process transport; it is not a second catalog state owner.
 
 ## Main capabilities
 
 - provider-neutral catalog reconciliation;
 - lifecycle events for listed, changed, and delisted markets;
 - append-only lifecycle history with sequence/time filtering and replay;
-- SQLite catalog recovery;
+- atomic SQLite catalog recovery and typed publication outbox;
 - market resolution and typed reference queries;
 - catalog, markets, lifecycle, and change-event publication;
 - one-shot CLI and workspace-managed Unix-socket server.

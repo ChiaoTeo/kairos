@@ -1,6 +1,6 @@
 use kairos_market::{
-    MarketApplication, MarketDescriptor, OrderBook, OrderBookDelta, OrderBookSide, PriceLevel,
-    SubscriptionId,
+    MarketApplication, MarketDataRoute, OrderBook, OrderBookDelta, OrderBookSide, PriceLevel,
+    ResolvedMarket, SubscriptionId,
 };
 
 #[test]
@@ -38,9 +38,14 @@ fn orderbook_applies_contiguous_deltas() {
 
 #[test]
 fn query_estimates_execution_with_decimal_vwap_and_slippage() {
-    let descriptor =
-        MarketDescriptor::new("market:btc", "instrument:btc", "binance", "spot", "BTCUSDT")
-            .unwrap();
+    let descriptor = ResolvedMarket::new(
+        "market:btc",
+        "instrument:btc",
+        kairos_primitives::InstrumentKind::Spot,
+        "binance",
+        MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
+    )
+    .unwrap();
     let mut application = MarketApplication::new("market-1", 10).unwrap();
     application
         .subscribe_static(

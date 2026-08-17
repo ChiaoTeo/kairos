@@ -140,6 +140,13 @@ class UserStrategy(Strategy):
         )
 
 
+class InvalidTypedHookStrategy(Strategy):
+    strategy_id = "invalid-typed-hook"
+
+    def on_quote(self, context, event):
+        return "callbacks must not return values"
+
+
 class RuntimeFactStrategy(UserStrategy):
     def __init__(self) -> None:
         super().__init__()
@@ -387,6 +394,26 @@ def test_multiple_callbacks_from_one_source_record_share_sequence_safely(
     assert strategy.messages == ["first", "second"]
     assert [item["source_sequence"] for item in application.event_trace] == [7, 7]
     assert [item["trace_sequence"] for item in application.event_trace] == [1, 2]
+
+
+def test_typed_market_hook_preserves_callback_return_validation(tmp_path: Path) -> None:
+    strategy = InvalidTypedHookStrategy()
+    application, _, _, _ = _host(tmp_path, strategy=strategy)
+    application.start()
+    application.enable()
+
+    with pytest.raises(TypeError, match="on_market must return None"):
+        application.dispatch(
+            EventEnvelope(
+                "market.events",
+                1,
+                "data",
+                "quote",
+                {"symbol": "AAPL"},
+            )
+        )
+
+    assert application.status.state is StrategyLifecycle.FAILED
 
 
 def test_replay_dispatch_visits_timer_times_inside_a_market_gap(tmp_path: Path) -> None:

@@ -16,8 +16,8 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
         "src/composition/sources/binance.rs",
         "src/composition/sources/massive.rs",
         "src/composition/sources/okx.rs",
-        "src/services/sources/snapshot.rs",
-        "src/services/sources/stream.rs",
+        "src/services/source/snapshot.rs",
+        "src/services/source/stream.rs",
     ] {
         let source = source(path);
         assert!(
@@ -56,6 +56,16 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
         );
     }
     assert!(source.contains("build_market_process"));
+}
+
+#[test]
+fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
+    let process = source("src/composition/process/mod.rs");
+    let runtime = source("src/application/process/runtime.rs");
+    assert!(process.contains("without_event_socket()"));
+    assert!(process.contains("with_aeron_event_publisher"));
+    assert!(process.contains("profile.scope != MarketRuntimeScope::Replay"));
+    assert!(runtime.contains("event_socket_path: Option<PathBuf>"));
 }
 
 #[test]
@@ -138,8 +148,75 @@ fn business_layers_do_not_import_provider_implementation_or_composition() {
 }
 
 #[test]
+fn private_services_do_not_depend_on_composition_or_provider_types() {
+    let mut pending = vec![crate_root().join("src/services")];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) != Some("rs") {
+                continue;
+            }
+            let value = std::fs::read_to_string(&path).unwrap();
+            let production = value.split("#[cfg(test)]").next().unwrap_or(&value);
+            for forbidden in ["crate::composition", "kairos_integration::participants"] {
+                assert!(
+                    !production.contains(forbidden),
+                    "Market service imports forbidden dependency {forbidden}: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reference_client_and_contract_are_composition_only() {
+    for directory in ["src/application", "src/services", "src/domain"] {
+        let mut pending = vec![crate_root().join(directory)];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|value| value.to_str()) != Some("rs") {
+                    continue;
+                }
+                let value = std::fs::read_to_string(&path).unwrap();
+                assert!(
+                    !value.contains("kairos_reference_contract")
+                        && !value.contains("ReferenceSqliteReader")
+                        && !value.contains("ReferenceProjection")
+                        && !value.contains("ReferenceChanged"),
+                    "Market business layer contains a Reference adapter/model: {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    for path in ["src/domain/reference", "src/services/reference"] {
+        assert!(
+            !crate_root().join(path).exists(),
+            "obsolete Market-owned Reference boundary remains: {path}"
+        );
+    }
+    let composition = source("src/composition/reference/projection.rs");
+    assert!(composition.contains("ReferenceProjectionSnapshot"));
+    assert!(composition.contains("ReconcileMarketUniverse"));
+    let process = source("src/composition/process/mod.rs");
+    let watcher = source("src/composition/reference/watcher.rs");
+    assert!(process.contains("market_snapshot()"));
+    assert!(watcher.contains("market_snapshot()"));
+}
+
+#[test]
 fn actor_is_the_single_source_runtime_state_owner() {
-    let actor = source("src/services/actor.rs");
+    let actor = source("src/services/actor/state.rs");
     for owned in [
         "attached_sources",
         "pending_source_requests",
@@ -148,22 +225,22 @@ fn actor_is_the_single_source_runtime_state_owner() {
     ] {
         assert!(actor.contains(owned), "MarketActor must own {owned}");
     }
-    let facade = source("src/application/facade.rs");
-    let application_struct = facade
+    let application = source("src/application/mod.rs");
+    let application_struct = application
         .split("pub struct MarketApplication")
         .nth(1)
         .unwrap()
         .split('}')
         .next()
         .unwrap();
-    assert!(application_struct.contains("actor: MarketActor"));
+    assert!(application_struct.contains("actor: crate::services::actor::MarketActor"));
     assert!(!application_struct.contains("sources:"));
     assert!(!application_struct.contains("pending_source_requests:"));
 }
 
 #[test]
 fn market_rest_exposes_health_as_its_only_get_query() {
-    let process = source("src/application/process.rs");
+    let process = source("src/application/process/runtime.rs");
     assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
     assert!(process.contains("Market business queries are available only through typed mmap views"));
     assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
@@ -187,4 +264,242 @@ fn market_rest_exposes_health_as_its_only_get_query() {
             "Market health leaks {forbidden}"
         );
     }
+}
+
+#[test]
+fn application_root_contains_only_its_module_boundary() {
+    let root = crate_root().join("src/application");
+    let files = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec!["mod.rs"]);
+}
+
+#[test]
+fn services_root_contains_only_its_module_boundary() {
+    let root = crate_root().join("src/services");
+    let files = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec!["mod.rs"]);
+}
+
+#[test]
+fn domain_root_contains_only_its_module_boundary() {
+    let root = crate_root().join("src/domain");
+    let files = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec!["mod.rs"]);
+}
+
+#[test]
+fn composition_root_contains_only_its_module_boundary() {
+    let root = crate_root().join("src/composition");
+    let files = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec!["mod.rs"]);
+}
+
+#[test]
+fn every_public_observation_has_a_symmetric_vertical_directory() {
+    for kind in [
+        "quote",
+        "trade",
+        "bar",
+        "trade_bar",
+        "quote_bar",
+        "ticker_24h",
+        "option_greeks",
+        "rate",
+        "mark_price",
+        "index_price",
+        "funding_rate",
+        "open_interest",
+        "order_book",
+    ] {
+        for layer in [
+            "domain/observation",
+            "application/observations",
+            "services/actor/observations",
+        ] {
+            assert!(
+                crate_root()
+                    .join(format!("src/{layer}/{kind}/mod.rs"))
+                    .is_file(),
+                "missing symmetric observation module: {layer}/{kind}"
+            );
+        }
+    }
+    assert!(!crate_root().join("src/domain/orderbook.rs").exists());
+    assert!(!crate_root().join("src/domain/orderbook").exists());
+    assert!(!crate_root()
+        .join("src/domain/observation/kind/mod.rs")
+        .exists());
+    for file in ["book.rs", "level.rs", "delta.rs", "continuity.rs"] {
+        assert!(crate_root()
+            .join(format!("src/domain/observation/order_book/{file}"))
+            .is_file());
+    }
+    let observation = source("src/domain/observation/mod.rs");
+    assert!(observation.contains("pub fn kind(&self) -> ObservationKind"));
+    let application_quote = source("src/application/observations/quote/mod.rs");
+    assert!(application_quote.contains("pub fn ingest_quote"));
+    let actor_quote = source("src/services/actor/observations/quote/mod.rs");
+    assert!(actor_quote.contains("fn apply_quote"));
+}
+
+#[test]
+fn view_checkpoint_and_change_have_distinct_boundaries() {
+    assert!(!crate_root().join("src/domain/snapshot").exists());
+    assert!(crate_root()
+        .join("src/services/actor/checkpoint.rs")
+        .is_file());
+    let root = source("src/lib.rs");
+    assert!(!root.contains("ReplayCheckpoint"));
+    assert!(!root.contains("MarketSnapshot"));
+    assert!(!root.contains("MarketSnapshotPublisher"));
+    let projection = source("src/application/observations/projection.rs");
+    assert!(!projection.contains("pub fn snapshot"));
+    assert!(projection.contains("pub fn current_view"));
+    let publication = source("src/application/process/publication.rs");
+    assert!(publication.contains("trait MarketChangePublisher"));
+    assert!(!publication.contains("SnapshotPublisher"));
+}
+
+#[test]
+fn canonical_market_capabilities_do_not_create_stateless_kind_wrappers() {
+    let capability = source("src/domain/observation/identity/capability.rs");
+    assert!(capability.contains("fn supports_observation("));
+    for kind in ["spot", "perpetual", "future", "option"] {
+        assert!(!crate_root()
+            .join(format!("src/domain/market/{kind}.rs"))
+            .exists());
+    }
+}
+
+#[test]
+fn observation_identity_and_order_book_behavior_live_in_their_owned_modules() {
+    for file in ["kind.rs", "key.rs", "qualifier.rs", "capability.rs"] {
+        assert!(crate_root()
+            .join(format!("src/domain/observation/identity/{file}"))
+            .is_file());
+    }
+    for file in ["projection.rs", "continuity.rs", "resync.rs"] {
+        assert!(crate_root()
+            .join(format!("src/application/observations/order_book/{file}"))
+            .is_file());
+    }
+    assert!(crate_root()
+        .join("src/services/actor/observations/views.rs")
+        .is_file());
+    assert!(crate_root()
+        .join("src/services/actor/observations/order_book/continuity.rs")
+        .is_file());
+
+    let actor_state = source("src/services/actor/state.rs");
+    for migrated in [
+        "fn apply_observation",
+        "fn apply_orderbook_snapshot",
+        "fn apply_orderbook_delta",
+        "fn begin_orderbook_resync",
+        "fn complete_orderbook_resync",
+        "fn record_orderbook_freshness",
+    ] {
+        assert!(
+            !actor_state.contains(migrated),
+            "migrated Observation behavior remains in actor/state.rs: {migrated}"
+        );
+    }
+}
+
+#[test]
+fn subscription_and_universe_slices_have_owned_vertical_modules() {
+    for file in ["intent.rs", "member.rs", "selector.rs", "status.rs"] {
+        assert!(crate_root()
+            .join(format!("src/domain/subscription/{file}"))
+            .is_file());
+    }
+    for file in [
+        "static_subscription.rs",
+        "dynamic_subscription.rs",
+        "lifecycle.rs",
+        "resolution.rs",
+    ] {
+        assert!(crate_root()
+            .join(format!("src/application/subscriptions/{file}"))
+            .is_file());
+    }
+    for file in ["reconciliation.rs", "recovery.rs"] {
+        assert!(crate_root()
+            .join(format!("src/application/universe/{file}"))
+            .is_file());
+    }
+    assert!(crate_root()
+        .join("src/services/actor/subscriptions.rs")
+        .is_file());
+    assert!(crate_root()
+        .join("src/services/actor/universe/mod.rs")
+        .is_file());
+    assert!(!crate_root()
+        .join("src/application/universe/resolution.rs")
+        .exists());
+
+    let actor_state = source("src/services/actor/state.rs");
+    for migrated in [
+        "fn subscribe_static",
+        "fn subscribe_dynamic",
+        "fn unsubscribe",
+        "fn release_owner",
+        "fn set_member_requirement",
+        "fn apply_market_universe",
+        "fn reconcile_market_universe_members",
+        "fn subscription_states",
+    ] {
+        assert!(
+            !actor_state.contains(migrated),
+            "migrated Subscription/Universe behavior remains in actor/state.rs: {migrated}"
+        );
+    }
+}
+
+#[test]
+fn domain_is_not_a_public_crate_module() {
+    let root = source("src/lib.rs");
+    assert!(root.contains("mod domain;"));
+    assert!(!root.contains("pub mod domain;"));
+}
+
+#[test]
+fn process_does_not_decode_control_wire_records() {
+    let process = source("src/application/process/runtime.rs");
+    let process = process.split("#[cfg(test)]").next().unwrap_or(&process);
+    for forbidden in [
+        "serde::Deserialize",
+        "serde_json::from_str",
+        "serde_json::from_value",
+        "struct CommandEnvelope",
+        "struct SubscribePayload",
+    ] {
+        assert!(
+            !process.contains(forbidden),
+            "Market process decodes control wire record: {forbidden}"
+        );
+    }
+    let wire = source("src/services/control/wire.rs");
+    assert!(wire.contains("struct CommandEnvelope"));
+    assert!(wire.contains("parse_subscribe_command"));
 }

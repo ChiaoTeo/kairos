@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.strategy import BarEvent, MarketEvent, Strategy, StrategyContext
+from kairospy.strategy import BarEvent, Strategy, StrategyContext
 
 
 class SpyHourlyBarStrategy(Strategy):
@@ -17,8 +17,8 @@ class SpyHourlyBarStrategy(Strategy):
         )
         ctx.market.subscribe_bars(market, timeframe="1h")
 
-    def on_market(self, ctx: StrategyContext, event: MarketEvent) -> None:
-        if not isinstance(event, BarEvent) or event.data.timeframe != "1h":
+    def on_bar(self, ctx: StrategyContext, event: BarEvent) -> None:
+        if event.data.timeframe != "1h":
             return
         count = ctx.state.increment("bar_count")
         if count == 1:

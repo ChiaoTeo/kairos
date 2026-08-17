@@ -129,11 +129,27 @@ collaboration belongs in application orchestration or composition.
 - `application/` is the only public entry point for other modules, servers,
   CLIs, scheduled jobs, and external test fixtures.
 - `services/` and other private files are never cross-module imports.
+- Direct dependency is the default. Application may directly depend on its
+  module's Domain, Actor, and concrete private services, and may directly use
+  another module's application API or independently depend-able contract.
+- Do not create an application-owned dependency-inversion trait merely to hide
+  a concrete service, make dependency injection uniform, provide test doubles,
+  or anticipate future implementations. A wrapper, queued worker, socket
+  decorator, and test fake around the same implementation do not constitute
+  multiple capability implementations.
+- A trait dependency is allowed only when an integrated lower-level module or
+  platform capability already owns a stable polymorphic boundary with current
+  production implementations. Depend on that owner-defined boundary directly;
+  do not mirror it with a second application `port`, `capability`, `gateway`,
+  or `protocol` trait.
+- If no such lower-level abstraction exists, keep the business rule in
+  Application or Domain and call the concrete service/application/contract
+  directly. Do not introduce a `ports/` layer as an architectural default.
 - `protocol` is optional, not a mandatory layer.
 - Prefer an existing `kairos-integration` application capability directly when
   the business module is intentionally coupled to integration.
-- Add a protocol only for a genuinely module-owned, minimal capability where
-  multiple implementations or a clear isolation boundary justify it.
+- Add a protocol only when the owning lower-level module has an established,
+  minimal capability with current production implementations and callers.
 - Do not duplicate an integration API, rename vendor concepts without a
   business reason, or add a protocol only for uniform dependency injection.
 - Concrete connectors, stores, publishers, and mode-specific implementations
@@ -160,6 +176,14 @@ For the current business modules:
 
 - Account owns balances, positions, equity, freshness, intents, and
   account-side order facts.
+- Live Account facts have one authoritative ingress: Account-owned Integration
+  account snapshot/event capabilities. Execution or another business module
+  must not push a duplicate live order, fill, balance, or position observation
+  into Account.
+- Simulation-only Account mutations must use an explicitly named simulation
+  command, be rejected by live Account processes, and remain idempotent. Do not
+  generalize that exception into an Account-facts port or a production event
+  ingestion API.
 - Execution owns the exchange-facing order lifecycle and execution audit.
 - Risk owns budgets and reservations.
 - Market owns observations, order books, subscriptions, and freshness.
@@ -175,9 +199,10 @@ Prefer the smallest change that solves the current problem. Engineering
 quality means clearer ownership, safer boundaries, fewer invalid states, and
 better evidence—not a larger number of layers or abstractions.
 
-- Do not add a manager, coordinator, registry, protocol, or compatibility
-  facade without a current caller, a concrete boundary, or a second real
-  implementation that needs it.
+- Do not add a manager, coordinator, registry, protocol, port, capability
+  trait, or compatibility facade unless its owning lower-level module already
+  has a current caller and multiple real production implementations. A
+  hypothetical second implementation or a test fake is not sufficient.
 - Prefer an existing owner or boundary over introducing a new layer. Do not
   optimize for uniform file layouts when responsibility is already clear.
 - Introduce shared domain types only when the semantic meaning is genuinely
@@ -232,6 +257,11 @@ python3 scripts/check/check_crate_layout.py
 Also run static searches for cross-module imports from `services/` or private
 files, vendor payloads crossing application boundaries, duplicate state
 owners, unnecessary protocol mirrors, and generic orchestration layers.
+Audit every trait defined under `application/`: require evidence that it is
+owned by an already-integrated lower-level capability; otherwise replace it
+with a direct concrete dependency or move business behavior into Application
+or Domain. Explicitly search for generic `ports`, `capabilities`, `gateways`,
+and test-only implementations before handoff.
 Search active business publisher composition for JSON model adapters (for
 example, `serde_json::to_value` or `serde_json::from_value`) and either remove
 every match from event/snapshot publication paths or document why the matched

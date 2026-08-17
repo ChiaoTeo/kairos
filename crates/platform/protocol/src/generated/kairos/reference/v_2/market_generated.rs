@@ -147,14 +147,13 @@ impl<'a> Market<'a> {
         }
     }
     #[inline]
-    pub fn listing_id(&self) -> &'a str {
+    pub fn listing_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_LISTING_ID, None)
-                .unwrap()
         }
     }
     #[inline]
@@ -367,7 +366,7 @@ impl ::flatbuffers::Verifiable for Market<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "listing_id",
                 Self::VT_LISTING_ID,
-                true,
+                false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "exchange_id",
@@ -476,7 +475,7 @@ impl<'a> Default for MarketArgs<'a> {
             market_id: None,     // required field
             market_key: None,    // required field
             instrument_id: None, // required field
-            listing_id: None,    // required field
+            listing_id: None,
             exchange_id: None,   // required field
             market_type: None,   // required field
             source_symbol: None, // required field
@@ -666,7 +665,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarketBuilder<'a, 'b, A> {
         self.fbb_.required(o, Market::VT_MARKET_KEY, "market_key");
         self.fbb_
             .required(o, Market::VT_INSTRUMENT_ID, "instrument_id");
-        self.fbb_.required(o, Market::VT_LISTING_ID, "listing_id");
         self.fbb_.required(o, Market::VT_EXCHANGE_ID, "exchange_id");
         self.fbb_.required(o, Market::VT_MARKET_TYPE, "market_type");
         self.fbb_
