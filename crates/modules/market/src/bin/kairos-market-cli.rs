@@ -349,7 +349,14 @@ async fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Err
     while !runtime.sources_complete() {
         count += runtime.drive_next_source_input().await?;
     }
-    Ok(json!({"events_applied": count, "snapshot": runtime.current_view()}))
+    let mut snapshot = serde_json::to_value(runtime.current_view())?;
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert(
+            "event_sequence".into(),
+            serde_json::json!(runtime.event_sequence()),
+        );
+    }
+    Ok(json!({"events_applied": count, "snapshot": snapshot}))
 }
 
 fn descriptor(command: &DescriptorArgs) -> Result<ResolvedMarket, String> {

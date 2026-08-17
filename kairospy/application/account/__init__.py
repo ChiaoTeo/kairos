@@ -113,6 +113,7 @@ class AccountAdminApplication:
         account_id: str,
         *,
         broker: str = "binance",
+        integration_provider: str | None = None,
         segment: str = "spot",
         environment: str = "live",
         credential: str | None = None,
@@ -130,6 +131,14 @@ class AccountAdminApplication:
             and not force
         ):
             raise ValueError("live account requires --credential or --force")
+        if integration_provider is None and credential is not None:
+            integration_provider = str(
+                CredentialApplication(self.workspace).show(credential)["provider"]
+            )
+        if integration_provider is None:
+            raise ValueError(
+                "integration_provider is required when the account has no credential"
+            )
         _cli(self.workspace).run(
             [
                 "register",
@@ -137,6 +146,8 @@ class AccountAdminApplication:
                 account_id,
                 "--broker",
                 broker,
+                "--integration-provider",
+                integration_provider,
                 "--segment",
                 segment,
                 "--environment",

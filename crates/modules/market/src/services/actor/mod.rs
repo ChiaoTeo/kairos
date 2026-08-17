@@ -1,4 +1,6 @@
 mod checkpoint;
+mod events;
+mod read_model;
 mod state;
 
 pub(crate) use checkpoint::ReplayCheckpoint;

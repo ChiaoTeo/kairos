@@ -158,6 +158,7 @@ class DemoBacktest(Strategy):
 _BACKTEST_ACCOUNT = """[account]
 id = "demo-paper"
 broker = "paper"
+integration_provider = "paper"
 environment = "paper"
 default_segment = "spot"
 fee_rate = "0.001"

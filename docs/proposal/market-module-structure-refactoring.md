@@ -40,16 +40,16 @@ Observation 的目录对称现在按真实调用链落实：每个公开 kind �
 
 ### 1.2 验证结果（2026-08-17）
 
-- `cargo test -p kairos-market --no-fail-fast`：通过，包含 48 个 lib tests、10 个 Actor integration tests、19 个 architecture tests、4 个 Order Book tests 和 2 个 replay tests；architecture tests 已覆盖每个 Observation kind 的 Domain/Application/Actor 三层同名目录和真实入口；
+- `cargo test -p kairos-market --no-fail-fast`：通过，包含 50 个 lib tests、10 个 application/Actor integration tests、25 个 architecture tests、6 个 behavior tests；architecture tests 已覆盖每个 Observation kind 的 Domain/Application/Actor 三层同名目录和真实入口；
 - `cargo test -p kairos-market-contract`：通过，2 个 contract tests；
-- `uv run pytest -q`：通过，361 passed、8 skipped；
+- `uv run pytest -q`：Market 相关 focused checks 已通过；全量结果为 361 passed、5 failed、8 skipped，失败集中在既有 Account/CLI/process 测试（详见执行计划 Phase 7 证据），不涉及 Market 改造；
 - `python3 scripts/check/check_crate_layout.py`：通过；
 - `cargo fmt -p kairos-market -- --check` 与 Market/doc scoped `git diff --check`：通过；
-- `cargo test --workspace` 与 `cargo fmt --all -- --check`：被工作树中无关的 Execution 改动阻断；`crates/modules/execution/src/application/use_cases/intents/mod.rs:7` 开始的函数存在未闭合 delimiter，rustc/rustfmt 在第 1106 行报告错误。Market focused checks 已独立完成。
+- `cargo test --workspace`：全仓运行至 `kairos-transport` 时失败，`reader_reopens_after_capacity_replacement` 因临时目录中的 `snapshot.bin.writer.lock` 仍被占用而触发 `WriterLeaseHeld`；失败位于 platform transport，和 Market 改造无关。`cargo fmt --all -- --check` 通过。Market focused checks 已独立完成。
 
-### 1.3 第二阶段问题陈述（2026-08-17）
+### 1.3 第二阶段问题陈述（历史记录，2026-08-17）
 
-第一阶段解决了顶层裸文件和部分依赖方向不可见的问题，但尚未拆完所有大实现文件；目录整理同时暴露出以下领域模型未收敛问题：
+第一阶段解决了顶层裸文件和部分依赖方向不可见的问题；当时目录整理暴露出以下领域模型未收敛问题，现已按执行计划完成收敛：
 
 - `domain/reference/ReferenceChanged` 使用外部模块名称表达 Market application input，不是 Market 自身的领域概念；
 - `services/reference/ReferenceProjection` 持有 Reference SQLite 路径并直接执行分页、join 和 watermark 校验，使 Market 私有 service 同时成为 Reference client 和 persistence adapter；

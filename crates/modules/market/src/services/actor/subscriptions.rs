@@ -215,7 +215,7 @@ impl MarketActor {
         Err(format!("subscription not found: {}", subscription_id.0))
     }
 
-    pub(super) fn subscription_states(&self) -> Vec<SubscriptionState> {
+    pub(crate) fn subscription_states(&self) -> Vec<SubscriptionState> {
         let mut subscriptions = self
             .static_subscriptions
             .values()

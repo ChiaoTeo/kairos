@@ -2,7 +2,7 @@
 
 ## 1. 文档定位
 
-- 状态：执行中
+- 状态：已完成（后续仅保留增量治理）
 - 范围：`crates/modules/market` 与其独立 `contract` crate
 - 设计依据：`docs/proposal/market-module-structure-refactoring.md`
 - 目标：把设计提案转换为可以逐项删除旧代码、验证行为并验收的实施清单
@@ -388,12 +388,12 @@ crates/modules/market/
 - [x] Reference watcher 拆分 client/events，保留 projection。
 - [x] 删除 composition/assembly、process、diagnostic、publisher 旧目录。
 
-验证：provider isolation、runtime profile、Reference catch-up、live/replay composition。
+验证：provider isolation、launch/profile、Reference catch-up、live/replay composition。
 
 完成证据（2026-08-17）：
 
 - `cargo check -p kairos-market --tests` 通过且无 warning；
-- `cargo test -p kairos-market --test architecture -- --test-threads=1`：24 passed；
+- `cargo test -p kairos-market --test architecture -- --test-threads=1`：25 passed；
 - provider attachment/default endpoint/manual diagnostics 已归入 `composition/sources/activation.rs`，进程装配与诊断入口归入 `composition/launch/`；
 - config 已拆为 `dto/profile/sources/defaults`，Reference watcher 已拆为 `client/events/projection`；
 - 旧 `assembly/`、`process/`、`diagnostic/`、`publisher/`、`config/model.rs`、`reference/watcher.rs` 路径已删除；Composition 不再使用 `runtime` 命名。
@@ -431,7 +431,10 @@ Phase 7 focused evidence（2026-08-17）：
 - tests 已按 `application/`、`behavior/` 与顶层 architecture wrapper 收敛；
 - crate root 仅公开 Application 与必要 Composition 入口，Domain/Services 保持 crate-private；
 - architecture test 固化旧路径删除、公开边界和测试目录布局；
-- Market focused tests、contract tests、fmt 与 diff check 在最终验收阶段复跑。
+- Market focused tests、contract tests、fmt、diff check、crate layout 和 domain architecture checks 在最终验收阶段复跑并通过；
+- `cargo fmt --all -- --check` 通过；`cargo test --workspace` 运行至 `kairos-transport` 时仅失败于既有 platform 测试 `shared_memory::tests::reader_reopens_after_capacity_replacement`，错误为临时目录 `snapshot.bin.writer.lock` 仍被占用（`WriterLeaseHeld`），与 Market 改造无关；
+- `uv run pytest -q` 结果为 `361 passed, 5 failed, 8 skipped`。5 个失败均不涉及 Market 代码：两个 Account CLI 测试缺少现有 `--integration-provider` 参数，Market CLI 回放测试读取不到既有 `snapshot["event_sequence"]` 字段，Paper Account CLI 进程退出码为 1，以及一个 process launch 时序断言超出 2 秒阈值；
+- Composition 不再使用 `runtime` 目录或模块名：启动/诊断实现位于 `composition/launch/`，配置模型位于 `composition/config/profile.rs`。
 
 若全仓检查被无关工作树改动阻断，必须记录准确文件和错误，并继续完成 Market focused checks；不得用 focused check 代替最终全仓验收。
 
