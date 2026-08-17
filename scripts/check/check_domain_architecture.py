@@ -58,7 +58,7 @@ TYPED_FIELDS = {
     ROOT / "crates" / "modules" / "market" / "src" / "domain" / "view" / "mod.rs": [
         r"pub generation: Generation",
     ],
-    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "freshness" / "mod.rs": [
+    ROOT / "crates" / "modules" / "market" / "src" / "domain" / "freshness" / "status.rs": [
         r"pub event_sequence: Sequence",
     ],
     ROOT / "crates" / "modules" / "execution" / "src" / "application" / "mod.rs": [
