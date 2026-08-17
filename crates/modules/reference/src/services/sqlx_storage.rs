@@ -132,7 +132,9 @@ async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     sqlx::query("PRAGMA busy_timeout = 5000")
         .execute(&pool)
         .await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    sqlx::raw_sql(include_str!("../../schema.sql"))
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }
 
@@ -234,6 +236,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reopened.pending_event_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn initializes_current_schema_without_migration_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let store = SqlxCatalogStore::open(&path).await.unwrap();
+
+        let migration_table_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(migration_table_count, 0);
     }
 
     #[tokio::test]
