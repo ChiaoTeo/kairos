@@ -32,6 +32,7 @@ class StrategyBacktestDriver:
     """Launch-owned concrete coordination for one backtest instance."""
 
     account_socket: Path | None
+    account_snapshot: Path | None
     account_id: AccountId | None
     risk_socket: Path | None
     execution_socket: Path | None
@@ -54,9 +55,15 @@ class StrategyBacktestDriver:
         )
 
     def mark_account(self, event: MarketEvent) -> AccountSegmentSnapshot | None:
-        if self.account_socket is None or self.account_id is None:
+        if (
+            self.account_socket is None
+            or self.account_snapshot is None
+            or self.account_id is None
+        ):
             return None
-        return mark_backtest_account(self.account_socket, self.account_id, event)
+        return mark_backtest_account(
+            self.account_socket, self.account_snapshot, self.account_id, event
+        )
 
 
 def build_backtest_driver(
@@ -71,6 +78,7 @@ def build_backtest_driver(
     account_id = next(iter(endpoints.accounts), None)
     return StrategyBacktestDriver(
         account_socket=(None if account_endpoint is None else account_endpoint.socket),
+        account_snapshot=(None if account_endpoint is None else account_endpoint.snapshot),
         account_id=account_id,
         risk_socket=None if endpoints.risk is None else endpoints.risk.socket,
         execution_socket=(

@@ -32,11 +32,13 @@ from .models import (
     IntentReceipt,
     LimitOrderRequest,
     MarketOrderRequest,
+    OrderCommitment,
     Order,
     OrderCommandReceipt,
     OrderRequest,
     OrderSide,
     ReplaceOrderRequest,
+    RiskReservationSaga,
     SubmissionStatus,
     TimeInForce,
 )
@@ -83,20 +85,30 @@ class ExecutionApplication:
             check_ready()
         self._event_source_ready = True
 
+    def commitments(self) -> tuple[OrderCommitment, ...]:
+        """Read Execution-owned capacity commitments from the typed mmap view."""
+        if self._projection is None:
+            return ()
+        return tuple(self._projection.commitments())
+
+    def risk_reservations(self) -> tuple[RiskReservationSaga, ...]:
+        """Read the persisted Risk reservation saga from the typed mmap view."""
+        if self._projection is None:
+            return ()
+        return tuple(self._projection.risk_reservations())
+
     async def events(self) -> AsyncIterator[ExecutionEvent]:
         if self._event_source is None:
             return
         cursor = self._event_cursor
-        async for record in self._event_source.events(after_sequence=cursor):
+        async for record in self._event_source.subscribe_live():
             if record.stream_id != "execution.events":
                 raise RuntimeError(
                     f"Execution event stream identity is invalid: {record.stream_id}"
                 )
             if self._launch_id is not None and record.launch_id != self._launch_id:
                 raise RuntimeError("Execution event belongs to another launch")
-            if cursor == 0 and bool(
-                getattr(self._event_source, "join_from_latest", False)
-            ):
+            if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
                 continue

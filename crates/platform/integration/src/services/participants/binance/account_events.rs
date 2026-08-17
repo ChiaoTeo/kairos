@@ -12,8 +12,9 @@ pub(super) fn from_execution_event(
     value: ExternalExecutionEvent,
 ) -> Result<ExternalAccountEvent, IntegrationError> {
     let status = match value.status {
-        kairos_primitives::OrderStatus::Acknowledged
-        | kairos_primitives::OrderStatus::Accepted => ExternalOrderStatus::Acknowledged,
+        kairos_primitives::OrderStatus::Acknowledged | kairos_primitives::OrderStatus::Accepted => {
+            ExternalOrderStatus::Acknowledged
+        }
         kairos_primitives::OrderStatus::PartiallyFilled => ExternalOrderStatus::PartiallyFilled,
         kairos_primitives::OrderStatus::Filled => ExternalOrderStatus::Filled,
         kairos_primitives::OrderStatus::Canceled => ExternalOrderStatus::Canceled,

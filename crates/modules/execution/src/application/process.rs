@@ -1,45 +1,30 @@
 use crate::application::market_input::MarketObservation;
 use crate::application::{
-    BacktestApplication, BacktestRequest, CancelIntent, CancelOrder, ExecuteStrategyIntent,
-    ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink,
-    ExecutionBusinessEvent, ExecutionCurrentView, ExecutionFillReport, ExpireIntent,
-    RefreshQuoteIntent, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
+    BacktestApplication, ExecutionApplication, ExecutionAuditSink, ExecutionBusinessEvent,
+    ExecutionCurrentView, ExecutionFillReport, RemoteOrderQuery, SubmitOrder,
 };
 use crate::services::actor::RemoteOrderEvent;
+use crate::services::control_transport::{
+    start as start_control_transport, ControlIngress, ControlOperation, ControlRequest,
+    RuntimeMetrics,
+};
 use crate::services::gateway::{
     AsyncQueuedOrderEntry, AsyncQueuedOrderQuery, QueuedOrderEntry, QueuedOrderQuery,
 };
 use crate::services::persistence::ExecutionOutboxEvent;
 use crate::services::simulator::{ExecutionSimulator, SimulationOrderRequest};
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderEventSource, AsyncOrderQueryConnection, CommandOutcome,
     ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
     IntegrationError, OrderEntryEvent, OrderEntryRequest,
 };
-use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UnixListener;
-use tokio::sync::oneshot;
-use tracing::{debug, info, Instrument};
-
-#[derive(serde::Deserialize)]
-struct CommandEnvelope<T> {
-    schema_version: u16,
-    operation: String,
-    instance_id: String,
-    payload: T,
-}
+use tracing::{debug, info};
 
 pub struct ExecutionProcess<
     E = NoAsyncOrderEntryConnection,
@@ -55,8 +40,6 @@ pub struct ExecutionProcess<
     snapshot_publisher: Option<Box<dyn ExecutionSnapshotPublisher>>,
     intent_snapshot_publisher: Option<Box<dyn IntentSnapshotPublisher>>,
     event_publisher: Option<Box<dyn ExecutionEventPublisher>>,
-    seen_exchange_events: std::collections::HashSet<String>,
-    exchange_event_order: std::collections::VecDeque<String>,
     metrics: std::sync::Arc<RuntimeMetrics>,
     last_remote_reconcile_unix_nanos: u64,
     async_order_entry: Option<E>,
@@ -295,54 +278,7 @@ pub trait ExecutionEventPublisher: Send {
     fn publish(&mut self, event: &ExecutionBusinessEvent) -> Result<(), String>;
 }
 
-struct ExecutionHttpRequest {
-    method: String,
-    target: String,
-    body: Vec<u8>,
-    response: oneshot::Sender<Result<(u16, Value), String>>,
-}
-
 const EXCHANGE_BATCH_LIMIT: usize = 64;
-
-#[derive(Default)]
-struct RuntimeMetrics {
-    pending_commands: AtomicUsize,
-    pending_queries: AtomicUsize,
-    pending_exchange_events: AtomicUsize,
-    exchange_events_applied: AtomicU64,
-    exchange_batches: AtomicU64,
-    max_exchange_batch: AtomicUsize,
-    state_loop_errors: AtomicU64,
-    last_operation_micros: AtomicU64,
-}
-
-impl RuntimeMetrics {
-    fn snapshot(&self) -> Value {
-        json!({
-            "pending_commands": self.pending_commands.load(Ordering::Relaxed),
-            "pending_queries": self.pending_queries.load(Ordering::Relaxed),
-            "pending_exchange_events": self.pending_exchange_events.load(Ordering::Relaxed),
-            "exchange_events_applied": self.exchange_events_applied.load(Ordering::Relaxed),
-            "exchange_batches": self.exchange_batches.load(Ordering::Relaxed),
-            "max_exchange_batch": self.max_exchange_batch.load(Ordering::Relaxed),
-            "state_loop_errors": self.state_loop_errors.load(Ordering::Relaxed),
-            "last_operation_micros": self.last_operation_micros.load(Ordering::Relaxed),
-        })
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum RequestClass {
-    Command,
-    Query,
-}
-
-#[derive(Clone)]
-struct ExecutionIngress {
-    command_tx: SyncSender<ExecutionHttpRequest>,
-    query_tx: SyncSender<ExecutionHttpRequest>,
-    metrics: std::sync::Arc<RuntimeMetrics>,
-}
 
 impl
     ExecutionProcess<
@@ -362,8 +298,6 @@ impl
             snapshot_publisher: None,
             intent_snapshot_publisher: None,
             event_publisher: None,
-            seen_exchange_events: std::collections::HashSet::new(),
-            exchange_event_order: std::collections::VecDeque::new(),
             metrics: std::sync::Arc::new(RuntimeMetrics::default()),
             last_remote_reconcile_unix_nanos: 0,
             async_order_entry: None,
@@ -388,8 +322,6 @@ impl
             snapshot_publisher: None,
             intent_snapshot_publisher: None,
             event_publisher: None,
-            seen_exchange_events: std::collections::HashSet::new(),
-            exchange_event_order: std::collections::VecDeque::new(),
             metrics: std::sync::Arc::new(RuntimeMetrics::default()),
             last_remote_reconcile_unix_nanos: 0,
             async_order_entry: None,
@@ -412,8 +344,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
             event_publisher: self.event_publisher,
-            seen_exchange_events: self.seen_exchange_events,
-            exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
             last_remote_reconcile_unix_nanos: self.last_remote_reconcile_unix_nanos,
             async_order_entry: connection,
@@ -434,8 +364,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
             event_publisher: self.event_publisher,
-            seen_exchange_events: self.seen_exchange_events,
-            exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
             last_remote_reconcile_unix_nanos: self.last_remote_reconcile_unix_nanos,
             async_order_entry: self.async_order_entry,
@@ -484,8 +412,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             snapshot_publisher: self.snapshot_publisher,
             intent_snapshot_publisher: self.intent_snapshot_publisher,
             event_publisher: self.event_publisher,
-            seen_exchange_events: self.seen_exchange_events,
-            exchange_event_order: self.exchange_event_order,
             metrics: self.metrics,
             last_remote_reconcile_unix_nanos: self.last_remote_reconcile_unix_nanos,
             async_order_entry: self.async_order_entry,
@@ -576,14 +502,12 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         } else {
             None
         };
-        let router = Router::new()
-            .fallback(execution_http_handler)
-            .with_state(ExecutionIngress {
-                command_tx: command_sender,
-                query_tx: query_sender,
-                metrics: std::sync::Arc::clone(&self.metrics),
-            });
-        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let ingress = ControlIngress::new(
+            command_sender,
+            query_sender,
+            std::sync::Arc::clone(&self.metrics),
+        );
+        let server = start_control_transport(listener, ingress);
         kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
         info!(event = "process_ready", component = "execution", socket = %self.socket_path.display(), "execution control socket ready");
         let socket_path = self.socket_path.clone();
@@ -675,20 +599,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         );
         self.last_published_generation = Some(snapshot.generation.get());
         Ok(())
-    }
-
-    fn accept_exchange_event(&mut self, event_id: &str) -> bool {
-        const MAX_SEEN_EXCHANGE_EVENTS: usize = 100_000;
-        if !self.seen_exchange_events.insert(event_id.to_owned()) {
-            return false;
-        }
-        self.exchange_event_order.push_back(event_id.to_owned());
-        if self.exchange_event_order.len() > MAX_SEEN_EXCHANGE_EVENTS {
-            if let Some(expired) = self.exchange_event_order.pop_front() {
-                self.seen_exchange_events.remove(&expired);
-            }
-        }
-        true
     }
 
     fn start_async_stream_consumers(
@@ -1010,8 +920,8 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
 
     fn state_loop(
         mut self,
-        command_receiver: Receiver<ExecutionHttpRequest>,
-        query_receiver: Receiver<ExecutionHttpRequest>,
+        command_receiver: Receiver<ControlRequest>,
+        query_receiver: Receiver<ControlRequest>,
         exchange_receiver: Receiver<RemoteOrderEvent>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.flush_events()?;
@@ -1045,6 +955,9 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     }) {
                         Ok(changed) => {
                             total_changed += changed;
+                            if route_index == usize::MAX {
+                                self.application.complete_writer_reconciliation();
+                            }
                             if route_index != usize::MAX {
                                 release_route_recovery_barrier(&self.route_readiness, route_index);
                             }
@@ -1168,18 +1081,15 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
 
     fn handle_http_request(
         &mut self,
-        request: ExecutionHttpRequest,
+        request: ControlRequest,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let operation_started = std::time::Instant::now();
-        let response = self.handle_request(
-            &request.method,
-            &request.target,
-            &String::from_utf8_lossy(&request.body),
-        );
+        let is_command = !matches!(request.operation, ControlOperation::Health);
+        let response = self.handle_operation(request.operation);
         let _ = request
             .response
             .send(response.map_err(|error| error.to_string()));
-        if request_class(&request.method, &request.target) == RequestClass::Command {
+        if is_command {
             self.flush_events()?;
             self.publish_snapshots()?;
         }
@@ -1197,7 +1107,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self.metrics
             .exchange_events_applied
             .fetch_add(1, Ordering::Relaxed);
-        if self.accept_exchange_event(&event.event_id) {
+        if self
+            .application
+            .accept_remote_event_identity(&event.event_id)
+        {
             if let Err(error) = self.application.apply_remote_execution_event(event.event) {
                 tracing::warn!(event = "exchange_event_rejected", component = "execution", error = %error, "exchange event was not applied");
             }
@@ -1266,7 +1179,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             MarketObservation::Bar(value) => value.observed_at_unix_nanos,
             MarketObservation::TradeBar(value) => value.bar.observed_at_unix_nanos,
             MarketObservation::QuoteBar(value) => value.bar.observed_at_unix_nanos,
-            _ => 0,
         };
         if event_time != 0 {
             simulator.set_business_time(event_time.into());
@@ -1290,26 +1202,30 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         Ok(fills)
     }
 
-    fn handle_request(
+    fn handle_operation(
         &mut self,
-        method: &str,
-        target: &str,
-        body: &str,
+        operation: ControlOperation,
     ) -> Result<(u16, Value), Box<dyn std::error::Error>> {
-        let started = Instant::now();
-        let (path, query) = target.split_once('?').unwrap_or((target, ""));
-        info!(event = "control_request", component = "execution", path = %path, "execution control request received");
-        let (status, payload) = match path {
-            HEALTH_PATH => (200, {
-                let (status, routes) = process_readiness(&self.route_readiness);
-                json!({"status":status,"pid":std::process::id(),"actor_id":self.application.snapshot().actor_id,"generation":self.application.snapshot().generation,"event_sequence":self.application.snapshot().event_sequence,"order_count":self.application.snapshot().orders.len(),"dependency_watermarks":self.application.dependency_watermarks(),"routes":routes,"runtime_metrics":self.metrics.snapshot()})
-            }),
-            "/v1/time/advance" => {
-                let value: serde_json::Value = serde_json::from_str(body)?;
-                let event_time = value
-                    .get("event_time_unix_nanos")
-                    .and_then(serde_json::Value::as_u64)
-                    .ok_or("event_time_unix_nanos is required")?;
+        let response = match operation {
+            ControlOperation::Health => {
+                let (route_status, routes) = process_readiness(&self.route_readiness);
+                let writer_recovery_ready = self.application.writer_recovery_ready();
+                let status = if route_status == "ready" && writer_recovery_ready {
+                    "ready"
+                } else {
+                    "degraded"
+                };
+                (
+                    200,
+                    json!({
+                        "status": status,
+                        "pid": std::process::id(),
+                        "writer_recovery_ready": writer_recovery_ready,
+                        "dependencies": { "order_event_routes": routes }
+                    }),
+                )
+            }
+            ControlOperation::AdvanceTime(event_time) => {
                 if let Some(current) = self
                     .simulator
                     .as_ref()
@@ -1325,287 +1241,169 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                 }
                 (200, json!({"event_time_unix_nanos": event_time}))
             }
-            path if method == "POST" && path == "/v1/intents" => {
-                match v2_submit_intent(body).and_then(|(intent, idempotency_key)| {
-                    self.application
-                        .submit_intent_with_idempotency(intent, idempotency_key)
-                        .map_err(|error| error.to_string())
-                }) {
-                    Ok((intent, duplicate)) => {
-                        for order_id in &intent.order_ids {
-                            if let Some(order) = self
-                                .application
-                                .orders(None)
-                                .into_iter()
-                                .find(|order| order.order_id.as_str() == order_id.as_str())
-                            {
-                                self.register_simulation_order(&order)?;
-                            }
+            ControlOperation::SubmitIntent {
+                intent,
+                idempotency_key,
+            } => match self
+                .application
+                .submit_intent_with_idempotency(intent, idempotency_key)
+            {
+                Ok((intent, duplicate)) => {
+                    for order_id in &intent.order_ids {
+                        if let Some(order) = self
+                            .application
+                            .orders(None)
+                            .into_iter()
+                            .find(|order| order.order_id.as_str() == order_id.as_str())
+                        {
+                            self.register_simulation_order(&order)?;
                         }
-                        (
-                            202,
-                            json!({"status": if duplicate { "duplicate" } else { "accepted" }, "command_id": intent.intent.intent_id, "intent_id": intent.intent.intent_id}),
-                        )
                     }
-                    Err(error) => (
-                        422,
-                        json!({"error":{"code":"execution.intent_invalid","message":error,"retryable":false}}),
-                    ),
-                }
-            }
-            "/v1/intents" => (200, json!({"intents": self.application.intents()})),
-            "/v1/intent" => match self
-                .application
-                .intent(&query_value(query, "intent_id").unwrap_or_default())
-            {
-                Some(intent) => (200, serde_json::to_value(intent)?),
-                None => (
-                    404,
-                    json!({"error":{"code":"execution.intent_not_found","message":"intent not found","retryable":false}}),
-                ),
-            },
-            "/v1/intent-events" => (
-                200,
-                json!({"events": self.application.intent_events_after(
-                    query_value(query, "intent_id").as_deref(),
-                    query_value(query, "after_sequence").and_then(|value| value.parse().ok()).unwrap_or_default(),
-                    query_value(query, "limit").and_then(|value| value.parse().ok()),
-                )}),
-            ),
-            "/v1/intent-hedge" => match self
-                .application
-                .hedge_requirement(&query_value(query, "intent_id").unwrap_or_default())
-            {
-                Ok(requirement) => (200, serde_json::to_value(requirement)?),
-                Err(error) => (422, json!({"error": error.to_string()})),
-            },
-            path if matches!(method, "DELETE" | "PATCH") && path.starts_with("/v1/orders/") => {
-                let order_id = path.trim_start_matches("/v1/orders/");
-                if order_id.is_empty() {
-                    (404, json!({"error":"order id is required"}))
-                } else if method == "DELETE" {
-                    let reason = serde_json::from_str::<Value>(body)
-                        .ok()
-                        .and_then(|value| {
-                            value
-                                .get("reason")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned)
-                        })
-                        .unwrap_or_default();
-                    match serde_json::from_value::<CancelOrder>(
-                        json!({"order_id": order_id, "reason": reason}),
+                    (
+                        202,
+                        json!({"status": if duplicate { "duplicate" } else { "accepted" }, "command_id": intent.intent.intent_id, "intent_id": intent.intent.intent_id}),
                     )
-                    .map_err(|error| error.to_string())
-                    .and_then(|request| {
-                        self.application
-                            .cancel(request)
-                            .map_err(|error| error.to_string())
-                    }) {
-                        Ok(order) => (202, json!({"status":"accepted","order_id":order.order_id})),
-                        Err(error) => (422, json!({"error":error.to_string()})),
-                    }
-                } else {
-                    let original = self
-                        .application
-                        .orders(None)
-                        .into_iter()
-                        .find(|order| order.order_id.as_str() == order_id);
-                    match original
-                        .ok_or_else(|| "order not found".to_owned())
-                        .and_then(|original| v2_replace_order(order_id, body, &original))
-                        .and_then(|request| {
-                            self.application
-                                .replace(request)
-                                .map_err(|error| error.to_string())
-                        }) {
-                        Ok(order) => (202, json!({"status":"accepted","order_id":order.order_id})),
-                        Err(error) => (422, json!({"error":error})),
-                    }
                 }
-            }
-            "/v1/orders" => (
-                200,
-                json!({"orders": self.application.orders(query_value(query, "account_id").as_deref())}),
-            ),
-            "/v1/open-orders" => (
-                200,
-                json!({"orders": self.application.orders(query_value(query, "account_id").as_deref()).into_iter().filter(|order| !order.status.terminal()).collect::<Vec<_>>() }),
-            ),
-            "/v1/history" => (
-                200,
-                json!({"orders": self.application.orders(query_value(query, "account_id").as_deref())}),
-            ),
-            "/v1/remote-open-orders" => {
-                match self.application.remote_open_orders(remote_query(query)) {
-                    Ok(orders) => (200, json!({"orders": orders})),
-                    Err(error) => (422, json!({"error": error.to_string()})),
-                }
-            }
-            "/v1/remote-history" => match self.application.remote_history(remote_query(query)) {
-                Ok(orders) => (200, json!({"orders": orders})),
-                Err(error) => (422, json!({"error": error.to_string()})),
-            },
-            "/v1/remote-order" => match self.application.remote_detail(remote_query(query)) {
-                Ok(order) => (200, json!(order)),
-                Err(error) => (422, json!({"error": error.to_string()})),
-            },
-            "/v1/reconcile-remote" => match self
-                .application
-                .reconcile_remote_orders(remote_query(query))
-            {
-                Ok(changed) => (200, json!({"changed": changed})),
-                Err(error) => (422, json!({"error": error.to_string()})),
-            },
-            "/v1/unknown-remote-orders" => (
-                200,
-                json!({"orders": self.application.unknown_remote_orders()}),
-            ),
-            "/v1/link-unknown-remote" => {
-                let remote_order_id = query_value(query, "remote_order_id").unwrap_or_default();
-                let local_order_id = query_value(query, "local_order_id").unwrap_or_default();
-                match self
-                    .application
-                    .link_unknown_remote_order(&remote_order_id, &local_order_id)
-                {
-                    Ok(order) => (200, serde_json::to_value(order)?),
-                    Err(error) => (422, json!({"error": error.to_string()})),
-                }
-            }
-            "/v1/stream/next" | "/v1/stream/consume" => (
-                410,
-                json!({"error":"exchange execution streams are consumed internally by the execution process"}),
-            ),
-            "/v1/events" => (
-                200,
-                json!({"events": self.application.events(query_value(query, "order_id").as_deref())}),
-            ),
-            "/v1/fills" => (
-                200,
-                json!({"fills": self.application.fills(query_value(query, "order_id").as_deref())}),
-            ),
-            "/v1/trace" => (
-                200,
-                json!({"events": self.application.trace(&query_value(query, "order_id").unwrap_or_default())}),
-            ),
-            "/v1/audit" => match self.audit_events(audit_query(query)) {
-                Ok(events) => (200, json!({"events": events})),
-                Err(error) => (422, json!({"error": error.to_string()})),
-            },
-            "/v1/journal" => match self.audit_events(audit_query(query)) {
-                Ok(events) => (
-                    200,
-                    json!({"order_id": query_value(query, "order_id"), "entries": events}),
+                Err(error) => (
+                    422,
+                    json!({"error":{"code":"execution.intent_invalid","message":error.to_string(),"retryable":false}}),
                 ),
+            },
+            ControlOperation::SubmitOrder(request) => match self.application.submit(request) {
+                Ok(order) => {
+                    self.register_simulation_order(&order)?;
+                    (202, json!({"status":"accepted","order_id":order.order_id}))
+                }
+                Err(error) => (422, json!({"error":error.to_string()})),
+            },
+            ControlOperation::CancelOrder(request) => match self.application.cancel(request) {
+                Ok(order) => (202, json!({"status":"accepted","order_id":order.order_id})),
+                Err(error) => (422, json!({"error":error.to_string()})),
+            },
+            ControlOperation::ReplaceOrder { order_id, patch } => {
+                let original = self
+                    .application
+                    .orders(None)
+                    .into_iter()
+                    .find(|order| order.order_id == order_id);
+                match original {
+                    Some(original) => {
+                        let replacement = SubmitOrder {
+                            order_id: kairos_primitives::OrderId::new(format!(
+                                "{}:replacement",
+                                order_id
+                            ))?,
+                            intent_id: original.intent_id,
+                            strategy_id: original.strategy_id,
+                            account_id: original.account_id,
+                            segment_key: original.segment_key,
+                            instrument_id: original.instrument_id,
+                            market_id: original.market_id,
+                            execution_access_id: original.execution_access_id,
+                            side: original.side,
+                            order_type: original.order_type,
+                            quantity: patch.quantity.unwrap_or(original.quantity),
+                            limit_price: patch.limit_price.unwrap_or(original.limit_price),
+                            options: patch.options,
+                            submitted_at_unix_nanos: None,
+                        };
+                        match self.application.replace(crate::application::ReplaceOrder {
+                            order_id,
+                            replacement,
+                        }) {
+                            Ok(order) => {
+                                (202, json!({"status":"accepted","order_id":order.order_id}))
+                            }
+                            Err(error) => (422, json!({"error":error.to_string()})),
+                        }
+                    }
+                    None => (422, json!({"error":"order not found"})),
+                }
+            }
+            ControlOperation::Reconcile(query) => {
+                match self.application.reconcile_remote_orders(query) {
+                    Ok(changed) => (202, json!({"status":"accepted","changed": changed})),
+                    Err(error) => (422, json!({"error": error.to_string()})),
+                }
+            }
+            ControlOperation::LinkUnknownRemote {
+                remote_order_id,
+                local_order_id,
+            } => match self
+                .application
+                .link_unknown_remote_order(&remote_order_id, &local_order_id)
+            {
+                Ok(order) => (200, serde_json::to_value(order)?),
                 Err(error) => (422, json!({"error": error.to_string()})),
             },
-            "/v1/backtest" => match serde_json::from_str::<BacktestRequest>(body)
-                .map_err(|error| error.to_string())
-                .and_then(BacktestApplication::evaluate)
-            {
-                Ok(metrics) => (200, serde_json::to_value(metrics)?),
-                Err(error) => (422, json!({"error": error})),
-            },
-            "/v1/backtest/run" => match serde_json::from_str::<BacktestRequest>(body)
-                .map_err(|error| error.to_string())
-                .and_then(BacktestApplication::run)
-            {
+            ControlOperation::EvaluateBacktest(request) => {
+                match BacktestApplication::evaluate(request) {
+                    Ok(metrics) => (200, serde_json::to_value(metrics)?),
+                    Err(error) => (422, json!({"error": error})),
+                }
+            }
+            ControlOperation::RunBacktest(request) => match BacktestApplication::run(request) {
                 Ok(result) => (200, serde_json::to_value(result)?),
                 Err(error) => (422, json!({"error": error})),
             },
-            "/v1/backtest/market" => {
-                match serde_json::from_str::<MarketObservation>(body)
-                    .map_err(|error| error.to_string())
-                    .and_then(|event| self.apply_simulated_market(event))
-                {
+            ControlOperation::ApplyBacktestMarket(event) => {
+                match self.apply_simulated_market(event) {
                     Ok(fills) => (200, json!({"fills": fills})),
                     Err(error) => (422, json!({"error": error})),
                 }
             }
-            "/v1/intents/cancel" => match serde_json::from_str::<CancelIntent>(body)
-                .map_err(|error| error.to_string())
-                .and_then(|request| {
-                    self.application
-                        .cancel_intent(request)
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(intent) => (
-                    202,
-                    json!({"schema_version":1,"status":"cancel_requested","result":intent}),
-                ),
-                Err(error) => (
-                    422,
-                    json!({"schema_version":1,"status":"rejected","error":{"code":"execution.intent_cancel_invalid","message":error,"retryable":false}}),
-                ),
-            },
-            "/v1/intents/expire" => match serde_json::from_str::<ExpireIntent>(body)
-                .map_err(|error| error.to_string())
-                .and_then(|request| {
-                    self.application
-                        .expire_intent(request)
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(intent) => (
-                    202,
-                    json!({"schema_version":1,"status":"expired","result":intent}),
-                ),
-                Err(error) => (
-                    422,
-                    json!({"schema_version":1,"status":"rejected","error":{"code":"execution.intent_expire_invalid","message":error,"retryable":false}}),
-                ),
-            },
-            "/v1/intents/refresh-quote" => {
-                match serde_json::from_str::<CommandEnvelope<RefreshQuoteIntent>>(body)
-                    .map_err(|error| error.to_string())
-                    .and_then(|command| {
-                        if command.schema_version != 1
-                            || command.operation != "execution.refresh_quote"
-                            || command.instance_id.trim().is_empty()
-                        {
-                            return Err("invalid quote refresh command envelope".into());
-                        }
-                        self.application
-                            .refresh_quote_intent(command.payload)
-                            .map_err(|error| error.to_string())
-                    }) {
+            ControlOperation::CancelIntent(request) => {
+                match self.application.cancel_intent(request) {
+                    Ok(intent) => (
+                        202,
+                        json!({"schema_version":1,"status":"cancel_requested","result":intent}),
+                    ),
+                    Err(error) => (
+                        422,
+                        json!({"schema_version":1,"status":"rejected","error":{"code":"execution.intent_cancel_invalid","message":error.to_string(),"retryable":false}}),
+                    ),
+                }
+            }
+            ControlOperation::ExpireIntent(request) => {
+                match self.application.expire_intent(request) {
+                    Ok(intent) => (
+                        202,
+                        json!({"schema_version":1,"status":"expired","result":intent}),
+                    ),
+                    Err(error) => (
+                        422,
+                        json!({"schema_version":1,"status":"rejected","error":{"code":"execution.intent_expire_invalid","message":error.to_string(),"retryable":false}}),
+                    ),
+                }
+            }
+            ControlOperation::RefreshQuote(request) => {
+                match self.application.refresh_quote_intent(request) {
                     Ok(intent) => (
                         202,
                         json!({"schema_version":1,"status":"quote_refreshed","result":intent}),
                     ),
                     Err(error) => (
                         422,
-                        json!({"schema_version":1,"status":"rejected","error":{"code":"execution.quote_refresh_invalid","message":error,"retryable":false}}),
+                        json!({"schema_version":1,"status":"rejected","error":{"code":"execution.quote_refresh_invalid","message":error.to_string(),"retryable":false}}),
                     ),
                 }
             }
-            "/v1/preview-submit" => match serde_json::from_str::<SubmitOrder>(body)
-                .map_err(|error| error.to_string())
-                .and_then(|request| {
-                    self.application
-                        .preview_submit(&request)
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(order) => (200, serde_json::to_value(order)?),
-                Err(error) => (422, json!({"error":error})),
-            },
-            "/v1/fill" => match serde_json::from_str::<ExecutionFillReport>(body)
-                .map_err(|error| error.to_string())
-                .and_then(|request| {
-                    self.application
-                        .record_fill(request)
-                        .map_err(|error| error.to_string())
-                }) {
+            ControlOperation::PreviewSubmit(request) => {
+                match self.application.preview_submit(&request) {
+                    Ok(order) => (200, serde_json::to_value(order)?),
+                    Err(error) => (422, json!({"error":error.to_string()})),
+                }
+            }
+            ControlOperation::RecordFill(request) => match self.application.record_fill(request) {
                 Ok(order) => (202, serde_json::to_value(order)?),
-                Err(error) => (422, json!({"error":error})),
+                Err(error) => (422, json!({"error":error.to_string()})),
             },
-            STOP_PATH => {
+            ControlOperation::Stop => {
                 self.stopping = true;
                 (202, json!({"status":"stopping"}))
             }
-            _ => (404, json!({"error":"unknown execution control path"})),
         };
-        info!(event = "control_response", component = "execution", path = %path, status, duration_ms = started.elapsed().as_millis(), "execution control response sent");
-        Ok((status, payload))
+        Ok(response)
     }
 
     fn flush_events(&mut self) -> Result<(), String> {
@@ -1664,25 +1462,6 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             .map_err(|error| error.to_string())?;
         Ok(())
     }
-
-    fn audit_events(
-        &mut self,
-        query: ExecutionAuditQuery,
-    ) -> Result<Vec<ExecutionAuditEvent>, crate::application::ExecutionError> {
-        if let Some(audit) = self.audit.as_mut() {
-            audit
-                .query(&query)
-                .map_err(crate::application::ExecutionError::Persistence)
-        } else {
-            self.application.audit_events(query)
-        }
-    }
-}
-
-fn query_value(query: &str, key: &str) -> Option<String> {
-    query
-        .split('&')
-        .find_map(|part| part.strip_prefix(&format!("{key}=")).map(str::to_owned))
 }
 
 fn remote_order_event_from_envelope(
@@ -1703,7 +1482,7 @@ fn remote_order_event_from_envelope(
         event: crate::application::RemoteOrderUpdate {
             order_id: event.order_id,
             symbol: event.symbol,
-            status: crate::application::service::remote_status(&format!("{:?}", event.status)),
+            status: crate::application::remote_status(&format!("{:?}", event.status)),
             fill_quantity: event
                 .fill_quantity
                 .and_then(|value| format_decimal(value).parse().ok()),
@@ -1741,31 +1520,6 @@ fn format_decimal(value: kairos_integration::application::DecimalValue) -> Strin
     }
 }
 
-fn remote_query(query: &str) -> RemoteOrderQuery {
-    RemoteOrderQuery {
-        binding_id: query_value(query, "binding_id"),
-        symbol: query_value(query, "symbol")
-            .and_then(|value| kairos_primitives::Symbol::new(value).ok()),
-        order_id: query_value(query, "order_id")
-            .and_then(|value| kairos_primitives::OrderId::new(value).ok()),
-        limit: query_value(query, "limit").and_then(|value| value.parse().ok()),
-        since_unix_nanos: query_value(query, "since_unix_nanos")
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(kairos_primitives::UnixNanos::from),
-    }
-}
-
-fn audit_query(query: &str) -> ExecutionAuditQuery {
-    ExecutionAuditQuery {
-        order_id: query_value(query, "order_id")
-            .and_then(|value| kairos_primitives::OrderId::new(value).ok()),
-        remote_order_id: query_value(query, "remote_order_id")
-            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
-        status: query_value(query, "status"),
-        limit: query_value(query, "limit").and_then(|value| value.parse().ok()),
-        ..Default::default()
-    }
-}
 fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => std::fs::remove_file(path),
@@ -1773,313 +1527,6 @@ fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
         Err(error) => Err(error),
     }
 }
-async fn execution_http_handler(
-    State(ingress): State<ExecutionIngress>,
-    request: Request,
-) -> Response {
-    let started = Instant::now();
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let span = tracing::info_span!(
-        "execution.control_request",
-        component = "execution",
-        method = %method,
-        path = %path,
-        status = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-        result = tracing::field::Empty,
-        error_code = tracing::field::Empty,
-        retryable = tracing::field::Empty,
-        trace_id = tracing::field::Empty,
-        span_id = tracing::field::Empty
-    );
-    kairos_workspace::logging::record_counter("kairos.control.request", 1);
-    kairos_workspace::logging::record_counter("kairos.operation", 1);
-    kairos_workspace::logging::set_remote_parent(&span, request.headers());
-    let response = execution_http_handler_inner(ingress, request)
-        .instrument(span.clone())
-        .await;
-    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    span.record("status", response.status().as_u16());
-    span.record("duration_ms", duration_ms);
-    span.record(
-        "result",
-        if response.status().is_success() {
-            "accepted"
-        } else {
-            "rejected"
-        },
-    );
-    kairos_workspace::logging::record_duration_ms("kairos.control.request.duration", duration_ms);
-    kairos_workspace::logging::record_duration_ms("kairos.operation.duration", duration_ms);
-    if response.status().is_server_error() {
-        kairos_workspace::logging::mark_span_error(&span, "control.internal_error", true);
-        kairos_workspace::logging::record_counter("kairos.control.request.failed", 1);
-        kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
-    } else if !response.status().is_success() {
-        span.record("error_code", "control.request_rejected");
-        span.record("retryable", false);
-    }
-    tracing::info!(parent: &span, event = "control_request_completed", component = "execution", duration_ms, result = if response.status().is_success() { "accepted" } else { "rejected" }, "execution control request completed");
-    response
-}
-
-async fn execution_http_handler_inner(ingress: ExecutionIngress, request: Request) -> Response {
-    let method = request.method().as_str().to_owned();
-    let target = request
-        .uri()
-        .path_and_query()
-        .map(|value| value.as_str().to_owned())
-        .unwrap_or_else(|| request.uri().path().to_owned());
-    let body = match to_bytes(
-        request.into_body(),
-        kairos_workspace::control::MAX_HTTP_BODY_BYTES,
-    )
-    .await
-    {
-        Ok(body) => body.to_vec(),
-        Err(_) => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(json!({"error":"request body too large"})),
-            )
-                .into_response()
-        }
-    };
-    let (response_sender, response_receiver) = oneshot::channel();
-    let class = request_class(&method, &target);
-    let sender = match class {
-        RequestClass::Command => &ingress.command_tx,
-        RequestClass::Query => &ingress.query_tx,
-    };
-    match class {
-        RequestClass::Command => {
-            ingress
-                .metrics
-                .pending_commands
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        RequestClass::Query => {
-            ingress
-                .metrics
-                .pending_queries
-                .fetch_add(1, Ordering::Relaxed);
-        }
-    }
-    if sender
-        .try_send(ExecutionHttpRequest {
-            method,
-            target,
-            body,
-            response: response_sender,
-        })
-        .is_err()
-    {
-        match class {
-            RequestClass::Command => {
-                ingress
-                    .metrics
-                    .pending_commands
-                    .fetch_sub(1, Ordering::Relaxed);
-            }
-            RequestClass::Query => {
-                ingress
-                    .metrics
-                    .pending_queries
-                    .fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"execution process is stopping"})),
-        )
-            .into_response();
-    }
-    match response_receiver.await {
-        Ok(Ok((status, payload))) => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(payload),
-        )
-            .into_response(),
-        Ok(Err(error)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":error})),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"execution process did not respond"})),
-        )
-            .into_response(),
-    }
-}
-
-fn request_class(method: &str, target: &str) -> RequestClass {
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    match path {
-        "/v1/intents/cancel"
-        | "/v1/intents/expire"
-        | "/v1/intents/refresh-quote"
-        | "/v1/fill"
-        | "/v1/link-unknown-remote"
-        | STOP_PATH => RequestClass::Command,
-        "/v1/intents" if method == "POST" => RequestClass::Command,
-        path if method == "DELETE" && path.starts_with("/v1/orders/") => RequestClass::Command,
-        path if method == "PATCH" && path.starts_with("/v1/orders/") => RequestClass::Command,
-        _ => RequestClass::Query,
-    }
-}
-
-fn v2_submit_intent(body: &str) -> Result<(ExecuteStrategyIntent, String), String> {
-    let request: Value = serde_json::from_str(body).map_err(|error| error.to_string())?;
-    let intent = request
-        .get("intent")
-        .cloned()
-        .ok_or_else(|| "intent is required".to_owned())?;
-    let intent_object = intent
-        .as_object()
-        .ok_or_else(|| "intent must be an object".to_owned())?;
-    let idempotency_key = request
-        .get("idempotency_key")
-        .or_else(|| request.get("command_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "idempotency_key or command_id is required".to_owned())?
-        .to_owned();
-    let legs: Vec<Value> = match intent_object.get("legs").and_then(Value::as_array) {
-        Some(legs) if !legs.is_empty() => legs.clone(),
-        _ => vec![json!({
-            "leg_id": format!("{}:leg", intent_object.get("intent_id").and_then(Value::as_str).unwrap_or("intent")),
-            "account_id": intent_object
-                .get("account_ids")
-                .and_then(Value::as_array)
-                .and_then(|accounts| accounts.first())
-                .cloned()
-                .unwrap_or_else(|| Value::String("main".to_owned())),
-            "segment_key": intent_object.get("segment_key").cloned().unwrap_or_else(|| Value::String("spot".to_owned())),
-            "instrument_id": intent_object.get("instrument_id").cloned().ok_or_else(|| "intent instrument_id is required".to_owned())?,
-            "market_id": intent_object.get("market_id").cloned().unwrap_or(Value::Null),
-            "side": "buy",
-            "quantity": intent_object.get("target_quantity").cloned().ok_or_else(|| "intent target_quantity is required".to_owned())?,
-            "quantity_semantics": "target_position",
-            "limit_price": intent_object.get("limit_price").cloned().unwrap_or(Value::Null),
-            "options": intent_object.get("order_options").cloned().unwrap_or_else(|| json!({})),
-        })],
-    };
-    let first = legs[0]
-        .as_object()
-        .ok_or_else(|| "intent leg must be an object".to_owned())?;
-    let account_ids: Vec<Value> = legs
-        .iter()
-        .map(|leg| {
-            leg.get("account_id")
-                .cloned()
-                .ok_or_else(|| "intent leg account_id is required".to_owned())
-        })
-        .collect::<Result<_, _>>()?;
-    let legacy_legs: Vec<Value> = legs
-        .iter()
-        .map(|leg| {
-            let leg = leg
-                .as_object()
-                .ok_or_else(|| "intent leg must be an object".to_owned())?;
-            let mut value = leg.clone();
-            let quantity_semantics = leg
-                .get("quantity_semantics")
-                .and_then(Value::as_str)
-                .unwrap_or("order_quantity");
-            value.insert(
-                "target_position".to_owned(),
-                Value::Bool(quantity_semantics.replace('_', "-") == "target-position"),
-            );
-            value.insert(
-                "options".to_owned(),
-                leg.get("options").cloned().unwrap_or_else(|| json!({})),
-            );
-            Ok(Value::Object(value))
-        })
-        .collect::<Result<_, String>>()?;
-    let mut legacy = intent_object.clone();
-    legacy.insert(
-        "instrument_id".to_owned(),
-        first
-            .get("instrument_id")
-            .cloned()
-            .ok_or_else(|| "intent leg instrument_id is required".to_owned())?,
-    );
-    legacy.insert(
-        "market_id".to_owned(),
-        first.get("market_id").cloned().unwrap_or(Value::Null),
-    );
-    legacy.insert("account_ids".to_owned(), Value::Array(account_ids));
-    legacy.insert(
-        "segment_key".to_owned(),
-        first
-            .get("segment_key")
-            .cloned()
-            .unwrap_or_else(|| Value::String("spot".to_owned())),
-    );
-    legacy.insert(
-        "target_quantity".to_owned(),
-        first
-            .get("quantity")
-            .cloned()
-            .ok_or_else(|| "intent leg quantity is required".to_owned())?,
-    );
-    legacy.insert(
-        "limit_price".to_owned(),
-        first.get("limit_price").cloned().unwrap_or(Value::Null),
-    );
-    legacy.insert("source_snapshot_id".to_owned(), Value::Null);
-    legacy.insert("source_event_sequence".to_owned(), Value::Null);
-    legacy.insert("source_event_time_unix_nanos".to_owned(), Value::Null);
-    legacy.insert(
-        "order_options".to_owned(),
-        first.get("options").cloned().unwrap_or_else(|| json!({})),
-    );
-    legacy.insert(
-        "reason".to_owned(),
-        intent_object
-            .get("reason")
-            .cloned()
-            .unwrap_or_else(|| Value::String(String::new())),
-    );
-    legacy.insert("legs".to_owned(), Value::Array(legacy_legs));
-    let intent =
-        serde_json::from_value(Value::Object(legacy)).map_err(|error| error.to_string())?;
-    Ok((intent, idempotency_key))
-}
-
-fn v2_replace_order(
-    order_id: &str,
-    body: &str,
-    original: &crate::domain::ExecutionOrder,
-) -> Result<ReplaceOrder, String> {
-    let request: Value = serde_json::from_str(body).map_err(|error| error.to_string())?;
-    let mut replacement = serde_json::to_value(original)
-        .map_err(|error| error.to_string())?
-        .as_object()
-        .cloned()
-        .ok_or_else(|| "execution order is not an object".to_owned())?;
-    replacement.insert(
-        "order_id".to_owned(),
-        Value::String(format!("{order_id}:replacement")),
-    );
-    if let Some(quantity) = request.get("quantity") {
-        replacement.insert("quantity".to_owned(), quantity.clone());
-    }
-    if let Some(limit_price) = request.get("limit_price") {
-        replacement.insert("limit_price".to_owned(), limit_price.clone());
-    }
-    replacement.insert(
-        "options".to_owned(),
-        request.get("options").cloned().unwrap_or_else(|| json!({})),
-    );
-    replacement.insert("submitted_at_unix_nanos".to_owned(), Value::Null);
-    serde_json::from_value(json!({"order_id": order_id, "replacement": replacement}))
-        .map_err(|error| error.to_string())
-}
-
 fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2090,15 +1537,12 @@ fn now_unix_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        process_readiness, request_class, resync_targets, set_route_readiness, v2_submit_intent,
-        ExecutionApplication, ExecutionAsyncRoute, ExecutionEventPublisher, ExecutionProcess,
-        RequestClass,
+        process_readiness, resync_targets, set_route_readiness, ExecutionApplication,
+        ExecutionAsyncRoute, ExecutionEventPublisher, ExecutionProcess,
     };
     use crate::application::{ExecutionBusinessEvent, ExecutionOrderOptions, SubmitOrder};
     use crate::domain::{OrderSide as DomainOrderSide, OrderType};
-    use kairos_primitives::{
-        AccountId, ExecutionAccessId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId,
-    };
+    use crate::services::control_transport::{request_class, v2_submit_intent, RequestClass};
     use kairos_integration::application::{
         AsyncOrderEventSource, ExternalEventEnvelope, ExternalExecutionEvent, IntegrationError,
     };
@@ -2107,6 +1551,9 @@ mod tests {
         ParticipantKind, ParticipantRef, ProviderInstrumentRef,
     };
     use kairos_integration::blocking::OrderEventSource;
+    use kairos_primitives::{
+        AccountId, ExecutionAccessId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
@@ -2180,14 +1627,14 @@ mod tests {
     }
 
     #[test]
-    fn exchange_event_identity_is_idempotent_at_the_process_boundary() {
+    fn exchange_event_identity_is_owned_by_the_actor() {
         let application = ExecutionApplication::with_dependencies("execution", None, None)
             .expect("fixture application");
         let mut process =
             ExecutionProcess::new(application, PathBuf::from("/tmp/execution-test.sock"));
-        assert!(process.accept_exchange_event("fill-1"));
-        assert!(!process.accept_exchange_event("fill-1"));
-        assert!(process.accept_exchange_event("fill-2"));
+        assert!(process.application.accept_remote_event_identity("fill-1"));
+        assert!(!process.application.accept_remote_event_identity("fill-1"));
+        assert!(process.application.accept_remote_event_identity("fill-2"));
     }
 
     #[test]
@@ -2337,8 +1784,7 @@ mod tests {
                 )),
                 2 => {
                     let event = ExternalExecutionEvent {
-                        order_id: kairos_primitives::OrderId::new("local-recovered-order")
-                            .unwrap(),
+                        order_id: kairos_primitives::OrderId::new("local-recovered-order").unwrap(),
                         symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
                         status: kairos_primitives::OrderStatus::Filled,
                         side: Some(OrderSide::Buy),
@@ -2444,8 +1890,7 @@ mod tests {
                 )),
                 2 => {
                     let event = ExternalExecutionEvent {
-                        order_id: kairos_primitives::OrderId::new("async-recovered-order")
-                            .unwrap(),
+                        order_id: kairos_primitives::OrderId::new("async-recovered-order").unwrap(),
                         symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
                         status: kairos_primitives::OrderStatus::Filled,
                         side: Some(OrderSide::Buy),

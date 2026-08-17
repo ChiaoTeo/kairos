@@ -12,7 +12,8 @@ pub use encode::{event_metadata, view_metadata, EncodeContext};
 pub use error::{ContractError, ContractResult};
 pub use event::{ExecutionEvent, ExecutionEventFrame, ExecutionEventStream};
 pub use view::{
-    ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher, ViewFrame, ViewMetadata,
+    ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher, ExecutionViewReader, ViewFrame,
+    ViewMetadata,
 };
 
 use std::path::PathBuf;

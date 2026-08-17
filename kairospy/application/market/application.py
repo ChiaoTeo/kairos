@@ -105,7 +105,14 @@ class MarketApplication:
         )
 
         cursor = self._event_cursor or 0
-        async for record in self._event_source.events(after_sequence=cursor):
+        subscribe_live = getattr(self._event_source, "subscribe_live", None)
+        if callable(subscribe_live):
+            records = subscribe_live()
+            live = True
+        else:
+            records = self._event_source.replay_from(cursor)
+            live = False
+        async for record in records:
             typed = isinstance(record, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent))
             stream_id = record.metadata.stream_id if typed else record.stream_id
             sequence = record.metadata.sequence if typed else record.sequence
@@ -123,9 +130,7 @@ class MarketApplication:
                     raise RuntimeError(
                         "Market event belongs to another launch instance"
                     )
-            if cursor == 0 and bool(
-                getattr(self._event_source, "join_from_latest", False)
-            ):
+            if cursor == 0 and live:
                 cursor = sequence - 1
             if sequence <= cursor:
                 continue

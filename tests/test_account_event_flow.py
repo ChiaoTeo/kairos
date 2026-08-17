@@ -64,10 +64,9 @@ class _Records:
     def __init__(self, *records: AccountEventRecord) -> None:
         self.records = records
 
-    async def events(self, after_sequence: int = 0):
+    async def subscribe_live(self):
         for record in self.records:
-            if record.sequence > after_sequence:
-                yield record
+            yield record
 
 
 class _LiveRecords(_Records):

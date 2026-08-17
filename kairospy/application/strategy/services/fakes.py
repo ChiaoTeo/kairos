@@ -191,7 +191,7 @@ class InMemoryMarketEventSource:
                 waiter.set_result(None)
         self._waiters.clear()
 
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[object]:
+    async def replay_from(self, after_sequence: int = 0) -> AsyncIterator[object]:
         next_sequence = after_sequence + 1
         while True:
             while (

@@ -283,7 +283,7 @@ def test_generated_paper_account_loads_through_canonical_account_cli(tmp_path) -
     )
 
     account = json.loads(output.getvalue())
-    assert account["provider"] == "paper"
+    assert account["broker"] == "paper"
     assert account["environment"] == "paper"
     assert account["initial_balances"] == ["USDT=100000"]
 

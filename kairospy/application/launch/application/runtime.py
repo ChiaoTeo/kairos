@@ -410,26 +410,6 @@ class LaunchRuntimeApplication:
 
             execution_config = dict(plan.execution)
             execution_enabled = bool(execution_config.get("enabled", True))
-            execution_provider = (
-                str(execution_config["provider"])
-                if execution_config.get("provider") is not None
-                else None
-            )
-            execution_product = (
-                str(execution_config["product"])
-                if execution_config.get("product") is not None
-                else None
-            )
-            raw_routes = execution_config.get("routes")
-            execution_routes: list[Mapping[str, Any]] | None = None
-            if raw_routes is not None:
-                if not isinstance(raw_routes, list) or not all(
-                    isinstance(route, Mapping) for route in raw_routes
-                ):
-                    raise LaunchRuntimeError(
-                        "execution.routes must be an array of route tables"
-                    )
-                execution_routes = [dict(route) for route in raw_routes]
             confirm_live = mode == "live" and bool(
                 plan.live_safety and plan.live_safety.get("trading_enabled")
             )
@@ -456,14 +436,10 @@ class LaunchRuntimeApplication:
             account_endpoints: dict[str, dict[str, Any]] = {}
             for bound_account_id in lease_account_ids:
                 socket_name = account_component_name(bound_account_id)
-                account_provider = str(
-                    account_records[bound_account_id].get("broker") or "binance"
-                )
                 components.ensure_running(
                     "account",
                     account_id=bound_account_id,
                     socket_name=socket_name,
-                    provider=account_provider,
                     instance_workspace=instance_workspace,
                 )
                 account_endpoints[bound_account_id] = {
@@ -481,6 +457,10 @@ class LaunchRuntimeApplication:
                 "risk": {
                     "socket": str(instance_workspace.socket("risk")),
                     "health": str(instance_workspace.health("risk")),
+                    "snapshot": str(
+                        instance_workspace.snapshot("risk", "risk.snapshot")
+                    ),
+                    "actor_id": f"risk:{instance_workspace.instance_id}",
                 },
                 "market": {
                     "socket": (
@@ -498,6 +478,8 @@ class LaunchRuntimeApplication:
                     {
                         "socket": str(self.workspace.paths.process_socket("reference")),
                         "health": str(self.workspace.paths.health_file("reference")),
+                        "snapshot": str(self.workspace.paths.child("snapshots", "v2")),
+                        "actor_id": "reference-actor",
                         "required": True,
                     }
                     if reference_required
@@ -512,9 +494,6 @@ class LaunchRuntimeApplication:
             if execution_enabled:
                 components.ensure_running(
                     "execution",
-                    provider=execution_provider,
-                    product=execution_product,
-                    execution_routes=execution_routes,
                     confirm_live=confirm_live,
                     instance_workspace=instance_workspace,
                 )

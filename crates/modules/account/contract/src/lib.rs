@@ -11,10 +11,7 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use control::{
-    AccountContractClient, Balance, BalanceGroup, BalancesResponse, Capability, DecimalValue, Fill,
-    Health, OrderEvent, Position, PositionGroup, PositionsResponse, SimulatedFill,
-};
+pub use control::{AccountContractClient, DecimalValue, Fill, Health, OrderEvent, SimulatedFill};
 pub use control::{AccountControlClient, AccountControlResponse};
 pub use encode::{
     event_metadata, view_metadata, BalanceEncoder, EncodeContext, ObservedOrderEncoder,
@@ -22,10 +19,11 @@ pub use encode::{
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{AccountEvent, AccountEventFrame, AccountEventStream};
-pub use transport::{
-    AccountAeronTransport, AccountMmapReader, AccountMmapWriter, AccountUdsTransport,
+pub use transport::AccountUdsTransport;
+pub use view::{
+    decode_account_current, AccountViewKey, AccountViewKind, AccountViewPublisher, ViewFrame,
+    ViewMetadata,
 };
-pub use view::{AccountViewKey, AccountViewKind, AccountViewPublisher, ViewFrame, ViewMetadata};
 
 use std::path::PathBuf;
 

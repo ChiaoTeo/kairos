@@ -5,10 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from kairospy.infrastructure.transport.generated_spec import (
+    DEFAULT_CHANNEL,
+    REFERENCE_CHANGES,
+)
+
 from .supervisor import ProcessSpec
 from ..workspace import Workspace
 
-REFERENCE_CHANGES_STREAM = 1201
+REFERENCE_CHANGES_STREAM = REFERENCE_CHANGES
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +22,7 @@ class ReferenceProcessConfig:
 
     workspace: Workspace
     binary: str = "kairos-reference-server"
-    aeron_channel: str = "aeron:udp?endpoint=localhost:40123"
+    aeron_channel: str = DEFAULT_CHANNEL
     aeron_dir: Path | None = None
     refresh_interval: str = "5m"
     reference_changes_stream: int = REFERENCE_CHANGES_STREAM

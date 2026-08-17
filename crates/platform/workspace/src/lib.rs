@@ -1,13 +1,17 @@
 pub mod cli;
 pub mod control;
 pub mod data;
+pub mod incarnation;
 pub mod logging;
 pub mod runtime;
 pub mod workspace;
 
 pub use control::{ControlApi, ControlServer, RestControlClient};
+pub use incarnation::ProducerIncarnation;
 pub use runtime::{
     DEGRADED_STATUS, HEALTH_PATH, READY_STATUS, RUNTIME_PROTOCOL_VERSION, STOPPING_STATUS,
     STOP_PATH,
 };
-pub use workspace::{InstanceWorkspace, Workspace, WorkspaceManifest, WorkspaceProcessLock};
+pub use workspace::{
+    InstanceWorkspace, Workspace, WorkspaceFencedLease, WorkspaceManifest, WorkspaceProcessLock,
+};

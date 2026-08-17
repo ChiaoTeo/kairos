@@ -38,6 +38,19 @@ pub struct ReferenceReadModel {
     outbox_depth: usize,
 }
 
+/// Complete immutable state used by the typed mmap publisher. This is an
+/// application-owned read model, not a persistence record and not a second
+/// mutable owner.
+#[derive(Clone)]
+pub struct ReferenceCurrentView {
+    pub actor_id: String,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub catalog: crate::domain::ReferenceCatalog,
+    pub provider_health: Vec<ProviderHealth>,
+    pub option_underlyings: Vec<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceRefreshResult {
     pub generation: Generation,
@@ -77,6 +90,17 @@ where
             provider_health: self.provider_health(),
             outbox_depth: self.actor.pending_event_count().await.unwrap_or(0),
         }
+    }
+
+    pub async fn current_view(&mut self) -> ReferenceResult<ReferenceCurrentView> {
+        Ok(ReferenceCurrentView {
+            actor_id: self.actor_id().to_owned(),
+            generation: self.actor.metadata.generation,
+            event_sequence: self.actor.metadata.event_sequence,
+            catalog: self.actor.current_catalog().await?,
+            provider_health: self.provider_health(),
+            option_underlyings: self.option_underlyings(),
+        })
     }
 
     pub fn source_id(&self) -> &str {

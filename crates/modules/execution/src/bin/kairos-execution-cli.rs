@@ -1,23 +1,17 @@
 use clap::{Args, Parser, Subcommand};
+use kairos_execution::{
+    application::{
+        BacktestApplication, BacktestRequest, ExecutionFillReport, ExecutionOrderOptions,
+        SubmitOrder,
+    },
+    domain::{OrderSide, OrderType},
+};
+use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewReader};
 use kairos_primitives::{
     AccountId, ExecutionAccessId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
 };
-use kairos_execution::{
-    application::{
-        BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
-        ExecutionFillReport, ExecutionOrderOptions, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
-    },
-    composition::{
-        compose_direct_execution_connections, load_reference_execution_accesses,
-        ExecutionConnectionOptions, SqlxExecutionStore,
-    },
-    domain::{OrderSide, OrderType},
-    ExecutionApplication,
-};
-use kairos_integration::application::credential::load_workspace_credential;
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
-use secrecy::ExposeSecret;
 use std::str::FromStr;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -32,12 +26,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .to_string();
     std::env::set_var("KAIROS_CLI_FORMAT", output);
-    run_direct_with_options(
-        &workspace,
-        args.command,
-        Some(args.connection.connection_options(&workspace)?),
-        args.confirm_live,
-    )?;
+    if args.command.is_mmap_query() {
+        let instance = workspace.instance(&args.mode, &args.launch_id, &args.instance_id)?;
+        print_json(read_current_execution_view(
+            &instance,
+            workspace.id(),
+            &args.command,
+        )?);
+        return Ok(());
+    }
+    if let Command::Backtest { file } = &args.command {
+        let request: BacktestRequest = toml::from_str(&std::fs::read_to_string(file)?)?;
+        print_json(serde_json::to_value(BacktestApplication::evaluate(
+            request,
+        )?)?);
+        return Ok(());
+    }
+    let instance = workspace.instance(&args.mode, &args.launch_id, &args.instance_id)?;
+    let socket = instance.socket("execution")?;
+    print_json(execute_control_command(&socket, args.command).await?);
     Ok(())
 }
 
@@ -46,170 +53,359 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct Cli {
     #[arg(long)]
     workspace: String,
+    #[arg(long, global = true, default_value = "paper")]
+    mode: String,
+    #[arg(long, global = true, default_value = "default")]
+    launch_id: String,
+    #[arg(long, global = true, default_value = "default")]
+    instance_id: String,
     #[arg(long, global = true, value_parser = OutputFormat::from_str)]
     output: Option<OutputFormat>,
-    #[arg(long, global = true)]
-    confirm_live: bool,
-    #[command(flatten)]
-    connection: ConnectionArgs,
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Clone, Debug, Args)]
-struct ConnectionArgs {
-    #[arg(long, global = true, default_value = "default")]
-    route_id: String,
-    #[arg(long, global = true, default_value = "main")]
-    account_id: String,
-    #[arg(long, global = true, default_value = "spot")]
-    segment_key: String,
-    #[arg(long, global = true, default_value = "simulated")]
-    provider: String,
-    #[arg(long, global = true, default_value = "spot")]
-    product: String,
-    /// OKX order/account mode, independent from its venue product.
-    #[arg(long, global = true)]
-    trading_mode: Option<String>,
-    #[arg(long, global = true, default_value = "")]
-    api_key: String,
-    #[arg(long, global = true, default_value = "")]
-    secret: String,
-    #[arg(long, global = true)]
-    credential_id: Option<String>,
-    #[arg(long, global = true, default_value = "")]
-    passphrase: String,
-    #[arg(long, global = true, default_value = "")]
-    base_url: String,
-    #[arg(long, global = true, default_value = "")]
-    websocket_url: String,
-    #[arg(long, global = true)]
-    isolated_symbol: Option<String>,
-    #[arg(long, global = true, default_value_t = 1_000)]
-    request_weight_per_minute: u32,
-    #[arg(long, global = true, default_value_t = 50)]
-    cancel_reserve_weight: u32,
-    #[arg(long, global = true, default_value_t = 1_024)]
-    order_event_queue_capacity: usize,
-    #[arg(long, global = true, default_value = "default-egress")]
-    egress_scope_id: String,
-    #[arg(long, global = true, default_value = "execution-default")]
-    principal_scope_id: String,
-    #[arg(long, global = true, default_value_t = 50)]
-    orders_per_10_seconds: u32,
-    #[arg(long, global = true, default_value_t = 160_000)]
-    orders_per_day: u32,
-    #[arg(long, global = true, default_value = "127.0.0.1")]
-    host: String,
-    #[arg(long, global = true, default_value_t = 4002)]
-    port: u16,
-    #[arg(long, global = true, default_value_t = 0)]
-    client_id: i32,
+impl Command {
+    fn is_mmap_query(&self) -> bool {
+        matches!(
+            self,
+            Self::Snapshot
+                | Self::Orders { .. }
+                | Self::OpenOrders { .. }
+                | Self::History { .. }
+                | Self::UnknownRemoteOrders
+                | Self::Status { .. }
+                | Self::Inspect { .. }
+                | Self::Events { .. }
+                | Self::Trace { .. }
+                | Self::Audit { .. }
+                | Self::Journal { .. }
+                | Self::Fills { .. }
+        )
+    }
 }
 
-impl ConnectionArgs {
-    fn connection_options(
-        &self,
-        workspace: &Workspace,
-    ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
-        let credentials_root = workspace.child(&["credentials"])?;
-        let stored = load_workspace_credential(
-            &credentials_root,
-            &self.provider,
-            self.credential_id.as_deref(),
-        )?;
-        let (default_base_url, default_websocket_url) =
-            provider_endpoints(&self.provider, &self.product);
-        Ok(ExecutionConnectionOptions {
-            route_id: self.route_id.clone(),
-            required: true,
-            account_id: self.account_id.clone(),
-            segment_key: self.segment_key.clone(),
-            provider: self.provider.clone(),
-            product: self.product.clone(),
-            trading_mode: self.trading_mode.clone(),
-            api_key: if self.api_key.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.api_key.clone())
-                    .unwrap_or_default()
-            } else {
-                self.api_key.clone()
-            }
-            .into(),
-            secret: if self.secret.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.secret.expose_secret().to_owned())
-                    .unwrap_or_default()
-            } else {
-                self.secret.clone()
-            }
-            .into(),
-            passphrase: if self.passphrase.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.passphrase.clone())
-                    .unwrap_or_default()
-            } else {
-                self.passphrase.clone()
-            }
-            .into(),
-            base_url: if self.base_url.trim().is_empty() {
-                default_base_url.into()
-            } else {
-                self.base_url.clone()
-            },
-            websocket_url: if self.websocket_url.trim().is_empty() {
-                default_websocket_url.into()
-            } else {
-                self.websocket_url.clone()
-            },
-            isolated_symbol: self.isolated_symbol.clone(),
-            request_weight_per_minute: self.request_weight_per_minute,
-            cancel_reserve_weight: self.cancel_reserve_weight,
-            order_event_queue_capacity: self.order_event_queue_capacity,
-            shared_quota_ledger_path: Some(
-                workspace
-                    .state_root()
-                    .join("integration")
-                    .join("provider-quota.mmap"),
-            ),
-            egress_scope_id: self.egress_scope_id.clone(),
-            principal_scope_id: self.principal_scope_id.clone(),
-            orders_per_10_seconds: self.orders_per_10_seconds,
-            orders_per_day: self.orders_per_day,
-            host: self.host.clone(),
-            port: self.port,
-            client_id: self.client_id,
+fn read_current_execution_view(
+    instance: &kairos_workspace::workspace::InstanceWorkspace,
+    workspace_id: &str,
+    command: &Command,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    use kairos_protocol::generated::kairos::{common::v_2 as common, execution::v_2 as fb};
+    let key = ExecutionViewKey::new(
+        workspace_id,
+        ExecutionViewKind::CurrentExecution,
+        Some(instance.launch_id()),
+        Some(instance.instance_id()),
+    )?;
+    let frame = ExecutionViewReader::open(instance.root(), key.clone())?.read()?;
+    let envelope = frame.envelope_metadata();
+    let view = frame.current_execution()?;
+    let metadata = view.metadata();
+    if metadata.view_key() != key.canonical_key()
+        || metadata.workspace_id() != workspace_id
+        || metadata.launch_id() != Some(instance.launch_id())
+        || metadata.instance_id() != Some(instance.instance_id())
+    {
+        return Err("Execution mmap identity mismatch".into());
+    }
+    if metadata.completeness() != common::ViewCompleteness::COMPLETE
+        || metadata.generation() != envelope.generation
+        || metadata.applied_revision().unwrap_or_default() != envelope.applied_event_sequence
+    {
+        return Err("Execution mmap is partial or its watermarks differ".into());
+    }
+
+    let orders = view.orders().iter().map(order_json).collect::<Vec<_>>();
+    let intents = view.intents().iter().map(intent_json).collect::<Vec<_>>();
+    let fills = view.fills().iter().map(fill_json).collect::<Vec<_>>();
+    let events = view
+        .order_events()
+        .iter()
+        .map(order_event_json)
+        .collect::<Vec<_>>();
+    let unknown = view
+        .unknown_remote_orders()
+        .iter()
+        .map(unknown_remote_json)
+        .collect::<Vec<_>>();
+    let value = match command {
+        Command::Snapshot => serde_json::json!({
+            "generation": metadata.generation(),
+            "event_sequence": metadata.applied_revision().unwrap_or_default(),
+            "orders": orders,
+            "intents": intents,
+            "fills": fills,
+            "events": events,
+            "unknown_remote_orders": unknown,
+            "commitment_count": view.commitments().len(),
+            "risk_reservation_count": view.risk_reservations().len(),
+            "exchange_event_watermark_unix_nanos": view.exchange_event_watermark_unix_nanos(),
+            "fill_history_truncated": view.fill_history_truncated(),
+            "order_event_history_truncated": view.order_event_history_truncated(),
+            "intent_event_history_truncated": view.intent_event_history_truncated(),
+        }),
+        Command::Orders { account_id } => serde_json::json!({
+            "orders": filter_orders(orders, account_id.as_deref(), None)
+        }),
+        Command::OpenOrders { account_id } => serde_json::json!({
+            "orders": filter_orders(orders, account_id.as_deref(), Some(false))
+        }),
+        Command::History { account_id } => serde_json::json!({
+            "orders": filter_orders(orders, account_id.as_deref(), Some(true))
+        }),
+        Command::UnknownRemoteOrders => serde_json::json!({"orders": unknown}),
+        Command::Status { order_id } | Command::Inspect { order_id } => orders
+            .into_iter()
+            .find(|value| value["order_id"] == order_id.as_str())
+            .ok_or_else(|| format!("unknown order: {order_id}"))?,
+        Command::Events { order_id } => serde_json::json!({
+            "events": filter_events(events, order_id.as_deref(), None, None, None)
+        }),
+        Command::Trace { order_id } | Command::Journal { order_id } => serde_json::json!({
+            "events": filter_events(events, Some(order_id), None, None, None)
+        }),
+        Command::Audit {
+            order_id,
+            remote_order_id,
+            status,
+            limit,
+        } => serde_json::json!({
+            "events": filter_events(
+                events,
+                order_id.as_deref(),
+                remote_order_id.as_deref(),
+                status.as_deref(),
+                *limit,
+            )
+        }),
+        Command::Fills { order_id } => serde_json::json!({
+            "fills": fills.into_iter().filter(|value| {
+                order_id.as_deref().is_none_or(|expected| value["order_id"] == expected)
+            }).collect::<Vec<_>>()
+        }),
+        _ => unreachable!("non-query command was routed to mmap"),
+    };
+    let result: Result<serde_json::Value, Box<dyn std::error::Error>> = Ok(value);
+
+    fn order_json(value: fb::OrderState<'_>) -> serde_json::Value {
+        serde_json::json!({
+            "order_id": value.order_id(),
+            "intent_id": value.intent_id(),
+            "plan_id": value.plan_id(),
+            "leg_id": value.leg_id(),
+            "strategy_id": value.strategy_id(),
+            "account_id": value.account_id(),
+            "segment_key": value.segment_key(),
+            "instrument_id": value.instrument_id(),
+            "market_id": value.market_id(),
+            "execution_access_id": value.execution_access_id(),
+            "remote_order_id": value.remote_order_id(),
+            "side": value.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "order_type": value.order_type().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "quantity": decimal_json(value.quantity()),
+            "filled_quantity": decimal_json(value.filled_quantity()),
+            "limit_price": value.limit_price().map(decimal_json),
+            "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "terminal": matches!(value.lifecycle(), fb::OrderLifecycle::FILLED | fb::OrderLifecycle::CANCELED | fb::OrderLifecycle::REJECTED | fb::OrderLifecycle::EXPIRED | fb::OrderLifecycle::FAILED),
+            "submitted_at_unix_nanos": value.submitted_at_unix_nanos(),
+            "updated_at_unix_nanos": value.updated_at_unix_nanos(),
+            "reason": value.reason(),
         })
     }
+
+    fn intent_json(value: fb::IntentState<'_>) -> serde_json::Value {
+        let intent = value.intent();
+        serde_json::json!({
+            "intent_id": intent.intent_id(),
+            "strategy_id": intent.strategy_id(),
+            "launch_id": intent.launch_id(),
+            "instance_id": intent.instance_id(),
+            "intent_type": intent.intent_type().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "updated_at_unix_nanos": value.updated_at_unix_nanos(),
+            "reason": value.reason(),
+        })
+    }
+
+    fn fill_json(value: fb::Fill<'_>) -> serde_json::Value {
+        serde_json::json!({
+            "fill_id": value.fill_id(),
+            "order_id": value.order_id(),
+            "intent_id": value.intent_id(),
+            "strategy_id": value.strategy_id(),
+            "account_id": value.account_id(),
+            "segment_key": value.segment_key(),
+            "instrument_id": value.instrument_id(),
+            "market_id": value.market_id(),
+            "remote_order_id": value.remote_order_id(),
+            "side": value.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "quantity": decimal_json(value.quantity()),
+            "price": decimal_json(value.price()),
+            "fee": value.fee().map(decimal_json),
+            "fee_currency": value.fee_asset_id(),
+            "occurred_at_unix_nanos": value.source_filled_at_unix_nanos(),
+        })
+    }
+
+    fn order_event_json(value: fb::OrderLifecycleEventState<'_>) -> serde_json::Value {
+        serde_json::json!({
+            "order_id": value.order_id(),
+            "intent_id": value.intent_id(),
+            "plan_id": value.plan_id(),
+            "leg_id": value.leg_id(),
+            "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "remote_order_id": value.remote_order_id(),
+            "occurred_at_unix_nanos": value.occurred_at_unix_nanos(),
+            "reason": value.reason(),
+            "fill_id": value.fill_id(),
+            "filled_quantity": value.filled_quantity().map(decimal_json),
+        })
+    }
+
+    fn unknown_remote_json(value: fb::UnknownRemoteOrderState<'_>) -> serde_json::Value {
+        serde_json::json!({
+            "remote_order_id": value.remote_order_id(),
+            "symbol": value.symbol(),
+            "status": value.lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "execution_id": value.execution_id(),
+            "fill_quantity": value.fill_quantity().map(decimal_json),
+            "fill_price": value.fill_price().map(decimal_json),
+            "fee_currency": value.fee_currency(),
+            "fee_amount": value.fee_amount().map(decimal_json),
+            "first_seen_at_unix_nanos": value.first_seen_at_unix_nanos(),
+            "last_seen_at_unix_nanos": value.last_seen_at_unix_nanos(),
+            "resolution": value.resolution(),
+            "reason": value.reason(),
+        })
+    }
+
+    fn decimal_json(value: &common::Decimal64) -> String {
+        let scale = value.scale() as usize;
+        let negative = value.mantissa() < 0;
+        let digits = i128::from(value.mantissa()).abs().to_string();
+        if scale == 0 {
+            return format!("{}{digits}", if negative { "-" } else { "" });
+        }
+        let padded = format!("{:0>width$}", digits, width = scale + 1);
+        let split = padded.len() - scale;
+        format!(
+            "{}{}.{}",
+            if negative { "-" } else { "" },
+            &padded[..split],
+            &padded[split..]
+        )
+    }
+
+    result
 }
 
-fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static str) {
-    match (
-        provider.trim().to_ascii_lowercase().as_str(),
-        product.trim().to_ascii_lowercase().as_str(),
-    ) {
-        ("binance", "spot") => (
-            "https://api.binance.com",
-            "wss://ws-api.binance.com:443/ws-api/v3",
-        ),
-        ("binance", "usd-m-futures") => ("https://fapi.binance.com", "wss://fstream.binance.com"),
-        ("binance", "coin-m-futures") => ("https://dapi.binance.com", "wss://dstream.binance.com"),
-        ("binance", "options" | "option") => (
-            "https://eapi.binance.com",
-            "wss://nbstream.binance.com/eoptions/private/stream",
-        ),
-        ("binance", "cross-margin" | "isolated-margin") => {
-            ("https://api.binance.com", "wss://stream.binance.com:9443")
-        }
-        ("okx" | "okex", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
-            ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private")
-        }
-        ("simulated" | "paper", _) | ("ibkr", "spot" | "equity") => ("", ""),
-        _ => ("", ""),
+fn filter_orders(
+    values: Vec<serde_json::Value>,
+    account_id: Option<&str>,
+    terminal: Option<bool>,
+) -> Vec<serde_json::Value> {
+    values
+        .into_iter()
+        .filter(|value| {
+            account_id.is_none_or(|expected| value["account_id"] == expected)
+                && terminal.is_none_or(|expected| value["terminal"] == expected)
+        })
+        .collect()
+}
+
+fn filter_events(
+    values: Vec<serde_json::Value>,
+    order_id: Option<&str>,
+    remote_order_id: Option<&str>,
+    status: Option<&str>,
+    limit: Option<u32>,
+) -> Vec<serde_json::Value> {
+    let mut values = values
+        .into_iter()
+        .filter(|value| {
+            order_id.is_none_or(|expected| value["order_id"] == expected)
+                && remote_order_id.is_none_or(|expected| value["remote_order_id"] == expected)
+                && status.is_none_or(|expected| value["status"] == expected)
+        })
+        .collect::<Vec<_>>();
+    if let Some(limit) = limit {
+        values.truncate(limit as usize);
     }
+    values
+}
+
+async fn execute_control_command(
+    socket: &std::path::Path,
+    command: Command,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let client = kairos_workspace::RestControlClient::new(socket);
+    let (method, path, body) = match command {
+        Command::Reconcile { order_id } => (
+            "POST",
+            "/v1/reconciliation".into(),
+            Some(serde_json::to_vec(&serde_json::json!({
+                "order_id": order_id,
+                "reason": "operator requested reconciliation",
+            }))?),
+        ),
+        Command::LinkUnknown {
+            remote_order_id,
+            local_order_id,
+        } => (
+            "POST",
+            format!(
+                "/v1/link-unknown-remote?remote_order_id={remote_order_id}&local_order_id={local_order_id}"
+            ),
+            None,
+        ),
+        Command::Fill(args) => {
+            let request = ExecutionFillReport {
+                fill_id: kairos_primitives::FillId::new(args.fill_id)?,
+                order_id: kairos_primitives::OrderId::new(args.order_id)?,
+                quantity: args.quantity.parse()?,
+                price: args.price.parse()?,
+                fee: args.fee.parse()?,
+                fee_currency: args
+                    .fee_currency
+                    .as_deref()
+                    .map(kairos_primitives::Currency::new)
+                    .transpose()?,
+                occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
+                execution_market_id: None,
+            };
+            ("POST", "/v1/fill".into(), Some(serde_json::to_vec(&request)?))
+        }
+        Command::Submit(args) => {
+            let dry_run = args.dry_run;
+            let request = submit_request(args)?;
+            (
+                "POST",
+                if dry_run {
+                    "/v1/preview-submit"
+                } else {
+                    "/v1/orders"
+                }
+                .into(),
+                Some(serde_json::to_vec(&request)?),
+            )
+        }
+        Command::Cancel { order_id, reason } => (
+            "DELETE",
+            format!("/v1/orders/{order_id}"),
+            Some(serde_json::to_vec(&serde_json::json!({"reason": reason}))?),
+        ),
+        Command::Replace {
+            order_id,
+            replacement,
+        } => (
+            "PATCH",
+            format!("/v1/orders/{order_id}"),
+            Some(serde_json::to_vec(&submit_request(replacement)?)?),
+        ),
+        Command::Backtest { .. } => unreachable!("backtest handled locally"),
+        _ => unreachable!("query command routed to typed mmap"),
+    };
+    Ok(client.request_json(method, &path, body.as_deref()).await?)
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -230,25 +426,10 @@ enum Command {
         #[arg(long)]
         account_id: Option<String>,
     },
-    RemoteOpenOrders {
+    #[command(alias = "reconcile-remote")]
+    Reconcile {
         #[arg(long)]
-        symbol: Option<String>,
-    },
-    RemoteHistory {
-        #[arg(long)]
-        symbol: Option<String>,
-        #[arg(long)]
-        limit: Option<u32>,
-    },
-    RemoteInspect {
-        #[arg(long)]
-        order_id: String,
-    },
-    ReconcileRemote {
-        #[arg(long)]
-        symbol: Option<String>,
-        #[arg(long)]
-        limit: Option<u32>,
+        order_id: Option<String>,
     },
     UnknownRemoteOrders,
     LinkUnknown {
@@ -257,7 +438,6 @@ enum Command {
         #[arg(long)]
         local_order_id: String,
     },
-    StreamNext,
     #[command(alias = "show")]
     Status {
         #[arg(long)]
@@ -374,183 +554,6 @@ struct FillArgs {
     fee_currency: Option<String>,
     #[arg(long)]
     occurred_at_unix_nanos: Option<u64>,
-}
-
-fn run_direct_with_options(
-    workspace: &Workspace,
-    command: Command,
-    options: Option<ExecutionConnectionOptions>,
-    confirm_live: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let options = options.expect("direct execution options");
-    let path = workspace.child(&["state", "execution", "execution-state.sqlite"])?;
-    let connections = compose_direct_execution_connections(&options)?;
-    let (order_entry, order_query, execution_stream, _runtime) = connections.into_parts();
-    let mut application = ExecutionApplication::with_dependencies_and_query_and_stream(
-        "execution",
-        order_entry,
-        order_query,
-        execution_stream,
-        Some(Box::new(SqlxExecutionStore::new(path)?)),
-    )?;
-    let simulated = matches!(
-        options.provider.trim().to_ascii_lowercase().as_str(),
-        "simulated" | "paper"
-    );
-    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
-    if reference_database.exists() {
-        for (access_id, provider_instrument) in
-            load_reference_execution_accesses(&reference_database)?
-        {
-            application.configure_execution_access(access_id, provider_instrument);
-        }
-    } else if !simulated {
-        return Err(format!(
-            "live Execution requires Reference execution accesses: {}",
-            reference_database.display()
-        )
-        .into());
-    }
-    application.configure_live_trading(!simulated, confirm_live);
-    let value = match command {
-        Command::Snapshot => serde_json::to_value(application.snapshot())?,
-        Command::Orders { account_id } => {
-            serde_json::json!({"orders": application.orders(account_id.as_deref())})
-        }
-        Command::OpenOrders { account_id } => {
-            let orders: Vec<_> = application
-                .orders(account_id.as_deref())
-                .into_iter()
-                .filter(|order| !order.status.terminal())
-                .collect();
-            serde_json::json!({"orders": orders})
-        }
-        Command::History { account_id } => {
-            serde_json::json!({"orders": application.orders(account_id.as_deref())})
-        }
-        Command::RemoteOpenOrders { symbol } => {
-            serde_json::to_value(application.remote_open_orders(RemoteOrderQuery {
-                symbol: symbol.map(kairos_primitives::Symbol::new).transpose()?,
-                ..Default::default()
-            })?)?
-        }
-        Command::RemoteHistory { symbol, limit } => {
-            serde_json::to_value(application.remote_history(RemoteOrderQuery {
-                symbol: symbol.map(kairos_primitives::Symbol::new).transpose()?,
-                limit,
-                ..Default::default()
-            })?)?
-        }
-        Command::RemoteInspect { order_id } => {
-            serde_json::to_value(application.remote_detail(RemoteOrderQuery {
-                order_id: Some(kairos_primitives::OrderId::new(order_id)?),
-                ..Default::default()
-            })?)?
-        }
-        Command::ReconcileRemote { symbol, limit } => serde_json::json!({
-            "changed": application.reconcile_remote_orders(RemoteOrderQuery {
-                symbol: symbol
-                    .map(kairos_primitives::Symbol::new)
-                    .transpose()?,
-                limit,
-                ..Default::default()
-            })?
-        }),
-        Command::UnknownRemoteOrders => {
-            serde_json::json!({"orders": application.unknown_remote_orders()})
-        }
-        Command::LinkUnknown {
-            remote_order_id,
-            local_order_id,
-        } => serde_json::to_value(
-            application.link_unknown_remote_order(&remote_order_id, &local_order_id)?,
-        )?,
-        Command::StreamNext => serde_json::to_value(application.consume_remote_execution_event()?)?,
-        Command::Status { order_id } | Command::Inspect { order_id } => {
-            let order = application
-                .orders(None)
-                .into_iter()
-                .find(|order| order.order_id == order_id)
-                .ok_or_else(|| format!("unknown order: {order_id}"))?;
-            serde_json::to_value(order)?
-        }
-        Command::Events { order_id } => {
-            serde_json::json!({"events": application.events(order_id.as_deref())})
-        }
-        Command::Trace { order_id } => {
-            serde_json::json!({"events": application.trace(&order_id)})
-        }
-        Command::Audit {
-            order_id,
-            remote_order_id,
-            status,
-            limit,
-        } => serde_json::to_value(
-            application.audit_events(ExecutionAuditQuery {
-                order_id: order_id
-                    .map(kairos_primitives::OrderId::new)
-                    .transpose()?,
-                remote_order_id: remote_order_id
-                    .map(kairos_primitives::RemoteOrderId::new)
-                    .transpose()?,
-                status,
-                limit,
-                ..Default::default()
-            })?,
-        )?,
-        Command::Journal { order_id } => {
-            serde_json::to_value(application.audit_events(ExecutionAuditQuery {
-                order_id: Some(kairos_primitives::OrderId::new(order_id)?),
-                ..Default::default()
-            })?)?
-        }
-        Command::Backtest { file } => {
-            let request: BacktestRequest = toml::from_str(&std::fs::read_to_string(file)?)?;
-            serde_json::to_value(BacktestApplication::evaluate(request)?)?
-        }
-        Command::Fills { order_id } => {
-            serde_json::json!({"fills": application.fills(order_id.as_deref())})
-        }
-        Command::Fill(args) => serde_json::to_value(
-            application.record_fill(ExecutionFillReport {
-                fill_id: kairos_primitives::FillId::new(args.fill_id)?,
-                order_id: kairos_primitives::OrderId::new(args.order_id)?,
-                quantity: args.quantity.parse()?,
-                price: args.price.parse()?,
-                fee: args.fee.parse()?,
-                fee_currency: args
-                    .fee_currency
-                    .as_deref()
-                    .map(kairos_primitives::Currency::new)
-                    .transpose()?,
-                occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
-                execution_market_id: None,
-            })?,
-        )?,
-        Command::Submit(args) => {
-            let request = submit_request(args.clone())?;
-            if args.dry_run {
-                serde_json::to_value(application.preview_submit(&request)?)?
-            } else {
-                serde_json::to_value(application.submit(request)?)?
-            }
-        }
-        Command::Cancel { order_id, reason } => {
-            serde_json::to_value(application.cancel(CancelOrder {
-                order_id: OrderId::new(order_id)?,
-                reason,
-            })?)?
-        }
-        Command::Replace {
-            order_id,
-            replacement,
-        } => serde_json::to_value(application.replace(ReplaceOrder {
-            order_id: OrderId::new(order_id)?,
-            replacement: submit_request(replacement)?,
-        })?)?,
-    };
-    print_json(value);
-    Ok(())
 }
 
 fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::Error>> {

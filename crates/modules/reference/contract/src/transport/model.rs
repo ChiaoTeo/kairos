@@ -133,3 +133,41 @@ pub struct MarketDataAccess {
     pub effective_from_unix_nanos: u64,
     pub effective_to_unix_nanos: Option<u64>,
 }
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProviderHealthState {
+    pub provider_id: String,
+    pub status: String,
+    pub message: Option<String>,
+    pub updated_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LifecycleEntry {
+    pub event_id: String,
+    pub event_type: String,
+    pub event_time_unix_nanos: u64,
+    pub record_kind: Option<String>,
+    pub record_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReferenceLatestSnapshot {
+    pub actor_id: String,
+    pub workspace_id: String,
+    pub launch_id: Option<String>,
+    pub instance_id: Option<String>,
+    pub generation: u64,
+    pub event_sequence: u64,
+    pub entities: Vec<Entity>,
+    pub assets: Vec<Asset>,
+    pub instruments: Vec<Instrument>,
+    pub listings: Vec<Listing>,
+    pub markets: Vec<Market>,
+    pub financial_products: Vec<FinancialProduct>,
+    pub execution_accesses: Vec<ExecutionAccess>,
+    pub market_data_accesses: Vec<MarketDataAccess>,
+    pub provider_health: Vec<ProviderHealthState>,
+    pub option_underlyings: Vec<String>,
+    pub lifecycle_events: Vec<LifecycleEntry>,
+}

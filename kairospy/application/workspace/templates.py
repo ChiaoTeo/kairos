@@ -182,6 +182,13 @@ ref = "demo-paper"
 [execution]
 dry_run = true
 
+[[execution.routes]]
+route_id = "demo-paper-spot"
+account_id = "demo-paper"
+segment_key = "spot"
+participant_id = "simulated"
+product = "spot"
+
 [backtest]
 data_root = "data"
 storage_format = "jsonl"

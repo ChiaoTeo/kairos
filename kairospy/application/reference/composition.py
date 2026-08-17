@@ -12,5 +12,5 @@ def build_strategy_access(workspace: Workspace) -> ReferenceApplication:
     """Build Reference read access for one Strategy process."""
 
     return ReferenceApplication(
-        ReferenceClient(database_path=workspace.paths.reference_database())
+        ReferenceClient(view_root=workspace.paths.child("snapshots", "v2"))
     )

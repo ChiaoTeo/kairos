@@ -13,7 +13,9 @@ use kairos_reference::composition::{
 };
 use kairos_reference::domain::{Asset, Instrument, Listing};
 use kairos_reference::{CashDividendDatasetRequest, OptionContractSnapshotRequest};
-use kairos_reference_contract::{ReferenceCollection, ReferenceSqliteReader, SqliteMarketQuery};
+use kairos_reference_contract::{
+    decode_reference_latest, ReferenceLatestSnapshot, ReferenceViewKey, ReferenceViewReader,
+};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
@@ -25,6 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let workspace = Workspace::open(&args.workspace)?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
+    let view_root = workspace.child(&["snapshots", "v2"])?;
     ensure_database_parent(&database)?;
     let output = args.output.unwrap_or_else(|| {
         workspace
@@ -43,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if !args.command.requires_publication() {
-        let value = execute_read(&database, args.command)?;
+        let value = execute_read(&view_root, args.command)?;
         println!("{}", render(&value, output));
         return Ok(());
     }
@@ -67,33 +70,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn execute_read(
-    database: &std::path::Path,
+    view_root: &std::path::Path,
     command: Command,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let reader = ReferenceSqliteReader::open(database)?;
-    let watermark = reader.watermark()?;
+    let reader = ReferenceViewReader::open(view_root, ReferenceViewKey::latest("reference-actor"))?;
+    let frame = reader.read()?;
+    let published_at_unix_nanos = frame.envelope_metadata().published_at_unix_nanos;
+    let snapshot = decode_reference_latest(&frame)?;
     let value = match command {
         Command::Status | Command::Snapshot => json!({
             "status": "ready",
-            "generation": watermark.generation,
-            "event_sequence": watermark.event_sequence,
-            "committed_at_unix_nanos": watermark.committed_at_unix_nanos,
-            "counts": reader.stats()?,
-            "note": "full catalog snapshots are retired; use bounded query commands",
+            "generation": snapshot.generation,
+            "event_sequence": snapshot.event_sequence,
+            "published_at_unix_nanos": published_at_unix_nanos,
+            "counts": snapshot_counts(&snapshot),
+            "note": "business queries are served by the typed Reference mmap view",
         }),
         Command::Assets { command } => match command {
             AssetCommand::List(args) => {
-                let mut values = reader.records(ReferenceCollection::Assets, args.limit)?;
+                let mut values = json_records(&snapshot.assets)?;
                 values.retain(|value| {
                     matches_json(value, args.query.as_deref())
                         && matches_field(value, "status", args.status.as_deref())
                         && (!args.active_only
                             || value.get("status").and_then(Value::as_str) == Some("active"))
                 });
+                values.truncate(args.limit);
                 json!(values)
             }
-            AssetCommand::Show { asset_id } => reader
-                .record(&asset_id)?
+            AssetCommand::Show { asset_id } => find_record(&snapshot, &asset_id)?
                 .ok_or_else(|| format!("unknown asset identifier: {asset_id}"))?,
             AssetCommand::Add(_) => unreachable!("write command routed to the application"),
         },
@@ -103,7 +108,7 @@ fn execute_read(
                 ParticipantCommand::Exchanges => "exchange",
                 ParticipantCommand::Providers => "data_provider",
             };
-            let mut values = reader.records(ReferenceCollection::Entities, 10_000)?;
+            let mut values = json_records(&snapshot.entities)?;
             values.retain(|value| {
                 value.get("entity_type").and_then(Value::as_str) == Some(entity_type)
             });
@@ -115,11 +120,37 @@ fn execute_read(
                 MarketCommand::Resolve(args) => (args, true),
             };
             let market_id = args.market_id.clone();
-            let values = if let Some(market_id) = market_id {
-                reader.market(&market_id)?.into_iter().collect::<Vec<_>>()
-            } else {
-                reader.markets(&args.into_sqlite_query())?
-            };
+            let limit = args.limit.unwrap_or(256);
+            let mut values = json_records(&snapshot.markets)?;
+            values.retain(|value| {
+                market_id.as_deref().is_none_or(|expected| {
+                    value.get("market_id").and_then(Value::as_str) == Some(expected)
+                }) && args.symbol.as_deref().is_none_or(|expected| {
+                    value.get("source_symbol").and_then(Value::as_str) == Some(expected)
+                }) && args
+                    .exchange_id
+                    .as_deref()
+                    .or(args.exchange.as_deref())
+                    .is_none_or(|expected| {
+                        value.get("exchange_id").and_then(Value::as_str) == Some(expected)
+                    })
+                    && args
+                        .market_type
+                        .as_deref()
+                        .or(args.market.as_deref())
+                        .is_none_or(|expected| {
+                            value.get("market_type").and_then(Value::as_str) == Some(expected)
+                        })
+                    && args.asset_type.as_deref().is_none_or(|expected| {
+                        value.get("asset_type").and_then(Value::as_str) == Some(expected)
+                    })
+                    && args.status.as_deref().is_none_or(|expected| {
+                        value.get("status").and_then(Value::as_str) == Some(expected)
+                    })
+                    && (!args.active_only
+                        || value.get("status").and_then(Value::as_str) == Some("active"))
+            });
+            values.truncate(limit);
             if resolve {
                 match values.as_slice() {
                     [market] => json!(market),
@@ -134,30 +165,31 @@ fn execute_read(
             debug_assert!(args.action.is_none());
             let query = args.query;
             let from = query.sequence_from.unwrap_or(1).saturating_sub(1);
-            let mut events = reader.changes_after(from, query.limit.unwrap_or(256))?;
+            let mut events = json_records(&snapshot.lifecycle_events)?;
             events.retain(|event| {
-                query.sequence_to.is_none_or(|to| {
-                    event
-                        .get("event_id")
-                        .and_then(Value::as_str)
-                        .and_then(|value| value.rsplit(':').next())
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .is_some_and(|sequence| sequence <= to)
-                })
+                let sequence = event
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.rsplit(':').next())
+                    .and_then(|value| value.parse::<u64>().ok());
+                sequence.is_some_and(|sequence| sequence > from)
+                    && query
+                        .sequence_to
+                        .is_none_or(|to| sequence.is_some_and(|sequence| sequence <= to))
             });
+            events.truncate(query.limit.unwrap_or(256));
             json!(events)
         }
-        Command::Query(args) => read_query(&reader, args.kind(), args.into_query())?,
+        Command::Query(args) => read_query(&snapshot, args.kind(), args.into_query())?,
         Command::Search(args) => {
             let query = ReferenceQuery {
                 text: Some(args.text),
                 limit: Some(args.limit),
                 ..ReferenceQuery::default()
             };
-            read_query(&reader, ReferenceKind::All, query)?
+            read_query(&snapshot, ReferenceKind::All, query)?
         }
-        Command::Show { identifier } => reader
-            .record(&identifier)?
+        Command::Show { identifier } => find_record(&snapshot, &identifier)?
             .ok_or_else(|| format!("unknown reference identifier: {identifier}"))?,
         Command::Refresh
         | Command::Sync
@@ -173,40 +205,19 @@ fn execute_read(
 }
 
 fn read_query(
-    reader: &ReferenceSqliteReader,
+    snapshot: &ReferenceLatestSnapshot,
     kind: ReferenceKind,
     query: ReferenceQuery,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let collections: &[ReferenceCollection] = match kind {
-        ReferenceKind::Entity => &[ReferenceCollection::Entities],
-        ReferenceKind::Asset => &[ReferenceCollection::Assets],
-        ReferenceKind::Instrument => &[ReferenceCollection::Instruments],
-        ReferenceKind::Listing => &[ReferenceCollection::Listings],
-        ReferenceKind::Market => &[ReferenceCollection::Markets],
-        ReferenceKind::FinancialProduct => &[ReferenceCollection::FinancialProducts],
-        ReferenceKind::ExecutionAccess => &[ReferenceCollection::ExecutionAccesses],
-        ReferenceKind::MarketDataAccess => &[ReferenceCollection::MarketDataAccesses],
-        ReferenceKind::Event => &[ReferenceCollection::LifecycleEvents],
-        ReferenceKind::All => &[
-            ReferenceCollection::Entities,
-            ReferenceCollection::Assets,
-            ReferenceCollection::Instruments,
-            ReferenceCollection::Listings,
-            ReferenceCollection::Markets,
-            ReferenceCollection::FinancialProducts,
-            ReferenceCollection::ExecutionAccesses,
-            ReferenceCollection::MarketDataAccesses,
-            ReferenceCollection::LifecycleEvents,
-        ],
-    };
+    let collections = snapshot_collections(snapshot, kind)?;
     let limit = query.limit.unwrap_or(256).clamp(1, 10_000);
     let mut values = Vec::new();
-    for collection in collections {
+    for records in collections {
         let remaining = limit.saturating_sub(values.len());
         if remaining == 0 {
             break;
         }
-        let mut records = reader.records(*collection, remaining)?;
+        let mut records = records;
         records.retain(|value| {
             matches_json(value, query.text.as_deref())
                 && matches_field(value, "status", query.status.as_deref())
@@ -228,6 +239,72 @@ fn read_query(
     }
     values.truncate(limit);
     Ok(json!(values))
+}
+
+fn snapshot_collections(
+    snapshot: &ReferenceLatestSnapshot,
+    kind: ReferenceKind,
+) -> Result<Vec<Vec<Value>>, serde_json::Error> {
+    let mut all = Vec::new();
+    macro_rules! include {
+        ($variant:ident, $field:ident) => {
+            if matches!(kind, ReferenceKind::$variant | ReferenceKind::All) {
+                all.push(json_records(&snapshot.$field)?);
+            }
+        };
+    }
+    include!(Entity, entities);
+    include!(Asset, assets);
+    include!(Instrument, instruments);
+    include!(Listing, listings);
+    include!(Market, markets);
+    include!(FinancialProduct, financial_products);
+    include!(ExecutionAccess, execution_accesses);
+    include!(MarketDataAccess, market_data_accesses);
+    include!(Event, lifecycle_events);
+    Ok(all)
+}
+
+fn json_records<T: serde::Serialize>(records: &[T]) -> Result<Vec<Value>, serde_json::Error> {
+    records.iter().map(serde_json::to_value).collect()
+}
+
+fn find_record(
+    snapshot: &ReferenceLatestSnapshot,
+    identifier: &str,
+) -> Result<Option<Value>, serde_json::Error> {
+    Ok(snapshot_collections(snapshot, ReferenceKind::All)?
+        .into_iter()
+        .flatten()
+        .find(|value| {
+            [
+                "entity_id",
+                "asset_id",
+                "instrument_id",
+                "listing_id",
+                "market_id",
+                "product_id",
+                "access_id",
+                "event_id",
+            ]
+            .into_iter()
+            .any(|field| value.get(field).and_then(Value::as_str) == Some(identifier))
+        }))
+}
+
+fn snapshot_counts(snapshot: &ReferenceLatestSnapshot) -> Value {
+    json!({
+        "entities": snapshot.entities.len(),
+        "assets": snapshot.assets.len(),
+        "instruments": snapshot.instruments.len(),
+        "listings": snapshot.listings.len(),
+        "markets": snapshot.markets.len(),
+        "financial_products": snapshot.financial_products.len(),
+        "execution_accesses": snapshot.execution_accesses.len(),
+        "market_data_accesses": snapshot.market_data_accesses.len(),
+        "provider_health": snapshot.provider_health.len(),
+        "lifecycle_events": snapshot.lifecycle_events.len(),
+    })
 }
 
 fn matches_json(value: &Value, text: Option<&str>) -> bool {
@@ -538,24 +615,6 @@ async fn assets(
         }
         AssetCommand::List(_) | AssetCommand::Show { .. } => {
             unreachable!("read command routed to SQLite")
-        }
-    }
-}
-
-impl MarketQueryArgs {
-    fn into_sqlite_query(self) -> SqliteMarketQuery {
-        let mut statuses = self.status.into_iter().collect::<Vec<_>>();
-        if self.active_only && statuses.is_empty() {
-            statuses.push("active".into());
-        }
-        SqliteMarketQuery {
-            source_symbol: self.symbol,
-            exchange_id: self.exchange_id.or(self.exchange),
-            market_type: self.market_type.or(self.market),
-            asset_type: self.asset_type,
-            statuses,
-            limit: self.limit.unwrap_or(256),
-            ..SqliteMarketQuery::default()
         }
     }
 }

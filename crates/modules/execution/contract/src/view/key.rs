@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 pub enum ExecutionViewKind {
     ActiveOrders,
     ActiveIntents,
+    CurrentExecution,
 }
 impl ExecutionViewKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ActiveOrders => "active-orders",
             Self::ActiveIntents => "active-intents",
+            Self::CurrentExecution => "current-execution",
         }
     }
 }

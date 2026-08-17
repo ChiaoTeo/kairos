@@ -174,10 +174,6 @@ impl AccountPersistenceWorker {
             .and_then(|mut error| error.take())
     }
 
-    pub(crate) fn queue_depth(&self) -> usize {
-        self.pending.load(Ordering::Relaxed)
-    }
-
     pub(crate) fn checkpoint(
         &self,
         actor_id: String,

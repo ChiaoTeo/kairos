@@ -21,7 +21,7 @@ def main() -> int:
     workspace = WorkspaceApplication().open(args.workspace)
     socket = workspace.paths.launch_socket(args.mode, args.launch_id, args.instance_id)
     method = "GET" if args.command == "status" else "POST"
-    path = "/v1/status" if args.command == "status" else f"/v1/{args.command}"
+    path = "/v1/health" if args.command == "status" else f"/v1/{args.command}"
     value = asyncio.run(UnixRestClient(socket).request(method, path))
     import json
 

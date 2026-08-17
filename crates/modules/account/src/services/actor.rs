@@ -270,21 +270,11 @@ impl AccountActor {
             .map(AccountProjection::from_account)
     }
 
-    pub fn query(&self, account_id: &str, segments: &[String]) -> Vec<AccountProjection> {
-        self.accounts
-            .values()
-            .filter(|account| {
-                account.segment().identity.account_id == account_id
-                    && segment_selected(segments, &account.segment().segment_key)
-            })
-            .map(AccountProjection::from_account)
-            .collect()
-    }
-
     pub fn snapshot(&self) -> AccountsSnapshot {
         AccountsSnapshot {
             actor_id: kairos_primitives::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
+            event_sequence: self.event_sequence,
             accounts: self
                 .accounts
                 .values()

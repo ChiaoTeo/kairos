@@ -64,7 +64,7 @@ class LaunchControlApplication:
                 "registry_consistent": registered is None
                 or registered.get("state") in {"stopped", "failed", "created"},
             }
-        value = self.request(target, "GET", "/v1/status")
+        value = self.request(target, "GET", "/v1/health")
         value["registry_state"] = registered.get("state") if registered else None
         value["registry_consistent"] = registered is None or registered.get(
             "state"

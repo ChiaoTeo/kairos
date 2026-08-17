@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn reference_catalog_golden_fixture_matches_rust_domain_contract() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../tests/fixtures/reference_catalog_empty.json");
+            .join("../../../tests/fixtures/reference_catalog_empty.json");
         let payload = std::fs::read_to_string(path).unwrap();
         let catalog: ReferenceCatalog = serde_json::from_str(&payload).unwrap();
         assert_eq!(catalog, ReferenceCatalog::default());

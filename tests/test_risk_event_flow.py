@@ -19,10 +19,9 @@ class FiniteRiskSource:
     def __init__(self, records: list[RiskEventRecord]) -> None:
         self.records = records
 
-    async def events(self, after_sequence: int = 0):
+    async def subscribe_live(self):
         for record in self.records:
-            if record.sequence > after_sequence:
-                yield record
+            yield record
 
 
 class LiveRiskSource(FiniteRiskSource):
@@ -71,7 +70,7 @@ def test_risk_application_maps_and_filters_aeron_business_events() -> None:
     assert events[0].metadata.sequence == 3
 
 
-def test_risk_application_rejects_event_gaps_without_reading_snapshot() -> None:
+def test_risk_application_uses_first_live_event_as_attach_baseline() -> None:
     application = RiskApplication(
         None,
         FiniteRiskSource([record(2, account="main", strategy="strategy-1")]),
@@ -82,12 +81,9 @@ def test_risk_application_rejects_event_gaps_without_reading_snapshot() -> None:
     async def collect():
         return [event async for event in application.events()]
 
-    try:
-        asyncio.run(collect())
-    except RuntimeError as error:
-        assert "not contiguous" in str(error)
-    else:
-        raise AssertionError("Risk event gaps must fail explicitly")
+    events = asyncio.run(collect())
+
+    assert [event.metadata.sequence for event in events] == [2]
 
 
 def test_risk_application_maps_decisions_and_global_circuit_changes() -> None:

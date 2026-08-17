@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.application.system.binaries import resolve_binary
 from kairospy.infrastructure.contracts.execution import ExecutionProjection
 from kairospy.infrastructure.transport.commands import (
     ExecutionCommandClient,
@@ -52,7 +51,6 @@ def build_strategy_access(
         projection,
         AeronExecutionEventSource(
             aeron_dir=instance.paths.aeron_dir(),
-            binary=resolve_binary("kairos-execution-event-bridge"),
         ),
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

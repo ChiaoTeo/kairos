@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::join_all;
-use kairos_primitives::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
 use kairos_integration::application::capabilities::reference::{
     AsyncInstrumentCatalogConnection, ExternalInstrument, ExternalInstrumentCatalog,
     ExternalInstrumentKind,
@@ -24,6 +23,7 @@ use kairos_integration::participants::massive::{
 use kairos_integration::participants::okx::{
     InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig,
 };
+use kairos_primitives::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
 
 use super::store::ProviderSyncStore;
 use crate::domain::{
@@ -2514,9 +2514,8 @@ fn binance_equity_provider_catalog(
         let status: kairos_primitives::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
         let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{symbol}"))?;
-        let instrument_id = kairos_primitives::InstrumentId::new(format!(
-            "instrument:equity:US:{symbol}:common"
-        ))?;
+        let instrument_id =
+            kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{symbol}:common"))?;
         let listing_id =
             kairos_primitives::ListingId::new(format!("listing:binance:equity:{symbol}"))?;
         let market_id =
@@ -2758,9 +2757,9 @@ fn append_binance_instrument(
                         instrument_id: underlying.clone(),
                         symbol: kairos_primitives::Symbol::new(base.clone())?,
                         instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(
-                            format!("asset:crypto:{base}"),
-                        )?),
+                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+                            "asset:crypto:{base}"
+                        ))?),
                         status: "active".into(),
                         ..Instrument::default()
                     });
@@ -2979,9 +2978,9 @@ fn append_okx_instrument(
                         instrument_id: underlying.clone(),
                         symbol: kairos_primitives::Symbol::new(base.clone())?,
                         instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(
-                            format!("asset:crypto:{base}"),
-                        )?),
+                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+                            "asset:crypto:{base}"
+                        ))?),
                         status: "active".into(),
                         ..Instrument::default()
                     });
@@ -3195,9 +3194,7 @@ fn populate_execution_accesses(
             broker_id: None,
             provider_id: provider_id.clone(),
             provider_product: market.market_type.clone(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new(
-                market.source_symbol.as_str(),
-            )?,
+            provider_symbol: kairos_primitives::ProviderSymbol::new(market.source_symbol.as_str())?,
             settlement_asset_id: None,
             status: market.status,
             effective_from_unix_nanos: market.effective_from_unix_nanos,
@@ -3273,9 +3270,6 @@ mod tests {
     use crate::services::actor::ReferenceActor;
     use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::services::store::ProviderSyncStore;
-    use kairos_primitives::{
-        AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, ProviderSymbol, Symbol,
-    };
     use kairos_integration::application::capabilities::reference::{
         ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
     };
@@ -3283,6 +3277,9 @@ mod tests {
     use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
     use kairos_integration::participants::hyperliquid::HyperliquidInstrumentProduct;
     use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
+    use kairos_primitives::{
+        AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, ProviderSymbol, Symbol,
+    };
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,

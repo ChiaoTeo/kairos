@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from kairospy.application.workspace import InstanceWorkspace, Workspace
-from kairospy.application.system.binaries import resolve_binary
 from kairospy.infrastructure.transport.commands import (
     MarketCommandClient,
     UnixJsonCommandClient,
@@ -75,7 +74,6 @@ def build_strategy_access(
         if config.replayable
         else AeronMarketEventSource(
             aeron_dir=workspace.paths.aeron_dir(),
-            binary=resolve_binary("kairos-market-event-bridge"),
         )
     )
     application = MarketApplication(

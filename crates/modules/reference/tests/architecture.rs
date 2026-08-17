@@ -42,3 +42,45 @@ fn reference_domain_classification_is_not_unconstrained_text() {
     assert!(entities.contains("market_type: ProviderProductCode"));
     assert!(entities.contains("provider_product: ProviderProductCode"));
 }
+
+#[test]
+fn reference_rest_exposes_health_as_its_only_get_query() {
+    let server = source("src/bin/kairos-reference-server.rs");
+    assert!(server.contains("method == \"GET\" && path != control::HEALTH"));
+    assert!(
+        server.contains("Reference business queries are available only through typed mmap views")
+    );
+    assert!(server.contains("path == control::HEALTH && method != \"GET\""));
+    let health = server
+        .split("fn health_json(application")
+        .nth(1)
+        .expect("Reference health functions")
+        .split("fn reference_status")
+        .next()
+        .expect("Reference health bodies");
+    for forbidden in [
+        "actor_id",
+        "generation",
+        "event_sequence",
+        "market_count",
+        "outbox_depth",
+        "control_queue_depth",
+        "last_attempt_unix_nanos",
+        "last_success_unix_nanos",
+        "consecutive_failures",
+    ] {
+        assert!(
+            !health.contains(forbidden),
+            "Reference health leaks {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn reference_publishes_a_typed_mmap_current_view() {
+    let composition = source("src/composition/mod.rs");
+    let server = source("src/bin/kairos-reference-server.rs");
+    assert!(composition.contains("MmapReferenceLatestPublisher"));
+    assert!(server.contains("ReferenceCurrentViewPublisher::create"));
+    assert!(server.contains("current_view_publisher.publish"));
+}

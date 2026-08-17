@@ -64,8 +64,58 @@ class ActiveOrdersView(object):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         return o == 0
 
+    # ActiveOrdersView
+    def Commitments(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.execution.v2.OrderCommitmentState import OrderCommitmentState
+            obj = OrderCommitmentState()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # ActiveOrdersView
+    def CommitmentsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # ActiveOrdersView
+    def CommitmentsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
+        return o == 0
+
+    # ActiveOrdersView
+    def RiskReservations(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.execution.v2.RiskReservationSagaState import RiskReservationSagaState
+            obj = RiskReservationSagaState()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # ActiveOrdersView
+    def RiskReservationsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # ActiveOrdersView
+    def RiskReservationsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        return o == 0
+
 def ActiveOrdersViewStart(builder):
-    builder.StartObject(2)
+    builder.StartObject(4)
 
 def Start(builder):
     ActiveOrdersViewStart(builder)
@@ -87,6 +137,30 @@ def ActiveOrdersViewStartOrdersVector(builder, numElems):
 
 def StartOrdersVector(builder, numElems):
     return ActiveOrdersViewStartOrdersVector(builder, numElems)
+
+def ActiveOrdersViewAddCommitments(builder, commitments):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(commitments), 0)
+
+def AddCommitments(builder, commitments):
+    ActiveOrdersViewAddCommitments(builder, commitments)
+
+def ActiveOrdersViewStartCommitmentsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartCommitmentsVector(builder, numElems):
+    return ActiveOrdersViewStartCommitmentsVector(builder, numElems)
+
+def ActiveOrdersViewAddRiskReservations(builder, riskReservations):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(riskReservations), 0)
+
+def AddRiskReservations(builder, riskReservations):
+    ActiveOrdersViewAddRiskReservations(builder, riskReservations)
+
+def ActiveOrdersViewStartRiskReservationsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartRiskReservationsVector(builder, numElems):
+    return ActiveOrdersViewStartRiskReservationsVector(builder, numElems)
 
 def ActiveOrdersViewEnd(builder):
     return builder.EndObject()

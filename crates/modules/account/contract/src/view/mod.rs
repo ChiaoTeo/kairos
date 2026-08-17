@@ -3,25 +3,30 @@ mod key;
 mod metadata;
 mod observed_orders;
 
-pub use account_current::AccountCurrentView;
+pub use account_current::{decode as decode_account_current, AccountCurrentView};
 pub use key::{AccountViewKey, AccountViewKind};
 pub use metadata::ViewMetadata;
 pub use observed_orders::ObservedOrdersCurrentView;
 
 use crate::{ContractError, ContractResult};
-use kairos_transport::SharedSnapshotWriter;
+use kairos_transport::{
+    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
+};
 use std::path::Path;
 
 pub struct ViewFrame {
-    generation: u64,
+    metadata: SnapshotEnvelopeMetadata,
     bytes: Vec<u8>,
 }
 impl ViewFrame {
-    pub(crate) fn new(generation: u64, bytes: Vec<u8>) -> Self {
-        Self { generation, bytes }
+    pub(crate) fn new(metadata: SnapshotEnvelopeMetadata, bytes: Vec<u8>) -> Self {
+        Self { metadata, bytes }
     }
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.metadata.generation
+    }
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.metadata
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -36,26 +41,38 @@ impl ViewFrame {
 
 pub struct AccountViewReader {
     key: AccountViewKey,
-    reader: crate::transport::AccountMmapReader,
+    reader: SharedSnapshotReader,
 }
 impl AccountViewReader {
     pub fn open(root: impl AsRef<Path>, key: AccountViewKey) -> ContractResult<Self> {
-        Ok(Self {
-            key: key.clone(),
-            reader: crate::transport::AccountMmapReader::open(root, key)?,
-        })
+        let reader = SharedSnapshotReader::open(key.resource_path(root))
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(Self { key, reader })
     }
     pub fn key(&self) -> &AccountViewKey {
         &self.key
     }
     pub fn read(&self) -> ContractResult<ViewFrame> {
-        self.reader.read()
+        let frame = self
+            .reader
+            .read_payload()
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(ViewFrame::new(
+            SnapshotEnvelopeMetadata {
+                resource_epoch: frame.resource_epoch,
+                producer_incarnation: frame.producer_incarnation,
+                generation: frame.generation,
+                applied_event_sequence: frame.applied_event_sequence,
+                published_at_unix_nanos: frame.published_at_unix_nanos,
+            },
+            frame.payload,
+        ))
     }
 }
 
 pub struct AccountViewPublisher {
     key: AccountViewKey,
-    writer: SharedSnapshotWriter,
+    writer: ReplacementSnapshotStorage,
 }
 impl AccountViewPublisher {
     pub fn create(
@@ -63,16 +80,21 @@ impl AccountViewPublisher {
         key: AccountViewKey,
         slot_size: usize,
     ) -> ContractResult<Self> {
-        let writer = SharedSnapshotWriter::create(key.resource_path(root), slot_size)
+        let writer = ReplacementSnapshotStorage::create(key.resource_path(root), slot_size)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, writer })
     }
     pub fn key(&self) -> &AccountViewKey {
         &self.key
     }
-    pub fn publish(&mut self, generation: u64, payload: &[u8]) -> ContractResult<()> {
+    pub fn publish(
+        &mut self,
+        metadata: SnapshotEnvelopeMetadata,
+        payload: &[u8],
+    ) -> ContractResult<()> {
         self.writer
-            .publish(generation, payload)
+            .publish(metadata, payload)
+            .map(|_| ())
             .map_err(|error| ContractError::Transport(error.to_string()))
     }
 }

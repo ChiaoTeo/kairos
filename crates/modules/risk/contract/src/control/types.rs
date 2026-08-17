@@ -317,6 +317,7 @@ pub struct RiskDecision {
 pub struct RiskCurrentView {
     pub actor_id: String,
     pub generation: u64,
+    pub event_sequence: u64,
     pub policy_version: u64,
     pub limits: Vec<LimitView>,
     pub reservations: Vec<Reservation>,

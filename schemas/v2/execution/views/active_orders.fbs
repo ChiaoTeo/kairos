@@ -6,6 +6,8 @@ namespace kairos.execution.v2;
 table ActiveOrdersView {
   metadata:kairos.common.v2.ViewMetadata (required);
   orders:[OrderState] (required);
+  commitments:[OrderCommitmentState] (required);
+  risk_reservations:[RiskReservationSagaState] (required);
 }
 
 root_type ActiveOrdersView;

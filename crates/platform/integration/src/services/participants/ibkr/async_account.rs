@@ -295,10 +295,8 @@ fn partial_event(
                         return Ok(None);
                     };
                     snapshot.balances.push(ExternalBalance {
-                        asset_id: kairos_primitives::AssetId::new(format!(
-                            "asset:fiat:{currency}"
-                        ))
-                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+                        asset_id: kairos_primitives::AssetId::new(format!("asset:fiat:{currency}"))
+                            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                         asset_code: kairos_primitives::Currency::new(currency)
                             .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                         total,

@@ -10,7 +10,8 @@ use kairos_reference::application::control;
 use kairos_reference::application::ReferenceReadModel;
 use kairos_reference::composition::{
     build_application, ensure_database_parent, ComposedReferenceApplication,
-    ReferenceCompositionConfig, ReferenceEventWriter, ReferenceEventWriterConfig,
+    ReferenceCompositionConfig, ReferenceCurrentViewPublisher, ReferenceEventWriter,
+    ReferenceEventWriterConfig,
 };
 use kairos_reference::domain::{Asset, Instrument, Listing};
 use kairos_workspace::workspace::Workspace;
@@ -95,9 +96,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let composition = build_application(&config, true).await?;
     let mut application = composition.application;
     let mut event_writer = composition.event_writer;
+    let reference_view_root = workspace.child(&["snapshots", "v2"])?;
+    let reference_identity = kairos_protocol::InstanceIdentity::new(workspace.id(), "", "");
+    let mut current_view_publisher = ReferenceCurrentViewPublisher::create(
+        &reference_view_root,
+        32 * 1024 * 1024,
+        application.actor_id(),
+        reference_identity,
+    )?;
 
     if args.run_mode == "once" {
         let refresh = application.refresh().await?;
+        current_view_publisher.publish(&application.current_view().await?)?;
         if let Some(writer) = event_writer.as_mut() {
             loop {
                 let events = application.pending_events(EVENT_BATCH_LIMIT).await?;
@@ -160,6 +170,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         health_file,
         args.refresh_interval,
         true,
+        current_view_publisher,
     )
     .await
 }
@@ -171,6 +182,7 @@ async fn run_process(
     health_file: Option<PathBuf>,
     refresh_interval: Duration,
     initial_refresh: bool,
+    mut current_view_publisher: ReferenceCurrentViewPublisher,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event_publisher = event_writer_config.map(EventPublisherRuntime::new);
     tracing::info!(event = "process_starting", component = "reference", socket = %socket.display(), refresh_interval_secs = refresh_interval.as_secs(), "reference process starting");
@@ -231,6 +243,7 @@ async fn run_process(
             }
         };
         *read_model.write().await = application.read_model().await;
+        current_view_publisher.publish(&application.current_view().await?)?;
         *health_status.write().await = status.to_owned();
         write_health(&health_file, &application, status).await?;
     }
@@ -247,7 +260,7 @@ async fn run_process(
         tokio::select! {
             Some(request) = receiver.recv() => {
                 control_queue_depth.fetch_sub(1, Ordering::Relaxed);
-                let response = handle_request(&mut application, event_publisher.as_ref(), &request.target, &String::from_utf8_lossy(&request.body)).await;
+                let response = handle_request(&mut application, event_publisher.as_ref(), &request.method, &request.target, &String::from_utf8_lossy(&request.body)).await;
                 if let Ok((should_stop, status, payload)) = &response {
                     stopping = *should_stop;
                     let _ = request.response.send(Ok((*should_stop, *status, payload.clone())));
@@ -261,6 +274,10 @@ async fn run_process(
                     let _ = request.response.send(response.map_err(|error| error.to_string()));
                 }
                 *read_model.write().await = application.read_model().await;
+                if let Err(error) = application.current_view().await.and_then(|view| current_view_publisher.publish(&view)) {
+                    tracing::error!(event = "snapshot_publish_failed", component = "reference", error = %error, "Reference typed mmap publication failed");
+                    *health_status.write().await = "degraded".into();
+                }
             }
             _ = interval.tick() => {
                 let refresh_started = Instant::now();
@@ -290,6 +307,10 @@ async fn run_process(
                     }
                 };
                 *read_model.write().await = application.read_model().await;
+                if let Err(error) = application.current_view().await.and_then(|view| current_view_publisher.publish(&view)) {
+                    tracing::error!(event = "snapshot_publish_failed", component = "reference", error = %error, "Reference typed mmap publication failed");
+                    *health_status.write().await = "degraded".into();
+                }
                 *health_status.write().await = status.to_owned();
                 write_health(&health_file, &application, status).await?;
             }
@@ -320,6 +341,7 @@ async fn run_process(
 }
 
 struct ReferenceHttpRequest {
+    method: String,
     target: String,
     body: Vec<u8>,
     response: oneshot::Sender<Result<(bool, u16, Value), String>>,
@@ -459,6 +481,7 @@ async fn reference_http_handler(
 }
 
 async fn reference_http_handler_inner(state: ReferenceServerState, request: Request) -> Response {
+    let method = request.method().as_str().to_owned();
     let target = request
         .uri()
         .path_and_query()
@@ -467,15 +490,24 @@ async fn reference_http_handler_inner(state: ReferenceServerState, request: Requ
     let path = target
         .split_once('?')
         .map_or(target.as_str(), |(path, _)| path);
+    if method == "GET" && path != control::HEALTH {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({"error":"Reference business queries are available only through typed mmap views"})),
+        )
+            .into_response();
+    }
+    if path == control::HEALTH && method != "GET" {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({"error":"/v1/health only accepts GET"})),
+        )
+            .into_response();
+    }
     if path == control::HEALTH {
         let model = state.read_model.read().await;
         let status = state.health_status.read().await;
-        return Json(health_json_read_model(
-            &model,
-            &status,
-            state.control_queue_depth.load(Ordering::Relaxed),
-        ))
-        .into_response();
+        return Json(health_json_read_model(&model, &status)).into_response();
     }
     let body = match to_bytes(
         request.into_body(),
@@ -494,6 +526,7 @@ async fn reference_http_handler_inner(state: ReferenceServerState, request: Requ
     };
     let (response_sender, response_receiver) = oneshot::channel();
     match state.sender.try_send(ReferenceHttpRequest {
+        method,
         target,
         body,
         response: response_sender,
@@ -538,43 +571,22 @@ async fn reference_http_handler_inner(state: ReferenceServerState, request: Requ
 async fn handle_request(
     application: &mut ComposedReferenceApplication,
     writer: Option<&EventPublisherRuntime>,
+    method: &str,
     target: &str,
     body: &str,
 ) -> Result<(bool, u16, Value), Box<dyn std::error::Error>> {
     let started = Instant::now();
     tracing::info!(event = "control_request", component = "reference", path = %target, "reference control request received");
     let path = target.split_once('?').map_or(target, |(path, _)| path);
+    if method != "POST" && path != control::HEALTH {
+        return Ok((
+            false,
+            StatusCode::METHOD_NOT_ALLOWED.as_u16(),
+            json!({"error":"Reference REST accepts only control commands"}),
+        ));
+    }
     let (status, body, stopping) = match path {
         control::HEALTH => (200, health_json(application, "ready"), false),
-        control::PROVIDERS => (
-            200,
-            json!({
-                "mode": application.source_id(),
-                "source_id": application.source_id(),
-                "providers": application.provider_health(),
-            }),
-            false,
-        ),
-        control::EVENTS => {
-            let sequence_from = query_u64(target, "sequence_from")?;
-            let sequence_to = query_u64(target, "sequence_to")?;
-            let limit = query_u64(target, "limit")?.unwrap_or(256).clamp(1, 4096) as usize;
-            match application
-                .lifecycle_events_page(sequence_from, sequence_to, limit)
-                .await
-            {
-                Ok(events) => (
-                    200,
-                    json!({
-                        "generation": application.generation().get(),
-                        "event_sequence": application.event_sequence().get(),
-                        "events": events,
-                    }),
-                    false,
-                ),
-                Err(error) => (503, json!({"error": error.to_string()}), false),
-            }
-        }
         control::REFRESH => match match query_value(target, "source") {
             Some(source_id) => application.refresh_source(source_id).await,
             None => application.refresh().await,
@@ -631,11 +643,6 @@ async fn handle_request(
                 Err(error) => (400, json!({"error": error.to_string()}), false),
             }
         }
-        control::OPTIONS_COVERAGE => (
-            200,
-            json!({"source_id": "massive-options", "underlyings": application.option_underlyings()}),
-            false,
-        ),
         control::OPTIONS_COVERAGE_ADD | control::OPTIONS_COVERAGE_REMOVE => {
             let Some(underlying) = query_value(target, "underlying") else {
                 return Err("underlying is required".into());
@@ -721,16 +728,6 @@ async fn handle_request(
     };
     tracing::info!(event = "control_response", component = "reference", path = %path, status, duration_ms = started.elapsed().as_millis(), "reference control response sent");
     Ok((stopping, status, body))
-}
-
-fn query_u64(target: &str, name: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
-    let Some(value) = query_value(target, name) else {
-        return Ok(None);
-    };
-    value
-        .parse::<u64>()
-        .map(Some)
-        .map_err(|error| format!("invalid {name}: {error}").into())
 }
 
 fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
@@ -831,34 +828,40 @@ const CONTROL_QUEUE_CAPACITY: usize = 64;
 const EVENT_PUBLISH_QUEUE_CAPACITY: usize = 8;
 
 fn health_json(application: &ComposedReferenceApplication, status: &str) -> Value {
+    let providers = application
+        .provider_health()
+        .into_iter()
+        .map(|provider| {
+            json!({
+                "source_id": provider.source_id,
+                "status": provider.status,
+                "stale": provider.stale,
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "status": status,
         "pid": std::process::id(),
-        "actor_id": application.actor_id(),
-        "source_id": application.source_id(),
-        "generation": application.generation().get(),
-        "event_sequence": application.event_sequence().get(),
-        "market_count": application.market_count(),
-        "providers": application.provider_health(),
+        "dependencies": { "providers": providers },
     })
 }
 
-fn health_json_read_model(
-    model: &ReferenceReadModel,
-    status: &str,
-    control_queue_depth: usize,
-) -> Value {
+fn health_json_read_model(model: &ReferenceReadModel, status: &str) -> Value {
+    let providers = model
+        .provider_health()
+        .iter()
+        .map(|provider| {
+            json!({
+                "source_id": provider.source_id,
+                "status": provider.status,
+                "stale": provider.stale,
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "status": status,
         "pid": std::process::id(),
-        "actor_id": model.actor_id(),
-        "source_id": model.source_id(),
-        "generation": model.generation().get(),
-        "event_sequence": model.event_sequence().get(),
-        "market_count": model.market_count(),
-        "providers": model.provider_health(),
-        "outbox_depth": model.outbox_depth(),
-        "control_queue_depth": control_queue_depth,
+        "dependencies": { "providers": providers },
     })
 }
 
@@ -951,7 +954,7 @@ struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_refresh_interval, query_u64, Args};
+    use super::{parse_refresh_interval, Args};
     use clap::Parser;
     use std::time::Duration;
 
@@ -970,16 +973,6 @@ mod tests {
             Duration::from_secs(30)
         );
         assert!(parse_refresh_interval("0s").is_err());
-    }
-
-    #[test]
-    fn lifecycle_query_reads_stable_sequence_bounds() {
-        let target = "/v1/events?sequence_from=41&sequence_to=50&limit=9";
-        assert_eq!(query_u64(target, "sequence_from").unwrap(), Some(41));
-        assert_eq!(query_u64(target, "sequence_to").unwrap(), Some(50));
-        assert_eq!(query_u64(target, "limit").unwrap(), Some(9));
-        assert_eq!(query_u64(target, "missing").unwrap(), None);
-        assert!(query_u64("/v1/events?limit=invalid", "limit").is_err());
     }
 
     #[test]

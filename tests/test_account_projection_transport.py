@@ -7,6 +7,7 @@ import flatbuffers
 
 from kairospy.domain_types import AccountId
 from kairospy.infrastructure.contracts.account import AccountProjection
+from kairospy.infrastructure.transport.native import native
 from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
     AccountCurrentView,
     AccountModel,
@@ -20,7 +21,7 @@ from kairospy.infrastructure.transport.generated.kairos.common.v2 import (
 )
 
 
-def _account_snapshot() -> bytes:
+def _account_snapshot(*, generation: int = 7, completeness: int = 1) -> bytes:
     builder = flatbuffers.Builder(2048)
 
     def account(segment: str) -> int:
@@ -62,10 +63,11 @@ def _account_snapshot() -> bytes:
     ViewMetadata.ViewMetadataAddResourceId(builder, resource_id)
     ViewMetadata.ViewMetadataAddViewKey(builder, view_key)
     ViewMetadata.ViewMetadataAddOwnerId(builder, owner)
-    ViewMetadata.ViewMetadataAddGeneration(builder, 7)
+    ViewMetadata.ViewMetadataAddGeneration(builder, generation)
     ViewMetadata.ViewMetadataAddAsOfUnixNanos(builder, 1_000)
     ViewMetadata.ViewMetadataAddPublishedAtUnixNanos(builder, 2_000)
-    ViewMetadata.ViewMetadataAddCompleteness(builder, ViewCompleteness.ViewCompleteness.COMPLETE)
+    ViewMetadata.ViewMetadataAddCompleteness(builder, completeness)
+    ViewMetadata.ViewMetadataAddAppliedRevision(builder, 11)
     metadata = ViewMetadata.ViewMetadataEnd(builder)
     AccountCurrentView.AccountCurrentViewStart(builder)
     AccountCurrentView.AccountCurrentViewAddMetadata(builder, metadata)
@@ -101,3 +103,47 @@ def test_one_account_mmap_decodes_every_segment_at_one_generation(
         "usd_m_futures",
     ]
     assert {value.generation for value in snapshot.segments} == {7}
+    assert snapshot.event_sequence == 11
+
+
+def test_account_projection_rejects_frame_metadata_generation_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "account-main.snapshot"
+    _write_shared_snapshot(path, _account_snapshot(generation=8))
+
+    try:
+        AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    except ValueError as error:
+        assert "generation disagree" in str(error)
+    else:
+        raise AssertionError("generation mismatch must fail closed")
+
+
+def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -> None:
+    path = tmp_path / "account-main.snapshot"
+    _write_shared_snapshot(path, _account_snapshot(completeness=2))
+    try:
+        AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    except ValueError as error:
+        assert "not complete" in str(error)
+    else:
+        raise AssertionError("partial Account view must fail closed")
+
+    path.write_bytes(b"not-a-shared-snapshot")
+    try:
+        AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    except native.CorruptSnapshotError as error:
+        assert error.code == "corrupt_snapshot"
+    else:
+        raise AssertionError("corrupt Account mmap must fail closed")
+
+
+def test_account_projection_reopens_after_publisher_restart(tmp_path: Path) -> None:
+    path = tmp_path / "account-main.snapshot"
+    _write_shared_snapshot(path, _account_snapshot())
+    first = AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    path.unlink()
+    _write_shared_snapshot(path, _account_snapshot())
+    second = AccountProjection(path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    assert second == first

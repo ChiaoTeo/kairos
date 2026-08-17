@@ -2,6 +2,8 @@
 pub enum ContractError {
     Invalid(String),
     Transport(String),
+    NotSent(String),
+    Indeterminate(String),
     Rejected(String),
     Unsupported(String),
 }
@@ -10,6 +12,8 @@ impl std::fmt::Display for ContractError {
         match self {
             Self::Invalid(v) => write!(f, "invalid Risk contract data: {v}"),
             Self::Transport(v) => write!(f, "Risk contract transport failed: {v}"),
+            Self::NotSent(v) => write!(f, "Risk command was not sent: {v}"),
+            Self::Indeterminate(v) => write!(f, "Risk command delivery is indeterminate: {v}"),
             Self::Rejected(v) => write!(f, "Risk command rejected: {v}"),
             Self::Unsupported(v) => write!(f, "unsupported Risk contract operation: {v}"),
         }

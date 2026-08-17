@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+
 from kairospy.application.system import (
     AccountSystemClient,
     ComponentControlApplication,
@@ -27,20 +29,16 @@ class RecordingAccountClient(AccountSystemClient):
         return {"status": "ok"}
 
 
-def test_account_system_client_owns_business_endpoint_mapping() -> None:
+def test_account_system_client_keeps_only_control_and_reconciliation_queries() -> None:
     client = RecordingAccountClient()
+    client.reconcile()
+    assert client.calls == [("POST", "/v1/reconcile", None)]
 
-    client.balances(
-        segments=["spot", "margin"], include_zero=True, page=2, page_size=50
-    )
 
-    assert client.calls == [
-        (
-            "GET",
-            "/v1/balances?segment=spot&segment=margin&include_zero=true&page=2&page_size=50",
-            None,
-        ),
-    ]
+def test_system_rest_client_rejects_business_get_queries() -> None:
+    client = AccountSystemClient(Path("/tmp/account.sock"))
+    with pytest.raises(ValueError, match="only REST query"):
+        client.request("GET", "/v1/orders")
 
 
 def test_execution_system_client_owns_intent_endpoint() -> None:

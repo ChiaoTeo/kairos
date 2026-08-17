@@ -8,6 +8,7 @@ import os
 import platform
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import zipfile
 from pathlib import Path
@@ -17,6 +18,7 @@ from setuptools import build_meta as _setuptools
 ROOT = Path(__file__).resolve().parent
 BINARIES = (
     "kairos-aeron-driver",
+    "kairos-aeron-bridge",
     "kairos-reference-server", "kairos-reference-cli",
     "kairos-market-server", "kairos-market-cli",
     "kairos-risk-server", "kairos-risk-cli",
@@ -102,8 +104,16 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
             info.external_attr = 0o100755 << 16
             files[name] = (data, info)
     wheel_text = files[wheel_metadata].decode()
+    tags = [line.removeprefix("Tag: ") for line in wheel_text.splitlines() if line.startswith("Tag: ")]
+    python_tag, abi_tag, _ = tags[0].split("-", 2)
+    # The extension is compiled with PyO3's abi3-py311 feature. setuptools on
+    # newer CPython versions may still report the build interpreter tag; make
+    # the wheel metadata reflect the actual limited ABI. Free-threaded builds
+    # deliberately retain their version-specific tag.
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        python_tag, abi_tag = "cp311", "abi3"
     wheel_text = "\n".join(
-        f"Tag: py3-none-{platform_tag}" if line.startswith("Tag: ") else line
+        f"Tag: {python_tag}-{abi_tag}-{platform_tag}" if line.startswith("Tag: ") else line
         for line in wheel_text.splitlines()
     ) + "\n"
     files[wheel_metadata] = wheel_text.encode()
@@ -124,7 +134,9 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
                 target.writestr(name, data)
     wheel_stem = wheel.stem
     distribution_version = wheel_stem.rsplit("-", 3)[0]
-    platform_wheel = wheel.with_name(f"{distribution_version}-py3-none-{platform_tag}.whl")
+    platform_wheel = wheel.with_name(
+        f"{distribution_version}-{python_tag}-{abi_tag}-{platform_tag}.whl"
+    )
     temporary.replace(platform_wheel)
     if platform_wheel != wheel:
         wheel.unlink()

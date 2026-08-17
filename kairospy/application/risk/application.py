@@ -51,7 +51,7 @@ class RiskApplication:
         if self._event_source is None:
             return
         cursor = self._event_cursor
-        async for record in self._event_source.events(after_sequence=cursor):
+        async for record in self._event_source.subscribe_live():
             typed = isinstance(
                 record,
                 (
@@ -74,9 +74,7 @@ class RiskApplication:
                     and record.instance_id != self._instance_id
                 ):
                     raise RuntimeError("Risk event belongs to another launch instance")
-            if cursor == 0 and bool(
-                getattr(self._event_source, "join_from_latest", False)
-            ):
+            if cursor == 0:
                 cursor = sequence - 1
             if sequence <= cursor:
                 continue

@@ -1,22 +1,21 @@
 use std::collections::BTreeMap;
 
 use kairos_primitives::{
-    Currency, DurationNanos, Generation, MarketId, OrderId, OrderSide, OrderStatus, RemoteOrderId,
+    BrokerId, Currency, DurationNanos, Generation, MarketId, OrderId, OrderStatus, RemoteOrderId,
     Sequence, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
 mod error;
-mod identity;
-mod market_profile;
 pub use error::AccountDomainError;
-pub use identity::{AccountId, AssetId, ExternalOrderId, FillId, InstrumentId, SegmentKey};
-pub use kairos_primitives::{Money, Price, Quantity, Rate, SignedQuantity};
-pub use market_profile::AccountMarketProfile;
+pub use kairos_primitives::{
+    AccountId, AssetId, FillId, InstrumentId, Money, OrderSide, Price, Quantity, Rate, SegmentKey,
+    SignedQuantity,
+};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ExternalAccountIdentity {
-    pub broker: String,
+    pub broker: BrokerId,
     pub account_id: AccountId,
 }
 
@@ -25,10 +24,15 @@ impl ExternalAccountIdentity {
         broker: impl Into<String>,
         account_id: impl Into<String>,
     ) -> Result<Self, AccountDomainError> {
-        let broker = broker.into();
-        if broker.trim().is_empty() {
-            return Err(AccountDomainError::Required { field: "broker" });
-        }
+        let broker = BrokerId::new(broker.into()).map_err(|error| match error {
+            kairos_primitives::DomainTypeError::Empty { .. } => {
+                AccountDomainError::Required { field: "broker" }
+            }
+            _ => AccountDomainError::Invalid {
+                field: "broker",
+                reason: "broker identity must be non-empty without surrounding whitespace",
+            },
+        })?;
         Ok(Self {
             broker,
             account_id: AccountId::new(account_id)?,
@@ -436,7 +440,7 @@ pub struct AccountFill {
     pub instrument_id: InstrumentId,
     pub quantity: Quantity,
     pub price: Price,
-    pub side: FillSide,
+    pub side: OrderSide,
     #[serde(default)]
     pub settlement_asset: Option<Currency>,
     #[serde(default)]
@@ -460,11 +464,9 @@ pub struct AccountObservedFill {
     pub instrument_id: InstrumentId,
     pub quantity: Quantity,
     pub price: Price,
-    pub side: FillSide,
+    pub side: OrderSide,
     pub occurred_at_unix_nanos: UnixNanos,
 }
-
-pub use kairos_primitives::OrderSide as FillSide;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountEvent {

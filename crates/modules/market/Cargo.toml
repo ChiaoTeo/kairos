@@ -47,7 +47,3 @@ path = "src/bin/kairos-market-server.rs"
 [[bin]]
 name = "kairos-market-cli"
 path = "src/bin/kairos-market-cli.rs"
-
-[[bin]]
-name = "kairos-market-event-bridge"
-path = "src/bin/kairos-market-event-bridge.rs"

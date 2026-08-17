@@ -37,7 +37,6 @@ impl ControlApi {
     pub fn router(self) -> Router {
         Router::new()
             .route("/v1/health", get(health))
-            .route("/v1/components/{component_id}", get(component))
             .route("/v1/components/{component_id}/commands", post(command))
             .with_state(self)
     }
@@ -47,13 +46,6 @@ impl ControlApi {
 struct HealthResponse {
     status: &'static str,
     component_id: String,
-    protocol: &'static str,
-}
-
-#[derive(Serialize)]
-struct ComponentResponse {
-    component_id: String,
-    state: &'static str,
     protocol: &'static str,
 }
 
@@ -83,26 +75,6 @@ async fn health(State(api): State<ControlApi>) -> Json<HealthResponse> {
         component_id: api.component_id.to_string(),
         protocol: CONTROL_API_VERSION,
     })
-}
-
-async fn component(
-    State(api): State<ControlApi>,
-    RoutePath(component_id): RoutePath<String>,
-) -> impl IntoResponse {
-    if component_id != api.component_id.as_ref() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "component not found"})),
-        );
-    }
-    (
-        StatusCode::OK,
-        Json(json!(ComponentResponse {
-            component_id,
-            state: "running",
-            protocol: CONTROL_API_VERSION,
-        })),
-    )
 }
 
 async fn command(
@@ -215,6 +187,12 @@ impl RestControlClient {
     }
 
     async fn request(&self, method: &str, path: &str, body: Option<&[u8]>) -> io::Result<Value> {
+        if method == "GET" && path != "/v1/health" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GET /v1/health is the only REST query; read state from typed mmap views",
+            ));
+        }
         let body = body.unwrap_or_default();
         let uri: Uri = UnixUri::new(&self.socket_path, path).into();
         let mut request = Request::builder()
@@ -304,6 +282,12 @@ mod tests {
         let client = RestControlClient::new(&socket);
         let health = client.health().await.expect("health response");
         assert_eq!(health["status"], "ok");
+
+        let error = client
+            .request_json("GET", "/v1/components/component:market", None)
+            .await
+            .expect_err("component state is not a REST query");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 
         let command = client
             .send_command("component:market", &ControlCommand::Pause { reason: None })

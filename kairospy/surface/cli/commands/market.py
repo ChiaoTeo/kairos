@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Sequence
@@ -13,6 +14,7 @@ import typer
 from kairospy.application.market.cli import MarketCliApplication
 from kairospy.application.system import ComponentProcessApplication
 from kairospy.application.workspace import Workspace, WorkspaceApplication
+from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.surface.cli.options import OutputFormat, render
 
 
@@ -25,12 +27,9 @@ Running-process commands:
   status, snapshot, refresh, recover, stop, subscribe, unsubscribe
 
 Snapshot views:
-  snapshot quote --symbol BTCUSDT --exchange binance --market-type spot
-  snapshot trade --symbol BTCUSDT --exchange binance --market-type spot
-  snapshot orderbook --symbol BTCUSDT --exchange binance --market-type spot --depth 10
-  snapshot bar --symbol BTCUSDT --exchange binance --market-type spot --timeframe 1m
-  snapshot greeks --symbol BTC-260925-145000-C --exchange binance --market-type options
-  snapshot chain --underlying SPY --exchange massive --market-type options
+  snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
+  snapshot bar --market-id market:binance:spot:BTCUSDT --source-id binance-spot --timeframe 1m
+  snapshot greeks --market-id market:binance:options:BTC-260925-145000-C --source-id binance-options
 
 Running-process controls belong to `kairos system`; workspace data commands
 belong to the workspace/data API.
@@ -99,129 +98,55 @@ def _run_control_command(arguments: Sequence[str], workspace: Path | None) -> No
     if arguments[0] == "snapshot":
         parser.add_argument(
             "kind",
-            nargs="?",
-            choices=["all", "quote", "trade", "orderbook", "bar", "greeks", "chain"],
-            default=None,
+            choices=["quote", "bar", "greeks"],
         )
+        parser.add_argument("--market-id")
+        parser.add_argument("--source-id", required=True)
         parser.add_argument("--symbol")
         parser.add_argument("--exchange", default="binance")
         parser.add_argument("--market-type", default="spot")
-        parser.add_argument("--depth", type=int, default=10)
         parser.add_argument("--timeframe", default=None)
-        parser.add_argument("--underlying")
     parsed = parser.parse_args(list(arguments[1:]))
     owner = WorkspaceApplication().open(workspace)
+    if arguments[0] == "snapshot":
+        value = _read_mmap_snapshot(owner, parsed, parser)
+        typer.echo(render(value, OutputFormat(parsed.output)))
+        return
     client = _market_client(owner)
     operation = getattr(client, arguments[0])
     value = operation()
-    if arguments[0] == "snapshot" and parsed.kind is not None:
-        if parsed.depth <= 0:
-            parser.error("--depth must be positive")
-        value = _select_snapshot(
-            value,
-            kind=parsed.kind,
-            symbol=parsed.symbol,
-            exchange=parsed.exchange,
-            market_type=parsed.market_type,
-            depth=parsed.depth,
-            timeframe=parsed.timeframe,
-            underlying=parsed.underlying,
-        )
     typer.echo(render(value, OutputFormat(parsed.output)))
 
 
-def _select_snapshot(
-    snapshot: dict[str, object],
-    *,
-    kind: str,
-    symbol: str | None,
-    exchange: str,
-    market_type: str,
-    depth: int,
-    timeframe: str | None,
-    underlying: str | None,
+def _read_mmap_snapshot(
+    owner: Workspace, parsed: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> dict[str, object]:
-    if kind == "chain":
-        if not underlying:
-            raise typer.BadParameter("snapshot chain requires --underlying")
-        target = f":{underlying.upper()}"
-        market_ids: set[str] = set()
-        subscriptions = snapshot.get("subscriptions", [])
-        if isinstance(subscriptions, list):
-            for subscription in subscriptions:
-                if not isinstance(subscription, dict):
-                    continue
-                members = subscription.get("members", {})
-                if not isinstance(members, dict):
-                    continue
-                for market_id, market in members.items():
-                    if not isinstance(market_id, str) or not isinstance(market, dict):
-                        continue
-                    underlying_id = str(market.get("underlying_instrument_id") or "")
-                    if underlying_id.upper().endswith(target):
-                        market_ids.add(market_id)
-        quotes: list[dict[str, object]] = []
-        views = snapshot.get("views", {})
-        if isinstance(views, dict):
-            for view_key, observation in views.items():
-                if not isinstance(view_key, str) or not view_key.endswith(".quote"):
-                    continue
-                if not isinstance(observation, dict):
-                    continue
-                item = next(iter(observation.values()), None)
-                if isinstance(item, dict) and item.get("market_id") in market_ids:
-                    quotes.append(item)
-        quotes.sort(key=lambda item: str(item.get("market_id", "")))
-        return {
-            "underlying": underlying.upper(),
-            "quotes": quotes,
-            "count": len(quotes),
-        }
-    if not symbol:
-        raise typer.BadParameter("snapshot business views require --symbol")
-    market_id = f"market:{exchange.lower()}:{market_type.lower()}:{symbol.upper()}"
-    result: dict[str, object] = {"market_id": market_id}
-
-    if kind in {"all", "quote", "trade", "bar", "greeks"}:
-        views = snapshot.get("views", {})
-        if isinstance(views, dict):
-            for view_key, observation in views.items():
-                if not isinstance(view_key, str):
-                    continue
-                if not isinstance(observation, dict):
-                    continue
-                item = next(iter(observation.values()), None)
-                if not isinstance(item, dict) or item.get("market_id") != market_id:
-                    continue
-                if view_key.endswith(".quote"):
-                    item_kind = "quote"
-                elif view_key.endswith(".trade"):
-                    item_kind = "trade"
-                elif view_key.endswith(".greek"):
-                    item_kind = "greeks"
-                elif ".bar" in view_key:
-                    item_kind = "bar"
-                    if timeframe and not view_key.endswith(f".bar.{timeframe}"):
-                        continue
-                else:
-                    continue
-                if kind in {"all", item_kind}:
-                    result[item_kind] = item
-
-    if kind in {"all", "orderbook"}:
-        order_books = snapshot.get("order_books", {})
-        if isinstance(order_books, dict):
-            orderbook = order_books.get(market_id)
-            if isinstance(orderbook, dict):
-                result["orderbook"] = {
-                    **orderbook,
-                    "bids": list(orderbook.get("bids", []))[:depth],
-                    "asks": list(orderbook.get("asks", []))[:depth],
-                }
-
-    if len(result) == 1:
-        result["status"] = "not_found"
-    return result
+    market_id = parsed.market_id
+    if market_id is None:
+        if not parsed.symbol:
+            parser.error("snapshot requires --market-id or --symbol")
+        market_id = (
+            f"market:{parsed.exchange.lower()}:{parsed.market_type.lower()}:"
+            f"{parsed.symbol.upper()}"
+        )
+    projection = MarketProjection(
+        owner.paths.child("snapshots", "v2", "market", "market-shared")
+    )
+    if parsed.kind == "quote":
+        value = projection.read_quote(market_id, parsed.source_id)
+    elif parsed.kind == "bar":
+        if not parsed.timeframe:
+            parser.error("snapshot bar requires --timeframe")
+        value = projection.read_bar(market_id, parsed.source_id, parsed.timeframe)
+    else:
+        value = projection.read_greeks(market_id, parsed.source_id)
+    return {
+        "market_id": market_id,
+        "source_id": parsed.source_id,
+        "kind": parsed.kind,
+        "status": "ready" if value is not None else "not_found",
+        "value": None if value is None else asdict(value),
+    }
 
 
 def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) -> None:

@@ -185,9 +185,7 @@ mod tests {
             .fetch(&HistoricalMarketRequest {
                 symbol: kairos_primitives::Symbol::new("SPY").unwrap(),
                 data_kind: MarketDataKind::Bar,
-                start_time_unix_nanos: kairos_primitives::UnixNanos::new(
-                    1_799_000_000_000_000_000,
-                ),
+                start_time_unix_nanos: kairos_primitives::UnixNanos::new(1_799_000_000_000_000_000),
                 end_time_unix_nanos: kairos_primitives::UnixNanos::new(1_801_000_000_000_000_000),
                 interval: Some("1m".into()),
                 adjusted: Some(false),

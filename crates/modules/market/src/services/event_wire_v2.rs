@@ -911,10 +911,10 @@ mod tests {
     use super::encode_event;
     use crate::domain::events::MarketEvent;
     use crate::domain::observations::{Quote, Rate};
+    use kairos_market_contract::event::decode_event;
     use kairos_primitives::{
         InstrumentId, MarketId, Price, Quantity, Rate as FixedRate, UnixNanos,
     };
-    use kairos_market_contract::event::decode_event;
     use kairos_protocol::InstanceIdentity;
 
     #[test]

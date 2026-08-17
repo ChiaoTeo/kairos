@@ -80,7 +80,7 @@ class AccountApplication:
     async def _events(self) -> AsyncIterator[AccountEvent]:
         if self._event_source is None:
             return
-        async for record in self._event_source.events(after_sequence=0):
+        async for record in self._event_source.subscribe_live():
             if AccountId(record.account_id) not in self._projections:
                 continue
             expected_stream_id = f"account.events/account:{record.account_id}"
@@ -91,9 +91,7 @@ class AccountApplication:
                 )
             self._validate_event_scope(record.launch_id, record.instance_id)
             cursor = self._event_cursors.get(record.account_id, 0)
-            if cursor == 0 and bool(
-                getattr(self._event_source, "join_from_latest", False)
-            ):
+            if cursor == 0:
                 cursor = record.sequence - 1
             if record.sequence <= cursor:
                 continue

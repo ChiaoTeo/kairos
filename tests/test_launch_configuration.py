@@ -130,6 +130,57 @@ def test_launch_draft_does_not_replace_existing_file_when_validation_fails(
     assert 'id = "existing"' in path.read_text(encoding="utf-8")
 
 
+def test_launch_draft_materializes_one_explicit_execution_route_per_account() -> None:
+    values = LaunchDraft(
+        launch_id="multi-account",
+        mode="paper",
+        strategy="builtin:interactive",
+        accounts=("main", "hedge"),
+        execution_enabled=True,
+        execution_participant_id="simulated",
+    ).apply({})
+
+    assert values["execution"]["routes"] == [
+        {
+            "route_id": "main-spot",
+            "account_id": "main",
+            "segment_key": "spot",
+            "participant_id": "simulated",
+            "product": "spot",
+        },
+        {
+            "route_id": "hedge-spot",
+            "account_id": "hedge",
+            "segment_key": "spot",
+            "participant_id": "simulated",
+            "product": "spot",
+        },
+    ]
+
+
+def test_live_launch_draft_materializes_risk_and_execution_selection() -> None:
+    values = LaunchDraft(
+        launch_id="live",
+        mode="live",
+        strategy="builtin:interactive",
+        accounts=("main",),
+        execution_enabled=True,
+        execution_participant_id="ibkr",
+        execution_product="equity",
+        execution_segment_key="equity",
+        risk_profile="production-conservative",
+    ).apply({})
+
+    assert values["risk"] == {"profile": "production-conservative"}
+    assert values["execution"]["routes"][0] == {
+        "route_id": "main-equity",
+        "account_id": "main",
+        "segment_key": "equity",
+        "participant_id": "ibkr",
+        "product": "equity",
+    }
+
+
 def test_launch_config_allows_zero_accounts(tmp_path: Path) -> None:
     config = tmp_path / "market-only.toml"
     config.write_text(
@@ -453,13 +504,17 @@ def test_execution_routes_are_validated_without_inline_secrets(tmp_path: Path) -
 
 [[execution.routes]]
 route_id = "binance-spot"
-provider = "binance"
+account_id = "paper-account"
+segment_key = "spot"
+participant_id = "binance"
 product = "spot"
 credential_id = "binance-main"
 
 [[execution.routes]]
 route_id = "okx-swap"
-provider = "okx"
+account_id = "paper-account"
+segment_key = "swap"
+participant_id = "okx"
 product = "swap"
 credential_id = "okx-main"
 """,
@@ -467,6 +522,19 @@ credential_id = "okx-main"
     )
     report = LaunchConfigurationApplication().validate(config)
     assert report["valid"] is True
+
+    foreign_account = config.read_text(encoding="utf-8").replace(
+        'account_id = "paper-account"', 'account_id = "outside"', 1
+    )
+    config.write_text(foreign_account, encoding="utf-8")
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is False
+    assert any("not an enabled launch account" in issue for issue in report["issues"])
+
+    config.write_text(
+        foreign_account.replace('account_id = "outside"', 'account_id = "paper-account"', 1),
+        encoding="utf-8",
+    )
 
     forbidden = config.read_text(encoding="utf-8").replace(
         'credential_id = "okx-main"', 'api_key = "must-not-be-here"'
@@ -544,13 +612,14 @@ def test_live_market_scope_defaults_shared_and_can_be_instance_local(
     config.write_text(
         '[launch]\nid = "live"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
         '[account]\nref = "live-account"\n\n'
+        '[execution]\nenabled = false\n\n'
+        '[risk]\nprofile = "live-default"\n\n'
         '[live.market]\nscope = "instance"\n\n'
         "[live.safety]\ntrading_enabled = false\n",
         encoding="utf-8",
     )
     plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
     assert plan.market_scope == "instance"
-
     config.write_text(
         config.read_text(encoding="utf-8").replace('scope = "instance"\n', ""),
         encoding="utf-8",
@@ -563,6 +632,27 @@ def test_live_market_scope_defaults_shared_and_can_be_instance_local(
         == "shared"
     )
 
+
+def test_live_launch_requires_non_simulation_risk_profile(tmp_path: Path) -> None:
+    config = tmp_path / "live-risk.toml"
+    config.write_text(
+        '[launch]\nid = "live-risk"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
+        '[execution]\nenabled = false\n\n'
+        '[live.safety]\ntrading_enabled = false\n',
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is False
+    assert "risk.profile is required for live launches" in report["issues"]
+
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + '\n[risk]\nprofile = "simulation-default"\n',
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(config)
+    assert report["valid"] is False
+    assert any("forbidden for live" in issue for issue in report["issues"])
 
 def test_replay_market_cannot_use_shared_scope(tmp_path: Path) -> None:
     config = tmp_path / "replay.toml"

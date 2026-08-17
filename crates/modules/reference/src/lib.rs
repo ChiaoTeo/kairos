@@ -12,6 +12,6 @@ pub use application::{
     CashDividendDatasetRecord, CashDividendDatasetRequest, CashDividendDatasetResult,
     CashDividendInput, LifecycleQuery, MarketQuery, OptionContractDatasetRecord,
     OptionContractInput, OptionContractSnapshotRequest, OptionContractSnapshotResult,
-    ReferenceApplication, ReferenceDatasetApplication, ReferenceKind, ReferenceQuery,
-    ReferenceReadModel, ReferenceRecord, ReferenceRefreshResult,
+    ReferenceApplication, ReferenceCurrentView, ReferenceDatasetApplication, ReferenceKind,
+    ReferenceQuery, ReferenceReadModel, ReferenceRecord, ReferenceRefreshResult,
 };

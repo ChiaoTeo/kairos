@@ -26,7 +26,7 @@ mod diagnostic;
 mod process;
 mod reference;
 mod sources;
-mod v2_publisher;
+mod publisher;
 
 pub use config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
@@ -38,7 +38,7 @@ pub use diagnostic::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
 };
 pub use process::{build_market_process, MarketStartupError};
-pub use v2_publisher::MmapMarketSnapshotPublisher;
+pub use publisher::MmapMarketSnapshotPublisher;
 
 pub use reference::AeronReferenceChangeSource;
 

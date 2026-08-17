@@ -15,7 +15,13 @@ pub struct AccountBindingRecord {
     pub account_id: String,
     #[serde(default)]
     pub alias: String,
-    pub provider: String,
+    /// Account custodian/execution intermediary.  This is Account-owned
+    /// identity, not a generic integration provider selector.
+    pub broker: String,
+    /// Integration-owned participant used to construct the concrete account
+    /// connection. It is deliberately independent from `broker`: composition
+    /// must never infer a provider route from Account business identity.
+    pub integration_provider: String,
     #[serde(default)]
     pub exchange: Option<String>,
     pub environment: String,
@@ -158,9 +164,14 @@ fn load_account_toml(path: &std::path::Path) -> Result<Option<AccountBindingReco
     if account_id.trim().is_empty() {
         return Ok(None);
     }
-    let provider = table_text(account, "broker")
-        .or_else(|| table_text(account, "provider"))
-        .unwrap_or_else(|| "paper".into());
+    let broker = table_text(account, "broker")
+        .ok_or_else(|| format!("account TOML {} is missing account.broker", path.display()))?;
+    let integration_provider = table_text(account, "integration_provider").ok_or_else(|| {
+        format!(
+            "account TOML {} is missing account.integration_provider; provider routing must be explicit",
+            path.display()
+        )
+    })?;
     let environment = table_text(account, "environment").unwrap_or_else(|| "live".into());
     let exchange = table_text(account, "exchange");
     let default_segment = table_text(account, "default_segment");
@@ -242,7 +253,8 @@ fn load_account_toml(path: &std::path::Path) -> Result<Option<AccountBindingReco
     Ok(Some(AccountBindingRecord {
         account_id: account_id.clone(),
         alias: account_id,
-        provider,
+        broker,
+        integration_provider,
         exchange,
         environment,
         remote_identity: value
@@ -340,7 +352,11 @@ fn account_toml(record: &AccountBindingRecord) -> Result<String, String> {
     let mut lines = vec![
         "[account]".into(),
         format!("id = {}", toml_string(&record.account_id)),
-        format!("broker = {}", toml_string(&record.provider)),
+        format!("broker = {}", toml_string(&record.broker)),
+        format!(
+            "integration_provider = {}",
+            toml_string(&record.integration_provider)
+        ),
         format!("environment = {}", toml_string(&record.environment)),
     ];
     if let Some(exchange) = &record.exchange {
@@ -364,6 +380,7 @@ fn account_toml(record: &AccountBindingRecord) -> Result<String, String> {
         if !matches!(
             key.as_str(),
             "id" | "broker"
+                | "integration_provider"
                 | "provider"
                 | "environment"
                 | "exchange"

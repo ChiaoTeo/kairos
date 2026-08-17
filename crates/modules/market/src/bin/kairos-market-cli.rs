@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use kairos_primitives::{InstrumentId, MarketId};
 use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::application::{
     AsyncHistoricalMarketDataConnection, HistoricalMarketRequest, MarketEventKind,
@@ -15,6 +14,7 @@ use kairos_market::composition::{
     attach_replay_source, default_endpoint, MarketProduct,
 };
 use kairos_market::{load_replay_events_many, MarketApplication, MarketDescriptor, SubscriptionId};
+use kairos_primitives::{InstrumentId, MarketId};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
 use serde_json::{json, Value};

@@ -1,4 +1,6 @@
 use clap::Parser;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use kairos_risk::composition::{
@@ -38,28 +40,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let health = instance.health("risk")?;
     let state = instance.state(&["risk", "risk-state.json"])?;
     let snapshot = instance.service_snapshot("risk")?;
-    let policies = if args.launch_mode == "backtest" {
-        vec![RiskPolicy {
-            policy_id: kairos_primitives::PolicyId::new("backtest-notional")?,
-            version: 1.into(),
-            scope: PolicyScope {
-                account_id: None,
-                strategy_id: None,
-                instrument_id: None,
-                exchange_id: None,
-            },
-            metric: Metric::Notional,
-            // The policy is intentionally permissive but real: every replay
-            // order still passes Risk authorization and creates a reservation.
-            limit: Amount::new(1_000_000_000_000, 0)?,
-            enforcement: EnforcementMode::Reject,
-            valid_from_unix_nanos: 0.into(),
-            valid_until_unix_nanos: None,
-            window_nanos: None,
-        }]
-    } else {
-        Vec::new()
-    };
+    let normalized_path = instance.root().join("normalized-config.json");
+    let policies = load_risk_policies(&workspace, &normalized_path, &args.launch_mode)?;
     let application =
         compose_risk_application(format!("risk:{}", args.instance_id), policies, Some(state))?;
     RiskProcess::new(
@@ -83,6 +65,56 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?)
     .run()
     .await
+}
+
+fn load_risk_policies(
+    workspace: &Workspace,
+    normalized_path: &std::path::Path,
+    launch_mode: &str,
+) -> Result<Vec<RiskPolicy>, Box<dyn std::error::Error>> {
+    let normalized: NormalizedLaunchConfig =
+        serde_json::from_slice(&std::fs::read(&normalized_path)?)?;
+    let profile_name = normalized
+        .risk_profile
+        .as_deref()
+        .or_else(|| matches!(launch_mode, "backtest" | "paper").then_some("simulation-default"));
+    let policies = if profile_name == Some("simulation-default") {
+        if !matches!(launch_mode, "backtest" | "paper") {
+            return Err("simulation-default Risk profile is forbidden for a live launch".into());
+        }
+        vec![RiskPolicy {
+            policy_id: kairos_primitives::PolicyId::new("simulation-default-notional")?,
+            version: 1.into(),
+            scope: PolicyScope {
+                account_id: None,
+                strategy_id: None,
+                instrument_id: None,
+                exchange_id: None,
+            },
+            metric: Metric::Notional,
+            // The policy is intentionally permissive but real: every replay
+            // order still passes Risk authorization and creates a reservation.
+            limit: Amount::new(1_000_000_000_000, 0)?,
+            enforcement: EnforcementMode::Reject,
+            valid_from_unix_nanos: 0.into(),
+            valid_until_unix_nanos: None,
+            window_nanos: None,
+        }]
+    } else if let Some(profile_name) = profile_name {
+        let config: RiskConfig = workspace.read_section("risk")?;
+        config
+            .profiles
+            .get(profile_name)
+            .ok_or_else(|| format!("unknown Risk profile: {profile_name}"))?
+            .policies
+            .clone()
+    } else {
+        return Err("Risk profile is required for a live launch".into());
+    };
+    for policy in &policies {
+        policy.validate()?;
+    }
+    Ok(policies)
 }
 
 #[derive(Debug, Parser)]
@@ -114,4 +146,94 @@ struct Args {
         default_value_t = kairos_transport::stream_ids::RISK_EVENTS
     )]
     risk_events_stream_id: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct NormalizedLaunchConfig {
+    #[serde(default)]
+    risk_profile: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RiskConfig {
+    #[serde(default)]
+    profiles: BTreeMap<String, RiskProfileConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RiskProfileConfig {
+    policies: Vec<RiskPolicy>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simulation_uses_a_named_cross_account_default_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let normalized = root.path().join("normalized.json");
+        std::fs::write(&normalized, r#"{"risk_profile":null}"#).unwrap();
+        let policies = load_risk_policies(&workspace, &normalized, "paper").unwrap();
+        assert_eq!(policies.len(), 1);
+        assert!(policies[0].scope.account_id.is_none());
+        assert!(policies[0].scope.exchange_id.is_none());
+    }
+
+    #[test]
+    fn live_launch_requires_an_explicit_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let normalized = root.path().join("normalized.json");
+        std::fs::write(&normalized, r#"{"risk_profile":null}"#).unwrap();
+        let error = load_risk_policies(&workspace, &normalized, "live")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Risk profile is required"));
+    }
+
+    #[test]
+    fn live_launch_rejects_the_builtin_simulation_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let normalized = root.path().join("normalized.json");
+        std::fs::write(&normalized, r#"{"risk_profile":"simulation-default"}"#).unwrap();
+        let error = load_risk_policies(&workspace, &normalized, "live")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("forbidden for a live launch"));
+    }
+
+    #[test]
+    fn live_profile_loads_workspace_owned_cross_account_policies() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace_root = root.path().join("workspace");
+        Workspace::init(&workspace_root, "test").unwrap();
+        let manifest = workspace_root.join("workspace.toml");
+        let mut contents = std::fs::read_to_string(&manifest).unwrap();
+        contents.push_str(
+            r#"
+[risk.profiles.production]
+
+[[risk.profiles.production.policies]]
+policy_id = "production-notional"
+version = 1
+scope = {}
+metric = "notional"
+limit = "1000000"
+enforcement = "reject"
+valid_from_unix_nanos = 0
+"#,
+        );
+        std::fs::write(&manifest, contents).unwrap();
+        let workspace = Workspace::open(&workspace_root).unwrap();
+        let normalized = root.path().join("normalized.json");
+        std::fs::write(&normalized, r#"{"risk_profile":"production"}"#).unwrap();
+
+        let policies = load_risk_policies(&workspace, &normalized, "live").unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].policy_id.as_str(), "production-notional");
+        assert!(policies[0].scope.account_id.is_none());
+    }
 }

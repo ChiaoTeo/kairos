@@ -36,7 +36,8 @@ impl MarketEventStream {
                     {
                         Ok(subscription) => subscription,
                         Err(error) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
+                            let _ = sender
+                                .blocking_send(Err(ContractError::Transport(error.to_string())));
                             return;
                         }
                     };
@@ -52,7 +53,8 @@ impl MarketEventStream {
                         }
                         Ok(None) => std::thread::yield_now(),
                         Err(error) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
+                            let _ = sender
+                                .blocking_send(Err(ContractError::Transport(error.to_string())));
                             break;
                         }
                     }

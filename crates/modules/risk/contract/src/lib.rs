@@ -22,7 +22,9 @@ pub use encode::{
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
-pub use view::{RiskViewKey, RiskViewKind, RiskViewReader, ViewFrame, ViewMetadata};
+pub use view::{
+    RiskViewKey, RiskViewKind, RiskViewPublisher, RiskViewReader, ViewFrame, ViewMetadata,
+};
 
 use std::path::PathBuf;
 

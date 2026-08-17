@@ -12,6 +12,10 @@ description = "Aeron and shared-memory transport adapters for Kairos"
 rusteron-client = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 memmap2 = "0.9"
+crc32fast = "1"
+fs2 = "0.4"
+thiserror = "2"
+clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 kairos-workspace = { path = "../workspace", features = ["otel"] }
@@ -19,6 +23,10 @@ kairos-workspace = { path = "../workspace", features = ["otel"] }
 [[bin]]
 name = "kairos-aeron-driver"
 path = "src/bin/kairos-aeron-driver.rs"
+
+[[bin]]
+name = "kairos-aeron-bridge"
+path = "src/bin/kairos-aeron-bridge.rs"
 
 [dev-dependencies]
 tempfile = "3"

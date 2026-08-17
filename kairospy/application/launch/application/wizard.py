@@ -28,7 +28,10 @@ class LaunchDraft:
     strategy: str
     accounts: tuple[str, ...]
     execution_enabled: bool
-    execution_provider: str | None = None
+    execution_participant_id: str | None = None
+    execution_product: str | None = None
+    execution_segment_key: str | None = None
+    risk_profile: str | None = None
     backtest_start: str | None = None
     backtest_end: str | None = None
     backtest_events: str | None = None
@@ -47,8 +50,22 @@ class LaunchDraft:
         }
         execution = _table(result, "execution")
         execution["enabled"] = self.execution_enabled
-        if self.execution_provider:
-            execution["provider"] = self.execution_provider
+        if self.execution_participant_id and not execution.get("routes"):
+            route_accounts = self.accounts or ("main",)
+            product = self.execution_product or "spot"
+            segment_key = self.execution_segment_key or product
+            execution["routes"] = [
+                {
+                    "route_id": f"{account}-{segment_key}",
+                    "account_id": account,
+                    "segment_key": segment_key,
+                    "participant_id": self.execution_participant_id,
+                    "product": product,
+                }
+                for account in route_accounts
+            ]
+        if self.risk_profile:
+            _table(result, "risk")["profile"] = self.risk_profile
 
         if self.mode == "backtest":
             backtest = _table(result, "backtest")
@@ -103,11 +120,57 @@ def prompt_draft(
     execution_enabled = typer.confirm(
         "启用 Execution", default=bool(execution.get("enabled", True))
     )
-    provider_default = str(execution.get("provider", "simulated"))
-    provider = (
-        typer.prompt("Execution provider", default=provider_default)
+    routes = execution.get("routes")
+    first_route = routes[0] if isinstance(routes, list) and routes else {}
+    participant_default = str(
+        first_route.get("participant_id", "simulated")
+        if isinstance(first_route, Mapping)
+        else "simulated"
+    )
+    participant_id = (
+        typer.prompt("Execution participant", default=participant_default)
         if execution_enabled
         else None
+    )
+    product = (
+        typer.prompt(
+            "Execution product",
+            default=str(
+                first_route.get("product", "spot")
+                if isinstance(first_route, Mapping)
+                else "spot"
+            ),
+        )
+        if execution_enabled
+        else None
+    )
+    segment_key = (
+        typer.prompt(
+            "Account segment key",
+            default=str(
+                first_route.get("segment_key", product or "spot")
+                if isinstance(first_route, Mapping)
+                else product or "spot"
+            ),
+        )
+        if execution_enabled
+        else None
+    )
+    risk_value = current.get("risk")
+    risk: Mapping[str, Any] = (
+        risk_value if isinstance(risk_value, Mapping) else {}
+    )
+    risk_profile = (
+        typer.prompt(
+            "Risk profile",
+            default=str(risk.get("profile") or "production-default"),
+        )
+        if mode == "live"
+        else (
+            str(risk["profile"])
+            if isinstance(risk.get("profile"), str) and risk.get("profile")
+            else None
+        )
     )
 
     backtest_value = current.get("backtest")
@@ -139,7 +202,10 @@ def prompt_draft(
         strategy=strategy,
         accounts=account_refs,
         execution_enabled=execution_enabled,
-        execution_provider=provider,
+        execution_participant_id=participant_id,
+        execution_product=product,
+        execution_segment_key=segment_key,
+        risk_profile=risk_profile,
         backtest_start=start,
         backtest_end=end,
         backtest_events=events,

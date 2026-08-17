@@ -15,8 +15,9 @@ pub struct FlatbuffersRiskSnapshotWriter {
 }
 
 pub struct MmapRiskSnapshotPublisher {
-    publisher: crate::transport::RiskMmapWriter,
+    publisher: crate::RiskViewPublisher,
     encoder: FlatbuffersRiskSnapshotWriter,
+    producer_incarnation: u64,
 }
 
 impl MmapRiskSnapshotPublisher {
@@ -26,12 +27,13 @@ impl MmapRiskSnapshotPublisher {
         actor_id: impl Into<String>,
     ) -> crate::ContractResult<Self> {
         Ok(Self {
-            publisher: crate::transport::RiskMmapWriter::create(
+            publisher: crate::RiskViewPublisher::create(
                 path,
                 crate::view::RiskViewKey::latest(actor_id.into()),
                 slot_size,
             )?,
             encoder: FlatbuffersRiskSnapshotWriter::new("risk"),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
         })
     }
     pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
@@ -39,10 +41,24 @@ impl MmapRiskSnapshotPublisher {
             .publish(snapshot)
             .map_err(crate::ContractError::Invalid)?;
         self.publisher.publish(
-            snapshot.generation,
+            kairos_transport::SnapshotEnvelopeMetadata {
+                resource_epoch: 1,
+                producer_incarnation: self.producer_incarnation,
+                generation: snapshot.generation,
+                applied_event_sequence: snapshot.event_sequence,
+                published_at_unix_nanos: now_unix_nanos(),
+            },
             self.encoder.last_payload.as_deref().unwrap_or_default(),
         )
     }
+}
+
+fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u64::MAX as u128) as u64
 }
 
 impl FlatbuffersRiskSnapshotWriter {
@@ -90,7 +106,7 @@ impl FlatbuffersRiskSnapshotWriter {
             &common_fb::ViewMetadataArgs {
                 snapshot_id: Some(snapshot_id),
                 resource_id: Some(view_key),
-                resource_epoch: 0,
+                resource_epoch: 1,
                 view_key: Some(view_key),
                 owner_id: Some(owner),
                 workspace_id: Some(workspace),
@@ -100,7 +116,7 @@ impl FlatbuffersRiskSnapshotWriter {
                 as_of_unix_nanos: as_of(snapshot),
                 published_at_unix_nanos: now(),
                 completeness: common_fb::ViewCompleteness::COMPLETE,
-                applied_revision: Some(snapshot.generation),
+                applied_revision: Some(snapshot.event_sequence),
             },
         );
         let root = fb::RiskLatestView::create(
@@ -136,7 +152,7 @@ impl RiskAeronEventPublisher {
     ) -> crate::ContractResult<Self> {
         Ok(Self {
             publisher: kairos_transport::AeronBytePublisher::connect(aeron_dir, channel, stream_id)
-                .map_err(crate::ContractError::Transport)?,
+                .map_err(|error| crate::ContractError::Transport(error.to_string()))?,
             encoder: FlatbuffersRiskEventWriter::new_with_identity(actor_id, identity),
         })
     }
@@ -147,7 +163,7 @@ impl RiskAeronEventPublisher {
         if let Some(payload) = self.encoder.last_payload.as_deref() {
             self.publisher
                 .publish(payload)
-                .map_err(crate::ContractError::Transport)?;
+                .map_err(|error| crate::ContractError::Transport(error.to_string()))?;
         }
         Ok(())
     }

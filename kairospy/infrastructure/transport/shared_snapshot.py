@@ -1,74 +1,57 @@
-"""Generic reader for the Kairos KSS1 double-slot snapshot envelope."""
+"""Stable Python facade over the Rust KSS envelope reader."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import mmap
 from pathlib import Path
-import struct
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class SharedSnapshotPayload:
+    envelope_version: int
+    resource_epoch: int
+    producer_incarnation: int
     generation: int
+    applied_event_sequence: int
+    published_at_unix_nanos: int
     payload: bytes
 
 
 class SharedSnapshotReader:
-    """Read one stable payload from a Rust ``SharedSnapshotWriter`` file."""
+    """Read owned, consistency-checked bytes through ``kairos-transport``."""
 
-    _MAGIC = b"KSS1"
-    _FORMAT_VERSION = 1
-    _HEADER_SIZE = 64
-    _SLOT_COUNT = 2
-    _ACTIVE_OFFSET = 12
-    _SLOT_LENGTH_OFFSET = 24
-    _SLOT_GENERATION_OFFSET = 32
-
-    def __init__(self, path: str | Path, *, retries: int = 8) -> None:
-        if retries < 1:
+    def __init__(self, path: str | Path, *, retries: int | None = None) -> None:
+        if retries is not None and retries < 1:
             raise ValueError("retries must be positive")
+        # Source checkouts may be imported without a compiled extension. The
+        # first transport use is intentionally fail-fast and never falls back
+        # to a Python mmap implementation.
+        from .native import native
+
         self.path = Path(path)
-        self.retries = retries
+        self._reader: Any = native.SnapshotReader(self.path)
 
     def read(self) -> SharedSnapshotPayload:
-        with self.path.open("rb") as file:
-            with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
-                return self._read_mapped(mapped)
+        frame = self._reader.read()
+        return SharedSnapshotPayload(
+            envelope_version=int(frame.envelope_version),
+            resource_epoch=int(frame.resource_epoch),
+            producer_incarnation=int(frame.producer_incarnation),
+            generation=int(frame.generation),
+            applied_event_sequence=int(frame.applied_event_sequence),
+            published_at_unix_nanos=int(frame.published_at_unix_nanos),
+            payload=bytes(frame.payload),
+        )
 
-    def _read_mapped(self, mapped: mmap.mmap) -> SharedSnapshotPayload:
-        if len(mapped) < self._HEADER_SIZE or mapped[:4] != self._MAGIC:
-            raise ValueError("invalid shared snapshot header")
-        version, slots, slot_size = struct.unpack_from("<HHI", mapped, 4)
-        if (
-            version != self._FORMAT_VERSION
-            or slots != self._SLOT_COUNT
-            or slot_size <= 0
-        ):
-            raise ValueError("unsupported shared snapshot layout")
-        if len(mapped) < self._HEADER_SIZE + slots * slot_size:
-            raise ValueError("truncated shared snapshot file")
-        for _ in range(self.retries):
-            active = mapped[self._ACTIVE_OFFSET]
-            if active >= slots:
-                raise ValueError("invalid active snapshot slot")
-            length = struct.unpack_from(
-                "<I", mapped, self._SLOT_LENGTH_OFFSET + active * 4
-            )[0]
-            generation = struct.unpack_from(
-                "<Q", mapped, self._SLOT_GENERATION_OFFSET + active * 8
-            )[0]
-            if not 0 < length <= slot_size:
-                raise ValueError("active snapshot slot is empty or too large")
-            start = self._HEADER_SIZE + active * slot_size
-            payload = bytes(mapped[start : start + length])
-            active_after = mapped[self._ACTIVE_OFFSET]
-            generation_after = struct.unpack_from(
-                "<Q", mapped, self._SLOT_GENERATION_OFFSET + active * 8
-            )[0]
-            if active == active_after and generation == generation_after:
-                return SharedSnapshotPayload(generation=generation, payload=payload)
-        raise RuntimeError("shared snapshot changed while being read")
+    def close(self) -> None:
+        self._reader.close()
+
+    def __enter__(self) -> SharedSnapshotReader:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
 
 __all__ = ["SharedSnapshotPayload", "SharedSnapshotReader"]

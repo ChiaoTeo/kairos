@@ -1,24 +1,34 @@
+mod account_facts;
 pub mod backtest;
+mod intent_planner;
 pub mod market_input;
-mod preflight;
+mod model;
+mod order_admission;
 mod process;
+mod risk_reservations;
 mod service;
 
-pub use preflight::ExecutionPreflight;
+pub use account_facts::ExecutionAccountFacts;
+pub use intent_planner::ExecutionIntentPlanner;
+pub(crate) use model::remote_status;
+pub use model::{
+    CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent, ExecutionAuditEvent,
+    ExecutionAuditQuery, ExecutionBusinessChange, ExecutionBusinessEvent, ExecutionCurrentView,
+    ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionSnapshot,
+    ExpireIntent, HedgeRequirement, IntentEvent, IntentLegRequest, IntentState, IntentStatus,
+    QuoteObservation, RefreshQuoteIntent, RemoteOrder, RemoteOrderQuery, ReplaceOrder,
+    SnapshotWatermark, SubmitOrder, UnknownRemoteOrder, UnknownRemoteOrderResolution,
+};
+pub use order_admission::ExecutionOrderAdmission;
 pub use process::{
     ExecutionAsyncRoute, ExecutionEventPublisher, ExecutionProcess, ExecutionSnapshotPublisher,
     IntentSnapshotPublisher,
 };
-pub(crate) use service::remote_status;
-pub use service::{
-    CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent, ExecutionApplication,
-    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionBusinessChange, ExecutionBusinessEvent,
-    ExecutionCurrentView, ExecutionError, ExecutionEvent, ExecutionFillReport,
-    ExecutionOrderOptions, ExecutionSnapshot, ExpireIntent, HedgeRequirement, IntentEvent,
-    IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
-    RemoteOrderQuery, ReplaceOrder, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
-    UnknownRemoteOrderResolution,
+pub use risk_reservations::{
+    ExecutionRiskReservations, RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
 };
+pub(crate) use service::apply_connection_event;
+pub use service::ExecutionApplication;
 
 pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,

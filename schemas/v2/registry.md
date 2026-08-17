@@ -39,6 +39,7 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Reference | event | `ExecutionAccessUpdated` | `RXD2` | Reference Actor | Execution consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `MarketDataAccessUpserted` | `RMDA` | Reference Actor | Market consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `MarketDataAccessUpdated` | `RMDD` | Reference Actor | Market consumers | owner event stream / retained target |
+| DRAFT | Reference | current view | `ReferenceLatestView` | `RFV2` | Reference Actor | Execution, Market, Strategy, operations | KSS1 mmap / one writer |
 | DRAFT | Market | event | `QuoteUpdated` | `MQU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `TradeOccurred` | `MTO2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
@@ -103,6 +104,7 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Execution | event | `ReconciliationRequired` | `EXV2` | Execution Actor | operations, Strategy | Execution event stream / retained target |
 | DRAFT | Execution | active view | `ActiveIntentsView` | `ECI2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
 | DRAFT | Execution | active view | `ActiveOrdersView` | `ECO2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
+| DRAFT | Execution | current view | `CurrentExecutionView` | `ECV2` | Execution Actor | CLI, Strategy, operations, reconciliation | KSS1 mmap / one writer |
 | DRAFT | System | current view | `SystemHealthCurrentView` | `SHV2` | System monitor | operations | KSS1 mmap / one writer |
 | DRAFT | System | current view | `AlertsCurrentView` | `SAV2` | System monitor | operations | KSS1 mmap / one writer |
 

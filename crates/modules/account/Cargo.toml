@@ -41,7 +41,3 @@ path = "src/bin/kairos-account-server.rs"
 [[bin]]
 name = "kairos-account-cli"
 path = "src/bin/kairos-account-cli.rs"
-
-[[bin]]
-name = "kairos-account-event-bridge"
-path = "src/bin/kairos-account-event-bridge.rs"

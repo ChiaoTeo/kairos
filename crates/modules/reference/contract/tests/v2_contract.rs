@@ -108,3 +108,57 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
         _ => panic!("unexpected Reference event variant"),
     }
 }
+
+#[test]
+fn reference_latest_view_round_trips_through_mmap() {
+    let root = tempfile::tempdir().unwrap();
+    let actor_id = "reference:global";
+    let mut publisher = kairos_reference_contract::MmapReferenceLatestPublisher::create(
+        root.path(),
+        actor_id,
+        1024 * 1024,
+    )
+    .unwrap();
+    publisher
+        .publish(&kairos_reference_contract::ReferenceLatestSnapshot {
+            actor_id: actor_id.into(),
+            workspace_id: "workspace:test".into(),
+            generation: 7,
+            event_sequence: 11,
+            markets: vec![Market {
+                market_id: "market:binance:spot:BTCUSDT".into(),
+                market_key: "BTCUSDT".into(),
+                instrument_id: "instrument:spot:BTC".into(),
+                listing_id: "listing:binance:spot:BTCUSDT".into(),
+                exchange_id: "exchange:binance".into(),
+                market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+                source_symbol: "BTCUSDT".into(),
+                status: "active".into(),
+                ..Market::default()
+            }],
+            provider_health: vec![kairos_reference_contract::ProviderHealthState {
+                provider_id: "binance".into(),
+                status: "ready".into(),
+                updated_at_unix_nanos: 9,
+                ..Default::default()
+            }],
+            option_underlyings: vec!["AAPL".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let frame = kairos_reference_contract::ReferenceViewReader::open(
+        root.path(),
+        kairos_reference_contract::ReferenceViewKey::latest(actor_id),
+    )
+    .unwrap()
+    .read()
+    .unwrap();
+    assert_eq!(frame.generation(), 7);
+    assert_eq!(frame.envelope_metadata().applied_event_sequence, 11);
+    let view = frame.decode().unwrap();
+    assert_eq!(view.metadata().generation(), 7);
+    assert_eq!(view.state().markets().len(), 1);
+    assert_eq!(view.state().markets().get(0).source_symbol(), "BTCUSDT");
+    assert_eq!(view.state().provider_health().get(0).status(), "ready");
+    assert_eq!(view.state().option_underlyings().get(0), "AAPL");
+}

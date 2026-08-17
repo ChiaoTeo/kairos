@@ -70,8 +70,6 @@ def _account(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("account CLI returned an invalid account result")
     result = dict(value)
-    if "broker" not in result and "provider" in result:
-        result["broker"] = result["provider"]
     if "credential" not in result and result.get("credential_id") is not None:
         result["credential"] = result["credential_id"]
     if "segment" not in result and result.get("segments"):
@@ -107,7 +105,7 @@ class AccountAdminApplication:
 
     def schema(self, broker: str) -> dict[str, Any]:
         return dict(
-            _cli(self.workspace).run(["schema", "--provider", _text(broker, "broker")])
+            _cli(self.workspace).run(["schema", "--broker", _text(broker, "broker")])
         )
 
     def connect(
@@ -137,7 +135,7 @@ class AccountAdminApplication:
                 "register",
                 "--account-id",
                 account_id,
-                "--provider",
+                "--broker",
                 broker,
                 "--segment",
                 segment,
@@ -199,7 +197,7 @@ class AccountAdminApplication:
     ) -> dict[str, Any]:
         account_id = _text(account_id, "account_id")
         flags = {
-            "broker": "--provider",
+            "broker": "--broker",
             "exchange": "--exchange",
             "alias": "--alias",
             "environment": "--environment",

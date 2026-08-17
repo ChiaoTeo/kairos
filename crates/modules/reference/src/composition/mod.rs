@@ -27,8 +27,8 @@ use kairos_integration::application::credential::load_workspace_credential;
 use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
 use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
 use kairos_protocol::InstanceIdentity;
-use kairos_reference_contract::transport::ReferenceAeronTransport;
 use kairos_reference_contract::{EncodeContext, ReferenceEncoder, ReferenceSqliteReader};
+use kairos_transport::AeronBytePublisher;
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
     fn from(error: kairos_reference_contract::ContractError) -> Self {
@@ -186,6 +186,229 @@ impl ReferenceSource for ConfiguredReferenceSource {
 pub struct ReferenceEventWriter {
     publisher: kairos_transport::AeronBytePublisher,
     reader: ReferenceSqliteReader,
+}
+
+pub struct ReferenceCurrentViewPublisher {
+    inner: kairos_reference_contract::MmapReferenceLatestPublisher,
+    identity: InstanceIdentity,
+}
+
+impl ReferenceCurrentViewPublisher {
+    pub fn create(
+        root: impl AsRef<Path>,
+        slot_capacity: usize,
+        actor_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> ReferenceResult<Self> {
+        Ok(Self {
+            inner: kairos_reference_contract::MmapReferenceLatestPublisher::create(
+                root,
+                actor_id,
+                slot_capacity,
+            )?,
+            identity,
+        })
+    }
+
+    pub fn publish(&mut self, view: &crate::ReferenceCurrentView) -> ReferenceResult<()> {
+        self.inner
+            .publish(&reference_contract_view(view, &self.identity))?;
+        Ok(())
+    }
+}
+
+fn reference_contract_view(
+    view: &crate::ReferenceCurrentView,
+    identity: &InstanceIdentity,
+) -> kairos_reference_contract::ReferenceLatestSnapshot {
+    use kairos_reference_contract as contract;
+    let catalog = &view.catalog;
+    contract::ReferenceLatestSnapshot {
+        actor_id: view.actor_id.clone(),
+        workspace_id: identity.workspace_id.clone(),
+        launch_id: (!identity.launch_id.is_empty()).then(|| identity.launch_id.clone()),
+        instance_id: (!identity.instance_id.is_empty()).then(|| identity.instance_id.clone()),
+        generation: view.generation.get(),
+        event_sequence: view.event_sequence.get(),
+        entities: catalog
+            .entities
+            .values()
+            .map(|value| contract::Entity {
+                entity_id: value.entity_id.clone(),
+                entity_type: value.entity_type.clone(),
+                name: value.name.clone(),
+                status: value.status.as_str().into(),
+            })
+            .collect(),
+        assets: catalog
+            .assets
+            .values()
+            .map(|value| contract::Asset {
+                asset_id: value.asset_id.to_string(),
+                code: value.code.clone(),
+                name: value.name.clone(),
+                asset_class: value.asset_class,
+                status: value.status.as_str().into(),
+            })
+            .collect(),
+        instruments: catalog
+            .instruments
+            .values()
+            .map(|value| contract::Instrument {
+                instrument_id: value.instrument_id.to_string(),
+                symbol: value.symbol.to_string(),
+                name: value.name.clone(),
+                instrument_type: value.instrument_type,
+                product_family: None,
+                issuer_id: value.issuer_id.as_ref().map(ToString::to_string),
+                share_class: value.share_class.clone(),
+                primary_currency_asset_id: value
+                    .primary_currency_asset_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                underlying_instrument_id: value
+                    .underlying_instrument_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                expiry_unix_nanos: value.expiry_unix_nanos.map(|value| value.get()),
+                strike: value.strike.clone(),
+                option_right: value.option_right.clone(),
+                status: value.status.as_str().into(),
+            })
+            .collect(),
+        listings: catalog
+            .listings
+            .values()
+            .map(|value| contract::Listing {
+                listing_id: value.listing_id.to_string(),
+                instrument_id: value.instrument_id.to_string(),
+                exchange_id: value.exchange_id.to_string(),
+                exchange_symbol: value.exchange_symbol.to_string(),
+                status: value.status.as_str().into(),
+                effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+            })
+            .collect(),
+        markets: catalog
+            .markets
+            .values()
+            .map(|value| contract::Market {
+                market_id: value.market_id.to_string(),
+                market_key: value.market_key.clone(),
+                instrument_id: value.instrument_id.to_string(),
+                listing_id: value.listing_id.to_string(),
+                exchange_id: value.exchange_id.to_string(),
+                market_type: value.market_type.clone(),
+                asset_type: value.asset_type,
+                underlying_instrument_id: value
+                    .underlying_instrument_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                source_symbol: value.source_symbol.to_string(),
+                base_asset_id: value.base_asset_id.as_ref().map(ToString::to_string),
+                quote_asset_id: value.quote_asset_id.as_ref().map(ToString::to_string),
+                status: value.status.as_str().into(),
+                price_tick: value.price_tick.clone(),
+                quantity_tick: value.quantity_tick.clone(),
+                price_precision: value.price_precision,
+                quantity_precision: value.quantity_precision,
+                minimum_quantity: value.minimum_quantity.clone(),
+                minimum_notional: value.minimum_notional.clone(),
+                contract_size: value.contract_size.clone(),
+                effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+            })
+            .collect(),
+        financial_products: catalog
+            .financial_products
+            .values()
+            .map(|value| contract::FinancialProduct {
+                product_id: value.product_id.clone(),
+                product_type: value.product_type.clone(),
+                name: value.name.clone(),
+                asset_id: value.asset_id.to_string(),
+                provider_product_id: value.provider_product_id.clone(),
+                provider_id: value.provider_id.clone(),
+                issuer_id: value.issuer_id.as_ref().map(ToString::to_string),
+                currency_asset_id: value.currency_asset_id.as_ref().map(ToString::to_string),
+                min_amount: value.min_amount.clone(),
+                max_amount: value.max_amount.clone(),
+                apr: value.apr.clone(),
+                lock_period_days: value.lock_period_days,
+                maturity_at_unix_nanos: value.maturity_at_unix_nanos.map(|value| value.get()),
+                status: value.status.as_str().into(),
+                effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+            })
+            .collect(),
+        execution_accesses: catalog
+            .execution_accesses
+            .values()
+            .map(|value| contract::ExecutionAccess {
+                access_id: value.access_id.to_string(),
+                routing_mode: value.routing_mode.clone(),
+                instrument_id: value.instrument_id.as_ref().map(ToString::to_string),
+                listing_id: value.listing_id.as_ref().map(ToString::to_string),
+                market_id: value.market_id.as_ref().map(ToString::to_string),
+                destination_market_id: value
+                    .destination_market_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                broker_id: value.broker_id.clone(),
+                provider_id: value.provider_id.to_string(),
+                provider_product: value.provider_product.to_string(),
+                provider_symbol: value.provider_symbol.to_string(),
+                settlement_asset_id: value.settlement_asset_id.as_ref().map(ToString::to_string),
+                status: value.status.as_str().into(),
+                effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+            })
+            .collect(),
+        market_data_accesses: catalog
+            .market_data_accesses
+            .values()
+            .map(|value| contract::MarketDataAccess {
+                access_id: value.access_id.clone(),
+                market_id: value.market_id.to_string(),
+                provider_id: value.provider_id.to_string(),
+                provider_product: value.provider_product.to_string(),
+                provider_symbol: value.provider_symbol.to_string(),
+                status: value.status.as_str().into(),
+                effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
+                effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+            })
+            .collect(),
+        provider_health: view
+            .provider_health
+            .iter()
+            .map(|value| contract::ProviderHealthState {
+                provider_id: value.source_id.clone(),
+                status: value.status.clone(),
+                message: (value.consecutive_failures > 0)
+                    .then(|| format!("consecutive_failures={}", value.consecutive_failures)),
+                updated_at_unix_nanos: value
+                    .last_attempt_unix_nanos
+                    .or(value.last_success_unix_nanos)
+                    .map(|value| value.get())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        option_underlyings: view.option_underlyings.clone(),
+        lifecycle_events: catalog
+            .lifecycle_events
+            .iter()
+            .rev()
+            .take(4096)
+            .rev()
+            .map(|value| contract::LifecycleEntry {
+                event_id: value.event_id.clone(),
+                event_type: value.event_type.clone(),
+                event_time_unix_nanos: value.event_time_unix_nanos.get(),
+                record_kind: value.record_kind.clone(),
+                record_id: value.record_id.clone(),
+            })
+            .collect(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -529,11 +752,12 @@ fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product:
 impl ReferenceEventWriter {
     pub fn connect(config: &ReferenceEventWriterConfig) -> ReferenceResult<Self> {
         Ok(Self {
-            publisher: ReferenceAeronTransport::publisher(
+            publisher: AeronBytePublisher::connect(
                 config.aeron_dir.as_deref(),
                 &config.aeron_channel,
                 config.reference_changes_stream,
-            )?,
+            )
+            .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?,
             reader: ReferenceSqliteReader::open(&config.database)?,
         })
     }
@@ -764,7 +988,7 @@ impl ReferenceEventWriter {
             };
             self.publisher
                 .publish(&payload)
-                .map_err(crate::domain::ReferenceError::Publication)?;
+                .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
         }
         Ok(())
     }

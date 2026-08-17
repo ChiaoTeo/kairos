@@ -15,46 +15,54 @@ use rusteron_client::{
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// Workspace-wide Aeron stream identifiers.
-///
-/// Keep these identifiers in one place so publishers and subscribers cannot
-/// silently drift apart while each service carries its own magic number.
-pub mod stream_ids {
-    /// Reference lifecycle changes consumed by Market and other projections.
-    pub const REFERENCE_CHANGES: i32 = 1201;
-    /// Market business observations consumed by Strategy applications.
-    pub const MARKET_EVENTS: i32 = 1301;
-    /// Account balance, position, equity, and status changes.
-    pub const ACCOUNT_EVENTS: i32 = 1401;
-    /// Execution intent, order, and fill lifecycle facts.
-    pub const EXECUTION_EVENTS: i32 = 1501;
-    /// Risk decision, reservation, and circuit changes.
-    pub const RISK_EVENTS: i32 = 1601;
+const DEFAULT_PUBLISH_DEADLINE: Duration = Duration::from_millis(100);
+const MEDIA_DRIVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishOutcome {
+    Offered,
+    DroppedNoSubscriber,
 }
 
-/// Default local Aeron channel used by Workspace-managed services.
-pub const DEFAULT_CHANNEL: &str = "aeron:udp?endpoint=localhost:40123";
-
-// Reference catalogs containing a useful option chain can exceed 4 MiB after
-// FlatBuffers encoding. Keep one transport default large enough for a full
-// snapshot while retaining the explicit capacity constructor for tighter
-// consumers.
-const DEFAULT_BUFFER_CAPACITY: usize = 64 * 1024 * 1024;
-const DEFAULT_RETRY_LIMIT: usize = 10_000;
-const MEDIA_DRIVER_TIMEOUT: Duration = Duration::from_secs(10);
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AeronTransportError {
+    #[error("invalid Aeron configuration: {0}")]
+    Configuration(String),
+    #[error("Aeron Media Driver is unavailable: {0}")]
+    DriverUnavailable(String),
+    #[error("Aeron operation timed out: {0}")]
+    Timeout(String),
+    #[error("payload size {actual} exceeds limit {limit}")]
+    PayloadTooLarge { limit: usize, actual: usize },
+    #[error("Aeron publication remained back-pressured until its deadline")]
+    Backpressured,
+    #[error("Aeron resource is closed or poisoned: {0}")]
+    Closed(String),
+    #[error("Aeron operation failed: {0}")]
+    Operation(String),
+}
 
 pub struct AeronBytePublisher {
     _aeron: Aeron,
     publication: Arc<Mutex<AeronPublication>>,
     buffer_capacity: usize,
-    retry_limit: usize,
+    publish_deadline: Duration,
 }
 
 impl AeronBytePublisher {
-    pub fn connect(aeron_dir: Option<&str>, channel: &str, stream_id: i32) -> Result<Self, String> {
-        Self::connect_with_capacity(aeron_dir, channel, stream_id, DEFAULT_BUFFER_CAPACITY)
+    pub fn connect(
+        aeron_dir: Option<&str>,
+        channel: &str,
+        stream_id: i32,
+    ) -> Result<Self, AeronTransportError> {
+        Self::connect_with_capacity(
+            aeron_dir,
+            channel,
+            stream_id,
+            crate::DEFAULT_MAX_PAYLOAD_LEN,
+        )
     }
 
     pub fn connect_with_capacity(
@@ -62,33 +70,39 @@ impl AeronBytePublisher {
         channel: &str,
         stream_id: i32,
         buffer_capacity: usize,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AeronTransportError> {
         if buffer_capacity == 0 {
-            return Err("Aeron buffer capacity must be positive".into());
+            return Err(AeronTransportError::Configuration(
+                "buffer capacity must be positive".into(),
+            ));
         }
         let aeron = connect_client(aeron_dir)?;
-        let channel = CString::new(channel).map_err(|error| error.to_string())?;
+        let channel = CString::new(channel)
+            .map_err(|error| AeronTransportError::Configuration(error.to_string()))?;
         let publication = aeron
             .add_publication(&channel, stream_id, MEDIA_DRIVER_TIMEOUT)
-            .map_err(|error| format!("add Aeron publication: {error:?}"))?;
+            .map_err(|error| {
+                AeronTransportError::DriverUnavailable(format!("add publication: {error:?}"))
+            })?;
         Ok(Self {
             _aeron: aeron,
             publication: Arc::new(Mutex::new(publication)),
             buffer_capacity,
-            retry_limit: DEFAULT_RETRY_LIMIT,
+            publish_deadline: DEFAULT_PUBLISH_DEADLINE,
         })
     }
 
-    pub fn publish(&self, bytes: &[u8]) -> Result<(), String> {
+    pub fn publish(&self, bytes: &[u8]) -> Result<PublishOutcome, AeronTransportError> {
         if bytes.is_empty() {
-            return Err("Aeron payload must not be empty".into());
+            return Err(AeronTransportError::Configuration(
+                "payload must not be empty".into(),
+            ));
         }
         if bytes.len() > self.buffer_capacity {
-            return Err(format!(
-                "Aeron payload size {} exceeds buffer capacity {}",
-                bytes.len(),
-                self.buffer_capacity
-            ));
+            return Err(AeronTransportError::PayloadTooLarge {
+                limit: self.buffer_capacity,
+                actual: bytes.len(),
+            });
         }
         // Aeron publications are best-effort streams.  Having no subscriber
         // is a normal lifecycle state (for example while a consumer is
@@ -99,28 +113,39 @@ impl AeronBytePublisher {
         if !self
             .publication
             .lock()
-            .map_err(|_| "Aeron publication mutex poisoned".to_string())?
+            .map_err(|_| AeronTransportError::Closed("publication mutex poisoned".into()))?
             .is_connected()
         {
-            return Ok(());
+            return Ok(PublishOutcome::DroppedNoSubscriber);
         }
-        for _ in 0..self.retry_limit {
+        let deadline = Instant::now() + self.publish_deadline;
+        loop {
             let result = self
                 .publication
                 .lock()
-                .map_err(|_| "Aeron publication mutex poisoned".to_string())?
+                .map_err(|_| AeronTransportError::Closed("publication mutex poisoned".into()))?
                 .offer(bytes);
             match result {
-                Ok(_) => return Ok(()),
+                Ok(_) => return Ok(PublishOutcome::Offered),
                 // The subscriber may disappear between is_connected() and
                 // offer().  Treat that race exactly like the preflight case:
                 // the realtime notification is intentionally dropped.
-                Err(rusteron_client::AeronOfferError::NotConnected) => return Ok(()),
-                Err(error) if error.is_retryable() => std::thread::yield_now(),
-                Err(error) => return Err(format!("Aeron publication offer: {error:?}")),
+                Err(rusteron_client::AeronOfferError::NotConnected) => {
+                    return Ok(PublishOutcome::DroppedNoSubscriber)
+                }
+                Err(error) if error.is_retryable() && Instant::now() < deadline => {
+                    std::thread::yield_now()
+                }
+                Err(error) if error.is_retryable() => {
+                    return Err(AeronTransportError::Backpressured)
+                }
+                Err(error) => {
+                    return Err(AeronTransportError::Operation(format!(
+                        "publication offer: {error:?}"
+                    )))
+                }
             }
         }
-        Err("Aeron publication remained back-pressured".into())
     }
 
     /// Whether the publication currently has at least one subscriber.
@@ -128,10 +153,10 @@ impl AeronBytePublisher {
     /// Callers may use this as a best-effort readiness signal when delivery
     /// is optional. A successful `true` does not replace handling a later
     /// publish failure because the subscriber can disconnect at any time.
-    pub fn has_subscriber(&self) -> Result<bool, String> {
+    pub fn has_subscriber(&self) -> Result<bool, AeronTransportError> {
         self.publication
             .lock()
-            .map_err(|_| "Aeron publication mutex poisoned".to_string())
+            .map_err(|_| AeronTransportError::Closed("publication mutex poisoned".into()))
             .map(|publication| publication.is_connected())
     }
 }
@@ -141,12 +166,37 @@ pub struct AeronByteSubscription {
     subscription: Arc<Mutex<AeronSubscription>>,
     assembler: AeronFragmentClosureAssembler,
     queue: VecDeque<Vec<u8>>,
+    max_payload_len: usize,
 }
 
 impl AeronByteSubscription {
-    pub fn connect(aeron_dir: Option<&str>, channel: &str, stream_id: i32) -> Result<Self, String> {
+    pub fn connect(
+        aeron_dir: Option<&str>,
+        channel: &str,
+        stream_id: i32,
+    ) -> Result<Self, AeronTransportError> {
+        Self::connect_with_capacity(
+            aeron_dir,
+            channel,
+            stream_id,
+            crate::DEFAULT_MAX_PAYLOAD_LEN,
+        )
+    }
+
+    pub fn connect_with_capacity(
+        aeron_dir: Option<&str>,
+        channel: &str,
+        stream_id: i32,
+        max_payload_len: usize,
+    ) -> Result<Self, AeronTransportError> {
+        if max_payload_len == 0 || max_payload_len > u32::MAX as usize {
+            return Err(AeronTransportError::Configuration(
+                "max payload length must be in the u32 framing range".into(),
+            ));
+        }
         let aeron = connect_client(aeron_dir)?;
-        let channel = CString::new(channel).map_err(|error| error.to_string())?;
+        let channel = CString::new(channel)
+            .map_err(|error| AeronTransportError::Configuration(error.to_string()))?;
         let subscription = aeron
             .add_subscription(
                 &channel,
@@ -155,30 +205,36 @@ impl AeronByteSubscription {
                 rusteron_client::Handlers::NONE,
                 MEDIA_DRIVER_TIMEOUT,
             )
-            .map_err(|error| format!("add Aeron subscription: {error:?}"))?;
+            .map_err(|error| {
+                AeronTransportError::DriverUnavailable(format!("add subscription: {error:?}"))
+            })?;
         Ok(Self {
             _aeron: aeron,
             subscription: Arc::new(Mutex::new(subscription)),
-            assembler: AeronFragmentClosureAssembler::new()
-                .map_err(|error| format!("create Aeron fragment assembler: {error:?}"))?,
+            assembler: AeronFragmentClosureAssembler::new().map_err(|error| {
+                AeronTransportError::Operation(format!("create fragment assembler: {error:?}"))
+            })?,
             queue: VecDeque::new(),
+            max_payload_len,
         })
     }
 
-    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
+    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, AeronTransportError> {
         self.poll(64)?;
         Ok(self.queue.pop_front())
     }
 
-    pub fn poll(&mut self, fragment_limit: i32) -> Result<usize, String> {
+    pub fn poll(&mut self, fragment_limit: i32) -> Result<usize, AeronTransportError> {
         if fragment_limit <= 0 {
-            return Err("Aeron fragment limit must be positive".into());
+            return Err(AeronTransportError::Configuration(
+                "fragment limit must be positive".into(),
+            ));
         }
         let mut frames = Vec::new();
         let subscription = self
             .subscription
             .lock()
-            .map_err(|_| "Aeron subscription mutex poisoned".to_string())?;
+            .map_err(|_| AeronTransportError::Closed("subscription mutex poisoned".into()))?;
         let count = self
             .assembler
             .poll(
@@ -187,8 +243,22 @@ impl AeronByteSubscription {
                 collect_reassembled_frame,
                 fragment_limit as usize,
             )
-            .map_err(|error| format!("poll Aeron subscription: {error:?}"))?;
+            .map_err(|error| {
+                AeronTransportError::Operation(format!("poll subscription: {error:?}"))
+            })?;
         self.queue.extend(frames);
+        if let Some(frame) = self
+            .queue
+            .iter()
+            .find(|frame| frame.len() > self.max_payload_len)
+        {
+            let actual = frame.len();
+            self.queue.clear();
+            return Err(AeronTransportError::PayloadTooLarge {
+                limit: self.max_payload_len,
+                actual,
+            });
+        }
         Ok(count as usize)
     }
 }
@@ -197,18 +267,21 @@ fn collect_reassembled_frame(frames: &mut Vec<Vec<u8>>, buffer: &[u8], _header: 
     frames.push(buffer.to_vec());
 }
 
-fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, String> {
-    let context =
-        AeronContext::new().map_err(|error| format!("create Aeron context: {error:?}"))?;
+fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, AeronTransportError> {
+    let context = AeronContext::new().map_err(|error| {
+        AeronTransportError::DriverUnavailable(format!("create context: {error:?}"))
+    })?;
     if let Some(directory) = aeron_dir {
-        let directory = CString::new(directory).map_err(|error| error.to_string())?;
-        context
-            .set_dir(&directory)
-            .map_err(|error| format!("set Aeron directory: {error:?}"))?;
+        let directory = CString::new(directory)
+            .map_err(|error| AeronTransportError::Configuration(error.to_string()))?;
+        context.set_dir(&directory).map_err(|error| {
+            AeronTransportError::Configuration(format!("set directory: {error:?}"))
+        })?;
     }
-    let aeron = Aeron::new(&context).map_err(|error| format!("connect Aeron: {error:?}"))?;
-    aeron
-        .start()
-        .map_err(|error| format!("start Aeron client: {error:?}"))?;
+    let aeron = Aeron::new(&context)
+        .map_err(|error| AeronTransportError::DriverUnavailable(format!("connect: {error:?}")))?;
+    aeron.start().map_err(|error| {
+        AeronTransportError::DriverUnavailable(format!("start client: {error:?}"))
+    })?;
     Ok(aeron)
 }

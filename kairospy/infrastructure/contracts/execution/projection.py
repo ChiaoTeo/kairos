@@ -6,15 +6,19 @@ from decimal import Decimal
 from typing import Any
 
 from kairospy.application.execution.models import (
+    CommitmentStatus,
     ExecutionIntent,
     IntentStatus,
     Order,
     OrderSide,
     OrderStatus,
+    OrderCommitment,
+    RiskReservationSaga,
+    RiskReservationSagaStatus,
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId
+from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId, SegmentKey
 
 from .view import ExecutionViewKey, ExecutionViewKind, ExecutionViewReader
 
@@ -35,6 +39,20 @@ class ExecutionProjection:
 
     def get_order(self, order_id: str) -> Order | None:
         return next((value for value in self.orders() if str(value.id) == order_id), None)
+
+    def commitments(self) -> tuple[OrderCommitment, ...]:
+        value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
+        return tuple(
+            _commitment(value.Commitments(index))
+            for index in range(value.CommitmentsLength())
+        )
+
+    def risk_reservations(self) -> tuple[RiskReservationSaga, ...]:
+        value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
+        return tuple(
+            _risk_reservation(value.RiskReservations(index))
+            for index in range(value.RiskReservationsLength())
+        )
 
     def open_orders(self, *, account_id: str | None = None) -> tuple[Order, ...]:
         terminal = {
@@ -94,6 +112,74 @@ def _intent(value: Any) -> ExecutionIntent:
     accounts = tuple(
         AccountId(_required_text(intent.Legs(index).AccountId(), "intent account_id"))
         for index in range(intent.LegsLength())
+    )
+
+
+def _commitment(value: Any) -> OrderCommitment:
+    return OrderCommitment(
+        order_id=OrderId(_required_text(value.OrderId(), "commitment order_id")),
+        account_id=AccountId(_required_text(value.AccountId(), "commitment account_id")),
+        segment_key=SegmentKey(
+            _required_text(value.SegmentKey(), "commitment segment_key")
+        ),
+        instrument_id=InstrumentId(
+            _required_text(value.InstrumentId(), "commitment instrument_id")
+        ),
+        resource_kind={1: "asset", 2: "instrument", 3: "margin_notional"}.get(
+            int(value.ResourceKind()), "unspecified"
+        ),
+        resource_id=_required_text(value.ResourceId(), "commitment resource_id"),
+        amount=_required_decimal(value.Amount(), "commitment amount"),
+        remaining_quantity=_required_decimal(
+            value.RemainingQuantity(), "commitment remaining_quantity"
+        ),
+        status={
+            1: CommitmentStatus.HELD_BEFORE_SEND,
+            2: CommitmentStatus.ACTIVE,
+            3: CommitmentStatus.UNCERTAIN,
+            4: CommitmentStatus.REDUCED,
+            5: CommitmentStatus.RELEASED,
+            6: CommitmentStatus.RECONCILED,
+        }.get(int(value.Lifecycle()), CommitmentStatus.UNCERTAIN),
+        basis_kind={
+            1: "quote_price_cap",
+            2: "base_quantity",
+            3: "contract_notional",
+            4: "simulation_quantity",
+        }.get(int(value.BasisKind()), "unspecified"),
+        updated_at_unix_nanos=int(value.UpdatedAtUnixNanos()),
+    )
+
+
+def _risk_reservation(value: Any) -> RiskReservationSaga:
+    return RiskReservationSaga(
+        order_id=OrderId(_required_text(value.OrderId(), "reservation order_id")),
+        reservation_id=_required_text(
+            value.ReservationId(), "reservation reservation_id"
+        ),
+        idempotency_key=_required_text(
+            value.IdempotencyKey(), "reservation idempotency_key"
+        ),
+        account_id=AccountId(
+            _required_text(value.AccountId(), "reservation account_id")
+        ),
+        amount=_required_decimal(value.Amount(), "reservation amount"),
+        status={
+            1: RiskReservationSagaStatus.AUTHORIZE_PENDING,
+            2: RiskReservationSagaStatus.ACTIVE,
+            3: RiskReservationSagaStatus.RESIZE_PENDING,
+            4: RiskReservationSagaStatus.RELEASE_PENDING,
+            5: RiskReservationSagaStatus.CONSUME_PENDING,
+            6: RiskReservationSagaStatus.RELEASED,
+            7: RiskReservationSagaStatus.CONSUMED,
+            8: RiskReservationSagaStatus.EXPIRED,
+            9: RiskReservationSagaStatus.UNCERTAIN,
+        }.get(int(value.Lifecycle()), RiskReservationSagaStatus.UNCERTAIN),
+        risk_generation=int(value.RiskGeneration()),
+        risk_event_sequence=int(value.RiskEventSequence()),
+        policy_version=int(value.PolicyVersion()),
+        expires_at_unix_nanos=int(value.ExpiresAtUnixNanos()),
+        updated_at_unix_nanos=int(value.UpdatedAtUnixNanos()),
     )
     order_ids: tuple[OrderId, ...] = ()
     return ExecutionIntent(

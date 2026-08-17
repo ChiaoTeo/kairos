@@ -17,5 +17,10 @@ profile = "paper-instance"
 
 [execution]
 enabled = true
-provider = "simulated"
+
+[[execution.routes]]
+route_id = "paper-account-spot"
+account_id = "paper-account"
+segment_key = "spot"
+participant_id = "simulated"
 product = "spot"

@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use kairos_primitives::Money;
 use kairos_integration::application::{
     AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
     SubscriptionId as IntegrationSubscriptionId,
 };
+use kairos_primitives::Money;
 use tokio::sync::mpsc;
 
 use super::SourceHandle;
@@ -754,12 +754,12 @@ mod tests {
     use crate::domain::market::MarketDescriptor;
     use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceId, SourceStatus};
     use crate::services::messages::{SourceCommand, SourceInput};
-    use kairos_primitives::{Sequence, Symbol, UnixNanos};
     use kairos_integration::application::{
         AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
         SubscriptionId,
     };
     use kairos_integration::domain::{ConnectionHealth, ConnectionLifecycle};
+    use kairos_primitives::{Sequence, Symbol, UnixNanos};
     use std::collections::VecDeque;
     use tokio::sync::mpsc;
 

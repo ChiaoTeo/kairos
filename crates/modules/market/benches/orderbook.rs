@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kairos_primitives::{Price, Quantity};
 use kairos_market::PriceLevel;
+use kairos_primitives::{Price, Quantity};
 use std::hint::black_box;
 
 fn canonical_checksum_benchmark(c: &mut Criterion) {

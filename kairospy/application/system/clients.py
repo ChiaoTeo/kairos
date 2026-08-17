@@ -1,8 +1,8 @@
 """Typed clients for already-running business processes.
 
-These clients are part of the System boundary.  They control or query a
-process-owned application through its Unix REST socket; they never own
-business state and they are not used by one-shot business CLIs.
+These clients are part of the System boundary. They expose health and control
+commands through Unix REST; business state is read from module-owned typed
+mmap views.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlencode
 
 from .supervisor import UnixRestClient
 
@@ -35,6 +34,10 @@ class SystemRestClient:
         path: str,
         body: Mapping[str, Any] | bytes | None = None,
     ) -> dict[str, Any]:
+        if method == "GET" and path != "/v1/health":
+            raise ValueError(
+                "GET /v1/health is the only REST query; read state from typed mmap views"
+            )
         if isinstance(body, Mapping):
             payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
         else:
@@ -69,76 +72,12 @@ class SystemRestClient:
         return self.request("POST", f"/v1/{component}/command", body)
 
 
-def _query(path: str, values: Mapping[str, Any]) -> str:
-    encoded = [(key, value) for key, value in values.items() if value is not None]
-    return f"{path}?{urlencode(encoded, doseq=True)}" if encoded else path
-
-
 class AccountSystemClient(SystemRestClient):
-    def balances(
-        self,
-        *,
-        segments: list[str] | None = None,
-        include_zero: bool = False,
-        page: int | None = None,
-        page_size: int | None = None,
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            _query(
-                "/v1/balances",
-                {
-                    "segment": segments or [],
-                    "include_zero": str(include_zero).lower(),
-                    "page": page,
-                    "page_size": page_size,
-                },
-            ),
-        )
-
-    def positions(
-        self, *, segments: list[str] | None = None, symbol: str | None = None
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            _query("/v1/positions", {"segment": segments or [], "symbol": symbol}),
-        )
-
-    def open_orders(
-        self, *, symbol: str | None = None, limit: int | None = None
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET", _query("/v1/open-orders", {"symbol": symbol, "limit": limit})
-        )
-
-    def orders(self, *, order_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/orders", {"order_id": order_id}))
-
     def reconcile(self) -> dict[str, Any]:
         return self.request("POST", "/v1/reconcile")
 
-    def market_profiles(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/market-profiles")
-
-    def capabilities(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/capabilities")
-
-    def fees(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/fees")
-
 
 class ExecutionSystemClient(SystemRestClient):
-    def intents(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/intents")
-
-    def intent(self, intent_id: str) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/intent", {"intent_id": intent_id}))
-
-    def intent_events(self, *, intent_id: str | None = None) -> dict[str, Any]:
-        return self.request(
-            "GET", _query("/v1/intent-events", {"intent_id": intent_id})
-        )
-
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/intents", intent)
 
@@ -151,36 +90,6 @@ class ExecutionSystemClient(SystemRestClient):
         return self.request(
             "POST", "/v1/intents/expire", {"intent_id": intent_id, "reason": reason}
         )
-
-    def orders(self, *, account_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/orders", {"account_id": account_id}))
-
-    def open_orders(self, *, account_id: str | None = None) -> dict[str, Any]:
-        return self.request(
-            "GET", _query("/v1/open-orders", {"account_id": account_id})
-        )
-
-    def history(self, *, account_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/history", {"account_id": account_id}))
-
-    def remote_open_orders(self, *, symbol: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/remote-open-orders", {"symbol": symbol}))
-
-    def remote_history(
-        self, *, symbol: str | None = None, limit: int | None = None
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET", _query("/v1/remote-history", {"symbol": symbol, "limit": limit})
-        )
-
-    def remote_order(self, order_id: str) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/remote-order", {"order_id": order_id}))
-
-    def events(self, *, order_id: str | None = None) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/events", {"order_id": order_id}))
-
-    def audit(self, **filters: Any) -> dict[str, Any]:
-        return self.request("GET", _query("/v1/audit", filters))
 
     def submit(
         self, request: Mapping[str, Any], *, dry_run: bool = False

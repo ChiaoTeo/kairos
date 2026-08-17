@@ -77,9 +77,7 @@ impl AsyncAccountEventSource for BinanceOptionsAsyncAccountEventSource {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{
-        Currency, FillId, OrderId, OrderSide, OrderStatus, Symbol, UnixNanos,
-    };
+    use kairos_primitives::{Currency, FillId, OrderId, OrderSide, OrderStatus, Symbol, UnixNanos};
 
     use crate::application::capabilities::account_facts::ExternalAccountEvent;
     use crate::application::capabilities::DecimalValue;

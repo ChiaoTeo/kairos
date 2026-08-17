@@ -2,9 +2,9 @@
 
 pub mod account;
 pub mod registry;
-mod v2_publisher;
+mod publisher;
 
-pub use v2_publisher::{
+pub use publisher::{
     empty_snapshot, AeronAccountEventPublisher, FileAccountPublisher, FlatbuffersAccountPublisher,
     MmapAccountPublisher,
 };

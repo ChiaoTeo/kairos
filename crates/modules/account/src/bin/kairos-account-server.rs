@@ -53,40 +53,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .accounts
         .iter()
         .find(|record| record.account_id == args.account_id)
-        .cloned();
-    let segment_bindings = if let Some(record) =
-        record.as_ref().filter(|value| !value.segments.is_empty())
-    {
-        record
-            .segments
-            .iter()
-            .map(|segment_key| {
-                record
-                    .product_for_segment(segment_key)
-                    .map(|product| {
-                        let binding = AccountSegmentBinding::new(segment_key, product);
-                        record
-                            .segment_trading_modes
-                            .get(segment_key)
-                            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))
-                    })
-                    .ok_or_else(|| format!("account segment {segment_key} has no provider product"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let binding = AccountSegmentBinding::new(&args.segment, &args.product);
-        vec![args
-            .trading_mode
-            .as_ref()
-            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))]
-    };
-    let credential_id = record.as_ref().and_then(|value| {
-        value.credential_id.clone().or_else(|| {
-            value
-                .credentials
-                .first()
-                .map(|binding| binding.credential_id.clone())
+        .cloned()
+        .ok_or_else(|| format!("account binding is not configured: {}", args.account_id))?;
+    if record.segments.is_empty() {
+        return Err(format!("account binding has no segments: {}", record.account_id).into());
+    }
+    let segment_bindings = record
+        .segments
+        .iter()
+        .map(|segment_key| {
+            record
+                .product_for_segment(segment_key)
+                .map(|product| {
+                    let binding = AccountSegmentBinding::new(segment_key, product);
+                    record
+                        .segment_trading_modes
+                        .get(segment_key)
+                        .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))
+                })
+                .ok_or_else(|| format!("account segment {segment_key} has no provider product"))
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    let credential_id = record.credential_id.clone().or_else(|| {
+        record
+            .credentials
+            .first()
+            .map(|binding| binding.credential_id.clone())
     });
     let credential = credential_id.as_deref().and_then(|id| {
         credential_store
@@ -94,28 +86,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .find(|value| value.credential_id == id)
     });
-    let api_key = if args.api_key.is_empty() {
-        credential
-            .and_then(|value| value.api_key_value())
-            .unwrap_or_default()
-    } else {
-        args.api_key.clone()
-    };
-    let secret = if args.secret.is_empty() {
-        credential
-            .and_then(|value| value.secret_value())
-            .unwrap_or_default()
-    } else {
-        args.secret.clone()
-    };
-    let passphrase = if args.passphrase.trim().is_empty() {
-        credential
-            .and_then(|value| value.passphrase_value())
-            .unwrap_or_default()
-    } else {
-        args.passphrase.clone()
-    };
-    let mut options = args.options(record.as_ref(), api_key, secret, passphrase)?;
+    let api_key = credential
+        .and_then(|value| value.api_key_value())
+        .unwrap_or_default();
+    let secret = credential
+        .and_then(|value| value.secret_value())
+        .unwrap_or_default();
+    let passphrase = credential
+        .and_then(|value| value.passphrase_value())
+        .unwrap_or_default();
+    let mut options = args.options(&record, api_key, secret, passphrase)?;
     options.reference_database = Some(workspace.child(&["reference", "reference.sqlite"])?);
     let shared_quota_ledger = workspace
         .state_root()
@@ -162,7 +142,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })
         })
         .transpose()?;
-    let mut composition = if native_binance_account {
+    let composition = if native_binance_account {
         compose_binance_async_account_application(
             &options,
             &segment_bindings,
@@ -201,30 +181,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     };
-    let trade_enabled = record.as_ref().is_none_or(|value| {
+    let trade_enabled = {
         trade_access_enabled(
-            value.permissions.contains_key("trade"),
-            value.credential_role.as_deref(),
+            record.permissions.contains_key("trade"),
+            record.credential_role.as_deref(),
         )
+    };
+    let lease_file = trade_enabled.then_some(&record).map(|value| {
+        workspace
+            .child(&[
+                "state",
+                "account-locks",
+                &format!(
+                    "{}.{}",
+                    lease_component(&value.broker),
+                    lease_component(&args.account_id)
+                ),
+                "owner.json",
+            ])
+            .expect("validated account lease path")
     });
-    composition.application.set_trade_enabled(trade_enabled);
-    let lease_file = trade_enabled
-        .then(|| record.as_ref())
-        .flatten()
-        .map(|value| {
-            workspace
-                .child(&[
-                    "state",
-                    "account-locks",
-                    &format!(
-                        "{}.{}",
-                        lease_component(&value.provider),
-                        lease_component(&args.account_id)
-                    ),
-                    "owner.json",
-                ])
-                .expect("validated account lease path")
-        });
     let process = composition
         .into_process(
             args.account_id,
@@ -256,32 +232,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Parser)]
 #[command(name = "kairos-account", about = "Run the Account actor process")]
 struct Args {
-    #[arg(long, default_value = "binance")]
-    provider: String,
-    #[arg(long, default_value = "spot")]
-    product: String,
-    #[arg(long)]
-    trading_mode: Option<String>,
-    #[arg(long, default_value = "")]
-    api_key: String,
-    #[arg(long, default_value = "")]
-    secret: String,
-    #[arg(long, default_value = "")]
-    passphrase: String,
-    #[arg(long, default_value = "")]
-    base_url: String,
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-    #[arg(long, default_value_t = 4002)]
-    port: u16,
-    #[arg(long, default_value_t = 0)]
-    client_id: i32,
     #[arg(long)]
     account_id: String,
-    #[arg(long, default_value = "spot")]
-    segment: String,
-    #[arg(long, default_value = "live")]
-    environment: String,
     #[arg(long)]
     workspace: String,
     #[arg(long, visible_alias = "launch-mode", default_value = "paper")]
@@ -335,30 +287,25 @@ fn trade_access_enabled(has_trade_permission: bool, credential_role: Option<&str
 impl Args {
     fn options(
         &self,
-        record: Option<&AccountBindingRecord>,
+        record: &AccountBindingRecord,
         api_key: String,
         secret: String,
         passphrase: String,
     ) -> Result<AccountOptions, String> {
-        let provider = record
-            .map(|value| value.provider.clone())
-            .unwrap_or_else(|| self.provider.clone());
+        let provider = record.integration_provider.clone();
         let product = record
-            .and_then(|value| {
-                value
-                    .segments
-                    .first()
-                    .and_then(|segment| value.product_for_segment(segment))
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| self.product.clone());
-        let environment = record
-            .map(|value| value.environment.clone())
-            .unwrap_or_else(|| self.environment.clone());
-        let base_url = if self.base_url.trim().is_empty() {
-            default_rest_endpoint(&provider, &product)?.to_owned()
+            .segments
+            .first()
+            .and_then(|segment| record.product_for_segment(segment))
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                "account binding must configure at least one segment product".to_string()
+            })?;
+        let environment = record.environment.clone();
+        let base_url = if let Some(value) = record.values.get("base_url") {
+            value.clone()
         } else {
-            self.base_url.clone()
+            default_rest_endpoint(&provider, &product)?.to_owned()
         };
         Ok(AccountOptions {
             provider,
@@ -368,19 +315,30 @@ impl Args {
             passphrase: passphrase.into(),
             base_url,
             account_id: self.account_id.clone(),
-            segment: record
-                .and_then(|value| value.segments.first().cloned())
-                .unwrap_or_else(|| self.segment.clone()),
+            segment: record.segments.first().cloned().expect("validated segment"),
             environment,
-            account_model: record.and_then(|value| value.account_model.clone()),
-            initial_balances: record
-                .map(|value| value.initial_balances.clone())
-                .unwrap_or_default(),
-            host: self.host.clone(),
-            port: self.port,
-            client_id: self.client_id,
-            isolated_margin_symbol: record
-                .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
+            account_model: record.account_model.clone(),
+            initial_balances: record.initial_balances.clone(),
+            host: record
+                .values
+                .get("host")
+                .cloned()
+                .unwrap_or_else(|| "127.0.0.1".into()),
+            port: record
+                .values
+                .get("port")
+                .map(|value| value.parse())
+                .transpose()
+                .map_err(|_| "account binding port must be an unsigned 16-bit integer")?
+                .unwrap_or(4002),
+            client_id: record
+                .values
+                .get("client_id")
+                .map(|value| value.parse())
+                .transpose()
+                .map_err(|_| "account binding client_id must be an integer")?
+                .unwrap_or(0),
+            isolated_margin_symbol: record.values.get("isolated_margin_symbol").cloned(),
             reference_database: None,
         })
     }

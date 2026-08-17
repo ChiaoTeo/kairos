@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.application.system.binaries import resolve_binary
 from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
 from kairospy.infrastructure.transport.risk import AeronRiskEventSource
 from kairospy.domain_types import AccountId
@@ -32,7 +31,6 @@ def build_strategy_access(
         else None,
         AeronRiskEventSource(
             aeron_dir=instance.paths.aeron_dir(),
-            binary=resolve_binary("kairos-risk-event-bridge"),
         )
         if enabled
         else None,

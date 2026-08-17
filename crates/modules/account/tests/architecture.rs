@@ -117,12 +117,14 @@ fn account_contract_does_not_expose_execution_order_planning() {
 }
 
 #[test]
-fn account_capabilities_do_not_infer_provider_transfer_support() {
+fn account_application_does_not_expose_provider_capability_or_fee_queries() {
     let source = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/service.rs"),
     )
     .expect("read account application");
-    assert!(source.contains("let can_transfer = false"));
+    assert!(!source.contains("pub fn capabilities("));
+    assert!(!source.contains("pub fn fee_schedules("));
+    assert!(!source.contains("refresh_market_profile"));
     assert!(!source.contains("broker == \"binance\""));
 }
 
@@ -171,6 +173,26 @@ fn account_segment_identity_is_independent_from_provider_product() {
     assert!(!composition.contains("segment_options.product = segment_key"));
     assert!(registry.contains("pub segment_products: BTreeMap<String, String>"));
     assert!(registry.contains("pub segment_trading_modes: BTreeMap<String, String>"));
+}
+
+#[test]
+fn account_broker_identity_is_independent_from_integration_provider_route() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let registry = fs::read_to_string(root.join("src/composition/registry.rs"))
+        .expect("read account registry");
+    let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
+        .expect("read account server");
+    let cli =
+        fs::read_to_string(root.join("src/bin/kairos-account-cli.rs")).expect("read account cli");
+
+    assert!(registry.contains("pub broker: String"));
+    assert!(registry.contains("pub integration_provider: String"));
+    assert!(registry.contains("missing account.integration_provider"));
+    assert!(!registry.contains("or_else(|| table_text(account, \"provider\"))"));
+    assert!(server.contains("record.integration_provider.clone()"));
+    assert!(!server.contains("let provider = record.broker.clone()"));
+    assert!(cli.contains("record.integration_provider.clone()"));
+    assert!(!cli.contains(".map(|record| record.broker.clone())"));
 }
 
 #[test]
@@ -248,7 +270,7 @@ fn native_account_refresh_does_not_bridge_async_io_through_blocking_threads() {
     let application =
         fs::read_to_string(root.join("application/service.rs")).expect("read application facade");
     assert!(application.contains("pub async fn refresh_report_async"));
-    assert!(application.contains("pub async fn refresh_market_profile_async"));
+    assert!(!application.contains("refresh_market_profile"));
 }
 
 #[test]
@@ -360,7 +382,7 @@ fn ibkr_account_uses_one_native_async_hard_session() {
 #[test]
 fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
     let account_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let integration_root = account_root.join("../../../kairos-integration/src");
+    let integration_root = account_root.join("../../platform/integration/src");
     let facts =
         fs::read_to_string(integration_root.join("application/capabilities/account_facts.rs"))
             .expect("read Integration account facts");
@@ -377,4 +399,155 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
     let server = fs::read_to_string(account_root.join("src/bin/kairos-account-server.rs"))
         .expect("read Account server");
     assert!(server.contains("workspace.child(&[\"reference\", \"reference.sqlite\"])"));
+}
+
+#[test]
+fn account_server_bootstrap_selects_only_a_registered_account() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let server =
+        fs::read_to_string(root.join("bin/kairos-account-server.rs")).expect("read Account server");
+    assert!(server.contains("account binding is not configured"));
+    assert!(server.contains("account binding has no segments"));
+    let args = server
+        .split("struct Args {")
+        .nth(1)
+        .and_then(|value| value.split("fn lease_component").next())
+        .expect("Account server Args");
+    for forbidden in [
+        "api_key: String",
+        "secret: String",
+        "provider: String",
+        "product: String",
+        "environment: String",
+    ] {
+        assert!(
+            !args.contains(forbidden),
+            "Account server retains connection selection argument: {forbidden}"
+        );
+    }
+
+    let registry =
+        fs::read_to_string(root.join("composition/registry.rs")).expect("read Account registry");
+    let domain = fs::read_to_string(root.join("domain/mod.rs")).expect("read Account domain");
+    assert!(registry.contains("pub broker: String"));
+    assert!(!registry.contains("pub provider: String"));
+    assert!(domain.contains("pub broker: BrokerId"));
+    assert!(!domain.contains("pub broker: String"));
+}
+
+#[test]
+fn account_control_plane_does_not_duplicate_balance_or_position_views() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let process =
+        fs::read_to_string(root.join("src/application/process.rs")).expect("read Account process");
+    let contract = fs::read_to_string(root.join("contract/src/control/account.rs"))
+        .expect("read Account control contract");
+    for obsolete in [
+        "/v1/balances",
+        "/v1/positions",
+        "/v1/open-orders",
+        "/v1/account-state",
+        "BalancesResponse",
+        "PositionsResponse",
+    ] {
+        assert!(
+            !process.contains(obsolete) && !contract.contains(obsolete),
+            "Account control plane duplicates mmap business view: {obsolete}"
+        );
+    }
+    let publisher = fs::read_to_string(root.join("src/composition/publisher.rs"))
+        .expect("read Account mmap publisher");
+    assert!(publisher.contains("encode_balances"));
+    assert!(publisher.contains("encode_positions"));
+    assert!(publisher.contains("with_applied_revision(snapshot.event_sequence.get())"));
+}
+
+#[test]
+fn account_cli_business_state_queries_read_typed_mmap_without_composing_an_application() {
+    let cli = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),
+    )
+    .expect("read account cli");
+
+    assert!(cli.contains("fn read_mmap_query("));
+    assert!(cli.contains("SharedSnapshotReader::open(snapshot_path)"));
+    assert!(cli.contains("AccountViewKind::ObservedOrders"));
+    assert!(cli.contains("if is_mmap_query(&command)"));
+    for forbidden in [
+        "composition.application.snapshot_query(",
+        "composition.application.balances_query(",
+        "composition.application.balance_rows_query(",
+        "composition.application.positions_query(",
+        "composition.application.open_orders_query(",
+    ] {
+        assert!(
+            !cli.contains(forbidden),
+            "Account CLI retains direct application query path {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn account_application_has_no_synchronous_business_query_facade() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let application = fs::read_to_string(root.join("src/application/service.rs"))
+        .expect("read Account application");
+    let exports = fs::read_to_string(root.join("src/lib.rs")).expect("read Account exports");
+
+    assert!(!root.join("src/application/query.rs").exists());
+    for forbidden in [
+        "pub fn query(",
+        "pub fn snapshot(",
+        "pub fn snapshot_query(",
+        "pub fn balances(",
+        "pub fn balances_query(",
+        "pub fn positions(",
+        "pub fn positions_query(",
+        "pub fn open_orders(",
+        "pub fn open_orders_query(",
+    ] {
+        assert!(
+            !application.contains(forbidden),
+            "Account application retains synchronous business query {forbidden}"
+        );
+    }
+    assert!(!exports.contains("AccountQuery"));
+    assert!(!exports.contains("AccountDataQuery"));
+}
+
+#[test]
+fn account_rest_exposes_health_as_its_only_get_query() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let process =
+        fs::read_to_string(root.join("src/application/process.rs")).expect("read Account process");
+    assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
+    assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
+
+    let contract = fs::read_to_string(root.join("contract/src/control/client.rs"))
+        .expect("read Account control client");
+    assert_eq!(contract.matches("\"GET\"").count(), 1);
+    assert!(contract.contains("\"GET\", \"/v1/health\""));
+
+    let health = process
+        .split("fn health_json(&self)")
+        .nth(1)
+        .expect("Account health function")
+        .split("fn business_status")
+        .next()
+        .expect("Account health body");
+    for forbidden in [
+        "account_id",
+        "actor_id",
+        "generation",
+        "event_sequence",
+        "business_time_unix_nanos",
+        "stream_queue_depth",
+        "persistence_queue_depth",
+        "last_refresh",
+    ] {
+        assert!(
+            !health.contains(forbidden),
+            "Account health leaks {forbidden}"
+        );
+    }
 }

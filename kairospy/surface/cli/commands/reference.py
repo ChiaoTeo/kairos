@@ -19,7 +19,7 @@ def _client(workspace: Path | None) -> ReferenceClient:
     owner = WorkspaceApplication().open(workspace)
     return ReferenceClient(
         socket_path=owner.paths.reference_socket(),
-        database_path=owner.paths.reference_database(),
+        view_root=owner.paths.child("snapshots", "v2"),
     )
 
 

@@ -42,6 +42,27 @@ class DeliveryCertainty(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
+class CommitmentStatus(StrEnum):
+    HELD_BEFORE_SEND = "held_before_send"
+    ACTIVE = "active"
+    UNCERTAIN = "uncertain"
+    REDUCED = "reduced"
+    RELEASED = "released"
+    RECONCILED = "reconciled"
+
+
+class RiskReservationSagaStatus(StrEnum):
+    AUTHORIZE_PENDING = "authorize_pending"
+    ACTIVE = "active"
+    RESIZE_PENDING = "resize_pending"
+    RELEASE_PENDING = "release_pending"
+    CONSUME_PENDING = "consume_pending"
+    RELEASED = "released"
+    CONSUMED = "consumed"
+    EXPIRED = "expired"
+    UNCERTAIN = "uncertain"
+
+
 class IntentStatus(StrEnum):
     ACCEPTED = "accepted"
     PLANNING = "planning"
@@ -242,6 +263,36 @@ class Order:
     limit_price: Decimal | None
     status: OrderStatus
     updated_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class OrderCommitment:
+    order_id: OrderId
+    account_id: AccountId
+    segment_key: SegmentKey
+    instrument_id: InstrumentId
+    resource_kind: str
+    resource_id: str
+    amount: Decimal
+    remaining_quantity: Decimal
+    status: CommitmentStatus
+    basis_kind: str
+    updated_at_unix_nanos: int
+
+
+@dataclass(frozen=True, slots=True)
+class RiskReservationSaga:
+    order_id: OrderId
+    reservation_id: str
+    idempotency_key: str
+    account_id: AccountId
+    amount: Decimal
+    status: RiskReservationSagaStatus
+    risk_generation: int
+    risk_event_sequence: int
+    policy_version: int
+    expires_at_unix_nanos: int
+    updated_at_unix_nanos: int
 
 
 @dataclass(frozen=True, slots=True)

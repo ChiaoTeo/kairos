@@ -1,7 +1,5 @@
 use crate::application::MarkToMarket;
-use crate::application::{
-    AccountProjection, AccountRefreshIssue, AccountRefreshReport, AccountsSnapshot,
-};
+use crate::application::{AccountRefreshIssue, AccountRefreshReport, AccountsSnapshot};
 use crate::domain::{
     AccountEvent, AccountFill, AccountSegment, AccountSnapshot, ApplyOutcome, Money, Position,
     SegmentKey, SignedQuantity, SnapshotKind,
@@ -353,10 +351,6 @@ impl AccountRuntime {
         self.refresh_report(account_id, segments)
     }
 
-    pub(crate) fn query(&self, account_id: &str, segments: &[String]) -> Vec<AccountProjection> {
-        self.actor.query(account_id, segments)
-    }
-
     pub(crate) fn snapshot(&self) -> AccountsSnapshot {
         (*self.cached_snapshot).clone()
     }
@@ -377,12 +371,6 @@ impl AccountRuntime {
         self.persistence
             .as_ref()
             .and_then(AccountPersistenceWorker::take_error)
-    }
-
-    pub(crate) fn persistence_queue_depth(&self) -> usize {
-        self.persistence
-            .as_ref()
-            .map_or(0, AccountPersistenceWorker::queue_depth)
     }
 
     pub(crate) fn actor_id(&self) -> &str {

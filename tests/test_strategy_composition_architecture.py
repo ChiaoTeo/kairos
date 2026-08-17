@@ -187,10 +187,6 @@ def test_shared_market_access_does_not_claim_launch_instance_scope(
     workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="shared")
     instance = workspace.instance("paper", "launch", "instance")
     instance.prepare()
-    monkeypatch.setattr(
-        "kairospy.application.market.composition.resolve_binary",
-        lambda _: "/usr/bin/true",
-    )
 
     access = build_market_strategy_access(
         workspace=workspace,

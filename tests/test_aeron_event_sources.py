@@ -1,35 +1,36 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
+from kairospy.infrastructure.transport import native_event
 from kairospy.infrastructure.transport.account import AeronAccountEventSource
 from kairospy.infrastructure.transport.execution import AeronExecutionEventSource
+from kairospy.infrastructure.transport.generated_spec import (
+    ACCOUNT_EVENTS,
+    EXECUTION_EVENTS,
+    MARKET_EVENTS,
+    RISK_EVENTS,
+)
 from kairospy.infrastructure.transport.market import AeronMarketEventSource
 from kairospy.infrastructure.transport.risk import AeronRiskEventSource
 
 
 @pytest.mark.parametrize(
-    ("source_type", "message"),
+    ("source_type", "stream_id"),
     (
-        (AeronMarketEventSource, "Market Aeron bridge ended unexpectedly"),
-        (AeronAccountEventSource, "Account Aeron bridge ended unexpectedly"),
-        (AeronExecutionEventSource, "Execution Aeron bridge ended unexpectedly"),
-        (AeronRiskEventSource, "Risk Aeron bridge ended unexpectedly"),
+        (AeronMarketEventSource, MARKET_EVENTS),
+        (AeronAccountEventSource, ACCOUNT_EVENTS),
+        (AeronExecutionEventSource, EXECUTION_EVENTS),
+        (AeronRiskEventSource, RISK_EVENTS),
     ),
 )
-def test_live_aeron_source_never_treats_bridge_exit_as_end_of_stream(
-    source_type, message: str
+def test_aeron_sources_use_the_generated_native_stream_spec(
+    source_type, stream_id: int
 ) -> None:
-    source = source_type(binary="/usr/bin/true")
+    source = source_type(aeron_dir="/workspace/run/aeron/media")
 
-    async def collect() -> None:
-        async for _ in source.events():
-            pass
-
-    with pytest.raises(RuntimeError, match=message):
-        asyncio.run(collect())
+    assert source._aeron_dir == "/workspace/run/aeron/media"
+    assert source._spec.stream_id == stream_id
 
 
 @pytest.mark.parametrize(
@@ -41,22 +42,24 @@ def test_live_aeron_source_never_treats_bridge_exit_as_end_of_stream(
         AeronRiskEventSource,
     ),
 )
-def test_aeron_sources_bind_the_workspace_media_driver(source_type) -> None:
-    source = source_type(binary="bridge", aeron_dir="/workspace/run/aeron/media")
+def test_live_aeron_source_readiness_opens_and_closes_native_subscription(
+    monkeypatch: pytest.MonkeyPatch, source_type
+) -> None:
+    opened: list[tuple[object, str | None, int]] = []
 
-    assert source._command()[-2:] == ["--aeron-dir", "/workspace/run/aeron/media"]
+    class Subscription:
+        def __init__(self, spec, *, aeron_dir, queue_capacity) -> None:
+            opened.append((spec, aeron_dir, queue_capacity))
+            self.closed = False
 
+        def close(self) -> None:
+            self.closed = True
 
-@pytest.mark.parametrize(
-    "source_type",
-    (
-        AeronMarketEventSource,
-        AeronAccountEventSource,
-        AeronExecutionEventSource,
-        AeronRiskEventSource,
-    ),
-)
-def test_live_aeron_source_readiness_executes_bridge_probe(source_type) -> None:
-    source_type(binary="/usr/bin/true").check_ready()
-    with pytest.raises(RuntimeError, match="readiness failed"):
-        source_type(binary="/usr/bin/false").check_ready()
+    monkeypatch.setattr(native_event.native, "AeronSubscription", Subscription)
+    source = source_type(aeron_dir="/workspace/run/aeron/media")
+
+    source.check_ready()
+
+    assert len(opened) == 1
+    assert opened[0][1:] == ("/workspace/run/aeron/media", 1024)
+    assert source._subscription is None

@@ -24,7 +24,8 @@ from kairospy.infrastructure.contracts.market import (
     MarketViewKind,
     MarketViewReader,
 )
-from kairospy.infrastructure.transport.aeron_bridge import check_aeron_bridge
+from kairospy.infrastructure.transport.native_event import NativeEventSource
+from kairospy.infrastructure.transport.generated_spec import DEFAULT_CHANNEL, MARKET_EVENTS
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
 # for sibling imports. Keep that generated namespace private to this adapter
@@ -399,7 +400,7 @@ class UnixMarketEventStream:
             raise ValueError("reconnect_delay cannot be negative")
         self.reconnect_delay = reconnect_delay
 
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
+    async def replay_from(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
         cursor = max(0, after_sequence)
         while True:
             try:
@@ -431,69 +432,21 @@ class UnixMarketEventStream:
             await asyncio.sleep(self.reconnect_delay)
 
 
-class AeronMarketEventSource:
+class AeronMarketEventSource(NativeEventSource[MarketEventRecord]):
     """Market-owned adapter over the native Aeron subscription bridge."""
 
     replayable = False
-    join_from_latest = True
-
     def __init__(
         self,
         *,
         aeron_dir: str | Path | None = None,
-        channel: str = "aeron:udp?endpoint=localhost:40123",
-        stream_id: int = 1301,
-        binary: str,
+        channel: str = DEFAULT_CHANNEL,
+        stream_id: int = MARKET_EVENTS,
     ) -> None:
-        self.aeron_dir = None if aeron_dir is None else str(aeron_dir)
-        self.channel = channel
-        self.stream_id = stream_id
-        self.binary = binary
-
-    def _command(self) -> list[str]:
-        command = [
-            self.binary,
-            "--aeron-channel",
-            self.channel,
-            "--stream-id",
-            str(self.stream_id),
-        ]
-        if self.aeron_dir is not None:
-            command.extend(("--aeron-dir", self.aeron_dir))
-        return command
-
-    def check_ready(self) -> None:
-        check_aeron_bridge(self._command(), domain="Market")
-
-    async def events(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
-        process = await asyncio.create_subprocess_exec(
-            *self._command(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        super().__init__(
+            decoder=decode_market_event,
+            aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
         )
-        assert process.stdout is not None
-        try:
-            while True:
-                try:
-                    size = struct.unpack(">I", await process.stdout.readexactly(4))[0]
-                    if size == 0 or size > 4 * 1024 * 1024:
-                        raise ValueError("invalid Market Aeron frame length")
-                    payload = await process.stdout.readexactly(size)
-                except asyncio.IncompleteReadError:
-                    break
-                record = decode_market_event(payload)
-                if record.sequence > after_sequence:
-                    yield record
-            status = await process.wait()
-            if status != 0:
-                assert process.stderr is not None
-                error = (await process.stderr.read()).decode(errors="replace").strip()
-                raise RuntimeError(error or f"Market Aeron bridge exited with {status}")
-            raise RuntimeError("Market Aeron bridge ended unexpectedly")
-        finally:
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
 
 
 def decode_market_event(payload: bytes) -> MarketEventRecord:

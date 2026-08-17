@@ -83,6 +83,13 @@ where
         self.source.provider_health()
     }
 
+    pub async fn current_catalog(&mut self) -> ReferenceResult<ReferenceCatalog> {
+        self.store
+            .load()
+            .await
+            .map(|value| value.unwrap_or_default())
+    }
+
     pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
         let normalized = self.source.normalized_facts_authoritative();

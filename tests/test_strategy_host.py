@@ -191,7 +191,7 @@ class TimerStrategy(Strategy):
 class FiniteReplayStream(InMemoryMarketEventSource):
     replayable = True
 
-    async def events(self, after_sequence: int = 0):
+    async def replay_from(self, after_sequence: int = 0):
         while self._events:
             event = self._events.popleft()
             if event.metadata.sequence > after_sequence:
@@ -218,7 +218,7 @@ class GapThenRecoveryStream:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def events(self, after_sequence: int = 0):
+    async def replay_from(self, after_sequence: int = 0):
         self.calls += 1
         if self.calls == 1:
             raise EventStreamGap(self.stream_id, after_sequence + 1, after_sequence + 2)
@@ -848,7 +848,7 @@ def test_strategy_control_uses_instance_unix_rest_socket(tmp_path: Path) -> None
             host.start()
             bus.resolve(bus.requests[0].request_id)
             host.refresh()
-            status = await UnixRestClient(socket).request("GET", "/v1/status")
+            status = await UnixRestClient(socket).request("GET", "/v1/health")
             assert status["launch_id"] == "btc-paper"
             assert status["status"] == "ready"
             assert status["readiness"] == "ready"

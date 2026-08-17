@@ -41,7 +41,7 @@ kairospy-strategy-cli = "kairospy.bin.strategy_cli:main"
 kairospy-strategy-server = "kairospy.bin.strategy:main"
 
 [build-system]
-requires = ["setuptools>=68", "wheel>=0.43"]
+requires = ["setuptools>=68", "setuptools-rust>=1.11", "wheel>=0.43"]
 build-backend = "backend"
 backend-path = ["."]
 
@@ -50,6 +50,12 @@ include = ["kairospy*"]
 
 [tool.setuptools]
 py-modules = ["backend"]
+
+[[tool.setuptools-rust.ext-modules]]
+target = "kairospy._native_transport"
+path = "crates/platform/python-transport/Cargo.toml"
+binding = "PyO3"
+py-limited-api = "cp311"
 
 [tool.setuptools.package-data]
 kairospy = ["_bin/**/*"]

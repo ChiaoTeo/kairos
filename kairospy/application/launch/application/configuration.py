@@ -220,6 +220,22 @@ class LaunchConfig:
             else _text(raw_market_profile, f"{mode}.market.profile")
         )
         execution = dict(self.execution)
+        if (
+            mode in {"backtest", "paper"}
+            and execution.get("enabled", True)
+            and not execution.get("routes")
+        ):
+            account_ids = self.account_refs or ("main",)
+            execution["routes"] = [
+                {
+                    "route_id": f"{account_id}-simulated-spot",
+                    "account_id": account_id,
+                    "segment_key": "spot",
+                    "participant_id": "simulated",
+                    "product": "spot",
+                }
+                for account_id in account_ids
+            ]
         if mode in {"backtest", "paper"}:
             execution.setdefault("dry_run", True)
         else:
@@ -488,7 +504,28 @@ class LaunchConfig:
                 "environment"
             ) not in {"paper", "sandbox", "simulation", "testnet"}:
                 issues.append("account.environment must be paper-compatible")
+        risk = self.values.get("risk")
+        if risk is not None and not isinstance(risk, Mapping):
+            issues.append("risk must be a table")
+        elif isinstance(risk, Mapping):
+            profile = risk.get("profile")
+            if profile is not None and (
+                not isinstance(profile, str) or not profile.strip()
+            ):
+                issues.append("risk.profile must be a non-empty string")
+            if mode == "live" and profile == "simulation-default":
+                issues.append(
+                    "risk.profile simulation-default is forbidden for live launches"
+                )
+        if mode == "live" and (
+            not isinstance(risk, Mapping) or not risk.get("profile")
+        ):
+            issues.append("risk.profile is required for live launches")
         execution = self.values.get("execution")
+        if mode == "live" and not isinstance(execution, Mapping):
+            issues.append(
+                "execution must be explicitly configured or disabled for live launches"
+            )
         if (
             isinstance(execution, Mapping)
             and "enabled" in execution
@@ -516,7 +553,11 @@ class LaunchConfig:
             and not isinstance(execution["dry_run"], bool)
         ):
             issues.append("execution.dry_run must be a boolean")
-        if isinstance(execution, Mapping) and "routes" in execution:
+        if (
+            isinstance(execution, Mapping)
+            and execution.get("enabled", True)
+            and not (mode in {"backtest", "paper"} and "routes" not in execution)
+        ):
             routes = execution.get("routes")
             if not isinstance(routes, list) or not routes:
                 issues.append(
@@ -529,7 +570,13 @@ class LaunchConfig:
                     if not isinstance(route, Mapping):
                         issues.append(f"{prefix} must be a table")
                         continue
-                    for field in ("route_id", "provider", "product"):
+                    for field in (
+                        "route_id",
+                        "account_id",
+                        "segment_key",
+                        "participant_id",
+                        "product",
+                    ):
                         value = route.get(field)
                         if not isinstance(value, str) or not value.strip():
                             issues.append(f"{prefix}.{field} is required")
@@ -538,17 +585,25 @@ class LaunchConfig:
                         if route_id in route_ids:
                             issues.append(f"duplicate execution route_id: {route_id}")
                         route_ids.add(route_id)
+                    route_account_id = route.get("account_id")
+                    if (
+                        isinstance(route_account_id, str)
+                        and self.account_refs
+                        and route_account_id not in self.account_refs
+                    ):
+                        issues.append(
+                            f"{prefix}.account_id is not an enabled launch account: "
+                            f"{route_account_id}"
+                        )
                     for secret in ("api_key", "secret", "api_secret", "passphrase"):
                         if secret in route:
                             issues.append(
                                 f"{prefix}.{secret} is forbidden; use credential_id"
                             )
-                if (
-                    execution.get("provider") is not None
-                    or execution.get("product") is not None
-                ):
+            for obsolete in ("provider", "product"):
+                if execution.get(obsolete) is not None:
                     issues.append(
-                        "execution.routes cannot be combined with execution.provider/product"
+                        f"execution.{obsolete} is obsolete; configure execution.routes"
                     )
         mode_config = self.values.get(mode) if mode else None
         if isinstance(mode_config, Mapping) and "market" in mode_config:

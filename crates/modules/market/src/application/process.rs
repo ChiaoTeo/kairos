@@ -630,6 +630,18 @@ impl MarketActorTask {
             "market control request",
             json!({"method": method, "path": path}),
         );
+        if method == "GET" && path != HEALTH_PATH {
+            return MarketHttpResponse {
+                status: 405,
+                payload: json!({"error":"Market business queries are available only through typed mmap views"}),
+            };
+        }
+        if path == HEALTH_PATH && method != "GET" {
+            return MarketHttpResponse {
+                status: 405,
+                payload: json!({"error":"/v1/health only accepts GET"}),
+            };
+        }
         let command_key = if matches!(
             path,
             "/v1/subscribe"
@@ -700,10 +712,6 @@ impl MarketActorTask {
                 } else {
                     (status, payload)
                 }
-            }
-            path if path.starts_with("/v1/subscriptions/") && method == "GET" => {
-                let subscription_id = path.trim_start_matches("/v1/subscriptions/");
-                self.get_subscription(subscription_id)
             }
             path if path.starts_with("/v1/subscriptions/") && method == "DELETE" => {
                 let (status, payload) = self.unsubscribe(body);
@@ -818,61 +826,8 @@ impl MarketActorTask {
                 crate::FeedStatus::WarmingUp => "warming_up",
                 crate::FeedStatus::Degraded => "degraded",
             },
-            "actor_id": snapshot.actor_id,
-            "generation": snapshot.generation,
-            "event_sequence": snapshot.event_sequence,
-            "subscription_count": snapshot.subscriptions.len(),
-            "subscriptions": snapshot.subscriptions.iter().map(|subscription| json!({
-                "id": subscription.id,
-                "status": subscription.status,
-                "member_status": subscription.member_status,
-            })).collect::<Vec<_>>(),
-            "source_count": snapshot.sources.len(),
-            "feed_status": snapshot.feed_status,
+            "dependencies": { "feed_status": snapshot.feed_status },
         })
-    }
-
-    fn get_subscription(&self, subscription_id: &str) -> (u16, Value) {
-        let Ok(id) = SubscriptionId::new(subscription_id) else {
-            return (
-                404,
-                json!({"error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
-            );
-        };
-        let Some(subscription) = self
-            .application
-            .snapshot()
-            .subscriptions
-            .into_iter()
-            .find(|subscription| subscription.id == id)
-        else {
-            return (
-                404,
-                json!({"error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
-            );
-        };
-        let members = subscription
-            .members
-            .into_values()
-            .map(|member| {
-                json!({
-                    "market_id": member.market_id,
-                    "instrument_id": member.instrument_id,
-                    "source_id": member.source_id,
-                    "source_symbol": member.source_symbol,
-                })
-            })
-            .collect::<Vec<_>>();
-        (
-            200,
-            json!({
-                "subscription_id": subscription_id,
-                "owner_id": subscription.owner_id,
-                "status": subscription.status,
-                "members": members,
-                "updated_at_unix_nanos": now_unix_nanos(),
-            }),
-        )
     }
 
     fn subscribe(&mut self, body: &str) -> (u16, Value) {

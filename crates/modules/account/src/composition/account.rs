@@ -7,15 +7,14 @@ use crate::domain::{
     SignedQuantity,
 };
 use crate::services::integration::{
-    AccountAsyncEventSource, AccountAsyncMarketProfileConnection, AccountAsyncMarketProfileGateway,
-    AccountAsyncSnapshotConnection, AccountAsyncSnapshotGateway, AccountInstrumentResolver,
-    AccountMarketProfileGateway, AccountSnapshotGateway,
+    AccountAsyncEventSource, AccountAsyncSnapshotConnection, AccountAsyncSnapshotGateway,
+    AccountInstrumentResolver, AccountSnapshotGateway,
 };
 use crate::services::persistence::JsonAccountStore;
 use kairos_integration::application::{
     AsyncAccountCredentialInspectionConnection, ExternalAccountCredentialProfile,
 };
-use kairos_integration::blocking::{AccountMarketProfileConnection, AccountReadConnection};
+use kairos_integration::blocking::AccountReadConnection;
 use kairos_integration::participants::binance::ConnectionDomain as BinanceConnectionDomain;
 use kairos_integration::participants::binance::{
     BinanceCoinMConnection, BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig,
@@ -355,7 +354,6 @@ pub fn compose_binance_async_account_application(
         .map_err(|error| error.to_string())?;
     let mut account_segments = Vec::with_capacity(segments.len());
     let mut sources = std::collections::BTreeMap::new();
-    let mut profile_sources = std::collections::BTreeMap::new();
     let mut streams = Vec::new();
     for configured_segment in segments {
         let segment_key = configured_segment.segment_key.clone();
@@ -392,12 +390,6 @@ pub fn compose_binance_async_account_application(
                     })
                     .map_err(|error| error.to_string())?;
                 streams.push(stream);
-                profile_sources.insert(
-                    segment_key.clone(),
-                    AccountAsyncMarketProfileConnection::BinanceSpot(
-                        private.spot_account_market_profile(),
-                    ),
-                );
                 AccountAsyncSnapshotConnection::BinanceSpot(private.spot_account_read())
             }
             "funding" => {
@@ -514,11 +506,10 @@ pub fn compose_binance_async_account_application(
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
-    application.attach_async_sources(
-        AccountAsyncSnapshotGateway::new(sources, instrument_resolver.clone()),
-        (!profile_sources.is_empty())
-            .then(|| AccountAsyncMarketProfileGateway::new(profile_sources)),
-    );
+    application.attach_async_sources(AccountAsyncSnapshotGateway::new(
+        sources,
+        instrument_resolver.clone(),
+    ));
     Ok(AccountComposition {
         application,
         provider: "binance".into(),
@@ -574,7 +565,6 @@ pub fn compose_okx_async_account_application(
         .map_err(|error| error.to_string())?;
     let mut account_segments = Vec::with_capacity(segments.len());
     let mut sources = std::collections::BTreeMap::new();
-    let mut profile_sources = std::collections::BTreeMap::new();
     let mut streams = Vec::new();
     for (configured_segment, instrument_type) in segments.iter().zip(instrument_types) {
         let segment_key = configured_segment.segment_key.clone();
@@ -588,12 +578,6 @@ pub fn compose_okx_async_account_application(
         sources.insert(
             segment_key.clone(),
             AccountAsyncSnapshotConnection::OkxTrading(principal.trading_account(instrument_type)),
-        );
-        profile_sources.insert(
-            segment_key.clone(),
-            AccountAsyncMarketProfileConnection::OkxTrading(
-                principal.trading_account_market_profile(instrument_type),
-            ),
         );
         if let Some(websocket_url) = private_websocket_url {
             streams.push(AccountAsyncEventSource::OkxTrading {
@@ -617,10 +601,10 @@ pub fn compose_okx_async_account_application(
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
-    application.attach_async_sources(
-        AccountAsyncSnapshotGateway::new(sources, instrument_resolver.clone()),
-        Some(AccountAsyncMarketProfileGateway::new(profile_sources)),
-    );
+    application.attach_async_sources(AccountAsyncSnapshotGateway::new(
+        sources,
+        instrument_resolver.clone(),
+    ));
     Ok(AccountComposition {
         application,
         provider: "okx".into(),
@@ -682,16 +666,13 @@ pub fn compose_ibkr_async_account_application(
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
-    application.attach_async_sources(
-        AccountAsyncSnapshotGateway::new(
-            std::collections::BTreeMap::from([(
-                segment_key.clone(),
-                AccountAsyncSnapshotConnection::Ibkr(connection.account_read()),
-            )]),
-            instrument_resolver.clone(),
-        ),
-        None,
-    );
+    application.attach_async_sources(AccountAsyncSnapshotGateway::new(
+        std::collections::BTreeMap::from([(
+            segment_key.clone(),
+            AccountAsyncSnapshotConnection::Ibkr(connection.account_read()),
+        )]),
+        instrument_resolver.clone(),
+    ));
     let source = connection
         .account_events(segment_key.clone())
         .map_err(|error| error.to_string())?;
@@ -901,7 +882,6 @@ pub fn compose_blocking_account_application_for_segments(
         .map_err(|error| error.to_string())?;
     let mut account_segments = Vec::with_capacity(segments.len());
     let mut sources = std::collections::BTreeMap::new();
-    let mut profile_sources = std::collections::BTreeMap::new();
     for segment in segments {
         let segment_key = &segment.segment_key;
         let mut segment_options = options.clone();
@@ -927,20 +907,14 @@ pub fn compose_blocking_account_application_for_segments(
         });
         let connection = compose_blocking_account(&segment_options)?;
         sources.insert(segment_key.clone(), connection);
-        if let Some(connection) = compose_blocking_market_profile(&segment_options)? {
-            profile_sources.insert(segment_key.clone(), connection);
-        }
     }
     let instrument_resolver = load_instrument_resolver(options)?;
-    let mut application = AccountApplication::with_dependencies(
+    let application = AccountApplication::with_dependencies(
         account_segments,
         AccountSnapshotGateway::integration(sources, instrument_resolver.clone()),
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
-    if !profile_sources.is_empty() {
-        application.attach_market_profile_source(AccountMarketProfileGateway::new(profile_sources));
-    }
     Ok(AccountComposition {
         application,
         provider,
@@ -1145,23 +1119,6 @@ fn compose_blocking_credential_inspection(
     .map_err(|error| error.to_string())
 }
 
-fn compose_blocking_market_profile(
-    options: &AccountOptions,
-) -> Result<Option<Box<dyn AccountMarketProfileConnection + Send>>, String> {
-    if normalized_provider(&options.provider) != "binance"
-        || account_product(options)? != AccountProduct::Spot
-    {
-        return Ok(None);
-    }
-    binance::blocking::spot_market_profile(
-        options.api_key.expose_secret().to_owned(),
-        options.secret.expose_secret().to_owned(),
-        options.base_url.clone(),
-    )
-    .map(Some)
-    .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod secret_tests {
     use super::{
@@ -1217,7 +1174,7 @@ mod secret_tests {
         )
         .unwrap();
         assert_eq!(composition.async_account_streams.len(), 1);
-        assert_eq!(composition.application.async_source_counts(), (1, 1));
+        assert_eq!(composition.application.async_source_count(), 1);
         assert_eq!(composition.provider, "binance");
     }
 
@@ -1233,7 +1190,7 @@ mod secret_tests {
         )
         .unwrap();
 
-        assert_eq!(composition.application.async_source_counts(), (1, 1));
+        assert_eq!(composition.application.async_source_count(), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1248,7 +1205,7 @@ mod secret_tests {
         )
         .unwrap();
         assert_eq!(composition.async_account_streams.len(), 1);
-        assert_eq!(composition.application.async_source_counts(), (2, 1));
+        assert_eq!(composition.application.async_source_count(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1273,7 +1230,7 @@ mod secret_tests {
                 stream_count,
                 "{segment}"
             );
-            assert_eq!(composition.application.async_source_counts(), (1, 0));
+            assert_eq!(composition.application.async_source_count(), 1);
         }
     }
 
@@ -1350,11 +1307,11 @@ mod secret_tests {
         )
         .unwrap();
         assert_eq!(composition.async_account_streams.len(), 1);
-        assert_eq!(composition.application.async_source_counts(), (1, 0));
+        assert_eq!(composition.application.async_source_count(), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn okx_segments_share_one_native_principal_and_project_async_profiles() {
+    async fn okx_segments_share_one_native_principal_for_account_facts() {
         let mut options = options();
         options.provider = "okx".into();
         options.passphrase = "passphrase".into();
@@ -1369,7 +1326,7 @@ mod secret_tests {
         .unwrap();
         assert_eq!(composition.provider, "okx");
         assert_eq!(composition.async_account_streams.len(), 2);
-        assert_eq!(composition.application.async_source_counts(), (2, 2));
+        assert_eq!(composition.application.async_source_count(), 2);
     }
 
     #[test]
@@ -1410,6 +1367,6 @@ mod secret_tests {
             compose_ibkr_async_account_application(&options, &[binding("equity")], None).unwrap();
         assert_eq!(composition.provider, "ibkr");
         assert_eq!(composition.async_account_streams.len(), 1);
-        assert_eq!(composition.application.async_source_counts(), (1, 0));
+        assert_eq!(composition.application.async_source_count(), 1);
     }
 }

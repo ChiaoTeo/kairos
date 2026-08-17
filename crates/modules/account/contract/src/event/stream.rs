@@ -32,7 +32,8 @@ impl AccountEventStream {
                     {
                         Ok(value) => value,
                         Err(error) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
+                            let _ = sender
+                                .blocking_send(Err(ContractError::Transport(error.to_string())));
                             return;
                         }
                     };
@@ -48,7 +49,8 @@ impl AccountEventStream {
                         }
                         Ok(None) => std::thread::yield_now(),
                         Err(error) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(error)));
+                            let _ = sender
+                                .blocking_send(Err(ContractError::Transport(error.to_string())));
                             break;
                         }
                     }

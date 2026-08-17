@@ -94,7 +94,7 @@ _VIEW_ROOTS: dict[MarketViewKind, tuple[bytes, str, str]] = {
         "FundingRateLatestView",
     ),
     MarketViewKind.OPEN_INTEREST: (
-        b"MLO2",
+        b"MLI2",
         "OpenInterestLatestView",
         "OpenInterestLatestView",
     ),

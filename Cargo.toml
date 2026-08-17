@@ -6,6 +6,7 @@ members = [
     "crates/platform/network",
     "crates/platform/protocol",
     "crates/platform/transport",
+    "crates/platform/python-transport",
     "crates/platform/workspace",
     "crates/modules/account",
     "crates/modules/account/contract",

@@ -37,9 +37,13 @@ use kairos_integration::participants::okx::{
 use kairos_integration::participants::{binance, ibkr};
 use secrecy::{ExposeSecret, SecretString};
 
-mod v2_publishers;
+mod account_facts;
+mod risk_worker;
+mod publishers;
 
-pub use v2_publishers::{
+pub use account_facts::{QueuedExecutionAccountFacts, SocketExecutionAccountFacts};
+pub use risk_worker::QueuedExecutionRiskReservations;
+pub use publishers::{
     AeronExecutionEventPublisher, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
 };
 
@@ -54,51 +58,44 @@ pub use crate::services::simulator::{
 /// composition installs this before accepting submissions; Execution never
 /// reconstructs provider symbols or product discriminators from business IDs.
 pub fn load_reference_execution_accesses(
-    database: &Path,
-) -> Result<
-    Vec<(
-        kairos_primitives::ExecutionAccessId,
-        ProviderInstrumentRef,
-    )>,
-    String,
-> {
-    let reader = kairos_reference_contract::ReferenceSqliteReader::open(database)
-        .map_err(|error| error.to_string())?;
-    let mut after_access_id = None;
-    let mut result = Vec::new();
-    loop {
-        let page = reader
-            .execution_accesses(&kairos_reference_contract::SqliteExecutionAccessQuery {
-                statuses: vec!["active".into()],
-                after_access_id: after_access_id.clone(),
-                limit: 1_000,
-                ..Default::default()
-            })
-            .map_err(|error| error.to_string())?;
-        if page.is_empty() {
-            break;
-        }
-        for access in &page {
-            result.push(provider_instrument_from_execution_access(access)?);
-        }
-        after_access_id = page.last().map(|access| access.access_id.clone());
-        if page.len() < 1_000 {
-            break;
-        }
+    view_root: &Path,
+    actor_id: &str,
+) -> Result<Vec<(kairos_primitives::ExecutionAccessId, ProviderInstrumentRef)>, String> {
+    let frame = kairos_reference_contract::ReferenceViewReader::open(
+        view_root,
+        kairos_reference_contract::ReferenceViewKey::latest(actor_id),
+    )
+    .and_then(|reader| reader.read())
+    .map_err(|error| error.to_string())?;
+    let view = frame.decode().map_err(|error| error.to_string())?;
+    if frame.generation() != view.metadata().generation()
+        || frame.envelope_metadata().applied_event_sequence
+            != view.metadata().applied_revision().unwrap_or_default()
+    {
+        return Err("Reference mmap watermark mismatch".into());
     }
-    Ok(result)
+    view.state()
+        .execution_accesses()
+        .iter()
+        .filter(|access| access.status().variant_name() == Some("ACTIVE"))
+        .map(|access| {
+            provider_instrument_from_execution_access(
+                access.access_id(),
+                access.provider_id(),
+                access.product_family(),
+                access.provider_symbol(),
+            )
+        })
+        .collect()
 }
 
 fn provider_instrument_from_execution_access(
-    access: &kairos_reference_contract::ExecutionAccess,
-) -> Result<
-    (
-        kairos_primitives::ExecutionAccessId,
-        ProviderInstrumentRef,
-    ),
-    String,
-> {
-    let participant_kind = match access.provider_id.as_str() {
+    access_id: &str,
+    provider_id: &str,
+    provider_product: &str,
+    provider_symbol: &str,
+) -> Result<(kairos_primitives::ExecutionAccessId, ProviderInstrumentRef), String> {
+    let participant_kind = match provider_id {
         "binance" | "okx" | "hyperliquid" => ParticipantKind::Exchange,
         "ibkr" => ParticipantKind::Broker,
         provider => {
@@ -108,16 +105,15 @@ fn provider_instrument_from_execution_access(
         }
     };
     Ok((
-        kairos_primitives::ExecutionAccessId::new(access.access_id.clone())
-            .map_err(|error| error.to_string())?,
+        kairos_primitives::ExecutionAccessId::new(access_id).map_err(|error| error.to_string())?,
         ProviderInstrumentRef::new(
-            ParticipantRef::new(participant_kind, access.provider_id.clone())
+            ParticipantRef::new(participant_kind, provider_id)
                 .map_err(|error| error.to_string())?,
             Some(
-                ParticipantInstrumentTypeRef::new(access.provider_product.clone())
+                ParticipantInstrumentTypeRef::new(provider_product)
                     .map_err(|error| error.to_string())?,
             ),
-            access.provider_symbol.clone(),
+            provider_symbol,
         )
         .map_err(|error| error.to_string())?,
     ))
@@ -136,7 +132,11 @@ pub struct ExecutionConnectionOptions {
     /// Business account and segment served by this route.
     pub account_id: String,
     pub segment_key: String,
-    pub provider: String,
+    /// Integration participant selected for this route (for example an
+    /// exchange such as `binance` or a broker such as `ibkr`).  This is not
+    /// an Account-owned broker identity and must not be used as a generic
+    /// vendor/provider bucket.
+    pub participant_id: String,
     /// Provider venue product. For OKX this remains independent from the
     /// order/account trading mode below.
     pub product: String,
@@ -243,6 +243,77 @@ pub enum ExecutionAsyncOrderEntry {
 /// its route table and provider values remain private.
 pub struct ExecutionAsyncOrderEntryRoutes {
     inner: RoutedAsyncOrderEntry<ExecutionAsyncOrderEntry>,
+    writer_fences: Vec<ExecutionWriterFence>,
+}
+
+#[derive(Debug)]
+pub struct ExecutionWriterFence {
+    account_id: kairos_primitives::AccountId,
+    segment_key: kairos_primitives::SegmentKey,
+    lease: std::sync::Arc<kairos_workspace::WorkspaceFencedLease>,
+}
+
+impl ExecutionWriterFence {
+    pub fn new(
+        account_id: impl Into<String>,
+        segment_key: impl Into<String>,
+        lease: kairos_workspace::WorkspaceFencedLease,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            account_id: kairos_primitives::AccountId::new(account_id.into())
+                .map_err(|error| error.to_string())?,
+            segment_key: kairos_primitives::SegmentKey::new(segment_key.into())
+                .map_err(|error| error.to_string())?,
+            lease: std::sync::Arc::new(lease),
+        })
+    }
+
+    pub fn token(&self) -> u64 {
+        self.lease.token()
+    }
+
+    fn validates(&self, request: &OrderEntryRequest) -> bool {
+        self.account_id == request.account_id && self.segment_key == request.segment_key
+    }
+
+    fn validate(&self) -> Result<(), IntegrationError> {
+        self.lease.validate().map_err(|error| {
+            IntegrationError::Authorization(format!(
+                "Execution writer fencing rejected command: {error}"
+            ))
+        })
+    }
+}
+
+impl ExecutionAsyncOrderEntryRoutes {
+    pub fn install_writer_fences(
+        &mut self,
+        writer_fences: Vec<ExecutionWriterFence>,
+    ) -> Result<(), String> {
+        if writer_fences.is_empty() {
+            return Err("live Execution requires at least one writer fence".into());
+        }
+        self.writer_fences = writer_fences;
+        Ok(())
+    }
+
+    fn validate_writer(&self, request: &OrderEntryRequest) -> Result<(), IntegrationError> {
+        if self.writer_fences.is_empty() {
+            // Offline/direct composition has no process lease boundary. The
+            // production server must install fences before exposing a live gateway.
+            return Ok(());
+        }
+        self.writer_fences
+            .iter()
+            .find(|fence| fence.validates(request))
+            .ok_or_else(|| {
+                IntegrationError::Authorization(format!(
+                    "no Execution writer fence for account={}, segment={}",
+                    request.account_id, request.segment_key
+                ))
+            })?
+            .validate()
+    }
 }
 
 impl AsyncOrderEntryConnection for ExecutionAsyncOrderEntryRoutes {
@@ -250,6 +321,7 @@ impl AsyncOrderEntryConnection for ExecutionAsyncOrderEntryRoutes {
         &mut self,
         request: &OrderEntryRequest,
     ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        self.validate_writer(request)?;
         self.inner.submit_order(request).await
     }
 
@@ -259,6 +331,7 @@ impl AsyncOrderEntryConnection for ExecutionAsyncOrderEntryRoutes {
         remote_order_id: &str,
         at_unix_nanos: u64,
     ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+        self.validate_writer(request)?;
         self.inner
             .cancel_order(request, remote_order_id, at_unix_nanos)
             .await
@@ -792,7 +865,7 @@ pub fn compose_execution_routes(
         return Err("at least one Execution route is required".into());
     };
     if options.len() == 1 {
-        let provider = options[0].provider.trim().to_ascii_lowercase();
+        let provider = options[0].participant_id.trim().to_ascii_lowercase();
         let product = options[0].product.trim().to_ascii_lowercase();
         if matches!(provider.as_str(), "simulated" | "paper") {
             return compose_execution_connections(&options[0]);
@@ -815,13 +888,13 @@ pub fn compose_execution_routes(
         if !native_async {
             return Err(format!(
                 "production async execution route is not available for {} {}; migrate the provider-native async capability",
-                options[0].provider, options[0].product
+                options[0].participant_id, options[0].product
             ));
         }
     }
     let mut ibkr_client_identities = std::collections::BTreeSet::new();
     for option in options {
-        let provider = option.provider.trim().to_ascii_lowercase();
+        let provider = option.participant_id.trim().to_ascii_lowercase();
         let product = option.product.trim().to_ascii_lowercase();
         match provider.as_str() {
             "binance"
@@ -853,7 +926,7 @@ pub fn compose_execution_routes(
             _ => {
                 return Err(format!(
                     "multi-route async composition is not yet available for {} {}; migrate the provider-native capability first",
-                    option.provider, option.product
+                    option.participant_id, option.product
                 ))
             }
         }
@@ -871,7 +944,7 @@ pub fn compose_execution_routes(
             .map_err(|error| error.to_string())?;
         let segment_key = kairos_primitives::SegmentKey::new(option.segment_key.clone())
             .map_err(|error| error.to_string())?;
-        let provider = option.provider.trim().to_ascii_lowercase();
+        let provider = option.participant_id.trim().to_ascii_lowercase();
         let product = option.product.trim().to_ascii_lowercase();
         if provider == "binance" {
             let connection = if matches!(
@@ -1207,6 +1280,7 @@ pub fn compose_execution_routes(
         execution_stream: None,
         async_order_entry: Some(ExecutionAsyncOrderEntryRoutes {
             inner: RoutedAsyncOrderEntry::new(async_entry_routes)?,
+            writer_fences: Vec::new(),
         }),
         async_order_query: Some(ExecutionAsyncOrderQueryRoutes {
             inner: RoutedAsyncOrderQuery::new(async_query_routes)?,
@@ -1246,6 +1320,7 @@ fn compose_ibkr_async_execution(
             descriptor.clone(),
             ExecutionAsyncOrderEntry::Ibkr(connection.order_entry()),
         )?])?,
+        writer_fences: Vec::new(),
     };
     let query_routes = ExecutionAsyncOrderQueryRoutes {
         inner: RoutedAsyncOrderQuery::new(vec![ExecutionRoute::new(
@@ -1282,7 +1357,7 @@ fn compose_ibkr_async_execution(
 pub fn compose_direct_execution_connections(
     options: &ExecutionConnectionOptions,
 ) -> Result<DirectExecutionConnections, String> {
-    let provider = options.provider.trim().to_ascii_lowercase();
+    let provider = options.participant_id.trim().to_ascii_lowercase();
     let product = options.product.trim().to_ascii_lowercase();
     let native_async_direct = provider == "ibkr"
         || (provider == "binance"
@@ -1342,7 +1417,7 @@ pub fn compose_direct_execution_connections(
 pub fn compose_execution_connections(
     options: &ExecutionConnectionOptions,
 ) -> Result<ExecutionConnections, String> {
-    let provider = options.provider.trim().to_ascii_lowercase();
+    let provider = options.participant_id.trim().to_ascii_lowercase();
     let product = options.product.trim().to_ascii_lowercase();
     if provider == "binance" && product == "spot" {
         let connection = binance_spot_private_connection(options)?;
@@ -1371,6 +1446,7 @@ pub fn compose_execution_connections(
                 descriptor.clone(),
                 async_order_entry,
             )?])?,
+            writer_fences: Vec::new(),
         };
         let query_routes = ExecutionAsyncOrderQueryRoutes {
             inner: RoutedAsyncOrderQuery::new(vec![ExecutionRoute::new(
@@ -1436,6 +1512,7 @@ pub fn compose_execution_connections(
                 entry_descriptor.clone(),
                 ExecutionAsyncOrderEntry::OkxTrading(async_entry),
             )?])?,
+            writer_fences: Vec::new(),
         };
         let query_routes = ExecutionAsyncOrderQueryRoutes {
             inner: RoutedAsyncOrderQuery::new(vec![ExecutionRoute::new(
@@ -1480,7 +1557,7 @@ pub fn compose_execution_connections(
 pub fn compose_order_entry(
     options: &ExecutionConnectionOptions,
 ) -> Result<Box<dyn OrderEntryConnection>, String> {
-    let provider = options.provider.trim().to_ascii_lowercase();
+    let provider = options.participant_id.trim().to_ascii_lowercase();
     if matches!(provider.as_str(), "simulated" | "paper") {
         return Ok(Box::new(SimulatedOrderEntry::default()));
     }
@@ -1539,7 +1616,7 @@ pub fn compose_order_entry(
 pub fn compose_order_query(
     options: &ExecutionConnectionOptions,
 ) -> Result<Option<Box<dyn OrderQueryConnection>>, String> {
-    let provider = options.provider.trim().to_ascii_lowercase();
+    let provider = options.participant_id.trim().to_ascii_lowercase();
     let product = options.product.trim().to_ascii_lowercase();
     if provider == "binance" && product == "spot" {
         return Ok(Some(Box::new(
@@ -1732,7 +1809,7 @@ mod secret_tests {
             required: true,
             account_id: "main".into(),
             segment_key: "spot".into(),
-            provider: "binance".into(),
+            participant_id: "binance".into(),
             product: "spot".into(),
             trading_mode: None,
             api_key: "api-key-secret".into(),
@@ -1774,8 +1851,13 @@ mod secret_tests {
             status: "active".into(),
             ..Default::default()
         };
-        let (access_id, provider_instrument) =
-            provider_instrument_from_execution_access(&access).unwrap();
+        let (access_id, provider_instrument) = provider_instrument_from_execution_access(
+            &access.access_id,
+            &access.provider_id,
+            &access.provider_product,
+            &access.provider_symbol,
+        )
+        .unwrap();
 
         assert_eq!(access_id.as_str(), access.access_id);
         assert_eq!(provider_instrument.participant.id, "okx");
@@ -1791,7 +1873,13 @@ mod secret_tests {
 
         let mut unsupported = access;
         unsupported.provider_id = "future-provider".into();
-        assert!(provider_instrument_from_execution_access(&unsupported).is_err());
+        assert!(provider_instrument_from_execution_access(
+            &unsupported.access_id,
+            &unsupported.provider_id,
+            &unsupported.provider_product,
+            &unsupported.provider_symbol,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1813,7 +1901,7 @@ mod secret_tests {
     fn okx_route_projects_native_async_capabilities() {
         let mut options = binance_spot_options();
         options.route_id = "okx.swap".into();
-        options.provider = "okx".into();
+        options.participant_id = "okx".into();
         options.product = "swap".into();
         options.trading_mode = Some("cross".into());
         options.segment_key = "swap".into();
@@ -1838,7 +1926,7 @@ mod secret_tests {
     fn okx_rejects_binance_settlement_product_names() {
         for product in ["usd-m-futures", "coin-m-futures"] {
             let mut options = binance_spot_options();
-            options.provider = "okx".into();
+            options.participant_id = "okx".into();
             options.product = product.into();
             options.base_url = "https://www.okx.com".into();
 
@@ -1852,7 +1940,7 @@ mod secret_tests {
     #[test]
     fn okx_keeps_product_and_trading_mode_independent() {
         let mut options = binance_spot_options();
-        options.provider = "okx".into();
+        options.participant_id = "okx".into();
         options.product = "margin".into();
         options.base_url = "https://www.okx.com".into();
 
@@ -1885,7 +1973,7 @@ mod secret_tests {
     fn ibkr_production_route_projects_only_native_async_capabilities() {
         let mut options = binance_spot_options();
         options.route_id = "ibkr.equity".into();
-        options.provider = "ibkr".into();
+        options.participant_id = "ibkr".into();
         options.product = "equity".into();
         options.segment_key = "equity".into();
         options.principal_scope_id = "tws-client-0".into();
@@ -1908,7 +1996,7 @@ mod secret_tests {
     fn binance_usd_m_futures_projects_native_async_capabilities() {
         let mut options = binance_spot_options();
         options.route_id = "binance.usdm".into();
-        options.provider = "binance".into();
+        options.participant_id = "binance".into();
         options.product = "usd-m-futures".into();
         options.segment_key = "futures".into();
         options.base_url = "https://testnet.binancefuture.com".into();
@@ -1933,7 +2021,7 @@ mod secret_tests {
     fn binance_coin_m_futures_keeps_a_distinct_async_product_route() {
         let mut options = binance_spot_options();
         options.route_id = "binance.coinm".into();
-        options.provider = "binance".into();
+        options.participant_id = "binance".into();
         options.product = "coin-m-futures".into();
         options.segment_key = "coin-m-futures".into();
         options.base_url = "https://testnet.binancefuture.com".into();
@@ -2004,7 +2092,7 @@ mod secret_tests {
     fn production_rejects_unmigrated_live_blocking_provider_slice() {
         let mut options = binance_spot_options();
         options.route_id = "binance.equity".into();
-        options.provider = "binance".into();
+        options.participant_id = "binance".into();
         options.product = "equity".into();
         options.segment_key = "equity".into();
 
@@ -2039,7 +2127,7 @@ mod secret_tests {
     fn multi_route_composes_distinct_ibkr_client_sessions() {
         let mut first = binance_spot_options();
         first.route_id = "ibkr-main".into();
-        first.provider = "ibkr".into();
+        first.participant_id = "ibkr".into();
         first.product = "equity".into();
         first.segment_key = "equity-main".into();
         first.account_id = "DU111".into();
@@ -2064,7 +2152,7 @@ mod secret_tests {
     fn multi_route_rejects_duplicate_ibkr_client_identity() {
         let mut first = binance_spot_options();
         first.route_id = "ibkr-main".into();
-        first.provider = "ibkr".into();
+        first.participant_id = "ibkr".into();
         first.product = "equity".into();
         first.segment_key = "equity-main".into();
         first.account_id = "DU111".into();
@@ -2085,7 +2173,7 @@ mod secret_tests {
     async fn ibkr_direct_cli_uses_async_gateway_proxies() {
         let mut options = binance_spot_options();
         options.route_id = "ibkr-direct".into();
-        options.provider = "ibkr".into();
+        options.participant_id = "ibkr".into();
         options.product = "equity".into();
         options.segment_key = "equity".into();
 
@@ -2103,7 +2191,7 @@ mod secret_tests {
         let binance = binance_spot_options();
         let mut okx = binance_spot_options();
         okx.route_id = "okx.swap".into();
-        okx.provider = "okx".into();
+        okx.participant_id = "okx".into();
         okx.product = "swap".into();
         okx.trading_mode = Some("cross".into());
         okx.segment_key = "swap".into();
@@ -2148,6 +2236,12 @@ mod secret_tests {
     }
 }
 
-mod preflight;
+mod admission_rules;
+mod dependencies;
+mod dependency_projection;
+mod dependency_worker;
+mod risk_reservations;
 
-pub use preflight::{QueuedExecutionPreflight, SocketExecutionPreflight};
+pub use dependencies::{SocketExecutionIntentPlanner, SocketExecutionOrderAdmission};
+pub use dependency_worker::{QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission};
+pub use risk_reservations::SocketExecutionRiskReservations;

@@ -1,27 +1,34 @@
 mod active_intents;
 mod active_orders;
+mod current_execution;
 mod key;
 mod metadata;
 
 pub use active_intents::ActiveIntentsView;
 pub use active_orders::ActiveOrdersView;
+pub use current_execution::CurrentExecutionView;
 pub use key::{ExecutionViewKey, ExecutionViewKind};
 pub use metadata::ViewMetadata;
 
 use crate::{ContractError, ContractResult};
-use kairos_transport::SharedSnapshotWriter;
+use kairos_transport::{
+    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
+};
 use std::path::Path;
 
 pub struct ViewFrame {
-    generation: u64,
+    metadata: SnapshotEnvelopeMetadata,
     bytes: Vec<u8>,
 }
 impl ViewFrame {
-    pub(crate) fn new(generation: u64, bytes: Vec<u8>) -> Self {
-        Self { generation, bytes }
+    pub(crate) fn new(metadata: SnapshotEnvelopeMetadata, bytes: Vec<u8>) -> Self {
+        Self { metadata, bytes }
     }
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.metadata.generation
+    }
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.metadata
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -32,30 +39,45 @@ impl ViewFrame {
     pub fn active_intents(&self) -> ContractResult<ActiveIntentsView<'_>> {
         active_intents::decode(self.bytes())
     }
+    pub fn current_execution(&self) -> ContractResult<CurrentExecutionView<'_>> {
+        current_execution::decode(self.bytes())
+    }
 }
 
 pub struct ExecutionViewReader {
     key: ExecutionViewKey,
-    reader: crate::transport::ExecutionMmapReader,
+    reader: SharedSnapshotReader,
 }
 impl ExecutionViewReader {
     pub fn open(root: impl AsRef<Path>, key: ExecutionViewKey) -> ContractResult<Self> {
-        Ok(Self {
-            key: key.clone(),
-            reader: crate::transport::ExecutionMmapReader::open(root, key)?,
-        })
+        let reader = SharedSnapshotReader::open(key.resource_path(root))
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(Self { key, reader })
     }
     pub fn key(&self) -> &ExecutionViewKey {
         &self.key
     }
     pub fn read(&self) -> ContractResult<ViewFrame> {
-        self.reader.read()
+        let frame = self
+            .reader
+            .read_payload()
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(ViewFrame::new(
+            SnapshotEnvelopeMetadata {
+                resource_epoch: frame.resource_epoch,
+                producer_incarnation: frame.producer_incarnation,
+                generation: frame.generation,
+                applied_event_sequence: frame.applied_event_sequence,
+                published_at_unix_nanos: frame.published_at_unix_nanos,
+            },
+            frame.payload,
+        ))
     }
 }
 
 pub struct ExecutionViewPublisher {
     key: ExecutionViewKey,
-    writer: SharedSnapshotWriter,
+    writer: ReplacementSnapshotStorage,
 }
 impl ExecutionViewPublisher {
     pub fn create(
@@ -65,16 +87,21 @@ impl ExecutionViewPublisher {
     ) -> ContractResult<Self> {
         Ok(Self {
             key: key.clone(),
-            writer: SharedSnapshotWriter::create(key.resource_path(root), slot_size)
+            writer: ReplacementSnapshotStorage::create(key.resource_path(root), slot_size)
                 .map_err(|error| ContractError::Transport(error.to_string()))?,
         })
     }
     pub fn key(&self) -> &ExecutionViewKey {
         &self.key
     }
-    pub fn publish(&mut self, generation: u64, payload: &[u8]) -> ContractResult<()> {
+    pub fn publish(
+        &mut self,
+        metadata: SnapshotEnvelopeMetadata,
+        payload: &[u8],
+    ) -> ContractResult<()> {
         self.writer
-            .publish(generation, payload)
+            .publish(metadata, payload)
+            .map(|_| ())
             .map_err(|error| ContractError::Transport(error.to_string()))
     }
 }

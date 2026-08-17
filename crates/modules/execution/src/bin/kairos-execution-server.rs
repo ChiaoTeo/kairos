@@ -2,9 +2,12 @@ use clap::Parser;
 use kairos_execution::application::ExecutionApplication;
 use kairos_execution::composition::{
     compose_execution_routes, load_reference_execution_accesses, AeronExecutionEventPublisher,
-    ExecutionConnectionOptions, ExecutionSimulator, QueuedExecutionPreflight,
-    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulationConfig,
-    SocketExecutionPreflight, SqlxExecutionStore,
+    ExecutionConnectionOptions, ExecutionSimulator, ExecutionWriterFence,
+    QueuedExecutionAccountFacts, QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission,
+    QueuedExecutionRiskReservations, SharedExecutionSnapshotPublisher,
+    SharedIntentSnapshotPublisher, SimulationConfig, SocketExecutionAccountFacts,
+    SocketExecutionIntentPlanner, SocketExecutionOrderAdmission, SocketExecutionRiskReservations,
+    SqlxExecutionStore,
 };
 use kairos_execution::{ExecutionProcess, SqlxExecutionAudit};
 use kairos_integration::application::credential::load_workspace_credential;
@@ -28,7 +31,7 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    tracing::info!(event = "process_start", component = "execution", instance_id = %args.instance_id, launch_id = %args.launch_id, provider = %args.provider, "starting execution server");
+    tracing::info!(event = "process_start", component = "execution", instance_id = %args.instance_id, launch_id = %args.launch_id, "starting execution server");
     let workspace = Workspace::open(args.workspace.clone())?;
     let instance = workspace.instance(&args.launch_mode, &args.launch_id, &args.instance_id)?;
     instance.prepare()?;
@@ -36,12 +39,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let route_options = args.connection_options_list(&workspace)?;
     let simulated = route_options.iter().all(|options| {
         matches!(
-            options.provider.trim().to_ascii_lowercase().as_str(),
+            options.participant_id.trim().to_ascii_lowercase().as_str(),
             "simulated" | "paper"
         )
     });
     let _provider_process_locks =
         acquire_exclusive_provider_process_locks(&workspace, &route_options)?;
+    // Paper/backtest has a single instance-owned simulator and deliberately
+    // does not impersonate a live provider writer lease.
+    let writer_fences = if simulated {
+        Vec::new()
+    } else {
+        acquire_execution_writer_leases(&workspace, &args.launch_mode, &route_options)?
+    };
     let state = instance.state(&["execution", "execution-state.sqlite"])?;
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
     let execution_snapshot = instance.service_snapshot("execution")?;
@@ -57,7 +67,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = intent_snapshot.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let connections = compose_execution_routes(&route_options)?;
+    let mut connections = compose_execution_routes(&route_options)?;
+    if !simulated {
+        connections
+            .async_order_entry
+            .as_mut()
+            .ok_or("live Execution requires an async order-entry gateway")?
+            .install_writer_fences(writer_fences)?;
+    }
     tracing::info!(
         event = "integrations_composed",
         component = "execution",
@@ -81,34 +98,53 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some(Box::new(state_store)),
     )?;
     let mut application = application;
-    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
-    if reference_database.exists() {
+    let reference_view_root = workspace.child(&["snapshots", "v2"])?;
+    if reference_view_root.exists() {
         for (access_id, provider_instrument) in
-            load_reference_execution_accesses(&reference_database)?
+            load_reference_execution_accesses(&reference_view_root, "reference-actor")?
         {
             application.configure_execution_access(access_id, provider_instrument);
         }
     } else if !simulated {
         return Err(format!(
             "live Execution requires Reference execution accesses: {}",
-            reference_database.display()
+            reference_view_root.display()
         )
         .into());
     }
     let manifest = instance.component_manifest()?;
-    let mut preflight = SocketExecutionPreflight::from_manifest(manifest)?;
+    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest(&manifest)?;
+    let mut order_admission = SocketExecutionOrderAdmission::from_manifest(&manifest)?;
     if args.launch_mode == "backtest" {
-        preflight = preflight.without_market_snapshot();
-        preflight = preflight.with_backtest_trade_authorization(true);
-        preflight = preflight.with_backtest_reference_without_projection(true);
-        preflight = preflight.with_backtest_balance_without_projection(true);
+        intent_planner = intent_planner.without_market_snapshot();
+        order_admission = order_admission
+            .without_market_snapshot()
+            .with_backtest_reservation_window()
+            .with_backtest_reference_without_projection(true)
+            .with_backtest_balance_without_projection(true);
     }
-    let preflight = preflight.with_simulated_settlement(simulated);
-    application.attach_preflight(Box::new(QueuedExecutionPreflight::start(
-        Box::new(preflight),
+    let account_facts =
+        SocketExecutionAccountFacts::from_manifest(&manifest)?.with_simulated_settlement(simulated);
+    let risk_reservations: SocketExecutionRiskReservations =
+        order_admission.risk_reservations_adapter()?;
+    application.attach_intent_planner(Box::new(QueuedExecutionIntentPlanner::start(
+        intent_planner,
+        128,
+    )?));
+    application.attach_order_admission(Box::new(QueuedExecutionOrderAdmission::start(
+        order_admission,
+        128,
+    )?));
+    application.attach_risk_reservations(Box::new(QueuedExecutionRiskReservations::start(
+        Box::new(risk_reservations),
+        128,
+    )?));
+    application.attach_account_facts(Box::new(QueuedExecutionAccountFacts::start(
+        Box::new(account_facts),
         128,
     )?));
     application.configure_live_trading(!simulated, args.confirm_live);
+    application.recover_risk_reservations()?;
     let socket = instance.socket("execution")?;
     let process = ExecutionProcess::with_audit(application, socket, audit_store)
         .with_async_order_entry(async_order_entry)
@@ -122,7 +158,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     process
         .with_snapshot_publisher(SharedExecutionSnapshotPublisher::create_with_identity(
             execution_snapshot,
-            1024 * 1024,
+            32 * 1024 * 1024,
             format!("execution:{}", args.instance_id),
             transport_identity.clone(),
         )?)
@@ -149,7 +185,7 @@ fn acquire_exclusive_provider_process_locks(
 ) -> Result<Vec<WorkspaceProcessLock>, Box<dyn std::error::Error>> {
     let identities = routes
         .iter()
-        .filter(|route| route.provider.trim().eq_ignore_ascii_case("ibkr"))
+        .filter(|route| route.participant_id.trim().eq_ignore_ascii_case("ibkr"))
         .map(|route| {
             format!(
                 "ibkr|{}|{}|client-id:{}",
@@ -175,6 +211,44 @@ fn acquire_exclusive_provider_process_locks(
         .collect()
 }
 
+fn acquire_execution_writer_leases(
+    workspace: &Workspace,
+    environment: &str,
+    routes: &[ExecutionConnectionOptions],
+) -> Result<Vec<ExecutionWriterFence>, Box<dyn std::error::Error>> {
+    let identities = routes
+        .iter()
+        .map(|route| {
+            let identity = format!(
+                    "participant:{}|environment:{}|principal:{}|account:{}|segment:{}|product:{}|trading-mode:{}",
+                    route.participant_id.trim().to_ascii_lowercase(),
+                    environment.trim().to_ascii_lowercase(),
+                    route.principal_scope_id.trim(),
+                    route.account_id.trim(),
+                    route.segment_key.trim(),
+                    route.product.trim().to_ascii_lowercase(),
+                    route.trading_mode.as_deref().unwrap_or("").trim().to_ascii_lowercase(),
+                );
+            (identity, route.account_id.clone(), route.segment_key.clone())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    identities
+        .into_iter()
+        .map(|(identity, account_id, segment_key)| {
+            let lease = workspace
+                .fenced_lease("execution-writer", &identity)
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("Execution writer lease is unavailable ({identity}): {error}"),
+                    )
+                })?;
+            ExecutionWriterFence::new(account_id, segment_key, lease)
+                .map_err(|error| std::io::Error::other(error).into())
+        })
+        .collect()
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "kairos-execution", about = "Run the Execution actor process")]
 struct Args {
@@ -186,61 +260,6 @@ struct Args {
     launch_id: String,
     #[arg(long, default_value = "default")]
     instance_id: String,
-    #[arg(long, default_value = "default")]
-    route_id: String,
-    #[arg(long, default_value_t = true)]
-    route_required: bool,
-    /// Non-secret JSON array of execution routes. Credentials are referenced
-    /// by `credential_id` and loaded inside this process.
-    #[arg(long)]
-    routes_json: Option<String>,
-    #[arg(long, default_value = "main")]
-    account_id: String,
-    #[arg(long, default_value = "spot")]
-    segment_key: String,
-    #[arg(long, default_value = "simulated")]
-    provider: String,
-    #[arg(long, default_value = "spot")]
-    product: String,
-    /// OKX order/account mode, independent from its venue product.
-    #[arg(long)]
-    trading_mode: Option<String>,
-    #[arg(long, default_value = "")]
-    api_key: String,
-    #[arg(long, default_value = "")]
-    secret: String,
-    #[arg(long)]
-    credential_id: Option<String>,
-    #[arg(long, default_value = "")]
-    passphrase: String,
-    /// REST endpoint override; defaults from provider and product.
-    #[arg(long, default_value = "")]
-    base_url: String,
-    /// Private WebSocket endpoint override; defaults from provider and product.
-    #[arg(long, default_value = "")]
-    websocket_url: String,
-    #[arg(long)]
-    isolated_symbol: Option<String>,
-    #[arg(long, default_value_t = 1_000)]
-    request_weight_per_minute: u32,
-    #[arg(long, default_value_t = 50)]
-    cancel_reserve_weight: u32,
-    #[arg(long, default_value_t = 1_024)]
-    order_event_queue_capacity: usize,
-    #[arg(long, default_value = "default-egress")]
-    egress_scope_id: String,
-    #[arg(long, default_value = "execution-default")]
-    principal_scope_id: String,
-    #[arg(long, default_value_t = 50)]
-    orders_per_10_seconds: u32,
-    #[arg(long, default_value_t = 160_000)]
-    orders_per_day: u32,
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-    #[arg(long, default_value_t = 4002)]
-    port: u16,
-    #[arg(long, default_value_t = 0)]
-    client_id: i32,
     #[arg(long)]
     confirm_live: bool,
     #[arg(long, env = "AERON_DIR")]
@@ -261,11 +280,9 @@ struct ExecutionRouteConfig {
     route_id: String,
     #[serde(default = "default_true")]
     required: bool,
-    #[serde(default)]
-    account_id: Option<String>,
-    #[serde(default)]
-    segment_key: Option<String>,
-    provider: String,
+    account_id: String,
+    segment_key: String,
+    participant_id: String,
     product: String,
     #[serde(default)]
     trading_mode: Option<String>,
@@ -299,6 +316,20 @@ struct ExecutionRouteConfig {
     client_id: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NormalizedLaunchConfig {
+    #[serde(default)]
+    accounts: Vec<String>,
+    execution: NormalizedExecutionConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct NormalizedExecutionConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    routes: Vec<ExecutionRouteConfig>,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -308,12 +339,32 @@ impl Args {
         &self,
         workspace: &Workspace,
     ) -> Result<Vec<ExecutionConnectionOptions>, Box<dyn std::error::Error>> {
-        let Some(routes_json) = self.routes_json.as_deref() else {
-            return Ok(vec![self.connection_options(workspace)?]);
-        };
-        let routes: Vec<ExecutionRouteConfig> = serde_json::from_str(routes_json)?;
+        let instance = workspace.instance(&self.launch_mode, &self.launch_id, &self.instance_id)?;
+        let config_path = instance.root().join("normalized-config.json");
+        let config: NormalizedLaunchConfig = serde_json::from_slice(&std::fs::read(&config_path)?)
+            .map_err(|error| {
+                format!(
+                    "invalid normalized launch configuration {}: {error}",
+                    config_path.display()
+                )
+            })?;
+        if !config.execution.enabled {
+            return Err("Execution process cannot start when execution.enabled is false".into());
+        }
+        let routes = config.execution.routes;
         if routes.is_empty() {
-            return Err("--routes-json must contain at least one execution route".into());
+            return Err("execution.routes must contain at least one execution route".into());
+        }
+        if !config.accounts.is_empty() {
+            for route in &routes {
+                if !config.accounts.contains(&route.account_id) {
+                    return Err(format!(
+                        "execution route {} references an account not enabled by the launch: {}",
+                        route.route_id, route.account_id
+                    )
+                    .into());
+                }
+            }
         }
         routes
             .into_iter()
@@ -327,27 +378,30 @@ impl Args {
         route: ExecutionRouteConfig,
     ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
         if route.route_id.trim().is_empty()
-            || route.provider.trim().is_empty()
+            || route.account_id.trim().is_empty()
+            || route.segment_key.trim().is_empty()
+            || route.participant_id.trim().is_empty()
             || route.product.trim().is_empty()
         {
-            return Err("execution route_id, provider, and product are required".into());
+            return Err(
+                "execution route_id, account_id, segment_key, participant_id, and product are required"
+                    .into(),
+            );
         }
         let credentials_root = workspace.child(&["credentials"])?;
         let stored = load_workspace_credential(
             &credentials_root,
-            &route.provider,
+            &route.participant_id,
             route.credential_id.as_deref(),
         )?;
         let (default_base_url, default_websocket_url) =
-            provider_endpoints(&route.provider, &route.product);
+            provider_endpoints(&route.participant_id, &route.product);
         Ok(ExecutionConnectionOptions {
             route_id: route.route_id.clone(),
             required: route.required,
-            account_id: route.account_id.unwrap_or_else(|| self.account_id.clone()),
-            segment_key: route
-                .segment_key
-                .unwrap_or_else(|| self.segment_key.clone()),
-            provider: route.provider,
+            account_id: route.account_id,
+            segment_key: route.segment_key,
+            participant_id: route.participant_id,
             product: route.product,
             trading_mode: route.trading_mode,
             api_key: stored
@@ -369,18 +423,10 @@ impl Args {
             websocket_url: route
                 .websocket_url
                 .unwrap_or_else(|| default_websocket_url.into()),
-            isolated_symbol: route
-                .isolated_symbol
-                .or_else(|| self.isolated_symbol.clone()),
-            request_weight_per_minute: route
-                .request_weight_per_minute
-                .unwrap_or(self.request_weight_per_minute),
-            cancel_reserve_weight: route
-                .cancel_reserve_weight
-                .unwrap_or(self.cancel_reserve_weight),
-            order_event_queue_capacity: route
-                .order_event_queue_capacity
-                .unwrap_or(self.order_event_queue_capacity),
+            isolated_symbol: route.isolated_symbol,
+            request_weight_per_minute: route.request_weight_per_minute.unwrap_or(1_000),
+            cancel_reserve_weight: route.cancel_reserve_weight.unwrap_or(50),
+            order_event_queue_capacity: route.order_event_queue_capacity.unwrap_or(1_024),
             shared_quota_ledger_path: Some(
                 workspace
                     .state_root()
@@ -389,95 +435,15 @@ impl Args {
             ),
             egress_scope_id: route
                 .egress_scope_id
-                .unwrap_or_else(|| self.egress_scope_id.clone()),
+                .unwrap_or_else(|| "default-egress".into()),
             principal_scope_id: route
                 .principal_scope_id
                 .unwrap_or_else(|| route.route_id.clone()),
-            orders_per_10_seconds: route
-                .orders_per_10_seconds
-                .unwrap_or(self.orders_per_10_seconds),
-            orders_per_day: route.orders_per_day.unwrap_or(self.orders_per_day),
-            host: route.host.unwrap_or_else(|| self.host.clone()),
-            port: route.port.unwrap_or(self.port),
-            client_id: route.client_id.unwrap_or(self.client_id),
-        })
-    }
-
-    fn connection_options(
-        &self,
-        workspace: &Workspace,
-    ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
-        let credentials_root = workspace.child(&["credentials"])?;
-        let stored = self.credential_id.as_deref().map_or_else(
-            || load_workspace_credential(&credentials_root, &self.provider, None),
-            |credential_id| {
-                load_workspace_credential(&credentials_root, &self.provider, Some(credential_id))
-            },
-        )?;
-        let (default_base_url, default_websocket_url) =
-            provider_endpoints(&self.provider, &self.product);
-        Ok(ExecutionConnectionOptions {
-            route_id: self.route_id.clone(),
-            required: self.route_required,
-            account_id: self.account_id.clone(),
-            segment_key: self.segment_key.clone(),
-            provider: self.provider.clone(),
-            product: self.product.clone(),
-            trading_mode: self.trading_mode.clone(),
-            api_key: if self.api_key.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.api_key.clone())
-                    .unwrap_or_default()
-            } else {
-                self.api_key.clone()
-            }
-            .into(),
-            secret: if self.secret.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.secret.expose_secret().to_owned())
-                    .unwrap_or_default()
-            } else {
-                self.secret.clone()
-            }
-            .into(),
-            passphrase: if self.passphrase.is_empty() {
-                stored
-                    .as_ref()
-                    .map(|value| value.passphrase.clone())
-                    .unwrap_or_default()
-            } else {
-                self.passphrase.clone()
-            }
-            .into(),
-            base_url: if self.base_url.trim().is_empty() {
-                default_base_url.into()
-            } else {
-                self.base_url.clone()
-            },
-            websocket_url: if self.websocket_url.trim().is_empty() {
-                default_websocket_url.into()
-            } else {
-                self.websocket_url.clone()
-            },
-            isolated_symbol: self.isolated_symbol.clone(),
-            request_weight_per_minute: self.request_weight_per_minute,
-            cancel_reserve_weight: self.cancel_reserve_weight,
-            order_event_queue_capacity: self.order_event_queue_capacity,
-            shared_quota_ledger_path: Some(
-                workspace
-                    .state_root()
-                    .join("integration")
-                    .join("provider-quota.mmap"),
-            ),
-            egress_scope_id: self.egress_scope_id.clone(),
-            principal_scope_id: self.principal_scope_id.clone(),
-            orders_per_10_seconds: self.orders_per_10_seconds,
-            orders_per_day: self.orders_per_day,
-            host: self.host.clone(),
-            port: self.port,
-            client_id: self.client_id,
+            orders_per_10_seconds: route.orders_per_10_seconds.unwrap_or(50),
+            orders_per_day: route.orders_per_day.unwrap_or(160_000),
+            host: route.host.unwrap_or_else(|| "127.0.0.1".into()),
+            port: route.port.unwrap_or(4002),
+            client_id: route.client_id.unwrap_or(0),
         })
     }
 }
@@ -511,23 +477,63 @@ fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static 
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_exclusive_provider_process_locks, provider_endpoints, ExecutionRouteConfig,
+        acquire_exclusive_provider_process_locks, acquire_execution_writer_leases,
+        provider_endpoints, Args, ExecutionRouteConfig,
     };
     use kairos_execution::composition::ExecutionConnectionOptions;
     use kairos_workspace::workspace::Workspace;
     use secrecy::SecretString;
 
     #[test]
-    fn route_json_accepts_credential_references_and_rejects_inline_secrets() {
+    fn route_config_accepts_credential_references_and_rejects_inline_secrets() {
         let routes: Vec<ExecutionRouteConfig> = serde_json::from_str(
-            r#"[{"route_id":"okx-main","provider":"okx","product":"swap","credential_id":"okx-main"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","participant_id":"okx","product":"swap","credential_id":"okx-main"}]"#,
         )
         .unwrap();
         assert_eq!(routes[0].credential_id.as_deref(), Some("okx-main"));
         assert!(serde_json::from_str::<Vec<ExecutionRouteConfig>>(
-            r#"[{"route_id":"okx-main","provider":"okx","product":"swap","api_key":"secret"}]"#,
+            r#"[{"route_id":"okx-main","account_id":"main","segment_key":"swap","participant_id":"okx","product":"swap","api_key":"secret"}]"#,
         )
         .is_err());
+    }
+
+    #[test]
+    fn server_loads_explicit_routes_from_the_normalized_launch_config() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let instance = workspace.instance("paper", "launch", "instance").unwrap();
+        instance.prepare().unwrap();
+        std::fs::write(
+            instance.root().join("normalized-config.json"),
+            r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
+        )
+        .unwrap();
+        let args = Args {
+            workspace: workspace.root().display().to_string(),
+            launch_mode: "paper".into(),
+            launch_id: "launch".into(),
+            instance_id: "instance".into(),
+            confirm_live: false,
+            aeron_dir: None,
+            aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
+            execution_events_stream_id: kairos_transport::stream_ids::EXECUTION_EVENTS,
+        };
+        let routes = args.connection_options_list(&workspace).unwrap();
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].account_id, "secondary");
+        assert_eq!(routes[0].segment_key, "swap");
+        assert_eq!(routes[0].participant_id, "simulated");
+
+        std::fs::write(
+            instance.root().join("normalized-config.json"),
+            r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
+        )
+        .unwrap();
+        let error = args
+            .connection_options_list(&workspace)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("account not enabled by the launch"));
     }
 
     #[test]
@@ -539,7 +545,7 @@ mod tests {
             required: true,
             account_id: "DU123".into(),
             segment_key: "equity".into(),
-            provider: "ibkr".into(),
+            participant_id: "ibkr".into(),
             product: "equity".into(),
             trading_mode: None,
             api_key: SecretString::from(String::new()),
@@ -561,11 +567,21 @@ mod tests {
             client_id: 7,
         };
         let first = acquire_exclusive_provider_process_locks(&workspace, &[route.clone()]).unwrap();
-        let error = acquire_exclusive_provider_process_locks(&workspace, &[route])
+        let error = acquire_exclusive_provider_process_locks(&workspace, &[route.clone()])
             .unwrap_err()
             .to_string();
         assert!(error.contains("already allocated"));
         drop(first);
+
+        let first = acquire_execution_writer_leases(&workspace, "live", &[route.clone()]).unwrap();
+        assert_eq!(first[0].token(), 1);
+        let error = acquire_execution_writer_leases(&workspace, "live", &[route.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("writer lease is unavailable"));
+        drop(first);
+        let second = acquire_execution_writer_leases(&workspace, "live", &[route]).unwrap();
+        assert_eq!(second[0].token(), 2);
     }
 
     #[test]

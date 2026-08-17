@@ -47,7 +47,3 @@ path = "src/bin/kairos-execution-server.rs"
 [[bin]]
 name = "kairos-execution-cli"
 path = "src/bin/kairos-execution-cli.rs"
-
-[[bin]]
-name = "kairos-execution-event-bridge"
-path = "src/bin/kairos-execution-event-bridge.rs"

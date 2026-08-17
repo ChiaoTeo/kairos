@@ -142,6 +142,7 @@ class AccountSnapshot:
     account_id: AccountId
     segments: tuple[AccountSegmentSnapshot, ...]
     generation: int
+    event_sequence: int = 0
 
     def find_segment(self, segment: SegmentKey | str) -> AccountSegmentSnapshot | None:
         segment_key = _segment_key(segment)

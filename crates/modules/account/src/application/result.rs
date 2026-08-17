@@ -3,7 +3,7 @@ use crate::domain::{
     Money, OpenOrder, Position, PositionMode, SegmentKey,
 };
 use kairos_primitives::{
-    ActorId, Currency, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
+    ActorId, BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -11,7 +11,7 @@ pub struct AccountProjection {
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub environment: String,
-    pub broker: String,
+    pub broker: BrokerId,
     pub configured_account_model: Option<String>,
     pub observed_account_model: Option<AccountModel>,
     pub status: AccountStatus,
@@ -86,6 +86,7 @@ pub struct AccountRefreshReport {
 pub struct AccountsSnapshot {
     pub actor_id: ActorId,
     pub generation: Generation,
+    pub event_sequence: Sequence,
     pub accounts: Vec<AccountProjection>,
 }
 
@@ -147,36 +148,4 @@ pub enum AccountBusinessChange {
         status: AccountStatus,
         stale: bool,
     },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct AccountCapability {
-    pub account_id: AccountId,
-    pub segment_key: SegmentKey,
-    pub can_trade: bool,
-    pub can_hold_assets: bool,
-    pub can_hold_position: bool,
-    pub can_borrow: bool,
-    pub can_transfer_in: bool,
-    pub can_transfer_out: bool,
-    pub supported_order_types: Vec<String>,
-    pub settlement_assets: Vec<Currency>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct AccountFeeSchedule {
-    pub account_id: AccountId,
-    pub segment_key: SegmentKey,
-    pub maker: Option<kairos_primitives::Rate>,
-    pub taker: Option<kairos_primitives::Rate>,
-    pub currency: Option<Currency>,
-    pub tier: Option<String>,
-    pub source: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct AccountBalanceRow {
-    pub account_id: AccountId,
-    pub segment_key: SegmentKey,
-    pub balance: Balance,
 }

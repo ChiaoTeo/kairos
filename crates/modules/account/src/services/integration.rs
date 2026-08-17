@@ -9,17 +9,15 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::application::{AccountMarketProfile, AccountMarketProfileRequest};
 use crate::domain::{
     AccountEvent, AccountModel, AccountObservedFill, AccountOrderObservation, AccountSegment,
     AccountSnapshot, AccountStatus, AssetId, Balance, FillId, InstrumentId, MarginMode, Money,
     OpenOrder, Position, PositionMode, SegmentKey, SignedQuantity,
 };
 use kairos_integration::application::{
-    AsyncAccountEventSource, AsyncAccountMarketProfileConnection, AsyncAccountReadConnection,
-    ExternalMarketProfile, ExternalMarketProfileRequest, IntegrationError,
+    AsyncAccountEventSource, AsyncAccountReadConnection, IntegrationError,
 };
-use kairos_integration::blocking::{AccountMarketProfileConnection, AccountReadConnection};
+use kairos_integration::blocking::AccountReadConnection;
 
 use futures_util::{stream::FuturesUnordered, StreamExt};
 
@@ -139,9 +137,7 @@ impl AccountInstrumentResolver {
             return Ok((
                 InstrumentId::new(market.instrument_id.clone())
                     .map_err(|error| error.to_string())?,
-                Some(kairos_primitives::MarketId::new(
-                    market.market_id.clone(),
-                )?),
+                Some(kairos_primitives::MarketId::new(market.market_id.clone())?),
             ));
         }
         #[cfg(not(test))]
@@ -195,9 +191,7 @@ impl AccountInstrumentResolver {
             Ok((
                 InstrumentId::new(market.instrument_id.clone())
                     .map_err(|error| error.to_string())?,
-                Some(kairos_primitives::MarketId::new(
-                    market.market_id.clone(),
-                )?),
+                Some(kairos_primitives::MarketId::new(market.market_id.clone())?),
             ))
         }
     }
@@ -479,69 +473,6 @@ impl AccountAsyncSnapshotGateway {
     }
 }
 
-pub(crate) enum AccountAsyncMarketProfileConnection {
-    BinanceSpot(kairos_integration::participants::binance::BinanceSpotAccountMarketProfile),
-    OkxTrading(kairos_integration::participants::okx::OkxTradingAccountMarketProfile),
-}
-
-impl AccountAsyncMarketProfileConnection {
-    async fn fetch_market_profile(
-        &mut self,
-        request: &ExternalMarketProfileRequest,
-    ) -> Result<ExternalMarketProfile, IntegrationError> {
-        match self {
-            Self::BinanceSpot(connection) => connection.fetch_market_profile(request).await,
-            Self::OkxTrading(connection) => connection.fetch_market_profile(request).await,
-        }
-    }
-}
-
-pub(crate) struct AccountAsyncMarketProfileGateway {
-    connections: BTreeMap<String, AccountAsyncMarketProfileConnection>,
-}
-
-impl AccountAsyncMarketProfileGateway {
-    pub(crate) fn new(connections: BTreeMap<String, AccountAsyncMarketProfileConnection>) -> Self {
-        Self { connections }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.connections.len()
-    }
-
-    pub(crate) async fn fetch(
-        &mut self,
-        request: &AccountMarketProfileRequest,
-    ) -> Result<AccountMarketProfile, String> {
-        let connection = self
-            .connections
-            .get_mut(request.segment_key.as_str())
-            .ok_or_else(|| format!("account segment is not configured: {}", request.segment_key))?;
-        let external_request = ExternalMarketProfileRequest {
-            account_id: request.account_id.clone(),
-            segment_key: kairos_primitives::SegmentKey::new(request.segment_key.to_string())
-                .map_err(|error| error.to_string())?,
-            market_id: request.market_id.clone(),
-            source_symbol: request.source_symbol.clone(),
-            market_data_access_id: request.market_data_access_id.clone(),
-        };
-        tokio::time::timeout(
-            ASYNC_ACCOUNT_QUERY_TIMEOUT,
-            connection.fetch_market_profile(&external_request),
-        )
-        .await
-        .map_err(|_| {
-            format!(
-                "account market-profile query timed out after {}ms",
-                ASYNC_ACCOUNT_QUERY_TIMEOUT.as_millis()
-            )
-        })?
-        .map_err(|error| error.to_string())
-        .and_then(map_profile)
-    }
-}
-
 impl AccountAsyncEventSource {
     pub(crate) fn binding_id(&self) -> &str {
         match self {
@@ -691,44 +622,11 @@ impl AccountSnapshotGateway {
     }
 }
 
-pub(crate) struct AccountMarketProfileGateway {
-    connections: BTreeMap<String, Box<dyn AccountMarketProfileConnection + Send>>,
-}
-
-impl AccountMarketProfileGateway {
-    pub(crate) fn new(
-        connections: BTreeMap<String, Box<dyn AccountMarketProfileConnection + Send>>,
-    ) -> Self {
-        Self { connections }
-    }
-
-    pub(crate) fn fetch(
-        &mut self,
-        request: &AccountMarketProfileRequest,
-    ) -> Result<AccountMarketProfile, String> {
-        let connection = self
-            .connections
-            .get_mut(request.segment_key.as_str())
-            .ok_or_else(|| format!("account segment is not configured: {}", request.segment_key))?;
-        connection
-            .fetch_market_profile(&ExternalMarketProfileRequest {
-                account_id: request.account_id.clone(),
-                segment_key: kairos_primitives::SegmentKey::new(request.segment_key.to_string())
-                    .map_err(|error| error.to_string())?,
-                market_id: request.market_id.clone(),
-                source_symbol: request.source_symbol.clone(),
-                market_data_access_id: request.market_data_access_id.clone(),
-            })
-            .map_err(|error| error.to_string())
-            .and_then(map_profile)
-    }
-}
-
 fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
     ExternalAccountSegment {
         identity:
             kairos_integration::application::capabilities::account_facts::ExternalAccountIdentity {
-                broker: segment.identity.broker.clone(),
+                broker: segment.identity.broker.to_string(),
                 account_id: segment.identity.account_id.clone(),
             },
         segment_key: kairos_primitives::SegmentKey::new(segment.segment_key.to_string())
@@ -743,8 +641,7 @@ fn signed_quantity(value: ExternalDecimal) -> Result<SignedQuantity, String> {
 }
 
 fn quantity(value: ExternalDecimal) -> Result<kairos_primitives::Quantity, String> {
-    kairos_primitives::Quantity::new(value.mantissa, value.scale)
-        .map_err(|error| error.to_string())
+    kairos_primitives::Quantity::new(value.mantissa, value.scale).map_err(|error| error.to_string())
 }
 
 fn price(value: ExternalDecimal) -> Result<kairos_primitives::Price, String> {
@@ -753,10 +650,6 @@ fn price(value: ExternalDecimal) -> Result<kairos_primitives::Price, String> {
 
 fn money(value: ExternalDecimal) -> Result<Money, String> {
     Money::new(value.mantissa, value.scale).map_err(Into::into)
-}
-
-fn rate(value: ExternalDecimal) -> Result<kairos_primitives::Rate, String> {
-    kairos_primitives::Rate::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
 fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
@@ -941,42 +834,13 @@ pub(crate) fn map_event(
                 quantity: quantity(value.quantity)?,
                 price: price(value.price)?,
                 side: if value.side.eq_ignore_ascii_case("sell") {
-                    crate::domain::FillSide::Sell
+                    crate::domain::OrderSide::Sell
                 } else {
-                    crate::domain::FillSide::Buy
+                    crate::domain::OrderSide::Buy
                 },
                 occurred_at_unix_nanos: value.occurred_at_unix_nanos,
             })
         }
-    })
-}
-
-fn map_profile(
-    value: kairos_integration::application::ExternalMarketProfile,
-) -> Result<AccountMarketProfile, String> {
-    Ok(AccountMarketProfile {
-        account_id: value.account_id,
-        segment_key: SegmentKey::new(value.segment_key.to_string())
-            .map_err(|error| error.to_string())?,
-        market_id: value.market_id,
-        account_model: value.account_model.map(map_model),
-        margin_mode: value.margin_mode.as_deref().and_then(|mode| match mode {
-            "cross" => Some(MarginMode::Cross),
-            "isolated" => Some(MarginMode::Isolated),
-            _ => None,
-        }),
-        position_mode: value.position_mode.as_deref().and_then(|mode| match mode {
-            "one_way" => Some(PositionMode::OneWay),
-            "hedge" => Some(PositionMode::Hedge),
-            _ => None,
-        }),
-        maker_fee: value.maker_fee.map(rate).transpose()?,
-        taker_fee: value.taker_fee.map(rate).transpose()?,
-        fee_currency: value.fee_currency,
-        fee_discount: value.fee_discount.map(rate).transpose()?,
-        fee_tier: value.fee_tier,
-        source: value.source,
-        observed_at_unix_nanos: value.observed_at_unix_nanos,
     })
 }
 

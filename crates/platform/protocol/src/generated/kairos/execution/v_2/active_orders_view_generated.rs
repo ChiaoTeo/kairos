@@ -22,6 +22,8 @@ impl<'a> ::flatbuffers::Follow<'a> for ActiveOrdersView<'a> {
 impl<'a> ActiveOrdersView<'a> {
     pub const VT_METADATA: ::flatbuffers::VOffsetT = 4;
     pub const VT_ORDERS: ::flatbuffers::VOffsetT = 6;
+    pub const VT_COMMITMENTS: ::flatbuffers::VOffsetT = 8;
+    pub const VT_RISK_RESERVATIONS: ::flatbuffers::VOffsetT = 10;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -38,6 +40,12 @@ impl<'a> ActiveOrdersView<'a> {
         args: &'args ActiveOrdersViewArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<ActiveOrdersView<'bldr>> {
         let mut builder = ActiveOrdersViewBuilder::new(_fbb);
+        if let Some(x) = args.risk_reservations {
+            builder.add_risk_reservations(x);
+        }
+        if let Some(x) = args.commitments {
+            builder.add_commitments(x);
+        }
         if let Some(x) = args.orders {
             builder.add_orders(x);
         }
@@ -76,6 +84,40 @@ impl<'a> ActiveOrdersView<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn commitments(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<OrderCommitmentState<'a>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<OrderCommitmentState>>,
+                >>(ActiveOrdersView::VT_COMMITMENTS, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn risk_reservations(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<RiskReservationSagaState<'a>>>
+    {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<
+                        'a,
+                        ::flatbuffers::ForwardsUOffset<RiskReservationSagaState>,
+                    >,
+                >>(ActiveOrdersView::VT_RISK_RESERVATIONS, None)
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for ActiveOrdersView<'_> {
@@ -93,6 +135,12 @@ impl ::flatbuffers::Verifiable for ActiveOrdersView<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<OrderState>>,
             >>("orders", Self::VT_ORDERS, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<OrderCommitmentState>>,
+            >>("commitments", Self::VT_COMMITMENTS, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<RiskReservationSagaState>>,
+            >>("risk_reservations", Self::VT_RISK_RESERVATIONS, true)?
             .finish();
         Ok(())
     }
@@ -104,13 +152,25 @@ pub struct ActiveOrdersViewArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<OrderState<'a>>>,
         >,
     >,
+    pub commitments: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<OrderCommitmentState<'a>>>,
+        >,
+    >,
+    pub risk_reservations: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<RiskReservationSagaState<'a>>>,
+        >,
+    >,
 }
 impl<'a> Default for ActiveOrdersViewArgs<'a> {
     #[inline]
     fn default() -> Self {
         ActiveOrdersViewArgs {
-            metadata: None, // required field
-            orders: None,   // required field
+            metadata: None,          // required field
+            orders: None,            // required field
+            commitments: None,       // required field
+            risk_reservations: None, // required field
         }
     }
 }
@@ -142,6 +202,30 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ActiveOrdersViewBuilder<'a, '
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(ActiveOrdersView::VT_ORDERS, orders);
     }
     #[inline]
+    pub fn add_commitments(
+        &mut self,
+        commitments: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<OrderCommitmentState<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ActiveOrdersView::VT_COMMITMENTS,
+            commitments,
+        );
+    }
+    #[inline]
+    pub fn add_risk_reservations(
+        &mut self,
+        risk_reservations: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<RiskReservationSagaState<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ActiveOrdersView::VT_RISK_RESERVATIONS,
+            risk_reservations,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> ActiveOrdersViewBuilder<'a, 'b, A> {
@@ -157,6 +241,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ActiveOrdersViewBuilder<'a, '
         self.fbb_
             .required(o, ActiveOrdersView::VT_METADATA, "metadata");
         self.fbb_.required(o, ActiveOrdersView::VT_ORDERS, "orders");
+        self.fbb_
+            .required(o, ActiveOrdersView::VT_COMMITMENTS, "commitments");
+        self.fbb_.required(
+            o,
+            ActiveOrdersView::VT_RISK_RESERVATIONS,
+            "risk_reservations",
+        );
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -166,6 +257,8 @@ impl ::core::fmt::Debug for ActiveOrdersView<'_> {
         let mut ds = f.debug_struct("ActiveOrdersView");
         ds.field("metadata", &self.metadata());
         ds.field("orders", &self.orders());
+        ds.field("commitments", &self.commitments());
+        ds.field("risk_reservations", &self.risk_reservations());
         ds.finish()
     }
 }

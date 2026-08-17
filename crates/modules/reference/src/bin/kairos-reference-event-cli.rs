@@ -1,6 +1,6 @@
 use clap::Parser;
-use kairos_reference_contract::transport::ReferenceAeronTransport;
 use kairos_reference_contract::{decode_event, ReferenceEvent};
+use kairos_transport::AeronByteSubscription;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut subscriber = ReferenceAeronTransport::subscriber(
+    let mut subscriber = AeronByteSubscription::connect(
         args.aeron_dir.as_deref(),
         &args.aeron_channel,
         args.stream_id,

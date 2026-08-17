@@ -1034,7 +1034,9 @@ impl MarketActor {
                 market_id: kairos_primitives::MarketId::new(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: "order_book".into(),
-                last_event_time_unix_nanos: kairos_primitives::UnixNanos::new(event_time_unix_nanos),
+                last_event_time_unix_nanos: kairos_primitives::UnixNanos::new(
+                    event_time_unix_nanos,
+                ),
                 last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(now_unix_nanos()),
                 event_sequence: kairos_primitives::Sequence::new(sequence),
                 status: if synchronized {

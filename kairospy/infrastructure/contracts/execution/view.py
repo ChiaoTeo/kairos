@@ -17,6 +17,7 @@ sys.modules.setdefault("kairos", _generated_kairos)
 class ExecutionViewKind(str, Enum):
     ACTIVE_ORDERS = "active-orders"
     ACTIVE_INTENTS = "active-intents"
+    CURRENT_EXECUTION = "current-execution"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,7 @@ class ExecutionViewFrame:
 _VIEW_ROOTS: dict[ExecutionViewKind, tuple[bytes, str]] = {
     ExecutionViewKind.ACTIVE_ORDERS: (b"ECO2", "ActiveOrdersView"),
     ExecutionViewKind.ACTIVE_INTENTS: (b"ECI2", "ActiveIntentsView"),
+    ExecutionViewKind.CURRENT_EXECUTION: (b"ECV2", "CurrentExecutionView"),
 }
 
 
@@ -77,6 +79,10 @@ class ExecutionViewReader:
             raise ValueError("Execution view key identity mismatch")
         if int(metadata.ResourceEpoch()) != 1:
             raise ValueError("unsupported Execution view resource epoch")
+        if int(metadata.Generation()) != snapshot.generation:
+            raise ValueError("Execution envelope and payload generation differ")
+        if int(metadata.AppliedRevision() or 0) != snapshot.applied_event_sequence:
+            raise ValueError("Execution envelope and payload event sequence differ")
         return ExecutionViewFrame(self.key, snapshot.generation, snapshot.payload, value)
 
 

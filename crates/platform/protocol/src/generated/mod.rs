@@ -98,6 +98,14 @@ pub mod kairos {
             pub use financial_product_updated_generated::*;
             mod financial_product_upserted_generated;
             pub use financial_product_upserted_generated::*;
+            mod lifecycle_entry_generated;
+            pub use lifecycle_entry_generated::*;
+            mod provider_health_state_generated;
+            pub use provider_health_state_generated::*;
+            mod reference_latest_state_generated;
+            pub use reference_latest_state_generated::*;
+            mod reference_latest_view_generated;
+            pub use reference_latest_view_generated::*;
         }
     }
 
@@ -277,6 +285,14 @@ pub mod kairos {
             pub use active_orders_view_generated::*;
             mod completion_policy_generated;
             pub use completion_policy_generated::*;
+            mod commitment_basis_kind_generated;
+            pub use commitment_basis_kind_generated::*;
+            mod commitment_lifecycle_generated;
+            pub use commitment_lifecycle_generated::*;
+            mod commitment_resource_kind_generated;
+            pub use commitment_resource_kind_generated::*;
+            mod current_execution_view_generated;
+            pub use current_execution_view_generated::*;
             mod execution_intent_generated;
             pub use execution_intent_generated::*;
             mod execution_leg_state_generated;
@@ -299,6 +315,8 @@ pub mod kairos {
             pub use intent_leg_generated::*;
             mod intent_lifecycle_generated;
             pub use intent_lifecycle_generated::*;
+            mod intent_lifecycle_event_state_generated;
+            pub use intent_lifecycle_event_state_generated::*;
             mod intent_rejected_generated;
             pub use intent_rejected_generated::*;
             mod intent_rejection_code_generated;
@@ -319,6 +337,10 @@ pub mod kairos {
             pub use order_expired_generated::*;
             mod order_lifecycle_generated;
             pub use order_lifecycle_generated::*;
+            mod order_lifecycle_event_state_generated;
+            pub use order_lifecycle_event_state_generated::*;
+            mod order_commitment_state_generated;
+            pub use order_commitment_state_generated::*;
             mod order_rejected_generated;
             pub use order_rejected_generated::*;
             mod order_type_generated;
@@ -339,10 +361,16 @@ pub mod kairos {
             pub use reconciliation_reason_generated::*;
             mod reconciliation_required_generated;
             pub use reconciliation_required_generated::*;
+            mod risk_reservation_saga_lifecycle_generated;
+            pub use risk_reservation_saga_lifecycle_generated::*;
+            mod risk_reservation_saga_state_generated;
+            pub use risk_reservation_saga_state_generated::*;
             mod split_order_policy_generated;
             pub use split_order_policy_generated::*;
             mod time_in_force_generated;
             pub use time_in_force_generated::*;
+            mod unknown_remote_order_state_generated;
+            pub use unknown_remote_order_state_generated::*;
         }
     }
 

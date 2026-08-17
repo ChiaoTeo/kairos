@@ -37,7 +37,3 @@ path = "src/bin/kairos-risk-server.rs"
 [[bin]]
 name = "kairos-risk-cli"
 path = "src/bin/kairos-risk-cli.rs"
-
-[[bin]]
-name = "kairos-risk-event-bridge"
-path = "src/bin/kairos-risk-event-bridge.rs"

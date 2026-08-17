@@ -248,7 +248,19 @@ enabled = true
 
 [execution]
 enabled = true
-provider = "simulated"
+
+[[execution.routes]]
+route_id = "main-spot"
+account_id = "main"
+segment_key = "spot"
+participant_id = "simulated"
+product = "spot"
+
+[[execution.routes]]
+route_id = "secondary-spot"
+account_id = "secondary"
+segment_key = "spot"
+participant_id = "simulated"
 product = "spot"
 ```
 

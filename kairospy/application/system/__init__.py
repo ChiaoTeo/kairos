@@ -144,9 +144,6 @@ class ComponentProcessApplication:
         socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
         market_runtime_profile: str | None = None,
-        provider: str | None = None,
-        product: str | None = None,
-        execution_routes: list[Mapping[str, Any]] | None = None,
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
@@ -209,9 +206,6 @@ class ComponentProcessApplication:
             socket_name=socket_name,
             reference_config=reference_config,
             market_runtime_profile=market_runtime_profile,
-            provider=provider,
-            product=product,
-            execution_routes=execution_routes,
             confirm_live=confirm_live,
             instance_workspace=runtime,
         )
@@ -591,9 +585,6 @@ class ComponentProcessApplication:
         socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
         market_runtime_profile: str | None = None,
-        provider: str | None = None,
-        product: str | None = None,
-        execution_routes: list[Mapping[str, Any]] | None = None,
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
@@ -659,17 +650,9 @@ class ComponentProcessApplication:
             if market_runtime_profile is not None:
                 command.extend(("--runtime-profile", market_runtime_profile))
         if component == "execution":
-            if execution_routes:
-                command.extend(
-                    (
-                        "--routes-json",
-                        json.dumps(execution_routes, separators=(",", ":")),
-                    )
-                )
-            elif provider is not None:
-                command.extend(("--provider", provider))
-            if not execution_routes and product is not None:
-                command.extend(("--product", product))
+            # Execution reads the authoritative route collection from the
+            # instance's normalized launch configuration.  Do not create a
+            # second command-line configuration source.
             if confirm_live:
                 command.append("--confirm-live")
         if component == "account":
@@ -681,8 +664,6 @@ class ComponentProcessApplication:
             command.extend(("--account-id", resolved_account))
             if socket_name and socket_name != "account":
                 command.extend(("--socket-name", socket_name))
-            if provider is not None:
-                command.extend(("--provider", provider))
         return command, child_environment
 
     def _wait_ready(

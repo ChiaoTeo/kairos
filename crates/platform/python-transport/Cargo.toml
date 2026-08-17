@@ -1,0 +1,14 @@
+[package]
+name = "kairos-python-transport"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "_native_transport"
+crate-type = ["cdylib"]
+
+[dependencies]
+kairos-transport = { path = "../transport" }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311"] }

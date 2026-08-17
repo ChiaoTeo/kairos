@@ -21,16 +21,16 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::application::{
-    AccountApplication, AccountBusinessEvent, AccountDataQuery, AccountRefreshReport,
-    AccountsSnapshot, MarkToMarket, RefreshAccount,
+    AccountApplication, AccountBusinessEvent, AccountRefreshReport, AccountsSnapshot, MarkToMarket,
+    RefreshAccount,
 };
 use crate::domain::{AccountFill, AccountOrderObservation};
 use crate::services::integration::{
     AccountAsyncEventSource, AccountAsyncSnapshotGateway, AccountInstrumentResolver,
 };
 use crate::services::refresh::RefreshFetch;
-use kairos_primitives::AccountId;
 use kairos_integration::application::{ConnectionHealth, ConnectionLifecycle, IntegrationError};
+use kairos_primitives::AccountId;
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -79,6 +79,7 @@ pub trait AccountEventPublisher {
 }
 
 struct AccountHttpRequest {
+    method: String,
     target: String,
     body: Vec<u8>,
     response: oneshot::Sender<Result<(u16, Value), String>>,
@@ -260,6 +261,7 @@ impl AccountProcess {
             tokio::select! {
                 Some(request) = receiver.recv() => {
                     let response = self.handle_request(
+                        &request.method,
                         &request.target,
                         &String::from_utf8_lossy(&request.body),
                         &async_refresh_sender,
@@ -807,41 +809,26 @@ impl AccountProcess {
 
     fn handle_request(
         &mut self,
+        method: &str,
         target: &str,
         body: &str,
         async_refresh_sender: &mpsc::Sender<AsyncRefreshCompletion>,
     ) -> Result<(u16, Value), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let generation_before = self.application.generation();
-        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        let (path, _query) = target.split_once('?').unwrap_or((target, ""));
         info!(event = "control_request", component = "account", path = %path, "account control request received");
-        let account_query = parse_account_query(query, &self.account_id);
+        if method == "GET" && path != HEALTH_PATH {
+            return Ok((
+                405,
+                json!({"error":"REST business queries are disabled; read the typed mmap view"}),
+            ));
+        }
+        if path == HEALTH_PATH && method != "GET" {
+            return Ok((405, json!({"error":"health only supports GET"})));
+        }
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_json()),
-            "/v1/account-state" => (
-                200,
-                serde_json::to_value(self.application.snapshot_query(&account_query))?,
-            ),
-            "/v1/balances" => {
-                let (accounts, rows) = self.application.balances_query_with_rows(&account_query);
-                (
-                    200,
-                    json!({
-                        "accounts": accounts,
-                        "rows": rows,
-                        "page": account_query.page,
-                        "page_size": account_query.page_size,
-                    }),
-                )
-            }
-            "/v1/positions" => (
-                200,
-                json!({"accounts": self.application.positions_query(&account_query)}),
-            ),
-            "/v1/open-orders" => (
-                200,
-                json!({"accounts": self.application.open_orders_query(&account_query)}),
-            ),
             "/v1/simulated-fill" => self.json_command(body, |application, body| {
                 let fill: AccountFill =
                     serde_json::from_slice(body).map_err(|error| error.to_string())?;
@@ -936,15 +923,6 @@ impl AccountProcess {
                     .map(|applied| json!({"status":"applied", "events": applied}))
                     .map_err(|error| error.to_string())
             }),
-            "/v1/market-profiles" => (200, json!({"profiles": self.application.market_profiles()})),
-            "/v1/capabilities" => (
-                200,
-                json!({"capabilities": self.application.capabilities(Some(&self.account_id))}),
-            ),
-            "/v1/fees" => (
-                200,
-                json!({"fees": self.application.fee_schedules(Some(&self.account_id))}),
-            ),
             "/v1/fills" => match serde_json::from_str::<AccountFill>(body) {
                 Ok(fill) => match self
                     .application
@@ -1063,7 +1041,15 @@ impl AccountProcess {
                 })
             })
             .collect::<Vec<_>>();
-        json!({"status": self.business_status(), "pid": std::process::id(), "account_id": self.account_id, "actor_id": self.application.actor_id(), "generation": self.application.generation(), "event_sequence": self.application.event_sequence(), "business_time_unix_nanos": self.business_time_unix_nanos, "stream_queue_depth": self.async_event_queue_depth.load(std::sync::atomic::Ordering::Relaxed) + self.recovery_events.len(), "persistence_queue_depth": self.application.persistence_queue_depth(), "refresh_pending": self.refresh_pending(), "initial_refresh_complete": self.initial_refresh_complete, "provider_channels": provider_channels, "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
+        json!({
+            "status": self.business_status(),
+            "pid": std::process::id(),
+            "refresh_pending": self.refresh_pending(),
+            "initial_refresh_complete": self.initial_refresh_complete,
+            "lease_valid": self.lease_valid(),
+            "dependencies": { "provider_channels": provider_channels },
+            "last_error": self.last_error,
+        })
     }
 
     fn business_status(&self) -> &'static str {
@@ -1207,6 +1193,7 @@ async fn account_http_handler_inner(
     sender: Sender<AccountHttpRequest>,
     request: Request,
 ) -> Response {
+    let method = request.method().as_str().to_owned();
     let target = request
         .uri()
         .path_and_query()
@@ -1230,6 +1217,7 @@ async fn account_http_handler_inner(
     let (response_sender, response_receiver) = oneshot::channel();
     if sender
         .send(AccountHttpRequest {
+            method,
             target,
             body,
             response: response_sender,
@@ -1520,30 +1508,4 @@ fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
-}
-
-fn parse_account_query(query: &str, account_id: &str) -> AccountDataQuery {
-    let mut request = AccountDataQuery {
-        account_id: AccountId::new(account_id).ok(),
-        ..Default::default()
-    };
-    for pair in query.split('&').filter(|value| !value.is_empty()) {
-        let Some((key, value)) = pair.split_once('=') else {
-            continue;
-        };
-        match key {
-            "segment" => {
-                if let Ok(value) = crate::domain::SegmentKey::new(value) {
-                    request.segments.push(value);
-                }
-            }
-            "symbol" => request.symbol = kairos_primitives::Symbol::new(value).ok(),
-            "limit" => request.limit = value.parse().ok(),
-            "include_zero" => request.include_zero = value == "true" || value == "1",
-            "page" => request.page = value.parse().ok(),
-            "page_size" => request.page_size = value.parse().ok(),
-            _ => {}
-        }
-    }
-    request
 }

@@ -8,7 +8,9 @@ mod queries;
 #[cfg(test)]
 mod tests;
 
-pub use app::{ReferenceApplication, ReferenceReadModel, ReferenceRefreshResult};
+pub use app::{
+    ReferenceApplication, ReferenceCurrentView, ReferenceReadModel, ReferenceRefreshResult,
+};
 pub use datasets::{
     CashDividendDatasetRecord, CashDividendDatasetRequest, CashDividendDatasetResult,
     CashDividendInput, OptionContractDatasetRecord, OptionContractInput,

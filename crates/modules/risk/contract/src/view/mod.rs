@@ -2,19 +2,25 @@ pub mod encode;
 mod key;
 mod metadata;
 use crate::{ContractError, ContractResult};
+use kairos_transport::{
+    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
+};
 pub use key::{RiskViewKey, RiskViewKind};
 pub use metadata::ViewMetadata;
 use std::path::Path;
 pub struct ViewFrame {
-    generation: u64,
+    metadata: SnapshotEnvelopeMetadata,
     bytes: Vec<u8>,
 }
 impl ViewFrame {
-    pub(crate) fn new(generation: u64, bytes: Vec<u8>) -> Self {
-        Self { generation, bytes }
+    pub(crate) fn new(metadata: SnapshotEnvelopeMetadata, bytes: Vec<u8>) -> Self {
+        Self { metadata, bytes }
     }
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.metadata.generation
+    }
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.metadata
     }
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -35,19 +41,63 @@ impl ViewFrame {
 }
 pub struct RiskViewReader {
     key: RiskViewKey,
-    reader: crate::transport::RiskMmapReader,
+    reader: SharedSnapshotReader,
 }
 impl RiskViewReader {
     pub fn open(root: impl AsRef<Path>, key: RiskViewKey) -> ContractResult<Self> {
-        Ok(Self {
-            reader: crate::transport::RiskMmapReader::open(root, key.clone())?,
-            key,
-        })
+        let reader = SharedSnapshotReader::open(key.resource_path(root))
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(Self { reader, key })
     }
     pub fn read(&self) -> ContractResult<ViewFrame> {
-        self.reader.read()
+        let frame = self
+            .reader
+            .read_payload()
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(ViewFrame::new(
+            SnapshotEnvelopeMetadata {
+                resource_epoch: frame.resource_epoch,
+                producer_incarnation: frame.producer_incarnation,
+                generation: frame.generation,
+                applied_event_sequence: frame.applied_event_sequence,
+                published_at_unix_nanos: frame.published_at_unix_nanos,
+            },
+            frame.payload,
+        ))
     }
     pub fn key(&self) -> &RiskViewKey {
         &self.key
+    }
+}
+
+pub struct RiskViewPublisher {
+    key: RiskViewKey,
+    writer: ReplacementSnapshotStorage,
+}
+
+impl RiskViewPublisher {
+    pub fn create(
+        root: impl AsRef<Path>,
+        key: RiskViewKey,
+        slot_capacity: usize,
+    ) -> ContractResult<Self> {
+        let writer = ReplacementSnapshotStorage::create(key.resource_path(root), slot_capacity)
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        Ok(Self { key, writer })
+    }
+
+    pub fn key(&self) -> &RiskViewKey {
+        &self.key
+    }
+
+    pub fn publish(
+        &mut self,
+        metadata: SnapshotEnvelopeMetadata,
+        payload: &[u8],
+    ) -> ContractResult<()> {
+        self.writer
+            .publish(metadata, payload)
+            .map(|_| ())
+            .map_err(|error| ContractError::Transport(error.to_string()))
     }
 }

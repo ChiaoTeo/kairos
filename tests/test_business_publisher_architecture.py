@@ -13,9 +13,8 @@ def test_business_publishers_do_not_use_json_as_a_model_adapter() -> None:
         composition = (
             ROOT
             / "crates"
-            / "business"
+            / "modules"
             / module
-            / "service"
             / "src"
             / "composition"
             / "mod.rs"

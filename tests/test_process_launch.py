@@ -378,31 +378,16 @@ def test_market_command_passes_only_runtime_profile_selection(tmp_path: Path) ->
     assert "--secret" not in command
 
 
-def test_execution_command_passes_non_secret_route_collection(tmp_path: Path) -> None:
+def test_execution_command_uses_instance_normalized_route_configuration(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="execution-routes"
     )
-    routes = [
-        {
-            "route_id": "binance-spot",
-            "provider": "binance",
-            "product": "spot",
-            "credential_id": "binance-main",
-        },
-        {
-            "route_id": "okx-swap",
-            "provider": "okx",
-            "product": "swap",
-            "credential_id": "okx-main",
-        },
-    ]
     command, _ = ComponentProcessApplication(
         workspace, binaries={"execution": "execution-bin"}
-    )._command("execution", account_id=None, execution_routes=routes)
+    )._command("execution", account_id=None)
 
-    assert "--routes-json" in command
-    encoded = command[command.index("--routes-json") + 1]
-    assert json.loads(encoded) == routes
+    assert "--routes-json" not in command
+    assert "--participant-id" not in command
     assert "--api-key" not in command
     assert "--secret" not in command
 

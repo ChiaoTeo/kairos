@@ -32,7 +32,8 @@ impl ReferenceEventStream {
                     {
                         Ok(v) => v,
                         Err(e) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(e)));
+                            let _ =
+                                sender.blocking_send(Err(ContractError::Transport(e.to_string())));
                             return;
                         }
                     };
@@ -48,7 +49,8 @@ impl ReferenceEventStream {
                         }
                         Ok(None) => std::thread::yield_now(),
                         Err(e) => {
-                            let _ = sender.blocking_send(Err(ContractError::Transport(e)));
+                            let _ =
+                                sender.blocking_send(Err(ContractError::Transport(e.to_string())));
                             break;
                         }
                     }

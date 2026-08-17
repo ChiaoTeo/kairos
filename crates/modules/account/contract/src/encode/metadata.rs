@@ -13,6 +13,7 @@ pub struct EncodeContext {
     pub sequence: u64,
     pub event_id: String,
     pub generation: u64,
+    pub applied_revision: Option<u64>,
     pub resource_id: String,
 }
 
@@ -32,6 +33,7 @@ impl EncodeContext {
             sequence,
             event_id: event_id.into(),
             generation: 0,
+            applied_revision: None,
             resource_id: String::new(),
         }
     }
@@ -52,8 +54,14 @@ impl EncodeContext {
             sequence: 0,
             event_id: String::new(),
             generation,
+            applied_revision: None,
             resource_id: resource_id.into(),
         }
+    }
+
+    pub fn with_applied_revision(mut self, applied_revision: u64) -> Self {
+        self.applied_revision = Some(applied_revision);
+        self
     }
 }
 
@@ -115,7 +123,7 @@ pub fn view_metadata<'a, A: Allocator + 'a>(
             as_of_unix_nanos,
             published_at_unix_nanos: now_unix_nanos(),
             completeness: ViewCompleteness::COMPLETE,
-            applied_revision: None,
+            applied_revision: context.applied_revision,
         },
     )
 }

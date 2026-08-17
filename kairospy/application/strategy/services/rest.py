@@ -96,8 +96,10 @@ class StrategyControlServer:
                 not in {StrategyLifecycle.FAILED, StrategyLifecycle.STOPPED}
                 else "not_ready"
             }
-        if method == "GET" and path == "/v1/status":
-            return self._status(self.application.status)
+        if method == "GET":
+            raise ValueError(
+                "GET /v1/health is the only REST query; read state from typed mmap views"
+            )
         if method == "POST" and path == "/v1/command":
             payload = json.loads(body or b"{}")
             if not isinstance(payload, dict):

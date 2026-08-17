@@ -1,6 +1,6 @@
 use crate::application::AccountProjection;
 use crate::domain::{
-    AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, FillSide, Money, Position,
+    AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, Money, OrderSide, Position,
     SignedQuantity, SnapshotKind,
 };
 
@@ -39,7 +39,7 @@ pub(crate) fn settle_paper_fill(
         .unwrap_or_else(|| kairos_primitives::Price::new(1, 0).expect("positive fallback price"));
     let fill_quantity = SignedQuantity::new(fill.quantity.mantissa(), fill.quantity.scale())?;
     let (next_quantity, next_average, realized_pnl) = match fill.side {
-        FillSide::Buy => {
+        OrderSide::Buy => {
             let next_quantity = previous_quantity.checked_add(fill_quantity)?;
             let next_average =
                 if previous_quantity.is_positive() && position.average_price.is_some() {
@@ -52,7 +52,7 @@ pub(crate) fn settle_paper_fill(
                 };
             (next_quantity, next_average, Money::ZERO)
         }
-        FillSide::Sell => {
+        OrderSide::Sell => {
             let next_quantity = previous_quantity.checked_sub(fill_quantity)?;
             let closing_quantity = if previous_quantity.is_positive() {
                 if fill_quantity.cmp_value(previous_quantity)? == std::cmp::Ordering::Greater {

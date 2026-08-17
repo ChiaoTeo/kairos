@@ -217,7 +217,6 @@ impl ExecutionSimulator {
             MarketObservation::Bar(bar) => quote_from_bar(&bar),
             MarketObservation::TradeBar(value) => quote_from_bar(&value.bar),
             MarketObservation::QuoteBar(value) => quote_from_bar(&value.bar),
-            _ => return Ok(()),
         };
         self.validate_quote(&quote)?;
         self.try_fill_quote(&quote)

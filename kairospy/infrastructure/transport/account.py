@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-import struct
 import sys
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,78 +9,32 @@ from kairospy.application.account.events import (
     AccountEventRecord,
     AccountFactProvenanceRecord,
 )
-from kairospy.infrastructure.transport.aeron_bridge import check_aeron_bridge
+from kairospy.infrastructure.transport.native_event import NativeEventSource
+from kairospy.infrastructure.transport.generated_spec import (
+    ACCOUNT_EVENTS,
+    DEFAULT_CHANNEL,
+)
 from kairospy.infrastructure.transport.generated import kairos as _generated_kairos
 
 sys.modules.setdefault("kairos", _generated_kairos)
 
 
-class AeronAccountEventSource:
+class AeronAccountEventSource(NativeEventSource[AccountEventRecord]):
     """Account-owned subprocess adapter over the native Aeron subscription."""
-
-    join_from_latest = True
 
     def __init__(
         self,
         *,
         aeron_dir: str | Path | None = None,
-        channel: str = "aeron:udp?endpoint=localhost:40123",
-        stream_id: int = 1401,
-        binary: str,
+        channel: str = DEFAULT_CHANNEL,
+        stream_id: int = ACCOUNT_EVENTS,
     ) -> None:
-        self.aeron_dir = None if aeron_dir is None else str(aeron_dir)
-        self.channel = channel
-        self.stream_id = stream_id
-        self.binary = binary
-
-    def _command(self) -> list[str]:
-        command = [
-            self.binary,
-            "--aeron-channel",
-            self.channel,
-            "--stream-id",
-            str(self.stream_id),
-        ]
-        if self.aeron_dir is not None:
-            command.extend(("--aeron-dir", self.aeron_dir))
-        return command
-
-    def check_ready(self) -> None:
-        check_aeron_bridge(self._command(), domain="Account")
-
-    async def events(
-        self, after_sequence: int = 0
-    ) -> AsyncIterator[AccountEventRecord]:
-        process = await asyncio.create_subprocess_exec(
-            *self._command(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        super().__init__(
+            decoder=decode_account_event,
+            aeron_dir=aeron_dir,
+            channel=channel,
+            stream_id=stream_id,
         )
-        assert process.stdout is not None
-        try:
-            while True:
-                try:
-                    size = struct.unpack(">I", await process.stdout.readexactly(4))[0]
-                    if size == 0 or size > 4 * 1024 * 1024:
-                        raise ValueError("invalid Account Aeron frame length")
-                    payload = await process.stdout.readexactly(size)
-                except asyncio.IncompleteReadError:
-                    break
-                record = decode_account_event(payload)
-                if record.sequence > after_sequence:
-                    yield record
-            status = await process.wait()
-            if status != 0:
-                assert process.stderr is not None
-                error = (await process.stderr.read()).decode(errors="replace").strip()
-                raise RuntimeError(
-                    error or f"Account Aeron bridge exited with {status}"
-                )
-            raise RuntimeError("Account Aeron bridge ended unexpectedly")
-        finally:
-            if process.returncode is None:
-                process.terminate()
-                await process.wait()
 
 
 def decode_account_event(payload: bytes) -> AccountEventRecord:

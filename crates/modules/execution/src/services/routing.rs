@@ -6,12 +6,12 @@
 //! global registry: it is a private, typed collection with current callers in
 //! Execution composition and runtime.
 
-use kairos_primitives::{AccountId, SegmentKey};
 use kairos_integration::application::{
     AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
     ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
 };
 use kairos_integration::application::{OrderEntryEvent, OrderEntryRequest};
+use kairos_primitives::{AccountId, SegmentKey};
 
 /// One business route bound to one concrete Integration capability.
 pub(crate) struct ExecutionRoute<C> {

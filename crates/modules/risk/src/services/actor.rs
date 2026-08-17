@@ -685,6 +685,7 @@ impl RiskActor {
         crate::RiskCurrentView {
             actor_id: self.actor_id.clone(),
             generation: self.generation,
+            event_sequence: self.event_sequence,
             policy_version: self.policy_version,
             limits,
             reservations,
@@ -697,7 +698,7 @@ impl RiskActor {
         RiskSnapshot {
             actor_id: view.actor_id,
             generation: view.generation,
-            event_sequence: self.event_sequence,
+            event_sequence: view.event_sequence,
             policy_version: view.policy_version,
             limits: view.limits,
             reservations: view.reservations,

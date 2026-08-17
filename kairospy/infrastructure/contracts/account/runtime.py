@@ -36,18 +36,6 @@ class AccountContractClient:
     def health(self) -> Mapping[str, Any]:
         return self._get("/v1/health")
 
-    def account_state(self) -> Mapping[str, Any]:
-        return self._get("/v1/account-state")
-
-    def capabilities(self) -> Mapping[str, Any]:
-        return self._get("/v1/capabilities")
-
-    def balances(self, *, symbol: str | None = None) -> Mapping[str, Any]:
-        return self._get("/v1/balances", symbol=symbol)
-
-    def positions(self, *, symbol: str | None = None) -> Mapping[str, Any]:
-        return self._get("/v1/positions", symbol=symbol)
-
     def publish_order_event(self, event: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._post("/v1/order-event", event)
 
@@ -114,10 +102,18 @@ class AccountProjection:
         if _text(root.AccountId()) != str(account_id):
             raise ValueError(f"account {account_id!s} is not present in Account projection")
         generation = snapshot.generation
+        if int(metadata.Generation()) != generation:
+            raise ValueError("Account mmap frame and metadata generation disagree")
+        if int(metadata.Completeness()) != 1:
+            raise ValueError("Account mmap current view is not complete")
+        event_sequence = metadata.AppliedRevision()
+        if event_sequence is None:
+            raise ValueError("Account mmap current view is missing applied revision")
         return AccountSnapshot(
             account_id=account_id,
             segments=tuple(_segment_snapshot(root.Segments(index), account_id, generation) for index in range(root.SegmentsLength())),
             generation=generation,
+            event_sequence=int(event_sequence),
         )
 
 
@@ -258,7 +254,6 @@ def backtest_mark_to_market(
     )
     return {
         "result": result,
-        "snapshot": client.account_state(),
         "segment_key": segment_key,
     }
 

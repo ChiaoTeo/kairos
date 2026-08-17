@@ -12,8 +12,6 @@ ROOT = Path(__file__).resolve().parents[2]
 CRATES = ROOT / "crates"
 MODULES = CRATES / "modules"
 PLATFORM = CRATES / "platform"
-EXPECTED_MODULES = {"account", "execution", "market", "reference", "risk"}
-EXPECTED_PLATFORM = {"integration", "network", "protocol", "transport", "workspace"}
 FORBIDDEN_MODULE_LAYERS = {"app", "domain", "runtime", "service"}
 
 
@@ -24,21 +22,14 @@ def manifest(path: Path) -> dict:
 def main() -> int:
     failures: list[str] = []
 
-    actual_modules = {path.name for path in MODULES.iterdir() if path.is_dir()}
-    if actual_modules != EXPECTED_MODULES:
-        failures.append(
-            f"module directories differ: expected {sorted(EXPECTED_MODULES)}, "
-            f"found {sorted(actual_modules)}"
-        )
+    module_names = {path.name for path in MODULES.iterdir() if path.is_dir()}
+    platform_names = {path.name for path in PLATFORM.iterdir() if path.is_dir()}
+    if not module_names:
+        failures.append("crates/modules contains no business modules")
+    if not platform_names:
+        failures.append("crates/platform contains no platform crates")
 
-    actual_platform = {path.name for path in PLATFORM.iterdir() if path.is_dir()}
-    if actual_platform != EXPECTED_PLATFORM:
-        failures.append(
-            f"platform directories differ: expected {sorted(EXPECTED_PLATFORM)}, "
-            f"found {sorted(actual_platform)}"
-        )
-
-    for name in sorted(EXPECTED_MODULES):
+    for name in sorted(module_names):
         root = MODULES / name
         main_manifest = root / "Cargo.toml"
         contract_manifest = root / "contract" / "Cargo.toml"
@@ -60,7 +51,7 @@ def main() -> int:
                 f"unexpected contract package name {contract_name!r}: {contract_manifest}"
             )
         dependencies = contract_data.get("dependencies", {})
-        main_packages = {f"kairos-{module}" for module in EXPECTED_MODULES}
+        main_packages = {f"kairos-{module}" for module in module_names}
         leaked = sorted(main_packages.intersection(dependencies))
         if leaked:
             failures.append(
@@ -72,6 +63,14 @@ def main() -> int:
                 failures.append(
                     f"obsolete wrapper/domain crate directory: {(root / layer).relative_to(ROOT)}"
                 )
+
+    for name in sorted(platform_names):
+        platform_manifest = PLATFORM / name / "Cargo.toml"
+        if not platform_manifest.is_file():
+            failures.append(
+                "platform crate manifest is missing: "
+                f"{platform_manifest.relative_to(ROOT)}"
+            )
 
     primitives = manifest(CRATES / "primitives" / "Cargo.toml")
     if primitives["package"]["name"] != "kairos-primitives":

@@ -112,12 +112,13 @@ pub struct RiskSnapshot {
 
 /// Read-only state published through mmap.
 ///
-/// This type deliberately has no event sequence, cursor, dependency
-/// watermark, or event collection. Event delivery is owned by Aeron.
+/// The applied event sequence is a state watermark, not a replay cursor.
+/// Event delivery remains owned by Aeron or an explicit journal.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskCurrentView {
     pub actor_id: ActorId,
     pub generation: Generation,
+    pub event_sequence: Sequence,
     pub policy_version: Generation,
     pub limits: Vec<LimitView>,
     pub reservations: Vec<Reservation>,

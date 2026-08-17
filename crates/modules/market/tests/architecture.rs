@@ -160,3 +160,31 @@ fn actor_is_the_single_source_runtime_state_owner() {
     assert!(!application_struct.contains("sources:"));
     assert!(!application_struct.contains("pending_source_requests:"));
 }
+
+#[test]
+fn market_rest_exposes_health_as_its_only_get_query() {
+    let process = source("src/application/process.rs");
+    assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
+    assert!(process.contains("Market business queries are available only through typed mmap views"));
+    assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
+    let health = process
+        .split("fn health(&self)")
+        .nth(1)
+        .expect("Market health function")
+        .split("fn subscribe")
+        .next()
+        .expect("Market health body");
+    for forbidden in [
+        "actor_id",
+        "generation",
+        "event_sequence",
+        "subscription_count",
+        "subscriptions",
+        "source_count",
+    ] {
+        assert!(
+            !health.contains(forbidden),
+            "Market health leaks {forbidden}"
+        );
+    }
+}

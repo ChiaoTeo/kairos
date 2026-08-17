@@ -40,6 +40,7 @@ pub trait RiskEventPublisher {
 }
 
 struct RiskHttpRequest {
+    method: String,
     path: String,
     body: Vec<u8>,
     span: tracing::Span,
@@ -117,7 +118,7 @@ impl RiskProcess {
             tokio::select! {
                 Some(request) = receiver.recv() => {
                     let _entered = request.span.enter();
-                    let response = self.handle(&request.path, &String::from_utf8_lossy(&request.body));
+                    let response = self.handle(&request.method, &request.path, &String::from_utf8_lossy(&request.body));
                     self.publish_events();
                     self.publish_snapshot();
                     let _ = request.response.send(response);
@@ -170,8 +171,26 @@ impl RiskProcess {
         }
     }
 
-    fn handle(&mut self, path: &str, raw_body: &str) -> (StatusCode, Value) {
+    fn handle(&mut self, method: &str, path: &str, raw_body: &str) -> (StatusCode, Value) {
         info!(event = "control_request", component = "risk", path = %path, "risk control request received");
+        if method == "GET" && path != HEALTH_PATH {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                serde_json::json!({"error":"Risk business queries are available only through typed mmap views"}),
+            );
+        }
+        if path == HEALTH_PATH && method != "GET" {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                serde_json::json!({"error":"/v1/health only accepts GET"}),
+            );
+        }
+        if method != "POST" && path != HEALTH_PATH {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                serde_json::json!({"error":"Risk REST accepts only control commands"}),
+            );
+        }
         let (status, body) = match path {
             HEALTH_PATH => (200, self.health_body()),
             "/v1/time/advance" => {
@@ -347,24 +366,16 @@ impl RiskProcess {
             tokio::fs::create_dir_all(parent).await?;
         }
         let temp = path.with_extension("tmp");
-        let snapshot = self.application.snapshot();
-        let payload = serde_json::to_vec(&serde_json::json!({"status":status,"actor_id":snapshot.actor_id,"generation":snapshot.generation,"event_sequence":snapshot.event_sequence,"policy_version":snapshot.policy_version,"reservation_count":snapshot.reservations.len(),"open_circuit_count":snapshot.circuits.iter().filter(|c| c.open).count()})).map_err(std::io::Error::other)?;
+        let payload = serde_json::to_vec(&serde_json::json!({"status":status}))
+            .map_err(std::io::Error::other)?;
         tokio::fs::write(&temp, payload).await?;
         tokio::fs::rename(temp, path).await
     }
 
     fn health_body(&self) -> serde_json::Value {
-        let snapshot = self.application.snapshot();
         serde_json::json!({
             "status": "ready",
             "pid": std::process::id(),
-            "actor_id": snapshot.actor_id,
-            "generation": snapshot.generation,
-            "event_sequence": snapshot.event_sequence,
-            "policy_version": snapshot.policy_version,
-            "budget_count": snapshot.limits.len(),
-            "reservation_count": snapshot.reservations.len(),
-            "open_circuit_count": snapshot.circuits.iter().filter(|c| c.open).count(),
         })
     }
 }
@@ -426,6 +437,7 @@ async fn risk_http_handler_inner(
     sender: mpsc::Sender<RiskHttpRequest>,
     request: Request,
 ) -> Response {
+    let method = request.method().as_str().to_owned();
     let path = request
         .uri()
         .path_and_query()
@@ -449,6 +461,7 @@ async fn risk_http_handler_inner(
     let (response_sender, response_receiver) = oneshot::channel();
     if sender
         .send(RiskHttpRequest {
+            method,
             path,
             body,
             span: tracing::Span::current(),

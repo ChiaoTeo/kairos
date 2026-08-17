@@ -92,9 +92,33 @@ impl RiskControlClient {
             .post(format!("http://localhost{path}"))
             .json(body)
             .send()
-            .map_err(|error| ContractError::Transport(format!("POST {path}: {error}")))?;
-        decode_response(path, response)
+            .map_err(|error| {
+                if error.is_connect() || error.is_builder() {
+                    ContractError::NotSent(format!("POST {path}: {error}"))
+                } else {
+                    ContractError::Indeterminate(format!("POST {path}: {error}"))
+                }
+            })?;
+        decode_command_response(path, response)
     }
+}
+
+fn decode_command_response<T: DeserializeOwned>(
+    path: &str,
+    response: Response,
+) -> ContractResult<T> {
+    let status = response.status();
+    let value: serde_json::Value = response.json().map_err(|error| {
+        ContractError::Indeterminate(format!("decode {path} command response: {error}"))
+    })?;
+    if !status.is_success() {
+        return Err(ContractError::Rejected(format!(
+            "{path} failed with HTTP {status}: {value}"
+        )));
+    }
+    serde_json::from_value(value).map_err(|error| {
+        ContractError::Indeterminate(format!("decode {path} command result: {error}"))
+    })
 }
 
 fn decode_response<T: DeserializeOwned>(path: &str, response: Response) -> ContractResult<T> {

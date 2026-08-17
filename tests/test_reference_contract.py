@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from io import StringIO
-import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,68 +16,55 @@ from kairospy.domain_types import MarketId
 from kairospy.infrastructure.contracts.reference import ReferenceClient
 
 
-def _reference_database(path: Path) -> Path:
-    connection = sqlite3.connect(path)
-    connection.executescript(
-        """CREATE TABLE reference_meta(id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, generation INTEGER NOT NULL, event_sequence INTEGER NOT NULL, committed_at_unix_nanos INTEGER NOT NULL);
-        INSERT INTO reference_meta VALUES(1,1,3,7,11);
-        CREATE TABLE reference_entities_current(entity_id TEXT PRIMARY KEY, payload TEXT);
-        CREATE TABLE reference_assets_current(asset_id TEXT PRIMARY KEY, payload TEXT);
-        CREATE TABLE reference_instruments_current(instrument_id TEXT PRIMARY KEY, payload TEXT);
-        CREATE TABLE reference_listings_current(listing_id TEXT PRIMARY KEY, payload TEXT);
-        CREATE TABLE reference_markets_current(market_id TEXT PRIMARY KEY, source_id TEXT, market_key TEXT, instrument_id TEXT, listing_id TEXT, exchange_id TEXT, market_type TEXT, asset_type TEXT, underlying_instrument_id TEXT, source_symbol TEXT, status TEXT, effective_to_unix_nanos INTEGER, payload TEXT);
-        CREATE TABLE reference_financial_products_current(product_id TEXT PRIMARY KEY, payload TEXT);
-        CREATE TABLE reference_execution_accesses_current(access_id TEXT PRIMARY KEY, payload TEXT);
-        """
-    )
-    market = {
-        "market_id": "market:binance:spot:BTCUSDT",
-        "market_key": "BTCUSDT",
-        "instrument_id": "instrument:spot:BTC",
-        "listing_id": "listing:binance:spot:BTCUSDT",
-        "exchange_id": "exchange:binance",
-        "market_type": "spot",
-        "source_symbol": "BTCUSDT",
-        "status": "active",
-    }
-    connection.execute(
-        "INSERT INTO reference_markets_current VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            market["market_id"],
-            "binance-spot",
-            market["market_key"],
-            market["instrument_id"],
-            market["listing_id"],
-            market["exchange_id"],
-            market["market_type"],
-            None,
-            None,
-            market["source_symbol"],
-            market["status"],
-            None,
-            json.dumps(market),
-        ),
-    )
-    connection.commit()
-    connection.close()
-    return path
+class _Market:
+    MarketId = lambda self: b"market:binance:spot:BTCUSDT"
+    MarketKey = lambda self: b"BTCUSDT"
+    InstrumentId = lambda self: b"instrument:spot:BTC"
+    ListingId = lambda self: b"listing:binance:spot:BTCUSDT"
+    ExchangeId = lambda self: b"exchange:binance"
+    MarketType = lambda self: b"spot"
+    AssetType = lambda self: None
+    SourceSymbol = lambda self: b"BTCUSDT"
+    BaseAssetId = lambda self: None
+    QuoteAssetId = lambda self: None
+    UnderlyingInstrumentId = lambda self: None
+    Status = lambda self: 2
+    PriceTick = lambda self: None
+    QuantityTick = lambda self: None
+    MinimumQuantity = lambda self: None
+    MinimumNotional = lambda self: None
+    ContractSize = lambda self: None
 
 
-def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) -> None:
-    database = _reference_database(tmp_path / "reference.sqlite")
-    client = ReferenceClient(database_path=database)
+class _State:
+    MarketsLength = lambda self: 1
+    Markets = lambda self, index: _Market()
+    EntitiesLength = AssetsLength = InstrumentsLength = ListingsLength = lambda self: 0
+    FinancialProductsLength = ExecutionAccessesLength = MarketDataAccessesLength = lambda self: 0
+    ProviderHealthLength = OptionUnderlyingsLength = LifecycleEventsLength = lambda self: 0
+
+
+class _Client(ReferenceClient):
+    def _view(self):
+        return SimpleNamespace(
+            generation=3,
+            event_sequence=7,
+            value=SimpleNamespace(State=lambda: _State()),
+        )
+
+
+def test_reference_mmap_client_reads_watermark_and_scoped_markets() -> None:
+    client = _Client()
     assert client.catalog()["generation"] == 3
     assert client.catalog()["catalog"]["market_count"] == 1
     assert (
         client.resolve_market(symbol="BTCUSDT")["instrument_id"]
         == "instrument:spot:BTC"
     )
-    assert client.sqlite().watermark().event_sequence == 7
 
 
-def test_reference_application_reads_concrete_sqlite_client(tmp_path: Path) -> None:
-    database = _reference_database(tmp_path / "reference.sqlite")
-    application = ReferenceApplication(ReferenceClient(database_path=database))
+def test_reference_application_reads_concrete_mmap_client() -> None:
+    application = ReferenceApplication(_Client())
 
     markets = application.find_markets(
         symbol="BTCUSDT", exchange="binance", market_type="spot"
@@ -139,31 +126,14 @@ def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
 
 
 def test_reference_client_reads_lifecycle_events_by_sequence(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
-    observed: dict[str, object] = {}
-
-    def request_sync(socket_path, method, target, body=None, *, timeout):
-        observed.update(
-            socket_path=socket_path, method=method, target=target, timeout=timeout
-        )
-        return 200, {"generation": 3, "event_sequence": 7, "events": []}
-
-    monkeypatch.setattr(
-        "kairospy.infrastructure.transport.commands.request_sync", request_sync
-    )
-    socket = tmp_path / "reference.sock"
-    result = ReferenceClient(socket_path=socket).events(
+    result = _Client().events(
         sequence_from=4, sequence_to=8, limit=9
     )
 
     assert result["event_sequence"] == 7
-    assert observed == {
-        "socket_path": socket,
-        "method": "GET",
-        "target": "/v1/events?sequence_from=4&sequence_to=8&limit=9",
-        "timeout": 120.0,
-    }
+    assert result["events"] == []
 
 
 def test_reference_client_scopes_refresh_and_provider_controls(
@@ -179,7 +149,7 @@ def test_reference_client_scopes_refresh_and_provider_controls(
     monkeypatch.setattr(
         "kairospy.infrastructure.transport.commands.request_sync", request_sync
     )
-    client = ReferenceClient(socket_path=tmp_path / "reference.sock")
+    client = _Client(socket_path=tmp_path / "reference.sock")
 
     client.refresh(source="massive-options")
     client.set_source_paused("massive-options", True)
@@ -192,7 +162,6 @@ def test_reference_client_scopes_refresh_and_provider_controls(
         ("POST", "/v1/refresh?source=massive-options", 120.0),
         ("POST", "/v1/sources/pause?source=massive-options", 5.0),
         ("POST", "/v1/sources/resume?source=massive-options", 5.0),
-        ("GET", "/v1/options/coverage", 5.0),
         ("POST", "/v1/options/coverage/add?underlying=SPY", 120.0),
         ("POST", "/v1/options/coverage/remove?underlying=SPY", 120.0),
     ]

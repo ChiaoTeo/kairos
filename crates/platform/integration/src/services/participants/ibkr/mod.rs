@@ -247,9 +247,7 @@ fn fetch_snapshot(
         .map(
             |(currency, (total, available))| -> Result<ExternalBalance, String> {
                 Ok(ExternalBalance {
-                    asset_id: kairos_primitives::AssetId::new(format!(
-                        "asset:equity:{currency}"
-                    ))?,
+                    asset_id: kairos_primitives::AssetId::new(format!("asset:equity:{currency}"))?,
                     asset_code: kairos_primitives::Currency::new(currency)?,
                     total: total.or(available).unwrap_or_default(),
                     available,

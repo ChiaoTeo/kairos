@@ -33,3 +33,55 @@ fn risk_domain_has_no_infrastructure_dependencies() {
         assert!(!shared_types_only.contains("kairos_") && !source.contains("std::fs"));
     }
 }
+
+#[test]
+fn risk_server_selects_a_profile_instead_of_an_account_or_exchange() {
+    let server = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-risk-server.rs"),
+    )
+    .expect("read Risk server");
+    assert!(server.contains("normalized-config.json"));
+    assert!(server.contains("risk_profile"));
+    assert!(server.contains("unknown Risk profile"));
+    assert!(server.contains("Risk profile is required for a live launch"));
+    for forbidden in [
+        "account_id: String",
+        "exchange_id: String",
+        "provider: String",
+    ] {
+        assert!(
+            !server.contains(forbidden),
+            "Risk startup is incorrectly scoped by {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn risk_rest_exposes_health_as_its_only_get_query() {
+    let process = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/process.rs"),
+    )
+    .unwrap();
+    assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
+    assert!(process.contains("Risk business queries are available only through typed mmap views"));
+    assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
+    let health = process
+        .split("fn health_body(&self)")
+        .nth(1)
+        .expect("Risk health function")
+        .split("async fn risk_http_handler")
+        .next()
+        .expect("Risk health body");
+    for forbidden in [
+        "actor_id",
+        "generation",
+        "event_sequence",
+        "policy_version",
+        "budget_count",
+        "reservation_count",
+        "open_circuit_count",
+        ".snapshot()",
+    ] {
+        assert!(!health.contains(forbidden), "Risk health leaks {forbidden}");
+    }
+}

@@ -31,7 +31,7 @@ impl RiskEventStream {
                 let mut sub = match AeronByteSubscription::connect(d.as_deref(), &c, stream_id) {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = s.blocking_send(Err(ContractError::Transport(e)));
+                        let _ = s.blocking_send(Err(ContractError::Transport(e.to_string())));
                         return;
                     }
                 };
@@ -44,7 +44,7 @@ impl RiskEventStream {
                         }
                         Ok(None) => std::thread::yield_now(),
                         Err(e) => {
-                            let _ = s.blocking_send(Err(ContractError::Transport(e)));
+                            let _ = s.blocking_send(Err(ContractError::Transport(e.to_string())));
                             break;
                         }
                     }

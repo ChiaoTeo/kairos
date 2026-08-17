@@ -19,12 +19,6 @@ pub struct Health {
     pub event_sequence: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Capability {
-    pub account_id: String,
-    pub can_trade: bool,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecimalValue {
     pub mantissa: i64,
@@ -50,36 +44,6 @@ impl<'de> Deserialize<'de> for DecimalValue {
             .map(|(mantissa, scale)| Self { mantissa, scale })
             .map_err(serde::de::Error::custom)
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Balance {
-    pub asset_code: String,
-    pub total: DecimalValue,
-    pub available: Option<DecimalValue>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Position {
-    pub instrument_id: String,
-    pub market_id: Option<String>,
-    pub quantity: DecimalValue,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct BalanceGroup(pub String, pub String, pub Vec<Balance>);
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct PositionGroup(pub String, pub String, pub Vec<Position>);
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct BalancesResponse {
-    pub accounts: Vec<BalanceGroup>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct PositionsResponse {
-    pub accounts: Vec<PositionGroup>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,28 +107,6 @@ impl AccountContractClient {
 
     pub fn health(&self) -> ContractResult<Health> {
         self.get("/v1/health")
-    }
-
-    pub fn capabilities(&self) -> ContractResult<Vec<Capability>> {
-        #[derive(Deserialize)]
-        struct Response {
-            capabilities: Vec<Capability>,
-        }
-        Ok(self.get::<Response>("/v1/capabilities")?.capabilities)
-    }
-
-    pub fn balances(&self, symbol: Option<&str>) -> ContractResult<BalancesResponse> {
-        let path = symbol
-            .map(|value| format!("/v1/balances?symbol={value}"))
-            .unwrap_or_else(|| "/v1/balances".into());
-        self.get(&path)
-    }
-
-    pub fn positions(&self, symbol: Option<&str>) -> ContractResult<PositionsResponse> {
-        let path = symbol
-            .map(|value| format!("/v1/positions?symbol={value}"))
-            .unwrap_or_else(|| "/v1/positions".into());
-        self.get(&path)
     }
 
     pub fn publish_order_event(&self, event: &OrderEvent) -> ContractResult<()> {

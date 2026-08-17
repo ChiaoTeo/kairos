@@ -312,6 +312,7 @@ fn risk_contract_current_view(
     kairos_risk_contract::RiskCurrentView {
         actor_id: value.actor_id.to_string(),
         generation: value.generation.get(),
+        event_sequence: value.event_sequence.get(),
         policy_version: value.policy_version.get(),
         limits: value
             .limits

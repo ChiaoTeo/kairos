@@ -22,10 +22,12 @@ pub use application::{
 };
 pub use composition::{
     compose_execution_connections, compose_order_entry, ExecutionConnectionOptions,
-    ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionPreflight,
+    ExecutionConnections, ExecutionSimulator, FileExecutionStore, QueuedExecutionAccountFacts,
+    QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission, QueuedExecutionRiskReservations,
     SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulatedOrderEntry,
     SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
-    SimulationOrderStatus, SimulationResult, SocketExecutionPreflight,
+    SimulationOrderStatus, SimulationResult, SocketExecutionAccountFacts,
+    SocketExecutionIntentPlanner, SocketExecutionOrderAdmission, SocketExecutionRiskReservations,
 };
 pub use domain::{
     CompletionPolicy, ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus,

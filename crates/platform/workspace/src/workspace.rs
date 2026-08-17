@@ -56,6 +56,42 @@ pub struct WorkspaceProcessLock {
     path: PathBuf,
 }
 
+/// Workspace-scoped exclusive lease with a monotonically increasing fencing token.
+///
+/// The advisory lock establishes the current single owner. The durable token
+/// distinguishes a new owner from a stale process that retained old in-memory
+/// state after a takeover.
+#[derive(Debug)]
+pub struct WorkspaceFencedLease {
+    _lock: WorkspaceProcessLock,
+    token_path: PathBuf,
+    token: u64,
+}
+
+impl WorkspaceFencedLease {
+    pub fn token(&self) -> u64 {
+        self.token
+    }
+
+    pub fn token_path(&self) -> &Path {
+        &self.token_path
+    }
+
+    pub fn validate(&self) -> io::Result<()> {
+        let current = read_fencing_token(&self.token_path)?;
+        if current != self.token {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "fencing token is stale: held={}, current={current}",
+                    self.token
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl WorkspaceProcessLock {
     pub fn path(&self) -> &Path {
         &self.path
@@ -296,6 +332,55 @@ impl Workspace {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         self.process_lock(&format!("exclusive-{namespace}-{short}"))
+    }
+
+    /// Acquire one workspace-wide writer lease and advance its durable epoch.
+    pub fn fenced_lease(
+        &self,
+        namespace: &str,
+        resource_identity: &str,
+    ) -> io::Result<WorkspaceFencedLease> {
+        if namespace.trim().is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fenced lease namespace is invalid",
+            ));
+        }
+        if resource_identity.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fenced lease identity is required",
+            ));
+        }
+        let digest = Sha256::digest(resource_identity.as_bytes());
+        let short = digest[..10]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let lock = self.process_lock(&format!("fenced-{namespace}-{short}"))?;
+        let token_path = self.child(&["state", "leases", &format!("{namespace}-{short}.epoch")])?;
+        if let Some(parent) = token_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let token = if token_path.exists() {
+            read_fencing_token(&token_path)?
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("fencing token exhausted"))?
+        } else {
+            1
+        };
+        let temporary = token_path.with_extension(format!("epoch.{}.tmp", std::process::id()));
+        fs::write(&temporary, token.to_string())?;
+        fs::rename(&temporary, &token_path)?;
+        Ok(WorkspaceFencedLease {
+            _lock: lock,
+            token_path,
+            token,
+        })
     }
 
     pub fn init_project(
@@ -564,6 +649,16 @@ impl Workspace {
     }
 }
 
+fn read_fencing_token(path: &Path) -> io::Result<u64> {
+    let value = fs::read_to_string(path)?;
+    value.trim().parse().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid fencing token at {}: {error}", path.display()),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::Workspace;
@@ -696,6 +791,40 @@ source_id = "binance-spot"
         assert!(workspace
             .exclusive_process_lock("ibkr-client", identity)
             .is_ok());
+    }
+
+    #[test]
+    fn fenced_lease_is_exclusive_and_advances_monotonic_token_on_takeover() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "demo").unwrap();
+        let identity = "binance|live|principal:main|account:main|segment:spot";
+        let first = workspace
+            .fenced_lease("execution-writer", identity)
+            .unwrap();
+        assert_eq!(first.token(), 1);
+        assert!(first.validate().is_ok());
+        fs::write(first.token_path(), "9").unwrap();
+        assert_eq!(
+            first.validate().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        fs::write(first.token_path(), "1").unwrap();
+        assert_eq!(
+            workspace
+                .fenced_lease("execution-writer", identity)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        let token_path = first.token_path().to_path_buf();
+        drop(first);
+
+        let second = workspace
+            .fenced_lease("execution-writer", identity)
+            .unwrap();
+        assert_eq!(second.token(), 2);
+        assert_eq!(second.token_path(), token_path);
+        assert!(second.validate().is_ok());
     }
 
     #[test]

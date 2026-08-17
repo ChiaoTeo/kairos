@@ -50,3 +50,74 @@ table OrderState {
   updated_at_unix_nanos:ulong;
   reason:string;
 }
+
+enum CommitmentResourceKind:ubyte {
+  UNSPECIFIED = 0,
+  ASSET = 1,
+  INSTRUMENT = 2,
+  MARGIN_NOTIONAL = 3
+}
+
+enum CommitmentBasisKind:ubyte {
+  UNSPECIFIED = 0,
+  QUOTE_PRICE_CAP = 1,
+  BASE_QUANTITY = 2,
+  CONTRACT_NOTIONAL = 3,
+  SIMULATION_QUANTITY = 4
+}
+
+enum CommitmentLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  HELD_BEFORE_SEND = 1,
+  ACTIVE = 2,
+  UNCERTAIN = 3,
+  REDUCED = 4,
+  RELEASED = 5,
+  RECONCILED = 6
+}
+
+table OrderCommitmentState {
+  order_id:string (required);
+  account_id:string (required);
+  segment_key:string (required);
+  instrument_id:string (required);
+  side:kairos.common.v2.Side = UNSPECIFIED;
+  resource_kind:CommitmentResourceKind = UNSPECIFIED;
+  resource_id:string (required);
+  amount:kairos.common.v2.Decimal64 (required);
+  remaining_quantity:kairos.common.v2.Decimal64 (required);
+  lifecycle:CommitmentLifecycle = UNSPECIFIED;
+  basis_kind:CommitmentBasisKind = UNSPECIFIED;
+  price_cap:kairos.common.v2.Decimal64;
+  contract_size:kairos.common.v2.Decimal64;
+  settlement_asset:string;
+  updated_at_unix_nanos:ulong;
+}
+
+enum RiskReservationSagaLifecycle:ubyte {
+  UNSPECIFIED = 0,
+  AUTHORIZE_PENDING = 1,
+  ACTIVE = 2,
+  RESIZE_PENDING = 3,
+  RELEASE_PENDING = 4,
+  CONSUME_PENDING = 5,
+  RELEASED = 6,
+  CONSUMED = 7,
+  EXPIRED = 8,
+  UNCERTAIN = 9,
+  FAILED = 10
+}
+
+table RiskReservationSagaState {
+  order_id:string (required);
+  reservation_id:string (required);
+  idempotency_key:string (required);
+  account_id:string (required);
+  amount:kairos.common.v2.Decimal64 (required);
+  lifecycle:RiskReservationSagaLifecycle = UNSPECIFIED;
+  risk_generation:ulong;
+  risk_event_sequence:ulong;
+  policy_version:ulong;
+  expires_at_unix_nanos:ulong;
+  updated_at_unix_nanos:ulong;
+}
