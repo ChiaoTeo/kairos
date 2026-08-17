@@ -8,9 +8,9 @@ use crate::composition::history::{spawn_jsonl_history, HistoryCollectionSpec};
 use crate::services::source::load_replay_checkpoint;
 use crate::{MarketApplication, MarketDataRoute, MarketProcess, ResolvedMarket, SubscriptionId};
 
-use super::reference::{project_market_universe, spawn_market_universe_watcher};
+use super::super::reference::{project_market_universe, spawn_market_universe_watcher};
 
-use super::{
+use super::super::{
     attach_replay_source_with_policy, ConfiguredMarketSourceActivator, MarketCompositionConfig,
     MarketProcessRequest, MarketRuntimeProfile, MarketRuntimeScope, MmapMarketChangePublisher,
 };
@@ -21,7 +21,7 @@ const MAX_DYNAMIC_MEMBERS: usize = 10_000;
 fn collection_market_descriptor(
     reference: &kairos_reference_contract::ReferenceProjectionSnapshot,
     name: &str,
-    collection: &super::config::MarketCollectionConfig,
+    collection: &super::super::config::MarketCollectionConfig,
 ) -> Result<ResolvedMarket, MarketStartupError> {
     let market_id = collection.market_id.as_deref().ok_or_else(|| {
         MarketStartupError::new(format!(

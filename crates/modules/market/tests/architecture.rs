@@ -60,7 +60,7 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
 
 #[test]
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
-    let process = source("src/composition/process/mod.rs");
+    let process = source("src/composition/launch/process.rs");
     let runtime = source("src/application/process/lifecycle.rs");
     assert!(process.contains("without_event_socket()"));
     assert!(process.contains("with_aeron_event_publisher"));
@@ -208,8 +208,8 @@ fn reference_client_and_contract_are_composition_only() {
     let composition = source("src/composition/reference/projection.rs");
     assert!(composition.contains("ReferenceProjectionSnapshot"));
     assert!(composition.contains("ReconcileMarketUniverse"));
-    let process = source("src/composition/process/mod.rs");
-    let watcher = source("src/composition/reference/watcher.rs");
+    let process = source("src/composition/launch/process.rs");
+    let watcher = source("src/composition/reference/client.rs");
     assert!(process.contains("market_snapshot()"));
     assert!(watcher.contains("market_snapshot()"));
 }
@@ -616,4 +616,63 @@ fn publication_history_and_replay_implementations_have_final_owners() {
     let services = source("src/services/publication/queue.rs");
     assert!(!application.contains("crate::composition"));
     assert!(!services.contains("crate::composition"));
+}
+
+#[test]
+fn composition_uses_symmetric_launch_config_and_reference_modules() {
+    for file in ["mod.rs", "process.rs", "diagnostic.rs"] {
+        assert!(crate_root()
+            .join(format!("src/composition/launch/{file}"))
+            .is_file());
+    }
+    for file in ["dto.rs", "profile.rs", "sources.rs", "defaults.rs"] {
+        assert!(crate_root()
+            .join(format!("src/composition/config/{file}"))
+            .is_file());
+    }
+    for file in ["client.rs", "events.rs", "projection.rs"] {
+        assert!(crate_root()
+            .join(format!("src/composition/reference/{file}"))
+            .is_file());
+    }
+    for old in [
+        "src/composition/assembly/mod.rs",
+        "src/composition/process/mod.rs",
+        "src/composition/diagnostic/mod.rs",
+        "src/composition/config/model.rs",
+        "src/composition/config/runtime.rs",
+        "src/composition/reference/watcher.rs",
+    ] {
+        assert!(
+            !crate_root().join(old).exists(),
+            "obsolete path remains: {old}"
+        );
+    }
+}
+
+#[test]
+fn tests_and_public_boundaries_follow_final_layout() {
+    for file in ["application.rs", "behavior.rs", "architecture.rs"] {
+        assert!(crate_root().join(format!("tests/{file}")).is_file());
+    }
+    for file in [
+        "application/actor.rs",
+        "behavior/orderbook.rs",
+        "behavior/replay.rs",
+    ] {
+        assert!(crate_root().join(format!("tests/{file}")).is_file());
+    }
+    for old in ["tests/actor.rs", "tests/orderbook.rs", "tests/replay.rs"] {
+        assert!(
+            !crate_root().join(old).exists(),
+            "obsolete test path remains: {old}"
+        );
+    }
+    let root = source("src/lib.rs");
+    assert!(root.contains("pub mod application;"));
+    assert!(root.contains("pub mod composition;"));
+    assert!(root.contains("mod domain;"));
+    assert!(root.contains("mod services;"));
+    assert!(!root.contains("pub mod domain;"));
+    assert!(!root.contains("pub mod services;"));
 }

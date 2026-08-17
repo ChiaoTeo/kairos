@@ -1,5 +1,17 @@
-//! Runtime and source configuration selected at the composition boundary.
+//! Runtime and provider source configuration at the Composition boundary.
 
-mod model;
+mod defaults;
+mod dto;
+mod profile;
+mod sources;
 
-pub use model::*;
+pub use dto::{MarketCollectionConfig, MarketConfig};
+pub use profile::{
+    MarketProcessRequest, MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile,
+    MarketRuntimeScope,
+};
+pub use sources::{
+    BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
+    HyperliquidMarketType, MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType,
+    PublicMarketTransport,
+};

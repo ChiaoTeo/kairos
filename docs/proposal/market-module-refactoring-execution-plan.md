@@ -161,10 +161,10 @@ crates/modules/market/
       config/
         mod.rs
         dto.rs
-        runtime.rs
+        profile.rs
         sources.rs
         defaults.rs
-      runtime/
+      launch/
         mod.rs
         process.rs
         diagnostic.rs
@@ -272,8 +272,8 @@ crates/modules/market/
 - [x] `application/process/runtime.rs` 已删除并拆分为生命周期、Actor task、typed ingress、maintenance、universe、recovery、publication、shutdown。
 - [x] `application/sources/orchestration.rs` 已删除并按 attachment/subscriptions/recovery 拆分。
 - [ ] `services/actor/state.rs` 已降至约 227 行，Source/Freshness 已迁出，read model/event draining 仍待迁出。
-- [ ] `services/publication/encoding.rs` 仍约 960 行且位于错误层。
-- [ ] `composition/publisher/mmap.rs` 仍约 1,100 行。
+- [x] `services/publication/encoding.rs` 已删除，contract encoding 已迁入 `composition/publication/`。
+- [x] `composition/publisher/mmap.rs` 已迁入 `composition/publication/mmap.rs`。
 - [ ] `services/source/stream.rs` 仍约 880 行。
 - [ ] `composition/config/model.rs` 仍约 600 行。
 - [x] Domain subscription/source/freshness 与 Order Book 内部结构已拆分。
@@ -365,31 +365,47 @@ crates/modules/market/
 
 ### Phase 5：Publication、History 与 Replay
 
-- [ ] services publication 只保留 fanout/queue。
-- [ ] contract mapping、encoding、mmap 实现迁入 composition/publication。
-- [ ] JSONL recorder 迁入 composition/history。
-- [ ] Application replay 拆分 model/loader。
-- [ ] 删除 `services/publication/encoding.rs` 与 `services/history/`。
+- [x] services publication 只保留 fanout/queue。
+- [x] contract mapping、encoding、mmap 实现迁入 composition/publication。
+- [x] JSONL recorder 迁入 composition/history。
+- [x] Application replay 拆分 model/loader。
+- [x] 删除 `services/publication/encoding.rs` 与 `services/history/`。
 
 验证：FlatBuffers round-trip、sequence preservation、backpressure、history recovery、checkpoint resume。
 
+完成证据（2026-08-17）：
+
+- `cargo check -p kairos-market --tests` 通过且无 warning；
+- `cargo test -p kairos-market --no-fail-fast -- --test-threads=1`：50 lib、10 Actor、23 architecture、4 Order Book、2 replay 全部通过；
+- FlatBuffers event root、mmap 单资源写入、publication backlog/fanout、JSONL crash recovery/corruption、replay checkpoint resume 均有通过测试；
+- Application 通过注入的 event encoder 函数和 typed `HistoryQueue` 工作，不导入 Composition；Services publication 不再包含 contract mapping、encoding、mmap 或 JSONL 实现；
+- architecture test 固化最终 Publication/History/Replay 所有权并禁止恢复旧路径。
+
 ### Phase 6：Composition 收敛
 
-- [ ] assembly/process/diagnostic 收敛为 composition/runtime。
-- [ ] config 拆分 dto/runtime/sources/defaults。
-- [ ] Reference watcher 拆分 client/events，保留 projection。
-- [ ] 删除 composition/assembly、process、diagnostic、publisher 旧目录。
+- [x] assembly/process/diagnostic 收敛为 composition/launch。
+- [x] config 拆分 dto/profile/sources/defaults。
+- [x] Reference watcher 拆分 client/events，保留 projection。
+- [x] 删除 composition/assembly、process、diagnostic、publisher 旧目录。
 
 验证：provider isolation、runtime profile、Reference catch-up、live/replay composition。
 
+完成证据（2026-08-17）：
+
+- `cargo check -p kairos-market --tests` 通过且无 warning；
+- `cargo test -p kairos-market --test architecture -- --test-threads=1`：24 passed；
+- provider attachment/default endpoint/manual diagnostics 已归入 `composition/sources/activation.rs`，进程装配与诊断入口归入 `composition/launch/`；
+- config 已拆为 `dto/profile/sources/defaults`，Reference watcher 已拆为 `client/events/projection`；
+- 旧 `assembly/`、`process/`、`diagnostic/`、`publisher/`、`config/model.rs`、`reference/watcher.rs` 路径已删除；Composition 不再使用 `runtime` 命名。
+
 ### Phase 7：测试与公开边界
 
-- [ ] tests 按 application/process/composition/behavior 分类。
-- [ ] crate root 只重导出经过审查的 Application API。
-- [ ] application/services/domain 不依赖 composition。
-- [ ] domain/services 保持 crate-private。
-- [ ] 删除所有旧路径、兼容 facade 和无调用模块。
-- [ ] 更新原设计提案的最终状态并完成逐项审计。
+- [x] tests 按 application/process/composition/behavior 分类。
+- [x] crate root 只重导出经过审查的 Application API 和必要 Composition 入口。
+- [x] application/services/domain 不依赖 composition。
+- [x] domain/services 保持 crate-private。
+- [x] 删除所有旧路径、兼容 facade 和无调用模块。
+- [x] 更新原设计提案的最终状态并完成逐项审计。
 
 ## 6. 每阶段验证命令
 
@@ -409,6 +425,13 @@ cargo test --workspace
 uv run pytest -q
 cargo fmt --all -- --check
 ```
+
+Phase 7 focused evidence（2026-08-17）：
+
+- tests 已按 `application/`、`behavior/` 与顶层 architecture wrapper 收敛；
+- crate root 仅公开 Application 与必要 Composition 入口，Domain/Services 保持 crate-private；
+- architecture test 固化旧路径删除、公开边界和测试目录布局；
+- Market focused tests、contract tests、fmt 与 diff check 在最终验收阶段复跑。
 
 若全仓检查被无关工作树改动阻断，必须记录准确文件和错误，并继续完成 Market focused checks；不得用 focused check 代替最终全仓验收。
 

@@ -2,14 +2,14 @@
 
 ## 1. 文档状态
 
-- 状态：领域模型收敛已实施；目录重构正在按目标结构继续落地
+- 状态：已按执行计划完成 Market 领域与目录重构；后续仅保留增量治理
 - 范围：`crates/modules/market` 主 crate
 - 不包含：Integration provider capability 重设计、Reference catalog 业务语义重写、行情 normalization 和 Order Book continuity 规则重写
 - 主要目标：先明确 Market 在交易系统中的领域定位、事实权威性和上下游契约，再将代码和模型收敛为职责清晰、依赖方向稳定的行情运行时业务模块。第一阶段整理目录和依赖；第二阶段删除 Market 内部的 Reference 镜像、统一 snapshot/view 语义并收敛运行时市场模型
 
 ### 1.1 当前实施状态（2026-08-17）
 
-领域概念和主要依赖边界已经完成迁移，但目录重构尚不能宣称全部完成。此前把“旧裸文件已删除”和“领域概念已收敛”等同于“目标目录已经落地”是不准确的：`application/process/runtime.rs`、`application/sources/orchestration.rs`、`services/actor/state.rs` 等文件仍聚合了多项职责，必须继续按第 5 节目标结构迁移真实实现。
+领域概念、主要依赖边界和目标目录均已完成迁移。执行细节、证据和逐阶段验收记录见 `docs/proposal/market-module-refactoring-execution-plan.md`；本文保留领域决策与长期约束，后续只做增量治理。
 
 已经落地的边界包括：
 
@@ -19,8 +19,8 @@
 - Order Book 已迁入 `domain/observation/order_book/`，其 application ingestion 入口位于 `application/observations/order_book/`；它是具有 continuity/resync 附加规则的 Observation，不再与 Observation 并列；
 - canonical `InstrumentKind` 与 typed observation capability matrix 已收敛在 `domain/market/`；无状态 Spot、Perpetual、Future、Option wrapper 已删除；
 - 私有 source driver 统一位于 `services/source/`，provider-specific concrete connection 限制在 composition；replay service 不再依赖 composition；
-- process lifecycle、Reference forwarding、publication 与 control wire 已开始拆分；JSON command record 的定义和解析位于 `services/control/wire.rs`，但 process 和 source orchestration 的剩余混合职责仍需继续迁移；
-- event publication 的 bounded fanout/backpressure 与 typed encoding 位于 services，具体 mmap publisher 位于 composition；业务 publisher 不使用 JSON model round trip；
+- process lifecycle、typed ingress、maintenance、universe、source recovery、publication 与 control wire 已按职责拆分；JSON command record 的定义和解析位于 `services/control/wire.rs`；
+- event publication 的 bounded fanout/backpressure 位于 services，contract mapping、typed encoding 和 mmap publisher 位于 `composition/publication/`；业务 publisher 不使用 JSON model round trip；
 - `domain` 已改为 crate-private，application 只选择性导出合法的业务 request/result 类型；跨进程消费者继续使用 `kairos-market-contract`；
 - architecture tests 固化了四层根目录、单一 Actor、依赖方向、provider 隔离、control wire、Order Book 归属、market-kind 结构和私有 Domain 等约束。
 
@@ -1056,9 +1056,9 @@ Spot、Perpetual、Future、Option 当前只有静态 `supports()` allowlist，�
 | `application/query.rs` | `application/model/query.rs`、`application/queries/` | 分离 query result model 与查询实现 |
 | `application/process.rs` | `application/process/` 与 `services/control/` | Process 逻辑按职责拆分，wire parsing 移出 application |
 | `application/replay.rs` | `application/replay/` | 分离 replay model 和 loader；JSONL 保持显式文件边界 |
-| `composition/config.rs` | `composition/config/` | DTO、runtime model、source config 和 defaults 分离 |
-| `composition/process.rs` | `composition/runtime/process.rs` | 顶层 process 构造 |
-| `composition/diagnostic.rs` | `composition/runtime/diagnostic.rs` | one-shot CLI 专用组装 |
+| `composition/config.rs` | `composition/config/` | DTO、profile model、source config 和 defaults 分离 |
+| `composition/process.rs` | `composition/launch/process.rs` | 顶层 process 构造 |
+| `composition/diagnostic.rs` | `composition/launch/diagnostic.rs` | one-shot CLI 专用组装 |
 | `composition/mod.rs` source 构造 | `composition/sources/` | provider-by-provider 迁移并删除旧 constructor |
 | `composition/mod.rs` route 匹配 | `composition/sources/routing.rs` | 保留 Market-owned source route 语义 |
 | `composition/reference.rs` | `composition/reference/events.rs` | 具体 Aeron Reference event source |
@@ -1193,7 +1193,7 @@ pub use application::{
 
 ### Phase 5：Composition 模块化
 
-1. 拆分 config DTO、runtime model、source binding 和 defaults；
+1. 拆分 config DTO、profile model、source binding 和 defaults；
 2. 抽取 source routing/activation；
 3. 按 Binance、OKX、Hyperliquid、Massive 顺序迁移 provider composition；
 4. 迁移 Reference reader/event source；

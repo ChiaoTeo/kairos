@@ -5,7 +5,7 @@ use kairos_integration::participants::binance::{self, ConnectionDomain};
 
 use crate::MarketApplication;
 
-use super::{attach_binance_snapshot, attach_stream, MarketProduct};
+use super::super::sources::{attach_binance_snapshot, attach_stream, MarketProduct};
 
 pub fn attach_binance_spot_source(
     application: &mut MarketApplication,

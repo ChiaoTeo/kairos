@@ -46,7 +46,7 @@ pub(crate) fn spawn_market_universe_watcher(
                     match event {
                         Some(Ok(frame)) => match frame.decode() {
                             Ok(event) => {
-                                required_sequence = required_sequence.max(event_sequence(&event));
+                                required_sequence = required_sequence.max(super::events::event_sequence(&event));
                                 true
                             }
                             Err(_) => true,
@@ -81,24 +81,4 @@ pub(crate) fn spawn_market_universe_watcher(
         }
     });
     Ok((receiver, ReferenceWatcherGuard(task)))
-}
-
-fn event_sequence(event: &kairos_reference_contract::ReferenceEvent<'_>) -> u64 {
-    use kairos_reference_contract::ReferenceEvent;
-    match event {
-        ReferenceEvent::EntityUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::EntityUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::AssetUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::AssetUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::ExecutionAccessUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::ExecutionAccessUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::MarketDataAccessUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::MarketDataAccessUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::InstrumentUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::InstrumentUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::ListingUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::ListingUpdated(value) => value.metadata().sequence(),
-        ReferenceEvent::MarketUpserted(value) => value.metadata().sequence(),
-        ReferenceEvent::MarketUpdated(value) => value.metadata().sequence(),
-    }
 }
