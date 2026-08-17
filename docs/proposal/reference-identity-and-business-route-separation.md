@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：实施中；Slice 1 已完成，Slice 2 至 Slice 5 待完成。
+- 状态：已实施；Slice 1 至 Slice 5 已完成，仓库级验证见本文末实施记录。
 - 日期：2026-08-17。
 - 范围：Reference canonical `Instrument`、`Listing`、`Market`，Market 行情来源与
   observation scope，Execution broker route，以及 Massive 和 Binance Equity 的映射。
@@ -458,6 +458,13 @@ Provider source 删除或暂停不能自动 delist canonical Instrument/Listing/
 
 退出条件：Reference consumer projection 不需要 provider address 即可解释 canonical identity。
 
+实施记录（2026-08-17）：
+
+- Listing 删除 canonical `source_id`；Market 删除 `source_id`、`market_key`、provider
+  `market_type` 和 `source_symbol`，改为 canonical `instrument_kind` 与 `venue_symbol`；
+- Reference FlatBuffers、SQLite v4 projection、Rust/Python contract、query 和 CLI 已同步；
+- 旧 projection schema 不做字符串 rename，而是拒绝并从 provider source 重建。
+
 ### Slice 3：Market route 与 observation scope
 
 - Market composition 从 source binding、Integration capability 和 canonical projection 构造
@@ -470,6 +477,17 @@ Provider source 删除或暂停不能自动 delist canonical Instrument/Listing/
 
 退出条件：venue-specific 和 consolidated observations 都不需要伪 Market ID。
 
+实施记录（2026-08-17）：
+
+- Market observation、freshness、view/mmap key、event wire、history manifest 和 Python
+  strategy model 已采用 typed `ObservationScope`；OrderBook 保持 canonical Market scope；
+- Massive NBBO/aggregate 使用 consolidated scope，并保留 bid/ask venue、tape；trade 保留
+  venue/TRF/timestamp evidence，无法完成 canonical venue join 时进入 quarantine；
+- Market collection 与 strategy command 可直接建立 instrument-scoped route；Massive source
+  binding 不再要求或发布虚构 exchange；
+- 历史下载对 Massive aggregate 不再要求 `market_id`，Massive trade 未配置 venue join 时明确
+  拒绝而不是回退到 Listing/provider。
+
 ### Slice 4：Execution broker route
 
 - Binance Equity provider address 只存在于 Execution candidate/selected/attempt facts；
@@ -479,6 +497,14 @@ Provider source 删除或暂停不能自动 delist canonical Instrument/Listing/
 
 退出条件：Execution 可以在没有 `market:binance:equity:*` 的情况下列出、选择和审计
 Binance broker route。
+
+实施记录（2026-08-17）：
+
+- Execution normalized config 增加 instrument address 与可选 `destination_market_id`；
+- 显式 Binance Equity route 在无 canonical Market 时仍可生成 candidate，participant kind 为
+  Broker；只有真实 venue 与 participant 匹配的 Reference Market 才可生成 exchange route；
+- Execution quote dependency 明确只消费 market-scoped current view；consolidated 回测输入保留
+  typed scope，fill 的 execution market 仍来自选中 order route，而非行情来源。
 
 ### Slice 5：数据重建与依赖迁移
 
@@ -492,6 +518,18 @@ Binance broker route。
 - replay/dataset 中的旧伪 Market 必须显式迁移到真实 Market 或 consolidated scope。
 
 退出条件：active Reference catalog 不含 provider-as-venue rows，历史数据没有静默重解释。
+
+实施记录（2026-08-17）：
+
+- Reference projection schema version 变化会废弃并重建旧 canonical projection，不对旧 ID
+  原地改名；provider staging 保留 provenance；
+- 仓库内 Massive replay fixture、option acquisition target、analytics 和示例 strategy 已迁移到
+  consolidated scope；不存在可被静默继续消费的 `market:massive:*`/`market:opra` fixture；
+- `scripts/check/reference_route_separation_report.py` 可只读扫描 SQLite/JSONL，逐条区分
+  consolidated migration、删除伪 Market 后保留 Execution route，以及需要人工 venue join 的
+  记录；工具不做危险的字符串 rename；
+- legacy provider-shaped rows仅能作为显式 migration/architecture test data 出现，active
+  provider mapping 有静态 guard 防止重新生成。
 
 ## 10. 测试与架构检查
 
@@ -571,3 +609,18 @@ python3 scripts/check/check_crate_layout.py
 - active catalog 和新生成数据不含 provider-as-venue identity；
 - 旧 catalog、snapshot、dataset 和历史事实完成显式迁移或 correction 标记；
 - focused behavior、architecture、contract 和 repository checks 通过，或精确记录无关失败。
+
+## 13. 最终验证记录（2026-08-17）
+
+- `cargo test -p kairos-market -p kairos-execution`：通过（Market 56 unit + 41
+  application/architecture/behavior；Execution 108 unit + CLI/server/21 architecture）；
+- `cargo test -p kairos-reference -p kairos-reference-contract -p kairos-integration`：通过
+  （仅显式 live/scale tests ignored）；
+- `uv run pytest -q`：本设计相关测试全部通过；全套 384 passed、8 skipped，剩余一个无关
+  失败是 Account CLI 帮助测试仍期待已被并行重构删除的 `snapshot` command；
+- `cargo test --workspace`：被无关的 Conflux 并行重构阻塞，`context.rs`/`process.rs` 仍引用已
+  删除的 `ConfluxSystem`；
+- `cargo fmt --all -- --check`、`git diff --check`、crate layout check、相关 Python Ruff 与
+  compileall：通过；
+- provider-as-venue、Access 恢复、canonical ID 解析路径和业务 publisher JSON adapter 静态
+  搜索已审计；命中 JSON 的位置均为显式 control/CLI boundary。

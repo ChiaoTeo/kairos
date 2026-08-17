@@ -133,12 +133,21 @@ async fn download(
                 .await?
         }
     };
-    let market_id = command
-        .market_id
-        .ok_or("historical download requires Reference-owned --market-id")?;
     let instrument_id = command
         .instrument_id
         .ok_or("historical download requires Reference-owned --instrument-id")?;
+    let aggregate_scope = match provider {
+        HistoricalProvider::Massive => kairos_market::ObservationScope::consolidated(
+            &instrument_id,
+            command.network_id.clone(),
+        )?,
+        HistoricalProvider::Binance => kairos_market::ObservationScope::market(
+            command
+                .market_id
+                .as_deref()
+                .ok_or("Binance historical download requires canonical --market-id")?,
+        )?,
+    };
     let output = command.file;
     if let Some(parent) = output
         .parent()
@@ -153,7 +162,7 @@ async fn download(
             MarketEventKind::Bar => {
                 let bar = event.bar.ok_or("historical bar payload is missing")?;
                 kairos_market::MarketObservation::Bar(kairos_market::Bar {
-                    scope: kairos_market::ObservationScope::market(&market_id)?,
+                    scope: aggregate_scope.clone(),
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     timeframe: bar.timeframe,
                     open: bar.open,
@@ -168,7 +177,7 @@ async fn download(
             }
             MarketEventKind::Quote => {
                 kairos_market::MarketObservation::Quote(kairos_market::Quote {
-                    scope: kairos_market::ObservationScope::market(&market_id)?,
+                    scope: aggregate_scope.clone(),
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     bid_price: event.price,
                     bid_quantity: event.quantity,
@@ -182,8 +191,14 @@ async fn download(
                 })
             }
             MarketEventKind::Trade => {
+                if matches!(provider, HistoricalProvider::Massive) {
+                    return Err(
+                        "Massive historical trades require an explicit venue-code to canonical-market join; observation quarantined"
+                            .into(),
+                    );
+                }
                 kairos_market::MarketObservation::Trade(kairos_market::Trade {
-                    scope: kairos_market::ObservationScope::market(&market_id)?,
+                    scope: aggregate_scope.clone(),
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     trade_id: event
                         .sequence
@@ -215,7 +230,8 @@ async fn download(
         "provider": provider.as_str(),
         "source": provider.as_str(),
         "symbol": command.symbol,
-        "market_id": market_id,
+        "scope_key": aggregate_scope.key(),
+        "market_id": aggregate_scope.market_id().map(ToString::to_string),
         "instrument_id": instrument_id,
         "data_kind": command.data_kind.as_str(),
         "observation_type": command.data_kind.as_str(),
@@ -490,6 +506,8 @@ struct DownloadCommand {
     market_id: Option<String>,
     #[arg(long)]
     instrument_id: Option<String>,
+    #[arg(long)]
+    network_id: Option<String>,
     #[arg(long)]
     start: i64,
     #[arg(long)]

@@ -13,16 +13,21 @@ class OptionMarketDataTarget:
     underlying: str
     provider_symbol: str
     instrument_id: str
-    market_id: str
+    network_id: str | None
     start_time_unix_nanos: int
     end_time_unix_nanos: int
 
     def __post_init__(self) -> None:
-        for name in ("underlying", "provider_symbol", "instrument_id", "market_id"):
+        for name in ("underlying", "provider_symbol", "instrument_id"):
             value = str(getattr(self, name)).strip()
             if not value:
                 raise ValueError(f"option Market data target {name} is required")
             object.__setattr__(self, name, value)
+        if self.network_id is not None:
+            network_id = self.network_id.strip()
+            if not network_id:
+                raise ValueError("option Market data target network_id cannot be empty")
+            object.__setattr__(self, "network_id", network_id)
         if self.start_time_unix_nanos > self.end_time_unix_nanos:
             raise ValueError("option Market data target start cannot be after end")
 
@@ -40,7 +45,9 @@ class OptionMarketDataTarget:
             underlying=str(event.get("underlying") or ""),
             provider_symbol=str(event.get("provider_symbol") or ""),
             instrument_id=str(event.get("instrument_id") or ""),
-            market_id=str(event.get("market_id") or ""),
+            network_id=(
+                None if event.get("network_id") is None else str(event["network_id"])
+            ),
             start_time_unix_nanos=start_time_unix_nanos,
             end_time_unix_nanos=end_time_unix_nanos,
         )
@@ -96,9 +103,10 @@ class OptionMarketPreparationApplication:
                 parameters = {
                     "symbol": target.provider_symbol,
                     "instrument_id": target.instrument_id,
-                    "market_id": target.market_id,
                     "credential_id": credential_id,
                 }
+                if target.network_id is not None:
+                    parameters["network_id"] = target.network_id
                 if endpoint is not None:
                     parameters["endpoint"] = endpoint
                 result.append(

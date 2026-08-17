@@ -18,6 +18,8 @@ class PrintSpyOptionChain(Strategy):
         strike_offset_percent: str = "0.02",
         max_expiries: int = 3,
         max_contracts: int = 40,
+        massive_equity_source_id: str = "massive-equity",
+        massive_options_source_id: str = "massive-options",
     ) -> None:
         self.underlying = str(underlying).upper()
         self.max_days_to_expiry = max(0, int(max_days_to_expiry))
@@ -26,31 +28,33 @@ class PrintSpyOptionChain(Strategy):
             raise ValueError("strike_offset_percent must be positive")
         self.max_expiries = max(1, int(max_expiries))
         self.max_contracts = max(2, int(max_contracts))
-        self._underlying_market_id = ""
+        self.massive_equity_source_id = massive_equity_source_id
+        self.massive_options_source_id = massive_options_source_id
+        self._underlying_scope_key = ""
         self._underlying_instrument_id = ""
         self._option_subscription_attempted = False
         self._option_details: dict[str, tuple[str, str, str]] = {}
 
     def on_start(self, context: StrategyContext) -> None:
-        underlying_markets = context.reference.find_markets(
+        underlying_instruments = context.reference.find_instruments(
             symbol=self.underlying,
-            market_type="equity",
+            instrument_type="equity",
         )
-        underlying_market = next(
-            (
-                market
-                for market in underlying_markets
-                if str(market.exchange_id) != "exchange:binance"
-            ),
-            None,
+        underlying_instrument = next(iter(underlying_instruments), None)
+        if underlying_instrument is None:
+            raise RuntimeError(f"no active equity instrument found for {self.underlying}")
+        self._underlying_instrument_id = str(underlying_instrument.id)
+        self._underlying_scope_key = (
+            f"consolidated:{self._underlying_instrument_id}:sip"
         )
-        if underlying_market is None:
-            raise RuntimeError(
-                f"no active Massive equity market found for {self.underlying}"
-            )
-        self._underlying_market_id = str(underlying_market.id)
-        self._underlying_instrument_id = str(underlying_market.instrument.id)
-        context.market.subscribe_quotes(underlying_market)
+        context.market.subscribe_consolidated_quotes(
+            underlying_instrument,
+            provider_id="massive",
+            provider_product="equity",
+            provider_symbol=self.underlying,
+            source_id=self.massive_equity_source_id,
+            network_id="sip",
+        )
         context.logger.info(
             "spy_underlying_subscribed",
             underlying=self.underlying,
@@ -87,36 +91,24 @@ class PrintSpyOptionChain(Strategy):
             )
 
         contracts = {str(instrument.id): instrument for instrument in selected_chain}
-        market_ids = tuple(
-            _massive_option_market_id(self.underlying, instrument)
-            for instrument in contracts.values()
-        )
-        option_markets = context.reference.find_markets(
-            market_ids=market_ids,
-            limit=max(1, len(market_ids)),
-        )
-        option_markets = tuple(
-            market
-            for market in option_markets
-            if str(market.id).startswith("market:massive:options:")
-            and str(market.instrument.id) in contracts
-        )
-        if not option_markets:
-            raise RuntimeError(
-                f"no Massive option markets found for the selected {self.underlying} contracts"
-            )
-
-        for market in option_markets:
-            instrument = contracts[str(market.instrument.id)]
+        for instrument in contracts.values():
             expiry = instrument.expiry_unix_nanos
             if expiry is None:
                 continue
-            self._option_details[str(market.id)] = (
+            scope_key = f"consolidated:{instrument.id}:opra"
+            self._option_details[scope_key] = (
                 str(instrument.option_right or "-").upper(),
                 str(instrument.strike or "-"),
                 _utc_date(expiry),
             )
-            context.market.subscribe_quotes(market)
+            context.market.subscribe_consolidated_quotes(
+                instrument,
+                provider_id="massive",
+                provider_product="options",
+                provider_symbol=_massive_option_symbol(self.underlying, instrument),
+                source_id=self.massive_options_source_id,
+                network_id="opra",
+            )
 
         expiries = sorted(
             {
@@ -131,7 +123,7 @@ class PrintSpyOptionChain(Strategy):
             underlying=self.underlying,
             spot=str(spot),
             expiries=expiries,
-            option_contracts=len(option_markets),
+            option_contracts=len(self._option_details),
             available_contracts=len(chain),
             minimum_strike=str(min(strikes)),
             maximum_strike=str(max(strikes)),
@@ -140,8 +132,8 @@ class PrintSpyOptionChain(Strategy):
 
     def on_quote(self, context: StrategyContext, event: QuoteEvent) -> None:
         quote = event.data
-        market_id = str(quote.market_id)
-        if market_id == self._underlying_market_id:
+        scope_key = quote.scope.key()
+        if scope_key == self._underlying_scope_key:
             bid = quote.bid_price
             ask = quote.ask_price
             context.logger.info(
@@ -166,7 +158,7 @@ class PrintSpyOptionChain(Strategy):
                     )
             return
 
-        details = self._option_details.get(market_id)
+        details = self._option_details.get(scope_key)
         if details is None:
             return
         right, strike, expiry = details
@@ -180,7 +172,7 @@ class PrintSpyOptionChain(Strategy):
             ask=_price(quote.ask_price),
             bid_size=_price(quote.bid_quantity),
             ask_size=_price(quote.ask_quantity),
-            market_id=market_id,
+            scope=scope_key,
         )
 
 
@@ -192,7 +184,7 @@ def _utc_date(unix_nanos: int) -> str:
     )
 
 
-def _massive_option_market_id(underlying: str, instrument: object) -> str:
+def _massive_option_symbol(underlying: str, instrument: object) -> str:
     expiry_unix_nanos = getattr(instrument, "expiry_unix_nanos", None)
     strike = getattr(instrument, "strike", None)
     right = str(getattr(instrument, "option_right", "") or "").upper()
@@ -203,7 +195,7 @@ def _massive_option_market_id(underlying: str, instrument: object) -> str:
     ).strftime("%y%m%d")
     strike_code = int(Decimal(str(strike)) * 1_000)
     ticker = f"O:{underlying}{expiry}{right[:1]}{strike_code:08d}"
-    return f"market:massive:options:{ticker}"
+    return ticker
 
 
 def _expiry_window(observed_at: datetime, max_days: int) -> tuple[int, int]:

@@ -9,23 +9,22 @@
 mod actor;
 mod context;
 mod contract;
+mod event;
 mod lifecycle;
 mod process;
 mod resource;
 mod system;
 
 pub use actor::ConfluxActor;
-pub use context::{CommitContext, Context};
-pub use contract::{
-    AeronContract, Contract, NoAeron, NoViews, RestCallOf, RestContract, ServedContract,
-    ViewContract,
-};
+pub use context::Context;
+pub use contract::{Contract, RestContract, RestRequestOf, RestResponseOf};
+pub use event::{ConfluxEvent, IntegrationEvent};
 pub use lifecycle::{ProcessPhase, ShutdownMode};
 pub use process::{
-    BuildError, Conflux, ConfluxHandle, ConfluxOutcome, NotifyError, RunError, RuntimeConfig,
+    BuildError, Conflux, ConfluxHandle, ConfluxOutcome, HandleError, RunError, RuntimeConfig,
 };
 pub use resource::{
     EnsureDisposition, ManagedClient, ManagedClients, ManagedConnection, ManagedConnections,
-    ManagedContract, ResourceError, ResourceState,
+    ResourceError, ResourceState,
 };
-pub use system::{ConfluxSystem, StaticSystem};
+pub use system::ConfluxSystem;

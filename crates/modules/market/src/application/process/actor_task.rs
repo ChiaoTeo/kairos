@@ -356,6 +356,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn consolidated_subscription_accepts_an_instrument_route_without_a_market() {
+        let root = tempfile::tempdir().unwrap();
+        let mut process = test_process(
+            MarketApplication::new("test-market", 10).unwrap(),
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
+        );
+        let body = serde_json::to_string(&json!({
+            "schema_version": 1,
+            "command_id": "massive-aapl-quotes",
+            "idempotency_key": "massive-aapl-quotes",
+            "operation": "market.subscribe",
+            "strategy_id": "strategy-1",
+            "instance_id": "instance-1",
+            "payload": {
+                "subject": "AAPL",
+                "selectors": ["quote"],
+                "source_id": "massive-equity",
+                "market_type": "equity",
+                "params": {
+                    "scope": "consolidated",
+                    "instrument_id": "instrument:equity:US:AAPL:common",
+                    "provider_id": "massive",
+                    "network_id": "sip"
+                },
+                "dynamic": false
+            }
+        }))
+        .unwrap();
+
+        let response = process
+            .actor_task
+            .handle_request("POST", "/v1/subscribe", &body)
+            .await;
+
+        assert_eq!(response.status, 202, "{}", response.payload);
+        let subscription = process
+            .actor_task
+            .application
+            .current_view()
+            .subscriptions
+            .into_iter()
+            .next()
+            .expect("subscription");
+        let target = subscription.members.values().next().expect("target");
+        assert!(target.market_id().is_none());
+        assert_eq!(
+            target.scope.key(),
+            "consolidated:instrument:equity:US:AAPL:common:sip"
+        );
+    }
+
+    #[tokio::test]
     async fn owner_release_is_scoped_idempotent_and_enforced_by_unsubscribe() {
         let root = tempfile::tempdir().unwrap();
         let mut application = MarketApplication::new("test-market", 10).unwrap();

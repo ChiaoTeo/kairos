@@ -1,10 +1,10 @@
 // Connection composition tests live outside the production module boundary.
 
 mod secret_tests {
-    use kairos_integration::application::ParticipantKind;
     use super::super::model::{candidate_for_address, provider_instrument_for_route};
     use super::super::{compose_direct_execution_connections, ExecutionConnectionOptions};
     use crate::composition::{compose_execution_connections, compose_execution_routes};
+    use kairos_integration::application::ParticipantKind;
 
     fn binance_spot_options() -> ExecutionConnectionOptions {
         ExecutionConnectionOptions {
@@ -70,20 +70,19 @@ mod secret_tests {
         options.product = "equity".into();
         options.segment_key = "equity".into();
 
-        let (candidate, provider_instrument) = candidate_for_address(
-            &options,
-            "instrument:equity:US:AAPL:common",
-            None,
-            "AAPL",
-        )
-        .unwrap();
+        let (candidate, provider_instrument) =
+            candidate_for_address(&options, "instrument:equity:US:AAPL:common", None, "AAPL")
+                .unwrap();
 
         assert!(candidate.market_id.is_none());
         assert_eq!(
             candidate.instrument_id.unwrap().as_str(),
             "instrument:equity:US:AAPL:common"
         );
-        assert_eq!(provider_instrument.participant.kind, ParticipantKind::Broker);
+        assert_eq!(
+            provider_instrument.participant.kind,
+            ParticipantKind::Broker
+        );
         assert_eq!(provider_instrument.participant.id.as_str(), "binance");
     }
 

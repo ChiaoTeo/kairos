@@ -6,6 +6,12 @@ license = "MIT"
 description = "Closed, typed, single-writer runtime for Kairos modules"
 
 [dependencies]
+kairos-account-contract = { path = "../../modules/account/contract" }
+kairos-execution-contract = { path = "../../modules/execution/contract" }
+kairos-integration = { path = "../integration" }
+kairos-market-contract = { path = "../../modules/market/contract" }
+kairos-reference-contract = { path = "../../modules/reference/contract" }
+kairos-risk-contract = { path = "../../modules/risk/contract" }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }
 

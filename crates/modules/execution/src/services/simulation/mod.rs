@@ -38,7 +38,9 @@ mod tests {
         at: u64,
     ) -> MarketObservation {
         MarketObservation::Quote(Quote {
-            market_id: "binance:spot".into(),
+            scope: crate::application::ObservationScope::Market {
+                market_id: "binance:spot".into(),
+            },
             instrument_id: "BTCUSDT".into(),
             bid_price: Some(bid.into()),
             bid_quantity: Some(bid_quantity.into()),
@@ -156,7 +158,9 @@ mod tests {
             .unwrap();
         simulator
             .apply_market_event(MarketObservation::Bar(Bar {
-                market_id: "binance:spot".into(),
+                scope: crate::application::ObservationScope::Market {
+                    market_id: "binance:spot".into(),
+                },
                 instrument_id: "BTCUSDT".into(),
                 timeframe: "1m".into(),
                 open: "99".into(),

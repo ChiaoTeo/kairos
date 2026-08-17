@@ -19,7 +19,7 @@ from kairospy.application.strategy.services.ingress import StrategyEventIngress
 from kairospy.application.account import AccountSegmentSnapshot, DataFreshness, SPOT
 from kairospy.application.execution import ExecutionBacktestResult
 from kairospy.domain_types import AccountId
-from kairospy.application.market import MarketSnapshot
+from kairospy.application.market import MarketSnapshot, ObservationScope
 from kairospy.application.market.events import MarketEventRecord
 from kairospy.application.market.mapping import map_market_event
 from kairospy.strategy import (
@@ -86,7 +86,7 @@ def EventEnvelope(
             close = DecimalValue(int(payload.get("close", 100)), 0)
             payload = BarView(
                 instrument_id,
-                market_id,
+                ObservationScope.market(market_id),
                 "1m",
                 close,
                 close,
@@ -101,7 +101,14 @@ def EventEnvelope(
             bid = DecimalValue(100, 0)
             ask = DecimalValue(101, 0)
             payload = QuoteView(
-                instrument_id, market_id, bid, None, ask, None, event_time, "test"
+                instrument_id,
+                ObservationScope.market(market_id),
+                bid,
+                None,
+                ask,
+                None,
+                event_time,
+                "test",
             )
     if domain == "clock" and kind == "advance":
         assert occurred_at is not None
@@ -598,20 +605,19 @@ def test_market_subscription_uses_reference_market_route(tmp_path: Path) -> None
         InstrumentRef(InstrumentId("instrument:equity:US:AAPL:common"), "AAPL"),
         ListingId("listing:exchange:nasdaq:equity:AAPL:USD"),
         ExchangeId("exchange:nasdaq"),
-        "AAPL",
         "equity",
+        "AAPL",
         status=MarketStatus.ACTIVE,
-        source_id="massive-equity",
     )
 
     host.context.market.subscribe_quotes(market)
 
     request = bus.requests[-1].payload
-    assert request.subject == "AAPL"
+    assert request.subject == str(market.id)
     assert request.identity == str(market.id)
-    assert request.source_id == "massive-equity"
-    assert request.exchange == "exchange:nasdaq"
-    assert request.market_type == "equity"
+    assert request.source_id is None
+    assert request.exchange is None
+    assert request.market_type is None
     assert request.params == {"market_id": str(market.id)}
 
 
@@ -852,7 +858,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
         for record in records
         if record.get("event") == "market_subscription_requested"
     )
-    assert requested["data"]["market_type"] == "spot"
+    assert requested["data"]["market_type"] is None
     assert any(
         record.get("event") == "market_subscriptions_active" for record in records
     )

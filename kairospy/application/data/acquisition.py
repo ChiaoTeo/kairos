@@ -327,8 +327,8 @@ class DataAcquisitionApplication:
             "--file",
             str(staging),
         ]
-        if market_id := requirement.parameters.get("market_id"):
-            arguments.extend(("--market-id", market_id))
+        if network_id := requirement.parameters.get("network_id"):
+            arguments.extend(("--network-id", network_id))
         if interval := requirement.parameters.get("interval"):
             arguments.extend(("--interval", interval))
         if requirement.parameters.get("adjusted", "false").lower() == "true":

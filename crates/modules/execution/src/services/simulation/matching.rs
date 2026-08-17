@@ -120,12 +120,10 @@ impl ExecutionSimulator {
     }
 
     fn validate_quote(&self, quote: &Quote) -> Result<(), String> {
-        if quote.market_id.trim().is_empty()
-            || quote.instrument_id.trim().is_empty()
-            || quote.source_id.trim().is_empty()
-        {
-            return Err("quote market, instrument and source identities are required".into());
+        if quote.instrument_id.trim().is_empty() || quote.source_id.trim().is_empty() {
+            return Err("quote instrument and source identities are required".into());
         }
+        quote.scope.validate_for(&quote.instrument_id)?;
         if quote.bid_price.is_none() && quote.ask_price.is_none() {
             return Err("quote must contain bid_price or ask_price".into());
         }
@@ -260,7 +258,7 @@ impl ExecutionSimulator {
 /// intrabar policy without changing the Market replay contract.
 fn quote_from_bar(bar: &Bar) -> Quote {
     Quote {
-        market_id: bar.market_id.clone(),
+        scope: bar.scope.clone(),
         instrument_id: bar.instrument_id.clone(),
         bid_price: Some(bar.close.clone()),
         bid_quantity: bar.volume.clone(),

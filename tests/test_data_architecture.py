@@ -24,7 +24,11 @@ from kairospy import DataUnavailableError, Kairos
 def _quote(time: int, instrument: str = "SPY") -> dict:
     return {
         "Quote": {
-            "market_id": "market:opra",
+            "scope": {
+                "kind": "consolidated",
+                "instrument_id": instrument,
+                "network_id": "opra",
+            },
             "instrument_id": instrument,
             "bid_price": "100",
             "ask_price": "101",
@@ -407,7 +411,11 @@ def test_greeks_envelope_maps_to_option_greeks_atomic_kind(tmp_path: Path) -> No
         events=(
             {
                 "Greeks": {
-                    "market_id": "market:opra",
+                    "scope": {
+                        "kind": "consolidated",
+                        "instrument_id": "SPY-P-100",
+                        "network_id": "opra",
+                    },
                     "instrument_id": "SPY-P-100",
                     "observed_at_unix_nanos": 10,
                     "source_id": "derived",
@@ -732,7 +740,7 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
             "underlying": "SPY",
             "provider_symbol": "O:SPY250221P00580000",
             "instrument_id": "instrument:option:SPY:20250221:580:P",
-            "market_id": "market:massive:options:O:SPY250221P00580000",
+            "network_id": "opra",
         },
         start_time_unix_nanos=20,
         end_time_unix_nanos=30,
@@ -743,7 +751,7 @@ def test_option_market_preparation_builds_deterministic_atomic_requirements(
             "underlying": "SPY",
             "provider_symbol": "O:SPY250117P00570000",
             "instrument_id": "instrument:option:SPY:20250117:570:P",
-            "market_id": "market:massive:options:O:SPY250117P00570000",
+            "network_id": "opra",
         },
         start_time_unix_nanos=10,
         end_time_unix_nanos=15,
@@ -891,7 +899,11 @@ def test_reviewed_massive_plan_executes_through_market_application_and_publishes
             json.dumps(
                 {
                     "Quote": {
-                        "market_id": "market:massive:options:O:SPY250117P00500000",
+                        "scope": {
+                            "kind": "consolidated",
+                            "instrument_id": "instrument:option:SPY:20250117:500:P",
+                            "network_id": "opra",
+                        },
                         "instrument_id": "instrument:option:SPY:20250117:500:P",
                         "bid_price": "1.00",
                         "bid_quantity": "2",
@@ -1228,8 +1240,7 @@ def test_reviewed_massive_reference_plan_publishes_point_in_time_snapshot(
                     "available_at_unix_nanos": as_of_nanos,
                     "as_of": "2024-12-19",
                     "instrument_id": "instrument:option:SPY:20241220:590:P",
-                    "market_id": "market:massive:options:O:SPY241220P00590000",
-                    "listing_id": "listing:massive:options:O:SPY241220P00590000",
+                    "network_id": "opra",
                     "provider_symbol": "O:SPY241220P00590000",
                     "underlying_instrument_id": "instrument:equity:US:SPY:common",
                     "underlying": "SPY",

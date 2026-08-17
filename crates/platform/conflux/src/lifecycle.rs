@@ -4,8 +4,6 @@ pub enum ProcessPhase {
     Created,
     Starting,
     Running,
-    Quiescing,
-    DrainingInputs,
     Stopping,
     Stopped,
     Forced,
@@ -18,11 +16,9 @@ impl ProcessPhase {
             0 => Self::Created,
             1 => Self::Starting,
             2 => Self::Running,
-            3 => Self::Quiescing,
-            4 => Self::DrainingInputs,
-            5 => Self::Stopping,
-            6 => Self::Stopped,
-            7 => Self::Forced,
+            3 => Self::Stopping,
+            4 => Self::Stopped,
+            5 => Self::Forced,
             _ => Self::Failed,
         }
     }

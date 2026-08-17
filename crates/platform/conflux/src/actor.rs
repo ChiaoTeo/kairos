@@ -1,45 +1,36 @@
 use std::error::Error;
 use std::future::{ready, Future};
 
-use crate::{CommitContext, ConfluxSystem, Context, RestCallOf, ServedContract};
+use crate::{ConfluxEvent, Context, Contract, RestResponseOf};
 
-/// A closed Conflux process definition.
-///
-/// `Contract` is the process's one outward service and is inseparable from the
-/// Actor implementation. The system `S`, rather than the Actor, owns the
-/// complete client and connection universe. `Ingress` and `Output` are
-/// ordinary closed Rust enums selected by the module.
-pub trait ConfluxActor<S>: Send + Sized + 'static
-where
-    S: ConfluxSystem,
-{
+/// A closed Conflux process definition with one global event handler.
+pub trait ConfluxActor: Send + Sized + 'static {
     type FatalError: Error + Send + Sync + 'static;
-    type Contract: ServedContract;
-    type Ingress: From<RestCallOf<Self::Contract>> + Send + 'static;
-    type Output: Send + 'static;
+    type Contract: Contract;
+    type LocalEvent: Send + 'static;
 
     fn started<'a>(
         &'a mut self,
-        _context: &'a mut Context<'_, Self, S>,
+        _context: &'a mut Context<'_, Self>,
     ) -> impl Future<Output = Result<(), Self::FatalError>> + Send + 'a {
         ready(Ok(()))
     }
 
+    /// Handles every REST, Contract, Integration, or local event.
+    ///
+    /// REST events return `Some(response)`; events without a response return
+    /// `None`. Conflux delivers the returned value to the Handle caller.
     fn handle<'a>(
         &'a mut self,
-        ingress: Self::Ingress,
-        context: &'a mut Context<'_, Self, S>,
-    ) -> impl Future<Output = Result<(), Self::FatalError>> + Send + 'a;
-
-    fn commit<'a>(
-        &'a mut self,
-        output: Self::Output,
-        context: &'a mut CommitContext<'_, Self, S>,
-    ) -> impl Future<Output = Result<(), Self::FatalError>> + Send + 'a;
+        event: ConfluxEvent<Self::Contract, Self::LocalEvent>,
+        context: &'a mut Context<'_, Self>,
+    ) -> impl Future<Output = Result<Option<RestResponseOf<Self::Contract>>, Self::FatalError>>
+           + Send
+           + 'a;
 
     fn stopping<'a>(
         &'a mut self,
-        _context: &'a mut Context<'_, Self, S>,
+        _context: &'a mut Context<'_, Self>,
     ) -> impl Future<Output = Result<(), Self::FatalError>> + Send + 'a {
         ready(Ok(()))
     }

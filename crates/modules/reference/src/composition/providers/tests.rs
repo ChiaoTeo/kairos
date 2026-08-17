@@ -901,7 +901,7 @@ async fn paused_provider_keeps_its_snapshot_without_polling_peer() {
                 id: "massive-options",
                 catalog: ProviderCatalog {
                     markets: vec![Market {
-                        market_id: typed_market_id("market:massive"),
+                        market_id: typed_market_id("market:test-venue:option"),
                         status: "active".into(),
                         ..Default::default()
                     }],

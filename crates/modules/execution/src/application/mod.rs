@@ -12,7 +12,7 @@ pub use crate::domain::{
 pub use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
-    BacktestRunResult, Bar, MarketObservation, Quote, QuoteBar, TradeBar,
+    BacktestRunResult, Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar,
 };
 pub(crate) use core::apply_connection_event;
 pub use core::ExecutionApplication;

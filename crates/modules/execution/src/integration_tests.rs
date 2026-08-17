@@ -1087,7 +1087,9 @@ async fn simulated_execution_server_fills_from_market_observation() {
         .await
         .unwrap();
     let market = serde_json::to_vec(&MarketObservation::Quote(Quote {
-        market_id: "binance:spot".into(),
+        scope: crate::application::ObservationScope::Market {
+            market_id: "binance:spot".into(),
+        },
         instrument_id: "BTCUSDT".into(),
         bid_price: Some("99".into()),
         bid_quantity: Some("10".into()),
@@ -2287,7 +2289,9 @@ fn backtest_run_simulates_quote_execution_and_returns_fills() {
             submitted_at_unix_nanos: 10.into(),
         }],
         market_events: vec![MarketObservation::Quote(Quote {
-            market_id: "binance:spot".into(),
+            scope: crate::application::ObservationScope::Market {
+                market_id: "binance:spot".into(),
+            },
             instrument_id: "BTCUSDT".into(),
             bid_price: Some("99".into()),
             bid_quantity: Some("10".into()),
@@ -2331,7 +2335,10 @@ fn backtest_run_consumes_a_downloaded_bar_and_fills_at_close() {
             submitted_at_unix_nanos: 1_699_999_999_000_000_000.into(),
         }],
         market_events: vec![MarketObservation::Bar(kairos_execution::Bar {
-            market_id: "market:massive:equity:AAPL".into(),
+            scope: crate::application::ObservationScope::Consolidated {
+                instrument_id: "instrument:equity:US:AAPL:common".into(),
+                network_id: Some("sip".into()),
+            },
             instrument_id: "instrument:equity:US:AAPL:common".into(),
             timeframe: "1m".into(),
             open: "100".into(),

@@ -100,7 +100,10 @@ def _events() -> tuple[dict[str, object], ...]:
     return tuple(
         {
             "Bar": {
-                "market_id": "market:binance:spot:BTCUSDT",
+                "scope": {
+                    "kind": "market",
+                    "market_id": "market:binance:spot:BTCUSDT",
+                },
                 "instrument_id": "instrument:binance:spot:BTCUSDT",
                 "timeframe": "1m",
                 "open": format(close, "f"),

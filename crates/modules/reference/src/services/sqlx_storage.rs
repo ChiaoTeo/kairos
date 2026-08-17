@@ -544,7 +544,8 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let page = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_primitives::MarketId::new("market:massive:equity:BCPC").unwrap(),
+                market_id: kairos_primitives::MarketId::new("market:legacy-provider:equity:BCPC")
+                    .unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],

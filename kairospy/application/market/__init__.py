@@ -210,7 +210,7 @@ class MarketDataApplication:
             derived.append(
                 {
                     "Quote": {
-                        "market_id": bar["market_id"],
+                        "scope": dict(bar["scope"]),
                         "instrument_id": bar["instrument_id"],
                         "bid_price": _decimal_text(bid),
                         "bid_quantity": bar.get("volume"),
@@ -394,7 +394,7 @@ def _write_parquet(events: list[dict[str, Any]], path: Path) -> None:
         rows.append(
             {
                 "kind": kind,
-                "market_id": payload.get("market_id"),
+                "scope_key": _scope_key(payload.get("scope")),
                 "instrument_id": payload.get("instrument_id"),
                 "source_id": payload.get("source_id"),
                 "observed_at_unix_nanos": _event_time(event),
@@ -406,7 +406,7 @@ def _write_parquet(events: list[dict[str, Any]], path: Path) -> None:
         schema=pa.schema(
             [
                 ("kind", pa.string()),
-                ("market_id", pa.string()),
+                ("scope_key", pa.string()),
                 ("instrument_id", pa.string()),
                 ("source_id", pa.string()),
                 ("observed_at_unix_nanos", pa.uint64()),
@@ -452,15 +452,46 @@ def _validate_events(events: list[dict[str, Any]]) -> None:
             )
         if payload["observed_at_unix_nanos"] < 0:
             raise ValueError(f"market dataset event {index} has negative event time")
-        for field in ("market_id", "instrument_id", "source_id"):
+        for field in ("instrument_id", "source_id"):
             if not isinstance(payload.get(field), str) or not payload[field].strip():
                 raise ValueError(f"market dataset event {index} is missing {field}")
+        scope = payload.get("scope")
+        if not isinstance(scope, dict):
+            raise ValueError(f"market dataset event {index} is missing scope")
+        scope_kind = scope.get("kind")
+        if scope_kind == "market":
+            if not isinstance(scope.get("market_id"), str) or not scope["market_id"].strip():
+                raise ValueError(
+                    f"market dataset event {index} has invalid market scope"
+                )
+        elif scope_kind == "consolidated":
+            if scope.get("instrument_id") != payload["instrument_id"]:
+                raise ValueError(
+                    f"market dataset event {index} has mismatched consolidated scope"
+                )
+        else:
+            raise ValueError(f"market dataset event {index} has invalid scope kind")
         if kind in {"Bar", "TradeBar", "QuoteBar"} and not payload.get("timeframe"):
             # Composite bar observations carry their timeframe in the nested
             # bar payload; plain bars must declare it directly.
             nested = payload.get("bar")
             if not isinstance(nested, dict) or not nested.get("timeframe"):
                 raise ValueError(f"market dataset event {index} is missing timeframe")
+
+
+def _scope_key(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    if value.get("kind") == "market":
+        market_id = value.get("market_id")
+        return market_id if isinstance(market_id, str) else None
+    if value.get("kind") == "consolidated":
+        instrument_id = value.get("instrument_id")
+        if not isinstance(instrument_id, str):
+            return None
+        network_id = value.get("network_id")
+        return f"consolidated:{instrument_id}:{network_id or '*'}"
+    return None
 
 
 def _validate_manifest(manifest: dict[str, Any], events: list[dict[str, Any]]) -> None:

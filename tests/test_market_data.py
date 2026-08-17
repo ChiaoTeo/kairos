@@ -13,7 +13,10 @@ from kairospy.application.market import (
 def _bar(time: int) -> dict:
     return {
         "Bar": {
-            "market_id": "market:binance:spot:BTCUSDT",
+            "scope": {
+                "kind": "market",
+                "market_id": "market:binance:spot:BTCUSDT",
+            },
             "instrument_id": "instrument:binance:BTCUSDT",
             "timeframe": "1m",
             "open": "100",

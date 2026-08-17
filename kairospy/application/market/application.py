@@ -4,11 +4,11 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from kairospy.application.reference import Market
-from kairospy.domain_types import MarketId
+from kairospy.application.reference import Instrument, InstrumentRef, Market
+from kairospy.domain_types import InstrumentId, MarketId
 
 from .events import BarEvent, MarketEvent, TradeEvent
-from .models import Bar, OptionGreeks, Quote, Trade
+from .models import Bar, ObservationScope, OptionGreeks, Quote, Trade
 from .requests import SubscriptionRequest
 
 
@@ -182,6 +182,43 @@ class MarketApplication:
     ) -> Subscription:
         return self._subscribe(
             _market_subscription_request(market, ("quote",), source_id=source_id)
+        )
+
+    def subscribe_consolidated_quotes(
+        self,
+        instrument: Instrument | InstrumentRef | InstrumentId,
+        *,
+        provider_id: str,
+        provider_product: str,
+        provider_symbol: str,
+        source_id: str,
+        network_id: str | None = None,
+    ) -> Subscription:
+        """Subscribe to an instrument-wide quote route without inventing a Market."""
+
+        instrument_id = (
+            instrument.id
+            if isinstance(instrument, (Instrument, InstrumentRef))
+            else instrument
+        )
+        params: dict[str, object] = {
+            "scope": "consolidated",
+            "instrument_id": str(instrument_id),
+            "provider_id": provider_id,
+        }
+        if network_id is not None:
+            params["network_id"] = network_id
+        return self._subscribe(
+            SubscriptionRequest(
+                subject=provider_symbol,
+                selectors=("quote",),
+                identity=ObservationScope.consolidated(
+                    instrument_id, network_id
+                ).key(),
+                source_id=source_id,
+                market_type=provider_product,
+                params=params,
+            )
         )
 
     def subscribe_trades(

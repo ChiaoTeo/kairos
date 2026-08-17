@@ -456,27 +456,31 @@ impl MarketActorTask {
             );
         }
         let market_universe = self.application.market_universe();
-        let descriptor_result = match market_universe.as_slice() {
-            [_first, ..] => resolve_market(
-                &market_universe,
-                &exchange,
-                &market_type,
-                request.asset_type.as_deref(),
-                &source_symbol,
-            ),
-            _ if self.application.has_replay_source() => {
-                let market_id = request
-                    .params
-                    .get("market_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "replay subscription requires params.market_id".to_string());
-                let instrument_id = request
-                    .params
-                    .get("instrument_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "replay subscription requires params.instrument_id".to_string());
-                market_id.and_then(|market_id| {
-                    instrument_id.and_then(|instrument_id| {
+        let consolidated = request
+            .params
+            .get("scope")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("consolidated"));
+        let descriptor_result = if consolidated {
+            let instrument_id = request
+                .params
+                .get("instrument_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    "consolidated subscription requires params.instrument_id".to_string()
+                });
+            let provider_id = request
+                .params
+                .get("provider_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "consolidated subscription requires params.provider_id".to_string());
+            let source_id = request
+                .source_id
+                .as_deref()
+                .ok_or_else(|| "consolidated subscription requires source_id".to_string());
+            instrument_id.and_then(|instrument_id| {
+                provider_id.and_then(|provider_id| {
+                    source_id.and_then(|source_id| {
                         let instrument_kind = match market_type.as_str() {
                             "equity" => kairos_primitives::InstrumentKind::Equity,
                             "spot" => kairos_primitives::InstrumentKind::Spot,
@@ -485,34 +489,96 @@ impl MarketActorTask {
                             "option" | "options" => kairos_primitives::InstrumentKind::Option,
                             "index" => kairos_primitives::InstrumentKind::Index,
                             _ => {
-                                return Err(format!("unsupported replay market type {market_type}"))
+                                return Err(format!(
+                                    "unsupported consolidated market type {market_type}"
+                                ))
                             }
                         };
                         let route = crate::MarketDataRoute::new(
-                            format!("replay:{market_id}"),
-                            "replay",
+                            format!("strategy-route:{source_id}:{instrument_id}"),
+                            provider_id,
                             market_type.clone(),
                             source_symbol.clone(),
                         )?;
-                        let mut descriptor = crate::ResolvedMarket::new(
-                            market_id,
+                        crate::ResolvedMarket::consolidated(
                             instrument_id,
+                            request
+                                .params
+                                .get("network_id")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
                             instrument_kind,
-                            exchange.clone(),
                             route,
-                        )?;
-                        descriptor.asset_type = request
-                            .asset_type
-                            .as_deref()
-                            .map(str::parse::<kairos_primitives::AssetClass>)
-                            .transpose()
-                            .map_err(|error| error.to_string())?;
-                        descriptor.with_source("replay")
+                        )?
+                        .with_source(source_id)
                     })
                 })
-            }
-            _ => {
-                Err("market universe is not ready; explicit market-data access is required".into())
+            })
+        } else {
+            match market_universe.as_slice() {
+                [_first, ..] => resolve_market(
+                    &market_universe,
+                    &exchange,
+                    &market_type,
+                    request.asset_type.as_deref(),
+                    &source_symbol,
+                ),
+                _ if self.application.has_replay_source() => {
+                    let market_id = request
+                        .params
+                        .get("market_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "replay subscription requires params.market_id".to_string());
+                    let instrument_id = request
+                        .params
+                        .get("instrument_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            "replay subscription requires params.instrument_id".to_string()
+                        });
+                    market_id.and_then(|market_id| {
+                        instrument_id.and_then(|instrument_id| {
+                            let instrument_kind = match market_type.as_str() {
+                                "equity" => kairos_primitives::InstrumentKind::Equity,
+                                "spot" => kairos_primitives::InstrumentKind::Spot,
+                                "perpetual" | "swap" => {
+                                    kairos_primitives::InstrumentKind::Perpetual
+                                }
+                                "future" | "futures" => kairos_primitives::InstrumentKind::Future,
+                                "option" | "options" => kairos_primitives::InstrumentKind::Option,
+                                "index" => kairos_primitives::InstrumentKind::Index,
+                                _ => {
+                                    return Err(format!(
+                                        "unsupported replay market type {market_type}"
+                                    ))
+                                }
+                            };
+                            let route = crate::MarketDataRoute::new(
+                                format!("replay:{market_id}"),
+                                "replay",
+                                market_type.clone(),
+                                source_symbol.clone(),
+                            )?;
+                            let mut descriptor = crate::ResolvedMarket::new(
+                                market_id,
+                                instrument_id,
+                                instrument_kind,
+                                exchange.clone(),
+                                route,
+                            )?;
+                            descriptor.asset_type = request
+                                .asset_type
+                                .as_deref()
+                                .map(str::parse::<kairos_primitives::AssetClass>)
+                                .transpose()
+                                .map_err(|error| error.to_string())?;
+                            descriptor.with_source("replay")
+                        })
+                    })
+                }
+                _ => {
+                    Err("market universe is not ready; an explicit Market route is required".into())
+                }
             }
         };
         let mut descriptor = match descriptor_result {

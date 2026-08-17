@@ -1,15 +1,20 @@
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use thiserror::Error;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
-    CommitContext, ConfluxActor, ConfluxSystem, Context, ManagedContract, ProcessPhase, RestCallOf,
-    ShutdownMode,
+    ConfluxActor, ConfluxEvent, ConfluxSystem, Context, ProcessPhase, RestResponseOf, ShutdownMode,
 };
+
+type ActorEvent<A> = ConfluxEvent<<A as ConfluxActor>::Contract, <A as ConfluxActor>::LocalEvent>;
+
+struct EventEnvelope<A: ConfluxActor> {
+    event: ActorEvent<A>,
+    completed: oneshot::Sender<Option<RestResponseOf<A::Contract>>>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeConfig {
@@ -30,35 +35,27 @@ pub enum BuildError {
     ZeroIngressCapacity,
 }
 
-pub struct Conflux<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
+pub struct Conflux<A: ConfluxActor> {
     actor: A,
-    contract: ManagedContract<A::Contract>,
-    system: S,
-    ingress: mpsc::Receiver<A::Ingress>,
+    contract: A::Contract,
+    system: ConfluxSystem,
+    events: mpsc::Receiver<EventEnvelope<A>>,
     shutdown: watch::Receiver<Option<ShutdownMode>>,
     phase: Arc<AtomicU8>,
 }
 
-impl<A, S> Conflux<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
+impl<A: ConfluxActor> Conflux<A> {
     pub fn new(
         actor: A,
-        contract: ManagedContract<A::Contract>,
-        system: S,
+        contract: A::Contract,
+        system: ConfluxSystem,
         config: RuntimeConfig,
-    ) -> Result<(Self, ConfluxHandle<A, S>), BuildError> {
+    ) -> Result<(Self, ConfluxHandle<A>), BuildError> {
         if config.ingress_capacity == 0 {
             return Err(BuildError::ZeroIngressCapacity);
         }
 
-        let (sender, ingress) = mpsc::channel(config.ingress_capacity);
+        let (sender, events) = mpsc::channel(config.ingress_capacity);
         let (shutdown_sender, shutdown) = watch::channel(None);
         let phase = Arc::new(AtomicU8::new(ProcessPhase::Created as u8));
         let handle = ConfluxHandle {
@@ -72,7 +69,7 @@ where
                 actor,
                 contract,
                 system,
-                ingress,
+                events,
                 shutdown,
                 phase,
             },
@@ -80,21 +77,17 @@ where
         ))
     }
 
-    pub async fn run(mut self) -> Result<ConfluxOutcome<A, S>, RunError<A::FatalError>> {
+    pub async fn run(mut self) -> Result<ConfluxOutcome<A>, RunError<A::FatalError>> {
         self.set_phase(ProcessPhase::Starting);
-        let startup_shutdown = match self.run_started().await {
-            Ok(mode) => mode,
-            Err(error) => {
-                self.set_phase(ProcessPhase::Failed);
-                return Err(RunError::Actor(error));
-            }
-        };
+        let startup_shutdown = self.run_started().await.map_err(|error| {
+            self.set_phase(ProcessPhase::Failed);
+            RunError::Actor(error)
+        })?;
         self.set_phase(ProcessPhase::Running);
 
-        let shutdown_mode = if let Some(mode) = startup_shutdown {
-            mode
-        } else {
-            self.run_until_shutdown().await?
+        let shutdown_mode = match startup_shutdown {
+            Some(mode) => mode,
+            None => self.run_until_shutdown().await?,
         };
         self.finish_shutdown(shutdown_mode).await
     }
@@ -114,11 +107,11 @@ where
                         return Ok(mode);
                     }
                 }
-                ingress = self.ingress.recv() => {
-                    let Some(ingress) = ingress else {
+                envelope = self.events.recv() => {
+                    let Some(envelope) = envelope else {
                         return Ok(ShutdownMode::Drain);
                     };
-                    match self.run_turn(ingress).await {
+                    match self.run_event(envelope).await {
                         Ok(Some(mode)) => return Ok(mode),
                         Ok(None) => {}
                         Err(error) => {
@@ -132,60 +125,41 @@ where
     }
 
     async fn run_started(&mut self) -> Result<Option<ShutdownMode>, A::FatalError> {
-        let mut staged = VecDeque::new();
         let mut requested_shutdown = None;
-        {
-            let mut context = Context::new(
-                &mut self.contract,
-                &mut self.system,
-                &mut staged,
-                &mut requested_shutdown,
-            );
-            self.actor.started(&mut context).await?;
-        }
-        self.commit(staged).await?;
+        let mut context = Context::new(
+            &mut self.contract,
+            &mut self.system,
+            &mut requested_shutdown,
+        );
+        self.actor.started(&mut context).await?;
         Ok(requested_shutdown)
     }
 
-    async fn run_turn(
+    async fn run_event(
         &mut self,
-        ingress: A::Ingress,
+        envelope: EventEnvelope<A>,
     ) -> Result<Option<ShutdownMode>, A::FatalError> {
-        let mut staged = VecDeque::new();
         let mut requested_shutdown = None;
-        {
-            let mut context = Context::new(
-                &mut self.contract,
-                &mut self.system,
-                &mut staged,
-                &mut requested_shutdown,
-            );
-            self.actor.handle(ingress, &mut context).await?;
-        }
-        self.commit(staged).await?;
+        let mut context = Context::new(
+            &mut self.contract,
+            &mut self.system,
+            &mut requested_shutdown,
+        );
+        let response = self.actor.handle(envelope.event, &mut context).await?;
+        let _ = envelope.completed.send(response);
         Ok(requested_shutdown)
-    }
-
-    async fn commit(&mut self, mut staged: VecDeque<A::Output>) -> Result<(), A::FatalError> {
-        while let Some(output) = staged.pop_front() {
-            let mut context = CommitContext::new(&mut self.contract, &mut self.system);
-            self.actor.commit(output, &mut context).await?;
-        }
-        Ok(())
     }
 
     async fn finish_shutdown(
         mut self,
         mut mode: ShutdownMode,
-    ) -> Result<ConfluxOutcome<A, S>, RunError<A::FatalError>> {
-        self.set_phase(ProcessPhase::Quiescing);
-        self.ingress.close();
+    ) -> Result<ConfluxOutcome<A>, RunError<A::FatalError>> {
+        self.events.close();
 
         let mut discarded_inputs = 0;
         if mode == ShutdownMode::Drain {
-            self.set_phase(ProcessPhase::DrainingInputs);
-            while let Some(ingress) = self.ingress.recv().await {
-                match self.run_turn(ingress).await {
+            while let Some(envelope) = self.events.recv().await {
+                match self.run_event(envelope).await {
                     Ok(Some(ShutdownMode::Immediate)) => {
                         mode = ShutdownMode::Immediate;
                         break;
@@ -199,27 +173,19 @@ where
             }
         }
         if mode == ShutdownMode::Immediate {
-            while self.ingress.try_recv().is_ok() {
+            while self.events.try_recv().is_ok() {
                 discarded_inputs += 1;
             }
         }
 
         self.set_phase(ProcessPhase::Stopping);
-        let mut staged = VecDeque::new();
         let mut ignored_shutdown = None;
-        {
-            let mut context = Context::new(
-                &mut self.contract,
-                &mut self.system,
-                &mut staged,
-                &mut ignored_shutdown,
-            );
-            if let Err(error) = self.actor.stopping(&mut context).await {
-                self.set_phase(ProcessPhase::Failed);
-                return Err(RunError::Actor(error));
-            }
-        }
-        if let Err(error) = self.commit(staged).await {
+        let mut context = Context::new(
+            &mut self.contract,
+            &mut self.system,
+            &mut ignored_shutdown,
+        );
+        if let Err(error) = self.actor.stopping(&mut context).await {
             self.set_phase(ProcessPhase::Failed);
             return Err(RunError::Actor(error));
         }
@@ -243,22 +209,14 @@ where
     }
 }
 
-pub struct ConfluxHandle<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
-    sender: mpsc::Sender<A::Ingress>,
+pub struct ConfluxHandle<A: ConfluxActor> {
+    sender: mpsc::Sender<EventEnvelope<A>>,
     shutdown: watch::Sender<Option<ShutdownMode>>,
     phase: Arc<AtomicU8>,
-    actor: PhantomData<fn() -> (A, S)>,
+    actor: PhantomData<fn() -> A>,
 }
 
-impl<A, S> Clone for ConfluxHandle<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
+impl<A: ConfluxActor> Clone for ConfluxHandle<A> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
@@ -269,23 +227,18 @@ where
     }
 }
 
-impl<A, S> ConfluxHandle<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
-    pub async fn notify(&self, ingress: A::Ingress) -> Result<(), NotifyError<A::Ingress>> {
-        self.sender
-            .send(ingress)
-            .await
-            .map_err(|error| NotifyError::Closed(error.0))
-    }
-
-    pub async fn notify_rest(
+impl<A: ConfluxActor> ConfluxHandle<A> {
+    /// The single entry point for every event source.
+    pub async fn handle(
         &self,
-        call: RestCallOf<A::Contract>,
-    ) -> Result<(), NotifyError<A::Ingress>> {
-        self.notify(call.into()).await
+        event: ActorEvent<A>,
+    ) -> Result<Option<RestResponseOf<A::Contract>>, HandleError<ActorEvent<A>>> {
+        let (completed, response) = oneshot::channel();
+        self.sender
+            .send(EventEnvelope { event, completed })
+            .await
+            .map_err(|error| HandleError::Closed(error.0.event))?;
+        response.await.map_err(|_| HandleError::ActorStopped)
     }
 
     pub fn shutdown(&self, mode: ShutdownMode) {
@@ -298,18 +251,15 @@ where
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum NotifyError<I> {
-    Closed(I),
+pub enum HandleError<E> {
+    Closed(E),
+    ActorStopped,
 }
 
-pub struct ConfluxOutcome<A, S>
-where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
-{
+pub struct ConfluxOutcome<A: ConfluxActor> {
     pub actor: A,
-    pub contract: ManagedContract<A::Contract>,
-    pub system: S,
+    pub contract: A::Contract,
+    pub system: ConfluxSystem,
     pub phase: ProcessPhase,
     pub discarded_inputs: usize,
 }

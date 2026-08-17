@@ -23,9 +23,9 @@ pub use application::{
     ExecutionOrderStatus, ExecutionPlan, ExecutionSnapshot, ExpireIntent, FailurePolicy,
     HedgePolicy, HedgeRequirement, IntentEvent, IntentLegRequest, IntentLifecycle, IntentState,
     IntentStatus, IntentType, LegLifecycle, MakerExecutionPolicy, MarketObservation,
-    OrderCommitment, OrderSide, OrderType, Quote, QuoteBar, QuoteObservation, RefreshQuoteIntent,
-    ReplaceOrder, RiskReservationSagaStatus, SnapshotWatermark, SplitOrderPolicy, SubmitOrder,
-    TradeBar, UnknownRemoteOrder, UnknownRemoteOrderResolution,
+    ObservationScope, OrderCommitment, OrderSide, OrderType, Quote, QuoteBar, QuoteObservation,
+    RefreshQuoteIntent, ReplaceOrder, RiskReservationSagaStatus, SnapshotWatermark,
+    SplitOrderPolicy, SubmitOrder, TradeBar, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
 
 #[cfg(test)]

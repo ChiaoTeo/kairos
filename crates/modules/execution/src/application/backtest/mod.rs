@@ -12,7 +12,7 @@ use crate::services::simulation::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
 };
 use kairos_primitives::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
-pub use market::{Bar, MarketObservation, Quote, QuoteBar, TradeBar};
+pub use market::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
 use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

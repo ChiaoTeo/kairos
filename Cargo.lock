@@ -1631,6 +1631,12 @@ dependencies = [
 name = "kairos-conflux"
 version = "0.1.0"
 dependencies = [
+ "kairos-account-contract",
+ "kairos-execution-contract",
+ "kairos-integration",
+ "kairos-market-contract",
+ "kairos-reference-contract",
+ "kairos-risk-contract",
  "thiserror 2.0.19",
  "tokio",
 ]

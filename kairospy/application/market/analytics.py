@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import math
 from typing import Any, Mapping
 
+from .models import ObservationScope, ObservationScopeKind
+
 
 _YEAR_NANOS = 365.25 * 86_400 * 1_000_000_000
 _SQRT_TWO = math.sqrt(2.0)
@@ -19,7 +21,7 @@ _SQRT_TWO_PI = math.sqrt(2.0 * math.pi)
 
 @dataclass(frozen=True, slots=True)
 class OptionGreeksProjectionRequest:
-    market_id: str
+    scope: ObservationScope
     instrument_id: str
     option_right: str
     expiry_unix_nanos: int
@@ -39,7 +41,7 @@ class OptionGreeksProjectionRequest:
         if right not in {"C", "P"}:
             raise ValueError("option_right must be C or P")
         object.__setattr__(self, "option_right", right)
-        for name in ("market_id", "instrument_id", "price_basis", "source_id"):
+        for name in ("instrument_id", "price_basis", "source_id"):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"{name} is required")
         if self.expiry_unix_nanos <= self.observed_at_unix_nanos:
@@ -77,7 +79,7 @@ class MarketAnalyticalApplication:
         volatility = _implied_volatility(request, time_to_expiry)
         delta, gamma, vega, theta = _greeks(request, time_to_expiry, volatility)
         value = {
-            "market_id": request.market_id,
+            "scope": _scope_payload(request.scope),
             "instrument_id": request.instrument_id,
             "expiry_unix_nanos": request.expiry_unix_nanos,
             "strike": _number(request.strike),
@@ -112,6 +114,16 @@ class MarketAnalyticalApplication:
             theta=theta,
             event={"Greeks": value},
         )
+
+
+def _scope_payload(scope: ObservationScope) -> Mapping[str, object]:
+    if scope.kind is ObservationScopeKind.MARKET:
+        return {"kind": "market", "market_id": str(scope.market_id)}
+    return {
+        "kind": "consolidated",
+        "instrument_id": str(scope.instrument_id),
+        "network_id": scope.network_id,
+    }
 
 
 def _implied_volatility(

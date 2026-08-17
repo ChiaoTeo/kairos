@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from kairospy.application.market.events import MarketEventRecord
+from kairospy.application.market import ObservationScope
 from kairospy.application.execution.mapping import (
     map_execution_fill,
     map_execution_intent,
@@ -23,7 +24,7 @@ def test_market_mapper_preserves_decimal_precision_and_unix_nanos() -> None:
         "bar",
         BarView(
             "instrument:test:SPY",
-            "market:test:SPY",
+            ObservationScope.market("market:test:SPY"),
             "1h",
             DecimalValue(123456789, 6),
             DecimalValue(124000000, 6),
@@ -51,7 +52,7 @@ def test_market_mapper_rejects_discriminator_payload_mismatch() -> None:
         "quote",
         BarView(
             "instrument:test:SPY",
-            "market:test:SPY",
+            ObservationScope.market("market:test:SPY"),
             "1h",
             DecimalValue(1, 0),
             DecimalValue(1, 0),
@@ -74,7 +75,7 @@ def test_market_mapper_exposes_option_greeks_without_losing_precision() -> None:
         "greeks",
         GreeksView(
             "instrument:test:SPY-PUT",
-            "market:test:SPY-PUT",
+            ObservationScope.market("market:test:SPY-PUT"),
             1_710_000_000_000_000_000,
             DecimalValue(45000, 2),
             DecimalValue(-250000, 6),

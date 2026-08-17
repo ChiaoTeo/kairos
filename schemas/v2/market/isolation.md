@@ -1,7 +1,7 @@
 # Market v2 isolation contract
 
 Market has four different identities. They must not be collapsed into one
-`scope` or inferred from `market_id`.
+runtime `scope`; it is never inferred from an observation `market_id`.
 
 | Identity | Example | Owner | Meaning |
 | --- | --- | --- | --- |
@@ -55,7 +55,7 @@ different launch/instance identity is rejected.
   instance identity in `EventMetadata`.
 - A current-view resource must match `workspace_id`, runtime metadata,
   `resource_id`, `resource_epoch`, and `view_key` before decoding rows.
-- `market_id` is a canonical business identity; it is not a process or
+- `ObservationScope` is a canonical business identity; it is not a process or
   permission boundary.
 - `source_id` distinguishes provenance and routing. It must not be used to
   grant a caller access to another Market runtime.

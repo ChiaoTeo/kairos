@@ -36,7 +36,7 @@ class _Fact:
             self.owner,
             self.dataset_kind,
             str(payload.get("source_id", self.source)),
-            str(payload.get("market_id", "")),
+            json.dumps(payload.get("scope", {}), sort_keys=True, separators=(",", ":")),
             str(payload.get("instrument_id", "")),
             self.dataset_identity,
             json.dumps(self.event, sort_keys=True, separators=(",", ":")),

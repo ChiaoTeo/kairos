@@ -1,61 +1,73 @@
-/// The complete statically typed client and connection universe supplied by
-/// system composition to every Conflux process.
-///
-/// Actors do not declare their own resource subsets. They receive the system
-/// universe and create or use named instances on demand. Concrete system
-/// implementations remain ordinary structs, so adding a resource type is a
-/// compile-time change and never an erased catalog insertion.
-pub trait ConfluxSystem: Send + 'static {
-    type Clients: Send + 'static;
-    type Connections: Send + 'static;
+use kairos_account_contract::AccountClient;
+use kairos_execution_contract::ExecutionClient;
+use kairos_integration::participants::{
+    binance::{
+        BinanceCoinMConnection, BinanceFuturesPrincipalConnection,
+        BinanceMarginPrincipalConnection, BinanceOptionsConnection,
+        BinanceOptionsPrincipalConnection, BinanceSpotConnection, BinanceSpotPrincipalConnection,
+        BinanceUsdMConnection,
+    },
+    hyperliquid::HyperliquidConnection,
+    ibkr::IbkrConnection,
+    massive::MassiveConnection,
+    okx::{OkxConnection, OkxPrincipalConnection},
+};
+use kairos_market_contract::MarketClient;
+use kairos_reference_contract::ReferenceClient;
+use kairos_risk_contract::RiskClient;
 
-    fn clients(&self) -> &Self::Clients;
-    fn clients_mut(&mut self) -> &mut Self::Clients;
-    fn connections(&self) -> &Self::Connections;
-    fn connections_mut(&mut self) -> &mut Self::Connections;
+use crate::{ManagedClients, ManagedConnections};
+
+/// The one concrete resource universe available to every Kairos Actor.
+pub struct ConfluxSystem {
+    pub account_clients: ManagedClients<String, AccountClient>,
+    pub execution_clients: ManagedClients<String, ExecutionClient>,
+    pub market_clients: ManagedClients<String, MarketClient>,
+    pub reference_clients: ManagedClients<String, ReferenceClient>,
+    pub risk_clients: ManagedClients<String, RiskClient>,
+
+    pub binance_spot_connections: ManagedConnections<String, BinanceSpotConnection>,
+    pub binance_usdm_connections: ManagedConnections<String, BinanceUsdMConnection>,
+    pub binance_coinm_connections: ManagedConnections<String, BinanceCoinMConnection>,
+    pub binance_options_connections: ManagedConnections<String, BinanceOptionsConnection>,
+    pub binance_spot_principals: ManagedConnections<String, BinanceSpotPrincipalConnection>,
+    pub binance_futures_principals: ManagedConnections<String, BinanceFuturesPrincipalConnection>,
+    pub binance_margin_principals: ManagedConnections<String, BinanceMarginPrincipalConnection>,
+    pub binance_options_principals: ManagedConnections<String, BinanceOptionsPrincipalConnection>,
+    pub okx_connections: ManagedConnections<String, OkxConnection>,
+    pub okx_principals: ManagedConnections<String, OkxPrincipalConnection>,
+    pub hyperliquid_connections: ManagedConnections<String, HyperliquidConnection>,
+    pub ibkr_connections: ManagedConnections<String, IbkrConnection>,
+    pub massive_connections: ManagedConnections<String, MassiveConnection>,
 }
 
-/// Basic system container. A workspace-level composition may instead provide
-/// a named struct implementing [`ConfluxSystem`] directly.
-pub struct StaticSystem<Clients, Connections> {
-    clients: Clients,
-    connections: Connections,
-}
-
-impl<Clients, Connections> StaticSystem<Clients, Connections> {
-    pub fn new(clients: Clients, connections: Connections) -> Self {
+impl ConfluxSystem {
+    pub fn new() -> Self {
         Self {
-            clients,
-            connections,
+            account_clients: ManagedClients::new(),
+            execution_clients: ManagedClients::new(),
+            market_clients: ManagedClients::new(),
+            reference_clients: ManagedClients::new(),
+            risk_clients: ManagedClients::new(),
+            binance_spot_connections: ManagedConnections::new(),
+            binance_usdm_connections: ManagedConnections::new(),
+            binance_coinm_connections: ManagedConnections::new(),
+            binance_options_connections: ManagedConnections::new(),
+            binance_spot_principals: ManagedConnections::new(),
+            binance_futures_principals: ManagedConnections::new(),
+            binance_margin_principals: ManagedConnections::new(),
+            binance_options_principals: ManagedConnections::new(),
+            okx_connections: ManagedConnections::new(),
+            okx_principals: ManagedConnections::new(),
+            hyperliquid_connections: ManagedConnections::new(),
+            ibkr_connections: ManagedConnections::new(),
+            massive_connections: ManagedConnections::new(),
         }
     }
-
-    pub fn into_parts(self) -> (Clients, Connections) {
-        (self.clients, self.connections)
-    }
 }
 
-impl<Clients, Connections> ConfluxSystem for StaticSystem<Clients, Connections>
-where
-    Clients: Send + 'static,
-    Connections: Send + 'static,
-{
-    type Clients = Clients;
-    type Connections = Connections;
-
-    fn clients(&self) -> &Self::Clients {
-        &self.clients
-    }
-
-    fn clients_mut(&mut self) -> &mut Self::Clients {
-        &mut self.clients
-    }
-
-    fn connections(&self) -> &Self::Connections {
-        &self.connections
-    }
-
-    fn connections_mut(&mut self) -> &mut Self::Connections {
-        &mut self.connections
+impl Default for ConfluxSystem {
+    fn default() -> Self {
+        Self::new()
     }
 }

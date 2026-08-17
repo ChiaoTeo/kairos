@@ -23,24 +23,24 @@
 
 1. Conflux 的抽象单位不是通用 HTTP route、任意消息、资源类型目录或 provider
    operation，而是一个编译期闭合的 module 运行环境。
-2. module Contract 是该 module 完整的跨进程可执行协议，明确分为 REST、View、Aeron 三个
-   平面：REST 承载 command/query，View 承载 latest current projection，Aeron 承载 ordered
-   event stream；各平面拥有相应 client、host、publisher、reader、codec 和 watermark 语义。
+2. module Contract crate 仍拥有该 module 的完整跨进程协议；当前 Conflux 只抽象 REST 的
+   `Request -> Response` 类型对。View、Aeron 和 Reference 的 SQLite projection 等能力继续
+   由各 module 的 concrete client 暴露，等真实实现形成稳定共同形态后再考虑自举。
 3. Conflux 不再要求 Actor 使用 `#[handle(post = "...")]` 重复声明 HTTP method/path。
    Actor 实现 Contract 已声明的 operation；HTTP-over-UDS、HTTP-over-TCP 或其他 framing
    是 Contract-owned transport projection。
 4. Actor ingress 由其服务的 Contract、消费的 Contract event、Integration fact、内部
    completion 和 timer 在编译期组成闭合 enum。正常 Actor dispatch 不使用
    `Box<dyn Any>`、`TypeId`、downcast 或运行时 route lookup。
-5. 每个进程向外提供且只提供一个 owning module Contract。该服务以
-   `ManagedContract<OwnContract>` 进入 Conflux；对外暴露的是 Contract，不是 Conflux
+5. 每个进程向外提供且只提供一个 owning module Contract。该 concrete Contract 直接进入
+   Conflux；对外暴露的是 Contract，不是 Conflux
    route、HTTP handler 或第二套 application facade。
 6. system composition 编译期集成所有可用 module Contract client 类型和所有
    provider-native Integration connection 类型，形成全局完整的 `Clients` 与
    `Connections` named list。Actor 不声明自己的资源子集，而是在系统全集中按需创建和使用
    命名实例。Conflux 不建立跨类型 `ContractCatalog` 或 `IntegrationCatalog`。
 7. 同一 concrete type 的动态多个实例使用同构、类型化的命名集合，例如
-   `ManagedClients<AccountId, Account>` 或
+   `ManagedClients<AccountId, AccountClient>` 或
    `ManagedConnections<ExecutionRouteId, BinanceSpot>`，不升级为跨类型 registry。
 8. Actor 直接调用 concrete Contract client 和 Integration connection。Conflux 不定义
    universal Contract client trait、universal Integration trait、provider session facade 或
@@ -159,100 +159,80 @@ timer                 -> typed tick
 Contract 不拥有 module Actor、Application、provider connection、persistence record 或
 vendor payload。
 
-Contract 必须明确拆分 REST、View 和 Aeron 三个协议平面。REST 承载 command/query，View
-承载 latest current projection，Aeron 承载 ordered event stream。
-为了支持逐步自举，client-side `Contract` 和已经完成服务端闭环的 `ServedContract` 分开：
-现有 Contract 可以先把 unified client、view reader 和 Aeron stream 接入 system clients；
-只有 REST call/host、view publisher、Aeron publisher 都归回 Contract 后，才允许实现
-`ServedContract` 并作为本进程唯一 `ManagedContract` 运行。
+Contract crate 可以具体提供 REST/control、current view、ordered event stream 或 SQLite
+projection，但这些能力目前并没有一个真实统一的 Rust shape：Account、Market、Execution
+和 Risk client 提供 control、events 与 keyed view；Reference client 提供 events 与
+consumer-scoped SQLite projection query。Conflux 因此只记录已经稳定的 REST request/response
+类型关系，不为 View、Aeron、Endpoint 或统一 Client 发明通用 trait。
 
 ```rust,ignore
 pub trait RestContract: Send + 'static {
-    type Client: Send + 'static;
-}
-
-pub trait ViewContract: Send + 'static {
-    type Key: Send + Sync + 'static;
-    type Frame: Send + 'static;
-    type Reader: Send + 'static;
-}
-
-pub trait AeronContract: Send + 'static {
-    type Frame: Send + 'static;
-    type Stream: Send + 'static;
+    type Request: Send + 'static;
+    type Response: Send + 'static;
 }
 
 pub trait Contract: Send + 'static {
-    type Endpoint: Send + 'static;
-    type Client: Send + 'static;
     type Rest: RestContract;
-    type View: ViewContract;
-    type Aeron: AeronContract;
-}
-
-pub trait ServedContract: Contract {
-    type RestCall: Send + 'static;
-    type Service: Send + 'static;
 }
 ```
 
-`Contract::Endpoint` 创建统一 `Contract::Client` facade；`Rest::Client`、
-`View::{Key, Frame, Reader}` 和 `Aeron::{Frame, Stream}` 是 facade 下的三个明确能力。
-`ServedContract::RestCall` 是服务端完整、闭合的 REST call enum，并携带准确 typed reply；
-`Service` 是 REST host、View publisher 和 Aeron publisher 的
-Contract-owned 服务端 bundle。Conflux 不解释这些 facade 中的业务方法。
+`RestContract` 只表达闭合的 request/response pair。method/path、serialization、transport、
+typed error 如何进入 response，以及具体 client/host 的构造仍由 owning Contract crate 决定。
+Conflux 不定义 `ServedContract`，也不要求依赖 client 实现 `Contract`。
 
-每个 module 主进程只向外提供一个 owning module Contract。Conflux 以
-`ManagedContract<C>` 持有并监督这个服务：
+当前 concrete client 能力清单如下；这是暂不抽象 View/Aeron 的直接依据：
+
+| concrete client | 当前公开能力 |
+| --- | --- |
+| `AccountClient` | `control()`、`events(capacity)`、`view(AccountViewKey)` |
+| `MarketClient` | `control()`、`events(capacity)`、`view(MarketViewKey)` |
+| `ExecutionClient` | `control()`、`events(capacity)`、`view(ExecutionViewKey)` |
+| `RiskClient` | `control()`、`events(capacity)`、`view(RiskViewKey)`；连接本身可失败 |
+| `ReferenceClient` | `events(capacity)`、`watermark()`、三类 consumer-scoped SQLite snapshot query |
+
+虽然多个 client 都出现 `events`，但 stream 的恢复、订阅和长期监督语义尚未形成稳定 owner-defined
+capability；Reference 也不是 keyed mmap view。此时提取 `ViewContract` 或 `AeronContract` 只会
+隐藏差异。system composition 直接保存这些 concrete client，Actor 调用它们当前已有的方法。
+
+每个 module 主进程只向外提供一个 owning module Contract。第一版由 `Conflux<A>` 直接持有
+`A::Contract`，不增加 managed wrapper：
 
 ```rust,ignore
-pub struct ManagedContract<C: ServedContract> {
-    service: C::Service,
-    state: ResourceState,
-    revision: u64,
-    epoch: u64,
+pub struct Conflux<A: ConfluxActor> {
+    contract: A::Contract,
+    system: ConfluxSystem,
 }
 ```
 
-`C::Service` 是 Contract-owned REST host、View publisher 和 Aeron publisher 的闭合服务
-投影。它把 Contract call 解码为 Actor 的 own-contract ingress，并把 typed response 编码回
-Contract transport。Conflux 不在其外层再定义 HTTP route、通用 service API 或公开 handler
-目录。同一个 Contract 可以投影到 HTTP-over-UDS、HTTP-over-TCP 或其他 framing，但这些
-transport host 共同组成一个逻辑 `ManagedContract<C>`，不构成多个业务服务。
+`A::Contract` 是本进程具体的对外 Contract 服务对象。它把 REST request 适配为 Actor 的
+own-contract ingress，并把 response 编码回 Contract transport。Conflux 不在其外层再定义
+HTTP route、通用 service API 或公开 handler 目录。同一个 Contract 可以投影到
+HTTP-over-UDS、HTTP-over-TCP 或其他 framing，但这些
+transport host 共同组成一个逻辑 Contract，不构成多个业务服务。只有出现真实的 Contract
+热替换需求时，才重新评估 revision/epoch 管理。
 
 ### 4.2 REST command/query operation
 
-Contract 应以 operation type 声明服务端和客户端共同使用的协议，而不是只暴露
-`request(method, path, bytes)`：
+第一版只要求 owning Contract 给出一个闭合 request enum 与对应 response enum：
 
 ```rust,ignore
-pub trait ContractOperation {
-    type Request: Send + 'static;
-    type Response: Send + 'static;
-    type Error: Send + 'static;
+enum ExecutionRestRequest {
+    SubmitIntent(SubmitIntentRequest),
+    CancelOrder(CancelOrderRequest),
+    Health,
+}
 
-    const NAME: &'static str;
-    const KIND: OperationKind;
-    const DELIVERY: DeliverySemantics;
+enum ExecutionRestResponse {
+    SubmitIntent(Result<SubmitIntentResponse, ExecutionControlError>),
+    CancelOrder(Result<CancelOrderResponse, ExecutionControlError>),
+    Health(Result<Health, ExecutionControlError>),
 }
 ```
 
-HTTP method/path、UDS framing 和 JSON codec 是该 operation 的 Contract-owned transport
-binding。Actor 绑定 operation type：
-
-```rust,ignore
-#[command(account_contract::control::RefreshAccount)]
-async fn refresh(
-    &mut self,
-    request: RefreshAccountRequest,
-    context: &mut Context<'_, Self>,
-) -> Result<RefreshAccountResponse, AccountControlError> {
-    // business orchestration
-}
-```
-
-宏必须在编译期验证 request、response 和 error 类型。Actor 不重复声明 path，不接收 raw
-HTTP request，不执行 JSON extraction，也不能发明 Contract 未声明的公开 endpoint。
+HTTP method/path、UDS framing、JSON codec、client 与 host 都继续由 Contract crate 具体实现。
+Conflux 只通过 `RestContract::{Request, Response}` 固定这一对类型，不定义 operation trait、
+route macro 或通用 error。Contract host 将 request 封装进 Actor 的闭合 ingress，并在 turn
+提交后发送 response。
 
 业务读取默认通过 typed current view/projection。只有要求 Actor 强一致性的 query 才进入
 Actor；runtime health 可以由 Contract host 直接投影 Conflux status 和 module business
@@ -337,37 +317,30 @@ streams 的 reconnect、ordering 和 provider protocol 属于 Integration，gap 
 
 每个 Actor 的运行环境明确分成三类，不合并为一个任意资源 namespace：
 
-1. `ManagedContract<OwnContract>`：本进程唯一向外提供的 owning module Contract；
-2. system `Clients`：Kairos 当前集成的所有其他进程 Contract client 类型的完整、静态类型化
-   全集；
-3. system `Connections`：Kairos 当前集成的所有 Integration connection 类型的完整、静态
-   类型化全集。
+1. `A::Contract`：本进程唯一向外提供的 owning module Contract；
+2. `ConfluxSystem` 上的 concrete client 字段：Kairos 当前集成的其他进程 Contract clients；
+3. `ConfluxSystem` 上的 concrete connection 字段：Kairos 当前集成的 Integration connections。
 
 workspace/system composition 构造资源全集；各 Actor 不再重复声明自己的 client 和
 connection struct。例如：
 
 ```rust,ignore
-pub struct KairosClients {
-    pub accounts: ManagedClients<AccountProcessId, Account>,
-    pub markets: ManagedClients<MarketProcessId, Market>,
-    pub risks: ManagedClients<RiskProcessId, Risk>,
-    pub references: ManagedClients<ReferenceProcessId, Reference>,
-}
+pub struct ConfluxSystem {
+    pub account_clients: ManagedClients<String, AccountClient>,
+    pub execution_clients: ManagedClients<String, ExecutionClient>,
+    pub market_clients: ManagedClients<String, MarketClient>,
+    pub reference_clients: ManagedClients<String, ReferenceClient>,
+    pub risk_clients: ManagedClients<String, RiskClient>,
 
-pub struct KairosConnections {
-    pub binance_spot: ManagedConnections<ExecutionRouteId, BinanceSpot>,
-    pub okx: ManagedConnections<ExecutionRouteId, Okx>,
-    pub ibkr: ManagedConnections<ExecutionRouteId, Ibkr>,
-}
-
-pub struct KairosSystem {
-    pub clients: KairosClients,
-    pub connections: KairosConnections,
+    pub binance_spot_connections: ManagedConnections<String, BinanceSpotConnection>,
+    pub okx_connections: ManagedConnections<String, OkxConnection>,
+    pub ibkr_connections: ManagedConnections<String, IbkrConnection>,
+    // 其余当前 provider-native connection 同样是明确字段。
 }
 ```
 
-`KairosClients` 和 `KairosConnections` 是闭合的 system-level named list：每个字段的类型在
-编译期已知，但字段内部同类型实例的数量、名称、revision 和 epoch 可以在运行时变化。
+`ConfluxSystem` 是唯一具体实体，不是 trait，也不带泛型参数。每个字段的类型在编译期已知，
+但字段内部同类型实例的数量、名称、revision 和 epoch 可以在运行时变化。
 新增一种 Contract 或 Integration connection 类型必须修改 system composition 并重新编译；
 Conflux 不支持在运行时向一个开放目录塞入未知类型。Actor 从全集中按需调用
 `ensure_with` 创建实例，未使用的类型保持空 collection。
@@ -376,8 +349,8 @@ Actor 通过 Context 直接借用：
 
 ```rust,ignore
 let outcome = context
-    .connections()
-    .binance_spot
+    .system()
+    .binance_spot_connections
     .get(&execution_route_id)?
     .connection()
     .order_entry()
@@ -385,8 +358,8 @@ let outcome = context
     .await;
 
 let decision = context
-    .clients()
-    .risks
+    .system()
+    .risk_clients
     .get(&risk_process_id)?
     .client()
     .control()
@@ -402,12 +375,12 @@ Contract client 和 Integration connection 都允许同一类型存在多个命�
 同构、静态类型化的 collection，不是跨类型 registry：
 
 ```rust,ignore
-pub struct ManagedClients<K, C: Contract> {
+pub struct ManagedClients<K, C> {
     entries: HashMap<K, ManagedClient<C>>,
 }
 
-pub struct ManagedClient<C: Contract> {
-    pub client: C::Client,
+pub struct ManagedClient<C> {
+    pub client: C,
     pub revision: u64,
     pub epoch: u64,
     pub state: ResourceState,
@@ -428,8 +401,8 @@ pub struct ManagedConnection<C> {
 例如：
 
 ```text
-ManagedClients<AccountProcessId, Account>
-ManagedClients<ReferenceProcessId, Reference>
+ManagedClients<AccountProcessId, AccountClient>
+ManagedClients<ReferenceProcessId, ReferenceClient>
 ManagedConnections<ExecutionRouteId, BinanceSpot>
 ManagedConnections<MarketSourceId, OkxMarketData>
 ```
@@ -445,14 +418,14 @@ erased dispatch 或其他类型擦除。
 
 ### 5.4 长生命周期 stream
 
-`ManagedClient<C>` 中的 concrete Contract client 或 `ManagedConnection<C>` 中的 concrete
+`ManagedClient<C>` 直接持有 concrete Contract client，`ManagedConnection<C>` 直接持有 concrete
 Integration connection 可以创建 typed stream。若 stream 必须
 长期运行，Actor 将已经创建的 stream 交给通用 source supervision：
 
 ```rust,ignore
 let stream = context
-    .connections()
-    .binance_spot
+    .system()
+    .binance_spot_connections
     .get(&execution_route_id)?
     .connection()
     .order_events()
@@ -480,13 +453,13 @@ latency/profile 或并发需求证明有必要时，才把具体 future 交给�
 
 Actor 与它服务的 Contract 是一个不可拆开的运行时定义。Actor 只关联唯一
 `Contract`、闭合 `Ingress` 和闭合 `Output`；它不再声明 `Clients` 或 `Connections`。
-资源全集由 system type `S` 提供：
+资源全集由具体 `ConfluxSystem` 提供：
 
 ```rust,ignore
-pub trait ConfluxActor<S: ConfluxSystem>: Send + Sized + 'static {
+pub trait ConfluxActor: Send + Sized + 'static {
     type FatalError: Error + Send + Sync + 'static;
-    type Contract: ServedContract;
-    type Ingress: From<RestCallOf<Self::Contract>> + Send + 'static;
+    type Contract: Contract;
+    type Ingress: Send + 'static;
     type Output: Send + 'static;
 }
 ```
@@ -494,20 +467,20 @@ pub trait ConfluxActor<S: ConfluxSystem>: Send + Sized + 'static {
 Context 对当前 Actor 的资源是静态类型化的：
 
 ```rust,ignore
-pub struct Context<'runtime, A, S>
+pub struct Context<'runtime, A>
 where
-    S: ConfluxSystem,
-    A: ConfluxActor<S>,
+    A: ConfluxActor,
 {
-    contract: &'runtime mut ManagedContract<A::Contract>,
-    system: &'runtime mut S,
-    runtime: RuntimeAuthority<A, S>,
+    contract: &'runtime mut A::Contract,
+    system: &'runtime mut ConfluxSystem,
+    runtime: RuntimeAuthority<A>,
 }
 ```
 
 `A::Contract` 在类型层面保证本进程只有一个对外业务 Contract，并让 Actor handler 与该
-Contract 的 REST call、event 和 view 类型一起演进。`S::Clients` 与 `S::Connections` 是系统
-集成的完整资源全集；Actor 可以看到全集，但只在业务需要时创建和使用具体命名实例。
+Contract 的 REST request/response pair 一起演进。View、Aeron 或其他 concrete capability
+由 owning Contract 自己演进。`ConfluxSystem` 的明确字段是系统集成的完整资源全集；Actor
+可以看到全集，但只在业务需要时创建和使用具体命名实例。
 系统不会为每个 Actor 复制一份类型声明，也不会根据 Actor handler 构造运行时类型目录。
 
 ### 6.2 闭合 ingress
@@ -629,9 +602,8 @@ pub struct ResourceNode {
 }
 ```
 
-concrete outward Contract service 位于 `ManagedContract<A::Contract>`；依赖 client 和
-Integration connection 分别位于 system `S::Clients` 与 `S::Connections` 的 managed
-collections。
+concrete outward Contract service 直接位于 `Conflux<A>`；依赖 client 和 Integration
+connection 分别位于 `ConfluxSystem` 的明确 managed collection 字段中。
 Conflux 可以统一关联下列 metadata，但不把 concrete value 搬入类型擦除的 metadata
 registry。metadata 用于：
 
@@ -730,9 +702,9 @@ kairos-integration
 | Contract client/host/codec/publisher/reader | owning module Contract |
 | provider auth/protocol/capability/normalized facts | Integration |
 | concrete endpoint/connection selection | module composition |
-| unique outward `ManagedContract<OwnContract>` | owning module Contract defines it; composition constructs it; Conflux supervises it |
-| complete dependency `Clients` universe | workspace/system composition declares and constructs it; Conflux exposes it to Actors |
-| complete Integration `Connections` universe | workspace/system composition declares and constructs it; Conflux exposes it to Actors |
+| unique outward `A::Contract` | owning module Contract defines it; composition constructs it; Conflux owns it directly |
+| concrete dependency client fields | `ConfluxSystem` declares them; composition constructs named instances |
+| concrete Integration connection fields | `ConfluxSystem` declares them; composition constructs named instances |
 | same-type named instance key and cardinality | consuming module/composition |
 | source/task scheduling, bounded ingress, turn commit, readiness, shutdown | Conflux |
 | provider route/source selection and business consequences | consuming module Application/composition |
@@ -784,29 +756,24 @@ Contract client 或 application API，不能导入对方 services/private files�
 
 退出：仓库只有一份明确目标架构，冲突文档已同步。
 
-### Phase 1：Contract 服务端闭环
+### Phase 1：最小 REST Contract
 
-- 先以不依赖任何业务 module 的抽象 Contract 示例闭合 REST、View、Aeron 三个平面；
-- REST 定义一个准确 request/response/error operation 和闭合 call enum；
-- View 定义 key/frame/reader 和 latest publisher；
-- Aeron 定义 frame/stream 和 ordered publisher；
-- Contract 定义准确 operation request/response/error 和 generated/static host binding；
-- Actor 绑定 operation type，不再声明 method/path；
-- client 与 host round-trip 使用同一 Contract 类型；
-- 删除该 slice 的 module 自定义 HTTP decode/match。
+- 先以不依赖任何业务 module 的抽象示例定义准确的 REST `Request -> Response` 类型对；
+- Actor 关联唯一 concrete Contract，Contract 关联该 REST pair；
+- transport host 将 request 适配为 Actor 的闭合 ingress，并负责返回 response；
+- 不抽象 Endpoint、client、View、Aeron、publisher、reader 或 stream；
+- system resources 直接持有各 module Contract crate 当前已有的 concrete client。
 
-退出：新增或修改 operation 会同时约束 client、host 和 Actor handler；没有 raw
-`serde_json::Value` 作为 typed model adapter；示例的 REST 成功 turn 同时产生最新 View 和
-有序 Aeron frame，失败 turn 不提交两者。
+退出：修改 request 或 response 会约束 owning Contract 与对应 ingress 适配；Conflux 中没有
+为了统一现有模块而创建的 client/view/stream trait。
 
 ### Phase 2：闭合 ingress 与静态资源
 
 - Actor 只声明唯一 `Contract`、闭合 `Ingress` 和闭合 `Output`，不声明 client/connection
   子集；
-- workspace/system composition 创建全量 `S::Clients` 和 `S::Connections`，Conflux 将同一
-  system resource universe 暴露给 Actor 按需创建和使用实例；
-- module composition 创建 `ManagedContract<A::Contract>` 并与 Actor、system resources
-  一起移动进 Conflux；
+- `ConfluxSystem` 明确列出全量 concrete client 与 connection 字段，并把同一实体暴露给
+  Actor 按需创建和使用实例；
+- module composition 创建 `A::Contract` 并与 Actor、`ConfluxSystem` 一起移动进 Conflux；
 - 移除该 Actor 路径的 erased dispatch、`ContractCatalog` 和 `IntegrationCatalog`；
 - 为真实多个实例实现 `ManagedClients<K, C>` 与 `ManagedConnections<K, C>`；固定角色可以
   使用显式 named struct，不引入跨类型 registry。
@@ -835,7 +802,7 @@ Contract client 或 application API，不能导入对方 services/private files�
 
 建议顺序：
 
-1. Risk：验证第一个业务 Contract 能复用抽象示例的 REST/View/Aeron 闭环；
+1. Risk：验证第一个业务 Contract 能复用最小 REST request/response pair；
 2. Market：验证高吞吐 source、freshness、gap/resync 和 publication backpressure；
 3. Account：验证 snapshot recovery、buffered replay、多 principal 和 persistence worker；
 4. Reference：验证 typed SQLite projection、transactional publication 和 provider refresh；
@@ -848,12 +815,10 @@ facade。
 
 ### 14.1 Compile-time
 
-- Contract operation request/response/error 不匹配时编译失败；
+- Contract REST request/response 不匹配时编译失败；
 - 每个 Actor 只能声明一个 owning `Contract`；
 - `Clients` 与 `Connections` 必须是 system 的完整静态 named list，system composition 缺少
   任何已集成类型的 required field 时编译失败；Actor 不能声明另一份局部类型目录；
-- required operation 未绑定或重复绑定时编译失败；
-- Contract view marker 与 value type 不匹配时编译失败；
 - source item 与 Actor target ingress 不匹配时编译失败；
 - Actor 无法访问 system resource universe 之外的 Contract/Integration 类型；
 - 迁移 Actor dispatch 无 `Any`/`TypeId`/downcast。
@@ -926,9 +891,9 @@ duplicate mutable state owners
 最终目标是：
 
 ```text
-每个进程以唯一 ManagedContract<OwnContract> 提供本 module 的完整对外服务；
-system Clients 全量集成所有其他 module Contract，Actor 按需创建每种 client 的命名实例；
-system Connections 全量集成所有 Integration connection，Actor 按需创建每种 connection 的命名实例；
+每个进程以唯一 concrete A::Contract 提供本 module 的完整对外服务；
+ConfluxSystem 以明确字段全量集成其他 module clients 和 Integration connections；
+Actor 按需创建每种 client/connection 的命名实例；
 Contract 定义 Kairos module 之间的闭合类型化协议；
 Integration 提供 module 与 provider 之间的 concrete capability；
 Application/Actor 拥有业务状态和不变量；

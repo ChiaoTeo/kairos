@@ -65,7 +65,7 @@ class Instrument:
     symbol: str
     instrument_type: str
     name: str | None = None
-    provider_product: str | None = None
+    product_family: str | None = None
     issuer_id: str | None = None
     share_class: str | None = None
     primary_currency_asset_id: str | None = None
