@@ -166,7 +166,13 @@ pub fn mark_span_error(span: &tracing::Span, code: &'static str, retryable: bool
 /// Install the process-wide structured logger. Repeated calls are harmless so
 /// tests and embedded callers can initialize logging without coordination.
 pub fn init(component: &'static str) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // SQLx slow-query events include the complete statement, which can turn a
+    // single schema operation into a multi-kilobyte log record. Production
+    // defaults keep actionable SQL errors while application-owned persistence
+    // events carry bounded operation names and durations. RUST_LOG can still
+    // opt into SQL diagnostics explicitly.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,sqlx::query=error"));
     let registry = tracing_subscriber::registry().with(filter);
     #[cfg(feature = "otel")]
     let _ = build_meter_provider(component);

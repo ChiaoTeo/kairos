@@ -12,6 +12,12 @@ from kairospy.application.system import (
     NativeCliApplication,
     SystemRuntimeSupervisor,
 )
+from kairospy.application.system.process_logging import (
+    current_run_id,
+    decode_log_event,
+    filter_log_lines,
+    parse_since,
+)
 from decimal import Decimal
 from decimal import InvalidOperation
 from kairospy.application.config import ConfigApplication
@@ -1243,6 +1249,19 @@ def system_logs(
     follow: bool = typer.Option(
         False, "-f", "--follow", help="Continue printing new output."
     ),
+    current_run: bool = typer.Option(
+        False, "--current-run", help="Show only the most recent process run."
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Show events since a duration (10m) or RFC3339 timestamp."
+    ),
+    level: str | None = typer.Option(None, "--level", help="Filter by log level."),
+    event_name: str | None = typer.Option(
+        None, "--event", help="Filter by structured event name."
+    ),
+    provider: str | None = typer.Option(
+        None, "--provider", help="Filter by provider field."
+    ),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
@@ -1274,37 +1293,71 @@ def system_logs(
         raise typer.BadParameter("--follow currently supports text output only")
     owner = WorkspaceApplication().open(workspace)
     path = owner.paths.logs / "processes" / f"{component}.log"
+    try:
+        since_time = parse_since(since)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="--since") from error
+    content = (
+        path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if path.is_file()
+        else []
+    )
+    selected_run_id = current_run_id(content) if current_run else None
+    filtered = filter_log_lines(
+        content,
+        level=level,
+        event_name=event_name,
+        provider=provider,
+        since=since_time,
+        run_id=selected_run_id,
+    )
+    visible = filtered[-lines:] if lines else []
     if effective_output(output) is OutputFormat.JSON:
         value = {
             "component": component,
             "path": str(path),
             "exists": path.is_file(),
-            "lines": path.read_text(encoding="utf-8", errors="replace").splitlines()[
-                -lines:
-            ]
-            if path.is_file() and lines
-            else [],
+            "run_id": selected_run_id,
+            "lines": visible,
         }
         _emit(value, output)
         return
-    if path.is_file() and lines:
-        typer.echo(
-            "\n".join(
-                path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
-            )
-        )
+    if path.is_file() and visible:
+        typer.echo("\n".join(visible))
     elif not path.is_file():
         typer.echo(f"log file does not exist: {path}")
     if not follow:
         return
     position = path.stat().st_size if path.is_file() else 0
+    inode = path.stat().st_ino if path.is_file() else None
     try:
         while True:
             if path.is_file():
+                current_stat = path.stat()
+                if inode != current_stat.st_ino or current_stat.st_size < position:
+                    position = 0
+                    inode = current_stat.st_ino
+                    selected_run_id = None
                 with path.open("r", encoding="utf-8", errors="replace") as stream:
                     stream.seek(position)
                     for line in stream:
-                        typer.echo(line.rstrip("\n"), color=False)
+                        rendered = line.rstrip("\n")
+                        value = decode_log_event(rendered)
+                        if (
+                            current_run
+                            and value is not None
+                            and value.get("event") == "process_spawned"
+                        ):
+                            selected_run_id = value.get("run_id")
+                        if filter_log_lines(
+                            [rendered],
+                            level=level,
+                            event_name=event_name,
+                            provider=provider,
+                            since=since_time,
+                            run_id=selected_run_id if current_run else None,
+                        ):
+                            typer.echo(rendered, color=False)
                     position = stream.tell()
             time.sleep(0.25)
     except KeyboardInterrupt:

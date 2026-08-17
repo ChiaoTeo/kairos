@@ -9,13 +9,13 @@ from __future__ import annotations
 import time
 import json
 import os
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from . import ComponentProcessApplication, SYSTEM_COMPONENTS
+from .process_logging import start_logged_process
 
 
 # Launch owns Account, Risk, Execution, and instance-local Market runtimes.
@@ -105,26 +105,19 @@ class SystemRuntimeSupervisor:
             except (OSError, ValueError):
                 pass
         log_dir = self.processes.workspace.paths.logs / "processes"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log = (log_dir / "system-supervisor.log").open("ab")
-        try:
-            subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "kairospy.bin.system_supervisor",
-                    "--workspace",
-                    str(self.processes.workspace.paths.root),
-                ],
-                cwd=str(self.processes.workspace.paths.root),
-                env={**os.environ, "KAIROS_SUPERVISOR_CHILD": "1"},
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                close_fds=True,
-            )
-        finally:
-            log.close()
+        start_logged_process(
+            [
+                sys.executable,
+                "-m",
+                "kairospy.bin.system_supervisor",
+                "--workspace",
+                str(self.processes.workspace.paths.root),
+            ],
+            component="system-supervisor",
+            log_path=log_dir / "system-supervisor.log",
+            cwd=str(self.processes.workspace.paths.root),
+            environment={**os.environ, "KAIROS_SUPERVISOR_CHILD": "1"},
+        )
 
     def reconcile_once(self) -> dict[str, dict[str, Any]]:
         statuses = self.processes.list_status()

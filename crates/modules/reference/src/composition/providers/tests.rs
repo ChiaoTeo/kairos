@@ -713,6 +713,46 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
 }
 
 #[test]
+fn massive_same_ticker_on_distinct_venues_has_distinct_market_data_accesses() {
+    let equity = |venue: &str| ExternalInstrument {
+        source_symbol: ProviderSymbol::new("BCPC").unwrap(),
+        source_venue: Some(venue.into()),
+        kind: ExternalInstrumentKind::Equity,
+        base_currency: None,
+        quote_currency: Some(Currency::new("USD").unwrap()),
+        settlement_currency: None,
+        underlying: None,
+        expiry_unix_nanos: None,
+        strike: None,
+        option_right: None,
+        active: true,
+        price_tick: Some("0.01".into()),
+        quantity_tick: Some("1".into()),
+        minimum_quantity: None,
+        minimum_notional: None,
+        contract_value: Some("1".into()),
+        price_precision: Some(2),
+        quantity_precision: Some(0),
+    };
+    let catalog = massive_provider_catalog(ExternalInstrumentCatalog {
+        participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
+        instruments: vec![equity("XNAS"), equity("XNYS")],
+    })
+    .unwrap();
+
+    assert_eq!(catalog.markets.len(), 2);
+    assert_eq!(catalog.market_data_accesses.len(), 2);
+    let ids = catalog
+        .market_data_accesses
+        .iter()
+        .map(|access| access.access_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains("market-data-access:massive:market:exchange:nasdaq:equity:BCPC"));
+    assert!(ids.contains("market-data-access:massive:market:exchange:nyse:equity:BCPC"));
+}
+
+#[test]
 fn hyperliquid_provider_facts_receive_canonical_identity_only_in_reference() {
     let catalog = hyperliquid_provider_catalog(
         ExternalInstrumentCatalog {

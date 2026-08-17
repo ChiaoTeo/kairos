@@ -84,6 +84,15 @@ impl MassiveOptionsCoverageSource {
             return Ok(());
         }
         let key = Self::scope_key(&underlying);
+        if self.sync_store.prepare_projection(&key).await? {
+            tracing::info!(
+                event = "reference_provider_projection_reset",
+                component = "reference",
+                provider = %key,
+                projection_version = crate::services::sqlx_storage::PROVIDER_PROJECTION_VERSION,
+                "unfinished provider scan was reset for the current canonical projection"
+            );
+        }
         let (cursor, accumulated) = self
             .sync_store
             .load_state(&key)
@@ -218,6 +227,15 @@ impl MassiveEquitySource {
             return Err(ReferenceError::Persistence(
                 "production Massive equity ingestion requires normalized SQLite promotion".into(),
             ));
+        }
+        if sync_store.prepare_projection("massive-equity").await? {
+            tracing::info!(
+                event = "reference_provider_projection_reset",
+                component = "reference",
+                provider = "massive-equity",
+                projection_version = crate::services::sqlx_storage::PROVIDER_PROJECTION_VERSION,
+                "unfinished provider scan was reset for the current canonical projection"
+            );
         }
         let (cursor, accumulated) = sync_store
             .load_state("massive-equity")

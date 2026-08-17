@@ -203,3 +203,11 @@ CREATE TABLE IF NOT EXISTS reference_provider_sync (
     cursor TEXT,
     updated_at_unix_nanos INTEGER NOT NULL
 ) WITHOUT ROWID;
+
+-- Normalized pages contain canonical IDs, so unfinished scans must be
+-- restarted when those identity rules change. This version is independent
+-- from the public catalog schema and never invalidates committed records.
+CREATE TABLE IF NOT EXISTS reference_provider_projection_version (
+    provider TEXT PRIMARY KEY,
+    version INTEGER NOT NULL
+) WITHOUT ROWID;

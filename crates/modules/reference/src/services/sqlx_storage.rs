@@ -15,6 +15,7 @@ use crate::domain::{
 };
 
 const LIFECYCLE_LIMIT: i64 = 4096;
+pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 2;
 
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(test, allow(dead_code))]
@@ -466,6 +467,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn projection_version_change_restarts_only_unfinished_provider_scan() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let page = ProviderCatalog {
+            markets: vec![crate::domain::Market {
+                market_id: kairos_primitives::MarketId::new("market:massive:equity:BCPC").unwrap(),
+                status: "active".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        store
+            .append_staged_page("massive-equity", Some("cursor-2"), &page)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO reference_provider_records(provider,record_kind,record_id,payload) VALUES ('massive-equity','entity','committed','{}')")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        assert!(store.prepare_projection("massive-equity").await.unwrap());
+        assert!(store
+            .staged_pages("massive-equity")
+            .await
+            .unwrap()
+            .is_empty());
+        let (cursor, _) = store.load_state("massive-equity").await.unwrap().unwrap();
+        assert!(cursor.is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM reference_provider_records WHERE provider='massive-equity'",
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert!(!store.prepare_projection("massive-equity").await.unwrap());
+    }
+
+    #[tokio::test]
     async fn provider_last_good_is_stored_as_normalized_source_facts() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
@@ -862,6 +905,52 @@ impl SqlxProviderSyncStore {
 impl SqlxProviderSyncStore {
     pub(crate) fn supports_normalized_promotion(&self) -> bool {
         self.normalized_promotion
+    }
+
+    /// Prepare an incremental provider scan for the current canonical
+    /// projection. A version change discards only unfinished normalized pages
+    /// and their cursor; committed records remain authoritative until the new
+    /// scan is complete and atomically promoted.
+    pub(crate) async fn prepare_projection(&mut self, provider: &str) -> ReferenceResult<bool> {
+        if !self.normalized_promotion {
+            return Ok(false);
+        }
+        let provider = provider.to_owned();
+        self.run(|pool| async move {
+            let mut tx = pool.begin().await?;
+            let previous = sqlx::query_scalar::<_, i64>(
+                "SELECT version FROM reference_provider_projection_version WHERE provider = ?",
+            )
+            .bind(&provider)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let reset = previous != Some(PROVIDER_PROJECTION_VERSION);
+            if reset {
+                sqlx::query("DELETE FROM reference_provider_staging WHERE provider = ?")
+                    .bind(&provider)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query(
+                    "DELETE FROM reference_provider_pending_promotion WHERE provider = ?",
+                )
+                .bind(&provider)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query("UPDATE reference_provider_sync SET cursor = NULL, updated_at_unix_nanos = ? WHERE provider = ?")
+                    .bind(crate::domain::unix_nanos().get() as i64)
+                    .bind(&provider)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("INSERT INTO reference_provider_projection_version(provider,version) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET version=excluded.version")
+                    .bind(&provider)
+                    .bind(PROVIDER_PROJECTION_VERSION)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            Ok(reset)
+        })
+        .await
     }
 
     pub(crate) async fn load_state(

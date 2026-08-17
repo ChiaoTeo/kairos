@@ -109,11 +109,10 @@ fn populate_market_data_accesses(
             .market_data_accesses
             .push(crate::domain::MarketDataAccess {
                 source_id: None,
-                access_id: format!(
-                    "market-data-access:{provider}:{}:{}",
-                    market.market_type,
-                    market.source_symbol.as_str().to_ascii_lowercase()
-                ),
+                // A provider symbol is not a market identity. Massive may
+                // expose the same ticker on more than one venue, so bind the
+                // provider access to the canonical Market it observes.
+                access_id: format!("market-data-access:{provider}:{}", market.market_id),
                 market_id: market.market_id.clone(),
                 provider_id: provider_id.clone(),
                 provider_product: market.market_type.clone(),

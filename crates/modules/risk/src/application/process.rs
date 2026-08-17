@@ -429,7 +429,13 @@ async fn risk_http_handler(
         span.record("error_code", "control.request_rejected");
         span.record("retryable", false);
     }
-    tracing::info!(parent: &span, event = "control_request_completed", component = "risk", duration_ms, result = if response.status().is_success() { "accepted" } else { "rejected" }, "risk control request completed");
+    if path == HEALTH_PATH && response.status().is_success() {
+        tracing::debug!(parent: &span, event = "control_request_completed", component = "risk", duration_ms, result = "accepted", "risk health request completed");
+    } else if response.status().is_success() {
+        tracing::info!(parent: &span, event = "control_request_completed", component = "risk", duration_ms, result = "accepted", "risk control request completed");
+    } else {
+        tracing::warn!(parent: &span, event = "control_request_completed", component = "risk", duration_ms, result = "rejected", "risk control request failed");
+    }
     response
 }
 

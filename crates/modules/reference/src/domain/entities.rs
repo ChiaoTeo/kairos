@@ -420,9 +420,10 @@ impl ProviderCatalog {
                     return Err(ReferenceError::Invalid(format!("{label} id is empty")));
                 }
                 if !ids.insert(id) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "duplicate {label} id: {id}"
-                    )));
+                    return Err(ReferenceError::DuplicateId {
+                        record_kind: label.to_owned(),
+                        record_id: id.to_owned(),
+                    });
                 }
             }
             Ok(())

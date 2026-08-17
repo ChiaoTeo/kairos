@@ -25,6 +25,7 @@ from .clients import (
 from .reference import ReferenceProcessConfig
 from .binaries import reject_owned_options, resolve_binary
 from .risk import RiskProcessConfig
+from .process_logging import start_logged_process
 
 
 SYSTEM_COMPONENTS = ("reference", "market", "account", "risk", "execution")
@@ -214,21 +215,17 @@ class ComponentProcessApplication:
             if runtime is not None
             else self.workspace.paths.logs / "processes"
         )
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log = (log_dir / f"{component}.log").open("ab")
-        startup_log_offset = log.tell()
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(self.workspace.paths.root),
-                env={**os.environ, **extra_environment},
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                close_fds=True,
-            )
-        finally:
-            log.close()
+        log_path = log_dir / f"{component}.log"
+        # Each process run gets a fresh active JSONL file; previous runs are
+        # retained by the rotating sink as numbered backups.
+        startup_log_offset = 0
+        process = start_logged_process(
+            command,
+            component=component,
+            log_path=log_path,
+            cwd=str(self.workspace.paths.root),
+            environment={**os.environ, **extra_environment},
+        )
         recovery_command = (
             f"kairos launch artifacts {runtime.launch_id} "
             f"--instance {runtime.instance_id} --workspace {self.workspace.paths.project_root}"
@@ -239,7 +236,7 @@ class ComponentProcessApplication:
             component,
             control,
             process=process,
-            log_path=log_dir / f"{component}.log",
+            log_path=log_path,
             initial_log_offset=startup_log_offset,
             stream_logs=stream_startup_logs and component == "reference",
             recovery_command=recovery_command,
@@ -262,26 +259,19 @@ class ComponentProcessApplication:
         aeron_dir = self.workspace.paths.aeron_dir()
         aeron_dir.mkdir(parents=True, exist_ok=True)
         log_dir = self.workspace.paths.logs / "processes"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log = (log_dir / "aeron.log").open("ab")
-        try:
-            subprocess.Popen(
-                [
-                    binary,
-                    "--aeron-dir",
-                    str(aeron_dir),
-                    "--health-file",
-                    str(health_file),
-                ],
-                cwd=str(self.workspace.paths.root),
-                env=os.environ.copy(),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                close_fds=True,
-            )
-        finally:
-            log.close()
+        start_logged_process(
+            [
+                binary,
+                "--aeron-dir",
+                str(aeron_dir),
+                "--health-file",
+                str(health_file),
+            ],
+            component="aeron",
+            log_path=log_dir / "aeron.log",
+            cwd=str(self.workspace.paths.root),
+            environment=os.environ.copy(),
+        )
 
         deadline = time.monotonic() + self.ready_timeout
         while time.monotonic() < deadline:

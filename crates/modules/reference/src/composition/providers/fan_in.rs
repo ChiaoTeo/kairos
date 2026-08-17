@@ -376,20 +376,26 @@ where
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(
-                        event = "reference_provider_degraded",
-                        component = "reference",
-                        provider = %source_id,
-                        error = %error,
-                        "reference refresh retained normalized last-known-good facts"
-                    );
-                    self.mark_failure(&source_id, "stale");
                     let has_last_good = self
                         .sync_store
                         .as_mut()
                         .expect("store checked")
                         .has_last_good(&source_id)
                         .await?;
+                    self.mark_failure(&source_id, has_last_good);
+                    let (record_kind, record_id) = error.record_identity().unwrap_or(("", ""));
+                    tracing::warn!(
+                        event = if has_last_good { "reference_provider_degraded" } else { "reference_provider_unavailable" },
+                        component = "reference",
+                        provider = %source_id,
+                        error_code = error.code(),
+                        retryable = error.retryable(),
+                        record_kind,
+                        record_id,
+                        fallback = if has_last_good { "last_known_good" } else { "none" },
+                        error = %error,
+                        "reference provider refresh failed"
+                    );
                     if !has_last_good {
                         unavailable.push(source_id);
                     }
@@ -559,7 +565,7 @@ where
                     }
                     Err(error) => {
                         failures.push(format!("{source_id}: {error}"));
-                        self.mark_failure(&source_id, "stale");
+                        self.mark_failure(&source_id, self.last_good.contains_key(&source_id));
                         let Some(catalog) = self.last_good.get(&source_id) else {
                             unavailable_without_last_good.push(source_id.clone());
                             continue;
@@ -738,7 +744,13 @@ where
                     Ok(None)
                 }
                 Err(error) => {
-                    self.mark_failure(source_id, "failed");
+                    let has_last_good = self
+                        .sync_store
+                        .as_mut()
+                        .expect("normalized source has a store")
+                        .has_last_good(source_id)
+                        .await?;
+                    self.mark_failure(source_id, has_last_good);
                     Err(error)
                 }
             };
@@ -813,7 +825,7 @@ where
                     result
                 }
                 Err(error) => {
-                    self.mark_failure(source_id, "failed");
+                    self.mark_failure(source_id, self.last_good.contains_key(source_id));
                     #[cfg(not(test))]
                     self.last_good.clear();
                     Err(error)
@@ -996,7 +1008,7 @@ where
         }
     }
 
-    fn mark_failure(&mut self, source_id: &str, status: &str) {
+    fn mark_failure(&mut self, source_id: &str, has_last_good: bool) {
         let health = self
             .health
             .entry(source_id.to_owned())
@@ -1008,14 +1020,17 @@ where
                 consecutive_failures: 0,
                 stale: false,
             });
-        health.status = if self.known_last_good.contains(source_id) {
+        if has_last_good {
+            self.known_last_good.insert(source_id.to_owned());
+        }
+        health.status = if has_last_good {
             "stale"
         } else {
-            status
+            "unavailable"
         }
         .into();
         health.consecutive_failures = health.consecutive_failures.saturating_add(1);
-        health.stale = self.known_last_good.contains(source_id);
+        health.stale = has_last_good;
         let backoff_seconds = 5u64.saturating_mul(1u64 << health.consecutive_failures.min(6));
         if let Some(worker) = self
             .workers

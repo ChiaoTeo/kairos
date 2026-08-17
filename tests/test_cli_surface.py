@@ -460,7 +460,7 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["launch", "--help"], ("targets", "diagnose", "replay", "instance")),
         (
             ["reference", "--help"],
-                ("health", "catalog", "assets", "listings", "markets"),
+            ("health", "catalog", "assets", "listings", "markets"),
         ),
         (["system", "--help"], ("account", "restart", "list")),
     ):
@@ -705,6 +705,56 @@ def test_system_logs_rejects_conflicting_component_values() -> None:
         != 0
     )
     assert "specified twice with different values" in output.getvalue()
+
+
+def test_system_logs_filters_current_structured_run(tmp_path) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    log = workspace.paths.logs / "processes" / "reference.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    values = [
+        {
+            "event": "reference_provider_unavailable",
+            "level": "WARN",
+            "provider": "massive-equity",
+            "run_id": "old",
+        },
+        {"event": "process_spawned", "level": "INFO", "run_id": "new"},
+        {
+            "event": "reference_provider_unavailable",
+            "level": "WARN",
+            "provider": "massive-equity",
+            "run_id": "new",
+        },
+        {"event": "reference_refresh_completed", "level": "INFO", "run_id": "new"},
+    ]
+    log.write_text("\n".join(json.dumps(value) for value in values) + "\n")
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "system",
+                "logs",
+                "--component",
+                "reference",
+                "--current-run",
+                "--level",
+                "warn",
+                "--provider",
+                "massive-equity",
+                "--workspace",
+                str(tmp_path / "demo"),
+                "--format",
+                "text",
+            ],
+            output,
+        )
+        == 0
+    )
+    rendered = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert rendered == [values[2]]
 
 
 def test_system_doctor_reports_stale_health_pid(tmp_path) -> None:
