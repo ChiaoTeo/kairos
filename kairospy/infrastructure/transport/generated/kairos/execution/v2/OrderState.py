@@ -88,57 +88,71 @@ class OrderState(object):
         return None
 
     # OrderState
-    def ExecutionAccessId(self):
+    def ExecutionRouteId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # OrderState
-    def RemoteOrderId(self):
+    def SelectedRoute(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.execution.v2.SelectedExecutionRoute import SelectedExecutionRoute
+            obj = SelectedExecutionRoute()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # OrderState
+    def Attempts(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.execution.v2.ExecutionAttempt import ExecutionAttempt
+            obj = ExecutionAttempt()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # OrderState
+    def AttemptsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # OrderState
+    def AttemptsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        return o == 0
+
+    # OrderState
+    def RemoteOrderId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # OrderState
     def Side(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # OrderState
     def OrderType(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # OrderState
     def Quantity(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
-        if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # OrderState
-    def FilledQuantity(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
-        if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # OrderState
-    def LimitPrice(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
         if o != 0:
             x = o + self._tab.Pos
@@ -149,7 +163,7 @@ class OrderState(object):
         return None
 
     # OrderState
-    def AverageFillPrice(self):
+    def FilledQuantity(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             x = o + self._tab.Pos
@@ -160,42 +174,64 @@ class OrderState(object):
         return None
 
     # OrderState
-    def Lifecycle(self):
+    def LimitPrice(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # OrderState
+    def AverageFillPrice(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # OrderState
+    def Lifecycle(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # OrderState
     def CreatedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return 0
-
-    # OrderState
-    def SubmittedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return None
-
-    # OrderState
-    def UpdatedAtUnixNanos(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # OrderState
-    def Reason(self):
+    def SubmittedAtUnixNanos(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return None
+
+    # OrderState
+    def UpdatedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # OrderState
+    def Reason(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(50))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def OrderStateStart(builder):
-    builder.StartObject(22)
+    builder.StartObject(24)
 
 def Start(builder):
     OrderStateStart(builder)
@@ -254,80 +290,98 @@ def OrderStateAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     OrderStateAddMarketId(builder, marketId)
 
-def OrderStateAddExecutionAccessId(builder, executionAccessId):
-    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(executionAccessId), 0)
+def OrderStateAddExecutionRouteId(builder, executionRouteId):
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(executionRouteId), 0)
 
-def AddExecutionAccessId(builder, executionAccessId):
-    OrderStateAddExecutionAccessId(builder, executionAccessId)
+def AddExecutionRouteId(builder, executionRouteId):
+    OrderStateAddExecutionRouteId(builder, executionRouteId)
+
+def OrderStateAddSelectedRoute(builder, selectedRoute):
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(selectedRoute), 0)
+
+def AddSelectedRoute(builder, selectedRoute):
+    OrderStateAddSelectedRoute(builder, selectedRoute)
+
+def OrderStateAddAttempts(builder, attempts):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(attempts), 0)
+
+def AddAttempts(builder, attempts):
+    OrderStateAddAttempts(builder, attempts)
+
+def OrderStateStartAttemptsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartAttemptsVector(builder, numElems):
+    return OrderStateStartAttemptsVector(builder, numElems)
 
 def OrderStateAddRemoteOrderId(builder, remoteOrderId):
-    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
+    builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
 
 def AddRemoteOrderId(builder, remoteOrderId):
     OrderStateAddRemoteOrderId(builder, remoteOrderId)
 
 def OrderStateAddSide(builder, side):
-    builder.PrependUint8Slot(11, side, 0)
+    builder.PrependUint8Slot(13, side, 0)
 
 def AddSide(builder, side):
     OrderStateAddSide(builder, side)
 
 def OrderStateAddOrderType(builder, orderType):
-    builder.PrependUint8Slot(12, orderType, 0)
+    builder.PrependUint8Slot(14, orderType, 0)
 
 def AddOrderType(builder, orderType):
     OrderStateAddOrderType(builder, orderType)
 
 def OrderStateAddQuantity(builder, quantity):
-    builder.PrependStructSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
+    builder.PrependStructSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
 
 def AddQuantity(builder, quantity):
     OrderStateAddQuantity(builder, quantity)
 
 def OrderStateAddFilledQuantity(builder, filledQuantity):
-    builder.PrependStructSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(filledQuantity), 0)
+    builder.PrependStructSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(filledQuantity), 0)
 
 def AddFilledQuantity(builder, filledQuantity):
     OrderStateAddFilledQuantity(builder, filledQuantity)
 
 def OrderStateAddLimitPrice(builder, limitPrice):
-    builder.PrependStructSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(limitPrice), 0)
+    builder.PrependStructSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(limitPrice), 0)
 
 def AddLimitPrice(builder, limitPrice):
     OrderStateAddLimitPrice(builder, limitPrice)
 
 def OrderStateAddAverageFillPrice(builder, averageFillPrice):
-    builder.PrependStructSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(averageFillPrice), 0)
+    builder.PrependStructSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(averageFillPrice), 0)
 
 def AddAverageFillPrice(builder, averageFillPrice):
     OrderStateAddAverageFillPrice(builder, averageFillPrice)
 
 def OrderStateAddLifecycle(builder, lifecycle):
-    builder.PrependUint8Slot(17, lifecycle, 0)
+    builder.PrependUint8Slot(19, lifecycle, 0)
 
 def AddLifecycle(builder, lifecycle):
     OrderStateAddLifecycle(builder, lifecycle)
 
 def OrderStateAddCreatedAtUnixNanos(builder, createdAtUnixNanos):
-    builder.PrependUint64Slot(18, createdAtUnixNanos, 0)
+    builder.PrependUint64Slot(20, createdAtUnixNanos, 0)
 
 def AddCreatedAtUnixNanos(builder, createdAtUnixNanos):
     OrderStateAddCreatedAtUnixNanos(builder, createdAtUnixNanos)
 
 def OrderStateAddSubmittedAtUnixNanos(builder, submittedAtUnixNanos):
-    builder.PrependUint64Slot(19, submittedAtUnixNanos, None)
+    builder.PrependUint64Slot(21, submittedAtUnixNanos, None)
 
 def AddSubmittedAtUnixNanos(builder, submittedAtUnixNanos):
     OrderStateAddSubmittedAtUnixNanos(builder, submittedAtUnixNanos)
 
 def OrderStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
-    builder.PrependUint64Slot(20, updatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(22, updatedAtUnixNanos, 0)
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     OrderStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)
 
 def OrderStateAddReason(builder, reason):
-    builder.PrependUOffsetTRelativeSlot(21, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
+    builder.PrependUOffsetTRelativeSlot(23, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
 
 def AddReason(builder, reason):
     OrderStateAddReason(builder, reason)

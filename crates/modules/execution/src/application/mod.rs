@@ -7,7 +7,7 @@ pub use crate::domain::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy, ExecutionFill,
     ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
     IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, OrderCommitment, OrderSide,
-    OrderType, RiskReservationSagaStatus, SplitOrderPolicy,
+    OrderType, RiskReservationSagaStatus, SelectedExecutionRoute, SplitOrderPolicy,
 };
 pub use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 pub use backtest::{
@@ -20,10 +20,11 @@ pub(crate) use model::remote_status;
 pub use model::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,
     ExecutionBusinessChange, ExecutionBusinessEvent, ExecutionCurrentView, ExecutionError,
-    ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionSnapshot, ExpireIntent,
-    HedgeRequirement, IntentEvent, IntentLegRequest, IntentState, IntentStatus, QuoteObservation,
-    RefreshQuoteIntent, RemoteOrder, RemoteOrderQuery, ReplaceOrder, RiskAuthorizationContext,
-    RiskCommandFailure, RiskCommandResult, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
+    ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionRouteCandidate,
+    ExecutionRouteQuery, ExecutionSnapshot, ExpireIntent, HedgeRequirement, IntentEvent,
+    IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
+    RemoteOrderQuery, ReplaceOrder, RiskAuthorizationContext, RiskCommandFailure,
+    RiskCommandResult, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,
 };
 pub(crate) use process::{ExecutionAsyncRoute, ExecutionProcess};

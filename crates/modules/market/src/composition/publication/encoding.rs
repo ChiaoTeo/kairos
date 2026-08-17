@@ -84,6 +84,40 @@ fn strings<'a, A: flatbuffers::Allocator + 'a>(
     )
 }
 
+fn observation_scope<'a, A: flatbuffers::Allocator + 'a>(
+    builder: &mut FlatBufferBuilder<'a, A>,
+    value: &crate::ObservationScope,
+) -> flatbuffers::WIPOffset<fb::ObservationScope<'a>> {
+    let (kind, market_id, instrument_id, network_id) = match value {
+        crate::ObservationScope::Market { market_id } => (
+            fb::ObservationScopeKind::MARKET,
+            Some(builder.create_string(market_id.as_str())),
+            None,
+            None,
+        ),
+        crate::ObservationScope::Consolidated {
+            instrument_id,
+            network_id,
+        } => (
+            fb::ObservationScopeKind::CONSOLIDATED,
+            None,
+            Some(builder.create_string(instrument_id.as_str())),
+            network_id
+                .as_deref()
+                .map(|value| builder.create_string(value)),
+        ),
+    };
+    fb::ObservationScope::create(
+        builder,
+        &fb::ObservationScopeArgs {
+            kind,
+            market_id,
+            instrument_id,
+            network_id,
+        },
+    )
+}
+
 fn finish_event<'a, T, A, F>(
     builder: &mut FlatBufferBuilder<'a, A>,
     metadata: flatbuffers::WIPOffset<
@@ -118,27 +152,39 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (market_id, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, source_id) = strings(
                 &mut b,
-                &value.market_id,
+                &value.scope.key(),
                 &value.instrument_id,
                 &value.source_id,
             );
+            let scope = observation_scope(&mut b, &value.scope);
             let bid_price = value.bid_price.map(dec);
             let bid_quantity = value.bid_quantity.map(dec);
             let ask_price = value.ask_price.map(dec);
             let ask_quantity = value.ask_quantity.map(dec);
+            let bid_venue_code = value
+                .bid_venue_code
+                .as_deref()
+                .map(|value| b.create_string(value));
+            let ask_venue_code = value
+                .ask_venue_code
+                .as_deref()
+                .map(|value| b.create_string(value));
             let payload = fb::Quote::create(
                 &mut b,
                 &fb::QuoteArgs {
                     quote_id: None,
-                    market_id: Some(market_id),
+                    scope: Some(scope),
                     instrument_id: Some(instrument_id),
                     source_id: Some(source_id),
                     bid_price: bid_price.as_ref(),
                     bid_quantity: bid_quantity.as_ref(),
                     ask_price: ask_price.as_ref(),
                     ask_quantity: ask_quantity.as_ref(),
+                    bid_venue_code,
+                    ask_venue_code,
+                    tape: value.tape.unwrap_or_default(),
                     source_observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
                     received_at_unix_nanos: 0,
                 },
@@ -166,25 +212,41 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (market_id, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, source_id) = strings(
                 &mut b,
-                &value.market_id,
+                &value.scope.key(),
                 &value.instrument_id,
                 &value.source_id,
             );
+            let scope = observation_scope(&mut b, &value.scope);
             let price = dec(value.price);
             let quantity = dec(value.quantity);
             let trade_id = value.trade_id.as_deref().map(|v| b.create_string(v));
+            let venue_code = value
+                .venue_code
+                .as_deref()
+                .map(|value| b.create_string(value));
             let payload = fb::Trade::create(
                 &mut b,
                 &fb::TradeArgs {
                     trade_id,
-                    market_id: Some(market_id),
+                    scope: Some(scope),
                     instrument_id: Some(instrument_id),
                     source_id: Some(source_id),
                     price: Some(&price),
                     quantity: Some(&quantity),
                     aggressor_side: side(value.aggressor_side.as_deref()),
+                    venue_code,
+                    tape: value.tape.unwrap_or_default(),
+                    trf_id: value.trf_id.unwrap_or_default(),
+                    participant_timestamp_unix_nanos: value
+                        .participant_timestamp_unix_nanos
+                        .map(|value| value.get())
+                        .unwrap_or_default(),
+                    trf_timestamp_unix_nanos: value
+                        .trf_timestamp_unix_nanos
+                        .map(|value| value.get())
+                        .unwrap_or_default(),
                     source_observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
                     received_at_unix_nanos: 0,
                 },
@@ -214,12 +276,13 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (market_id, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, source_id) = strings(
                 &mut b,
-                &value.market_id,
+                &value.scope.key(),
                 &value.instrument_id,
                 &value.source_id,
             );
+            let scope = observation_scope(&mut b, &value.scope);
             let spec = b.create_string(&value.timeframe);
             let derivation = value.derivation.as_str();
             let open = dec(value.open);
@@ -230,7 +293,7 @@ fn encode_observation(
             let payload = fb::Bar::create(
                 &mut b,
                 &fb::BarArgs {
-                    market_id: Some(market_id),
+                    scope: Some(scope),
                     instrument_id: Some(instrument_id),
                     source_id: Some(source_id),
                     bar_spec_id: Some(spec),
@@ -269,12 +332,13 @@ fn encode_observation(
                 &context(actor_id, identity, sequence),
                 value.observed_at_unix_nanos.get(),
             );
-            let (market_id, instrument_id, source_id) = strings(
+            let (_scope_key, instrument_id, source_id) = strings(
                 &mut b,
-                &value.market_id,
+                &value.scope.key(),
                 &value.instrument_id,
                 &value.source_id,
             );
+            let scope = observation_scope(&mut b, &value.scope);
             let strike = value.strike.map(dec);
             let delta = value.delta.map(dec);
             let gamma = value.gamma.map(dec);
@@ -285,7 +349,7 @@ fn encode_observation(
             let payload = fb::Greeks::create(
                 &mut b,
                 &fb::GreeksArgs {
-                    market_id: Some(market_id),
+                    scope: Some(scope),
                     instrument_id: Some(instrument_id),
                     source_id: Some(source_id),
                     expiry_unix_nanos: value.expiry_unix_nanos.map(|v| v.get()),
@@ -362,12 +426,13 @@ fn encode_rate(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let rate_id = b.create_string(&value.rate_id);
     let basis = b.create_string(&value.basis);
     let rate = dec(value.value);
@@ -376,7 +441,7 @@ fn encode_rate(
         &mut b,
         &fb::RateArgs {
             rate_id: Some(rate_id),
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             basis: Some(basis),
@@ -415,12 +480,13 @@ fn encode_ticker(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let lp = value.last_price.map(dec);
     let bp = value.bid_price.map(dec);
     let bq = value.bid_quantity.map(dec);
@@ -438,7 +504,7 @@ fn encode_ticker(
     let payload = fb::Ticker24h::create(
         &mut b,
         &fb::Ticker24hArgs {
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             last_price: lp.as_ref(),
@@ -488,12 +554,13 @@ fn encode_mark_price(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let mark = dec(value.mark_price);
     let index = value.index_price.map(dec);
     let settlement = value.estimated_settlement_price.map(dec);
@@ -501,7 +568,7 @@ fn encode_mark_price(
     let payload = fb::MarkPrice::create(
         &mut b,
         &fb::MarkPriceArgs {
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             mark_price: Some(&mark),
@@ -542,17 +609,18 @@ fn encode_funding(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let rate = dec(value.funding_rate);
     let payload = fb::FundingRate::create(
         &mut b,
         &fb::FundingRateArgs {
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             funding_rate: Some(&rate),
@@ -591,12 +659,13 @@ fn encode_open_interest(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let contracts = dec(value.contracts);
     let q = value.quote_value.map(dec);
     let c = value.change_24h.map(dec);
@@ -604,7 +673,7 @@ fn encode_open_interest(
     let payload = fb::OpenInterest::create(
         &mut b,
         &fb::OpenInterestArgs {
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             contracts: Some(&contracts),
@@ -644,12 +713,13 @@ fn encode_index_price(
         &context(actor_id, identity, sequence),
         value.observed_at_unix_nanos.get(),
     );
-    let (market_id, instrument_id, source_id) = strings(
+    let (_scope_key, instrument_id, source_id) = strings(
         &mut b,
-        &value.market_id,
+        &value.scope.key(),
         &value.instrument_id,
         &value.source_id,
     );
+    let scope = observation_scope(&mut b, &value.scope);
     let spot = value.spot_index_price.map(dec);
     let contract = value.contract_index_price.map(dec);
     let index = value.index_price.map(dec);
@@ -657,7 +727,7 @@ fn encode_index_price(
     let payload = fb::IndexPrice::create(
         &mut b,
         &fb::IndexPriceArgs {
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             spot_index_price: spot.as_ref(),
@@ -912,20 +982,21 @@ mod tests {
     use crate::domain::events::MarketEvent;
     use crate::domain::observation::{Quote, Rate};
     use kairos_market_contract::event::decode_event;
-    use kairos_primitives::{
-        InstrumentId, MarketId, Price, Quantity, Rate as FixedRate, UnixNanos,
-    };
+    use kairos_primitives::{InstrumentId, Price, Quantity, Rate as FixedRate, UnixNanos};
     use kairos_protocol::InstanceIdentity;
 
     #[test]
     fn quote_event_is_a_v2_root() {
         let quote = Quote {
-            market_id: MarketId::new("market:btc").unwrap(),
+            scope: crate::ObservationScope::market("market:btc").unwrap(),
             instrument_id: InstrumentId::new("instrument:btc").unwrap(),
             bid_price: Some("1".parse::<Price>().unwrap()),
             bid_quantity: Some("2".parse::<Quantity>().unwrap()),
             ask_price: None,
             ask_quantity: None,
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: None,
             observed_at_unix_nanos: UnixNanos::new(7),
             source_id: "source".into(),
         };
@@ -944,7 +1015,7 @@ mod tests {
     fn rate_event_is_a_v2_root() {
         let rate = Rate {
             rate_id: "funding".into(),
-            market_id: MarketId::new("market:btc").unwrap(),
+            scope: crate::ObservationScope::market("market:btc").unwrap(),
             instrument_id: InstrumentId::new("instrument:btc").unwrap(),
             basis: "annualized".into(),
             value: "0.01".parse::<FixedRate>().unwrap(),

@@ -33,7 +33,7 @@ impl MarketActor {
         }
         for freshness in self.freshness.values_mut().filter(|freshness| {
             freshness.source_id.eq_ignore_ascii_case(source_id.as_str())
-                && freshness.market_id == *market_id
+                && freshness.scope.market_id() == Some(market_id)
                 && freshness.data_kind == ObservationKind::OrderBook
         }) {
             freshness.status = DataFreshnessStatus::Stale;

@@ -5,3 +5,4 @@ pub(crate) mod persistence_worker;
 pub(crate) mod refresh;
 pub(crate) mod runtime;
 pub(crate) mod settlement;
+pub(crate) mod synchronization;

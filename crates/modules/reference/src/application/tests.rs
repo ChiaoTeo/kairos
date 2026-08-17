@@ -131,13 +131,12 @@ fn provider_catalog() -> ProviderCatalog {
         }],
         markets: vec![Market {
             market_id: market_id("market:binance:spot:BTCUSDT"),
-            market_key: "binance.spot.BTCUSDT".into(),
             instrument_id: instrument_id("instrument:spot:BTC"),
             listing_id: Some(listing_id("listing:binance:spot:BTC:USDT")),
             exchange_id: Exchange::new("exchange:binance").unwrap(),
-            market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            instrument_kind: kairos_primitives::InstrumentKind::Spot,
             asset_type: Some(kairos_primitives::AssetClass::Crypto),
-            source_symbol: symbol("BTCUSDT"),
+            venue_symbol: Some(symbol("BTCUSDT")),
             base_asset_id: Some(asset_id("asset:BTC")),
             quote_asset_id: Some(asset_id("asset:USDT")),
             status: "active".into(),
@@ -162,7 +161,6 @@ fn one_listing_can_back_multiple_markets_on_different_exchanges() {
     });
     let mut iex_market = catalog.markets[0].clone();
     iex_market.market_id = market_id("market:iex:spot:BTCUSDT");
-    iex_market.market_key = "iex.spot.BTCUSDT".into();
     iex_market.exchange_id = Exchange::new("exchange:iex").unwrap();
     catalog.markets.push(iex_market);
 
@@ -187,9 +185,9 @@ async fn application_exposes_read_only_market_queries() {
 
     let query = MarketQuery {
         exchange_id: Some(Exchange::new("exchange:binance").unwrap()),
-        market_type: Some("spot".into()),
+        instrument_kind: Some(kairos_primitives::InstrumentKind::Spot),
         asset_type: Some("crypto".into()),
-        source_symbol: Some(kairos_primitives::Symbol::new("btcusdt").unwrap()),
+        venue_symbol: Some(kairos_primitives::Symbol::new("btcusdt").unwrap()),
         active_only: true,
         ..MarketQuery::default()
     };

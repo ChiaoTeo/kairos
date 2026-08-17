@@ -20,7 +20,7 @@ impl<'a> ::flatbuffers::Follow<'a> for OpenInterest<'a> {
 }
 
 impl<'a> OpenInterest<'a> {
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 4;
+    pub const VT_SCOPE: ::flatbuffers::VOffsetT = 4;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_CONTRACTS: ::flatbuffers::VOffsetT = 10;
@@ -65,20 +65,23 @@ impl<'a> OpenInterest<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
-        if let Some(x) = args.market_id {
-            builder.add_market_id(x);
+        if let Some(x) = args.scope {
+            builder.add_scope(x);
         }
         builder.finish()
     }
 
     #[inline]
-    pub fn market_id(&self) -> &'a str {
+    pub fn scope(&self) -> ObservationScope<'a> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(OpenInterest::VT_MARKET_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                    OpenInterest::VT_SCOPE,
+                    None,
+                )
                 .unwrap()
         }
     }
@@ -176,9 +179,9 @@ impl ::flatbuffers::Verifiable for OpenInterest<'_> {
         pos: usize,
     ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
         v.visit_table(pos)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_id",
-                Self::VT_MARKET_ID,
+            .visit_field::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                "scope",
+                Self::VT_SCOPE,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -226,7 +229,7 @@ impl ::flatbuffers::Verifiable for OpenInterest<'_> {
     }
 }
 pub struct OpenInterestArgs<'a> {
-    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub contracts: Option<&'a super::super::common::v_2::Decimal64>,
@@ -240,7 +243,7 @@ impl<'a> Default for OpenInterestArgs<'a> {
     #[inline]
     fn default() -> Self {
         OpenInterestArgs {
-            market_id: None,     // required field
+            scope: None,         // required field
             instrument_id: None, // required field
             source_id: None,     // required field
             contracts: None,     // required field
@@ -259,9 +262,12 @@ pub struct OpenInterestBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
 }
 impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenInterestBuilder<'a, 'b, A> {
     #[inline]
-    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_scope(&mut self, scope: ::flatbuffers::WIPOffset<ObservationScope<'b>>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(OpenInterest::VT_MARKET_ID, market_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<ObservationScope>>(
+                OpenInterest::VT_SCOPE,
+                scope,
+            );
     }
     #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -336,8 +342,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenInterestBuilder<'a, 'b, A
     #[inline]
     pub fn finish(self) -> ::flatbuffers::WIPOffset<OpenInterest<'a>> {
         let o = self.fbb_.end_table(self.start_);
-        self.fbb_
-            .required(o, OpenInterest::VT_MARKET_ID, "market_id");
+        self.fbb_.required(o, OpenInterest::VT_SCOPE, "scope");
         self.fbb_
             .required(o, OpenInterest::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_
@@ -351,7 +356,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OpenInterestBuilder<'a, 'b, A
 impl ::core::fmt::Debug for OpenInterest<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("OpenInterest");
-        ds.field("market_id", &self.market_id());
+        ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("source_id", &self.source_id());
         ds.field("contracts", &self.contracts());

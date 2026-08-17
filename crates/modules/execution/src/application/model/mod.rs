@@ -18,7 +18,7 @@ pub use risk::{RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult};
 pub use snapshot::*;
 
 use kairos_primitives::{
-    AccountId, ActorId, ClientOrderId, Currency, ExecutionAccessId, FillId, Generation,
+    AccountId, ActorId, ClientOrderId, Currency, ExecutionRouteId, FillId, Generation,
     InstrumentId, IntentId, LegId, MarketId, Money, OrderId, PlanId, Price, Quantity,
     RemoteOrderId, SegmentKey, Sequence, Symbol, UnixNanos,
 };
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::domain::{
-    CompletionPolicy, ExecutionFill, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan,
-    FailurePolicy, HedgePolicy, IntentType, MakerExecutionPolicy, OrderCommitment, OrderSide,
-    OrderType, RiskReservationEvidence, SplitOrderPolicy,
+    CompletionPolicy, ExecutionAttempt, ExecutionFill, ExecutionOrder, ExecutionOrderStatus,
+    ExecutionPlan, FailurePolicy, HedgePolicy, IntentType, MakerExecutionPolicy, OrderCommitment,
+    OrderSide, OrderType, RiskReservationEvidence, SplitOrderPolicy,
 };

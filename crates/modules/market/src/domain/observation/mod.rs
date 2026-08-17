@@ -18,7 +18,7 @@ pub mod trade_bar;
 
 pub use bar::Bar;
 pub use funding_rate::FundingRate;
-pub use identity::{MarketViewKey, ObservationKind, ObservationQualifier};
+pub use identity::{MarketViewKey, ObservationKind, ObservationQualifier, ObservationScope};
 pub use index_price::IndexPrice;
 pub use mark_price::MarkPrice;
 pub use open_interest::OpenInterest;
@@ -48,11 +48,8 @@ pub enum MarketObservation {
 
 impl MarketObservation {
     pub fn validate(&self) -> Result<(), String> {
-        if self.market_id().trim().is_empty()
-            || self.instrument_id().trim().is_empty()
-            || self.source_id().trim().is_empty()
-        {
-            return Err("observation market, instrument and source identities are required".into());
+        if self.instrument_id().trim().is_empty() || self.source_id().trim().is_empty() {
+            return Err("observation scope, instrument and source identities are required".into());
         }
         match self {
             Self::Bar(value) if value.timeframe.trim().is_empty() => {
@@ -111,21 +108,25 @@ impl MarketObservation {
         }
     }
 
-    pub fn market_id(&self) -> &str {
+    pub fn scope(&self) -> &ObservationScope {
         match self {
-            Self::Quote(value) => &value.market_id,
-            Self::Trade(value) => &value.market_id,
-            Self::Bar(value) => &value.market_id,
-            Self::TradeBar(value) => &value.bar.market_id,
-            Self::QuoteBar(value) => &value.bar.market_id,
-            Self::OptionGreeks(value) => &value.market_id,
-            Self::Rate(value) => &value.market_id,
-            Self::Ticker24h(value) => &value.market_id,
-            Self::MarkPrice(value) => &value.market_id,
-            Self::IndexPrice(value) => &value.market_id,
-            Self::FundingRate(value) => &value.market_id,
-            Self::OpenInterest(value) => &value.market_id,
+            Self::Quote(value) => &value.scope,
+            Self::Trade(value) => &value.scope,
+            Self::Bar(value) => &value.scope,
+            Self::TradeBar(value) => &value.bar.scope,
+            Self::QuoteBar(value) => &value.bar.scope,
+            Self::OptionGreeks(value) => &value.scope,
+            Self::Rate(value) => &value.scope,
+            Self::Ticker24h(value) => &value.scope,
+            Self::MarkPrice(value) => &value.scope,
+            Self::IndexPrice(value) => &value.scope,
+            Self::FundingRate(value) => &value.scope,
+            Self::OpenInterest(value) => &value.scope,
         }
+    }
+
+    pub fn market_id(&self) -> Option<&kairos_primitives::MarketId> {
+        self.scope().market_id()
     }
 
     pub fn observed_at_unix_nanos(&self) -> UnixNanos {
@@ -159,11 +160,11 @@ impl MarketObservation {
         match self.qualifier() {
             Some(qualifier) => crate::MarketViewKey::with_qualifier(
                 self.source_id(),
-                self.market_id(),
+                self.scope().key(),
                 self.kind(),
                 qualifier,
             ),
-            None => crate::MarketViewKey::new(self.source_id(), self.market_id(), self.kind()),
+            None => crate::MarketViewKey::new(self.source_id(), self.scope().key(), self.kind()),
         }
     }
 

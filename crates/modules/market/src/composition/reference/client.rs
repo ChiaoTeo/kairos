@@ -17,6 +17,7 @@ impl Drop for ReferenceWatcherGuard {
 
 pub(crate) fn spawn_market_universe_watcher(
     client: kairos_reference_contract::ReferenceClient,
+    sources: std::collections::BTreeMap<String, crate::composition::config::MarketSourceBinding>,
     interval: Duration,
     capacity: usize,
 ) -> Result<
@@ -66,7 +67,11 @@ pub(crate) fn spawn_market_universe_watcher(
                 let snapshot = client
                     .market_snapshot()
                     .map_err(|error| error.to_string())?;
-                super::projection::project_market_universe_at_sequence(&snapshot, required_sequence)
+                super::projection::project_market_universe_at_sequence(
+                    &snapshot,
+                    required_sequence,
+                    &sources,
+                )
             })();
             let Ok(update) = update else {
                 continue;

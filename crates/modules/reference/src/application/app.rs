@@ -321,7 +321,7 @@ impl ReferenceApplication {
                     value.record_kind.as_deref().unwrap_or(""),
                     value.record_id.as_deref().unwrap_or(""),
                     value.market_id.as_deref().unwrap_or(""),
-                    value.source_symbol.as_deref().unwrap_or(""),
+                    value.venue_symbol.as_deref().unwrap_or(""),
                 ]) && query
                     .exchange_id
                     .as_ref()
@@ -520,9 +520,9 @@ impl ReferenceApplication {
         if include(ReferenceKind::Market) {
             let market_query = MarketQuery {
                 exchange_id: query.exchange_id.clone(),
-                market_type: query.market_type.clone(),
+                instrument_kind: query.instrument_kind,
                 asset_type: query.asset_type.clone(),
-                source_symbol: query
+                venue_symbol: query
                     .text
                     .as_deref()
                     .and_then(|value| kairos_primitives::Symbol::new(value).ok()),
@@ -548,50 +548,6 @@ impl ReferenceApplication {
                             })
                     })
                     .map(ReferenceRecord::Market),
-            );
-        }
-        if include(ReferenceKind::ExecutionAccess) {
-            records.extend(
-                self.actor
-                    .catalog
-                    .execution_accesses
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query
-                                .exchange_id
-                                .as_deref()
-                                .is_none_or(|provider| value.provider_id == provider)
-                            && query.matches_text(&[
-                                &value.access_id,
-                                value.market_id.as_deref().unwrap_or_default(),
-                                value.provider_id.as_str(),
-                                value.provider_product.as_str(),
-                                &value.provider_symbol,
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::ExecutionAccess),
-            );
-        }
-        if include(ReferenceKind::MarketDataAccess) {
-            records.extend(
-                self.actor
-                    .catalog
-                    .market_data_accesses
-                    .values()
-                    .filter(|value| {
-                        query.matches_status(value.status.as_str())
-                            && query.matches_text(&[
-                                &value.access_id,
-                                &value.market_id,
-                                value.provider_id.as_str(),
-                                value.provider_product.as_str(),
-                                &value.provider_symbol,
-                            ])
-                    })
-                    .cloned()
-                    .map(ReferenceRecord::MarketDataAccess),
             );
         }
         if include(ReferenceKind::Event) {
@@ -620,7 +576,7 @@ impl ReferenceApplication {
                             value.record_kind.as_deref().unwrap_or(""),
                             value.record_id.as_deref().unwrap_or(""),
                             value.market_id.as_deref().unwrap_or(""),
-                            value.source_symbol.as_deref().unwrap_or(""),
+                            value.venue_symbol.as_deref().unwrap_or(""),
                         ]) && query
                             .record_kind
                             .as_deref()
@@ -652,9 +608,6 @@ impl ReferenceApplication {
         }
         if let Some(value) = self.actor.catalog.markets.get(identifier) {
             matches.push(ReferenceRecord::Market(value.clone()));
-        }
-        if let Some(value) = self.actor.catalog.execution_accesses.get(identifier) {
-            matches.push(ReferenceRecord::ExecutionAccess(value.clone()));
         }
         matches.extend(
             self.actor

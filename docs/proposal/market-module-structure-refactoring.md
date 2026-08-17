@@ -1,5 +1,12 @@
 # Market 领域定位与模块边界显式化重构提案
 
+> Access 所有权更新：本文件中早期阶段关于 Reference-owned
+> `MarketDataAccess` 的描述已由
+> [`access-capability-and-route-refactoring.md`](./access-capability-and-route-refactoring.md)
+> 取代。Reference 只提供 canonical Market 和来源映射；Market 在运行时组合
+> Integration 能力、workspace source 配置、readiness 与 freshness，并拥有
+> `source_id` 选择和订阅路径。
+
 ## 1. 文档状态
 
 - 状态：已按执行计划完成 Market 领域与目录重构；后续仅保留增量治理
@@ -110,7 +117,7 @@ Market 是 Kairos 的**行情运行时投影与交付边界**。
 
 ```text
 Reference                              Integration
-canonical Market / MarketDataAccess   provider capability / normalized external fact
+canonical Market / source provenance  provider capability / normalized external fact
           \                              /
            \                            /
             -> Market subscription and projection ->
@@ -135,20 +142,26 @@ canonical Market / MarketDataAccess   provider capability / normalized external 
 
 ### 2.3 与相邻模块的领域关系
 
-#### Reference -> Market：身份与可访问性
+#### Reference -> Market：canonical 身份与来源映射
 
 Reference 提供：
 
 - canonical `Market`、Instrument、Listing 等身份；
-- `MarketDataAccess`，即 canonical Market 到 provider/product/symbol 的数据访问地址；
-- access status、effective time 和生命周期变化；
+- Market 上用于映射外部来源的 provider/product/symbol provenance；
+- canonical Market status、effective time 和生命周期变化；
 - Reference snapshot/event sequence。
 
-Market 使用这些事实解析 dynamic subscription、选择可用 source，并在 Reference 变化时 reconciliation。跨模块读取必须通过 `kairos-reference-contract` 拥有的 `ReferenceClient`/typed view/event boundary 完成；Market 不得直接打开 Reference SQLite、依赖其表结构或自行实现第二套 Reference client。
+Market 将这些身份与 Integration adapter capability、workspace source 配置及 runtime
+状态组合，解析 dynamic subscription、选择可用 source，并在 Reference 变化时
+reconciliation。跨模块读取必须通过 `kairos-reference-contract` 拥有的
+`ReferenceClient`/typed view/event boundary 完成；Market 不得直接打开 Reference
+SQLite、依赖其表结构或自行实现第二套 Reference client。
 
 `composition/reference/` 负责把 Reference contract fact join 和映射为 Market-owned `ResolvedMarket` 与 `MarketDataRoute`。进入 application 后，类型名称和用例只表达 Market 所需的“已解析市场集合”及其上游 watermark，不再暴露 `ReferenceChanged`、SQLite reader、Reference transport frame 或完整 catalog。Market 可以记录已消费 watermark，但不能修改、补全或重新定义 canonical identity。
 
-`MarketDataAccess` 与 `ExecutionAccess` 必须保持分离：观察某市场使用的 provider/symbol 不意味着下单使用同一 provider/symbol。Market 不拥有 execution route。
+Market 的 `source_id` 与 Execution 的 `execution_route_id` 必须保持分离：观察某市场
+使用的 provider/symbol 不意味着下单使用同一 provider/symbol。Market 不拥有
+execution route，Reference 也不持久化二者的 runtime capability catalog。
 
 #### Integration -> Market：外部能力与 provider facts
 
@@ -394,7 +407,7 @@ domain/
 `ResolvedMarket` 和 `MarketSelectionQuery` 必须包含 canonical `InstrumentKind`，不能继续让名为 `market_type` 的 `ProviderProductCode` 同时承担 canonical kind 与 provider product 两种语义。旧 `market_type` 在迁移期只能存在于 composition 的 Reference contract mapping，最终路由使用以下三个互不替代的维度：
 
 1. canonical `instrument_kind`：Spot/Perpetual/Future/Option 等；
-2. Reference `MarketDataAccess.provider_product`：provider 产品面；
+2. Reference Market 的 provider provenance：provider 产品面；
 3. Market `source_id`：具体运行来源/路由。
 
 selector 的合法性也应按 market kind 判断。例如 Spot subscription 不应悄悄接受 `funding_rate` 或 `greeks`；Perpetual 可以请求 funding/mark/index/open-interest；Option 可以请求 greeks，但必须具备完整期权身份。若 provider/source 不支持某个该市场类别允许的 Observation，subscription 应表现为 unsupported/degraded，而不是假装 ready。
@@ -1240,7 +1253,7 @@ Actor 最后迁移，因为它是状态核心。只允许为同一个 `MarketAct
 
 1. 在 `composition/reference/` 使用 `kairos_reference_contract::ReferenceClient` 读取 events 和 current view；
 2. event 只触发 invalidation，读取的 view watermark 必须不落后于触发事件 sequence；
-3. 在 composition 完成 contract market、instrument、MarketDataAccess 到 `ResolvedMarket` 的 typed mapping；
+3. 在 composition 完成 contract market、instrument、source provenance 到 `ResolvedMarket` 的 typed mapping；
 4. application 新增 `reconcile_market_universe`，只接收 Market-owned type 和上游 watermark；
 5. 迁移 dynamic subscription、process recovery 和测试；
 6. 删除 `services/reference/ReferenceProjection`、Reference SQLite path、`domain/reference/ReferenceChanged` 及旧导出。
@@ -1251,10 +1264,10 @@ Actor 最后迁移，因为它是状态核心。只允许为同一个 `MarketAct
 
 1. 记录 `MarketDescriptor` 每个字段的真实 caller；
 2. 建立最小 `ResolvedMarket` 和 `MarketDataRoute`；
-3. composition 显式转换 canonical identity、instrument kind 和 active MarketDataAccess；
+3. composition 显式转换 canonical identity、instrument kind 和 source provenance；
 4. source activation 只消费 resolved route，不推断 provider product/symbol；
 5. 删除 `market_type`、`source_symbol`、Reference ingestion `source_id` 等兼容字段；
-6. 使用 missing/ambiguous access 测试固定失败语义。
+6. 使用 missing/ambiguous source 测试固定失败语义。
 
 ### Phase 12：Observation identity 与 capability 类型化
 

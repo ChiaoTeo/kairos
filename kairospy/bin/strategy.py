@@ -53,10 +53,8 @@ def _write_backtest_report(composition, workspace) -> None:
         composition.application.instance_id,
     )
     dataset = _replay_dataset_identity(instance.state("market", "replay.jsonl"))
-    config = _file_identity(instance.root / "normalized-config.json")
-    config["summary"] = _backtest_config_summary(
-        instance.root / "normalized-config.json"
-    )
+    config = _file_identity(instance.normalized_config())
+    config["summary"] = _backtest_config_summary(instance.normalized_config())
     final_account = None
     account_ids = composition.application.context.account.account_ids
     if account_ids:

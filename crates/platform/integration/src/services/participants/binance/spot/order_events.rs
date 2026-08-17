@@ -402,12 +402,14 @@ pub(super) fn parse_subscription_response(
     }
 }
 
-/// Binance documents WebSocket request IDs as arbitrary, but its production
-/// gateway closes signed user-data subscriptions when IDs contain punctuation
-/// such as `.` or `:`. Keep adapter-generated IDs inside the provider-safe
-/// alphanumeric/hyphen subset observed in live acceptance.
+/// Binance WebSocket string request IDs are limited to 36 characters. Its
+/// production gateway also closes signed user-data subscriptions when IDs
+/// contain punctuation such as `.` or `:`. Keep adapter-generated IDs inside
+/// both provider constraints while retaining the channel epoch suffix.
 pub(super) fn provider_safe_request_id(binding_id: &str, channel_epoch: u64) -> String {
-    let mut normalized = String::with_capacity(binding_id.len().min(48));
+    const MAX_REQUEST_ID_LEN: usize = 36;
+
+    let mut normalized = String::with_capacity(binding_id.len().min(MAX_REQUEST_ID_LEN));
     let mut previous_was_separator = false;
     for character in binding_id.chars() {
         let character = if character.is_ascii_alphanumeric() {
@@ -420,9 +422,6 @@ pub(super) fn provider_safe_request_id(binding_id: &str, channel_epoch: u64) -> 
             '-'
         };
         normalized.push(character);
-        if normalized.len() == 48 {
-            break;
-        }
     }
     let normalized = normalized.trim_matches('-');
     let normalized = if normalized.is_empty() {
@@ -430,7 +429,10 @@ pub(super) fn provider_safe_request_id(binding_id: &str, channel_epoch: u64) -> 
     } else {
         normalized
     };
-    format!("{normalized}-{channel_epoch}")
+    let suffix = format!("-{channel_epoch}");
+    let prefix_len = MAX_REQUEST_ID_LEN.saturating_sub(suffix.len());
+    let prefix = &normalized[..normalized.len().min(prefix_len)];
+    format!("{prefix}{suffix}")
 }
 
 fn normalize_order_type(value: &str) -> Option<OrderType> {
@@ -572,6 +574,11 @@ mod tests {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '-'));
         assert_eq!(provider_safe_request_id("...", 1), "kairos-1");
+        assert_eq!(
+            provider_safe_request_id("account.binance.spot.account-events", 1),
+            "account-binance-spot-account-event-1"
+        );
+        assert!(provider_safe_request_id(&"x".repeat(100), u64::MAX).len() <= 36);
     }
 
     #[test]

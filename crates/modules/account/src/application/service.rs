@@ -1,5 +1,5 @@
 use super::{
-    AccountError, AccountRefreshReport, AccountsSnapshot, MarkToMarket, ReconcileAccount,
+    AccountCurrentView, AccountError, AccountRefreshReport, MarkToMarket, ReconcileAccount,
     RefreshAccount,
 };
 use crate::domain::{AccountEvent, AccountObservedFill, AccountSegment};
@@ -43,15 +43,20 @@ impl AccountApplication {
         self.runtime.pending_business_event()
     }
 
-    pub(crate) fn acknowledge_business_event(&mut self) {
-        self.runtime.acknowledge_business_event();
+    pub(crate) fn acknowledge_business_event(&mut self) -> Result<(), AccountError> {
+        self.runtime
+            .acknowledge_business_event()
+            .map_err(AccountError::Source)
     }
 
-    pub(crate) fn attach_business_event_provenance(
+    pub(crate) fn apply_event_with_provenance(
         &mut self,
+        event: AccountEvent,
         provenance: super::AccountFactProvenance,
-    ) {
-        self.runtime.attach_business_event_provenance(provenance);
+    ) -> Result<usize, AccountError> {
+        self.runtime
+            .apply_event_with_provenance(event, Some(provenance))
+            .map_err(AccountError::Source)
     }
 
     pub fn actor_id(&self) -> &str {
@@ -161,15 +166,13 @@ impl AccountApplication {
 
     pub fn publish_current(
         &self,
-        publisher: &mut dyn super::AccountSnapshotPublisher,
+        mut publish: impl FnMut(&AccountCurrentView) -> Result<(), String>,
     ) -> Result<(), AccountError> {
-        publisher
-            .publish(&self.runtime.snapshot())
-            .map_err(AccountError::Source)
+        publish(&self.runtime.current_view()).map_err(AccountError::Source)
     }
 
-    pub(crate) fn snapshot_shared(&self) -> Arc<AccountsSnapshot> {
-        self.runtime.snapshot_shared()
+    pub(crate) fn current_view_shared(&self) -> Arc<AccountCurrentView> {
+        self.runtime.current_view_shared()
     }
 
     pub fn apply_simulated_fill(

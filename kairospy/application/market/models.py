@@ -5,8 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.application.reference.models import InstrumentRef
-from kairospy.domain_types import MarketId
+from kairospy.application.reference import InstrumentRef
+from kairospy.domain_types import InstrumentId, MarketId
 
 
 class AggressorSide(StrEnum):
@@ -15,9 +15,50 @@ class AggressorSide(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ObservationScopeKind(StrEnum):
+    MARKET = "market"
+    CONSOLIDATED = "consolidated"
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationScope:
+    kind: ObservationScopeKind
+    market_id: MarketId | None = None
+    instrument_id: InstrumentId | None = None
+    network_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind is ObservationScopeKind.MARKET:
+            if self.market_id is None or self.instrument_id is not None:
+                raise ValueError("market scope requires only market_id")
+        elif self.instrument_id is None or self.market_id is not None:
+            raise ValueError("consolidated scope requires only instrument_id")
+        if self.network_id is not None and not self.network_id.strip():
+            raise ValueError("scope network_id must be non-empty when present")
+
+    @classmethod
+    def market(cls, market_id: MarketId | str) -> ObservationScope:
+        return cls(ObservationScopeKind.MARKET, market_id=MarketId(str(market_id)))
+
+    @classmethod
+    def consolidated(
+        cls, instrument_id: InstrumentId | str, network_id: str | None = None
+    ) -> ObservationScope:
+        return cls(
+            ObservationScopeKind.CONSOLIDATED,
+            instrument_id=InstrumentId(str(instrument_id)),
+            network_id=network_id,
+        )
+
+    def key(self) -> str:
+        if self.market_id is not None:
+            return str(self.market_id)
+        return f"consolidated:{self.instrument_id}:{self.network_id or '*'}"
+
+
 @dataclass(frozen=True, slots=True)
 class Bar:
-    market_id: MarketId
+    scope: ObservationScope
     instrument: InstrumentRef
     timeframe: str
     open: Decimal
@@ -29,6 +70,10 @@ class Bar:
     occurred_at_unix_nanos: int
     source_id: str | None = None
 
+    @property
+    def market_id(self) -> MarketId | None:
+        return self.scope.market_id
+
     def __post_init__(self) -> None:
         if not self.timeframe.strip():
             raise ValueError("bar timeframe is required")
@@ -38,7 +83,7 @@ class Bar:
 
 @dataclass(frozen=True, slots=True)
 class Quote:
-    market_id: MarketId
+    scope: ObservationScope
     instrument: InstrumentRef
     bid_price: Decimal | None
     bid_quantity: Decimal | None
@@ -47,11 +92,18 @@ class Quote:
     occurred_at: datetime
     occurred_at_unix_nanos: int
     source_id: str | None = None
+    bid_venue_code: str | None = None
+    ask_venue_code: str | None = None
+    tape: int | None = None
+
+    @property
+    def market_id(self) -> MarketId | None:
+        return self.scope.market_id
 
 
 @dataclass(frozen=True, slots=True)
 class Trade:
-    market_id: MarketId
+    scope: ObservationScope
     instrument: InstrumentRef
     price: Decimal
     quantity: Decimal
@@ -59,11 +111,20 @@ class Trade:
     occurred_at: datetime
     occurred_at_unix_nanos: int
     source_id: str | None = None
+    venue_code: str | None = None
+    tape: int | None = None
+    trf_id: int | None = None
+    participant_timestamp_unix_nanos: int | None = None
+    trf_timestamp_unix_nanos: int | None = None
+
+    @property
+    def market_id(self) -> MarketId | None:
+        return self.scope.market_id
 
 
 @dataclass(frozen=True, slots=True)
 class OptionGreeks:
-    market_id: MarketId
+    scope: ObservationScope
     instrument: InstrumentRef
     expiry_unix_nanos: int
     strike: Decimal | None
@@ -76,6 +137,10 @@ class OptionGreeks:
     occurred_at_unix_nanos: int
     source_id: str | None = None
     derivation: str | None = None
+
+    @property
+    def market_id(self) -> MarketId | None:
+        return self.scope.market_id
 
 
 @dataclass(frozen=True, slots=True)

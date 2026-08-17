@@ -5,12 +5,11 @@ namespace kairos.reference.v2;
 
 table Market {
   market_id:string (required);
-  market_key:string (required);
   instrument_id:string (required);
   listing_id:string;
   exchange_id:string (required);
-  market_type:string (required);
-  source_symbol:string (required);
+  instrument_kind:string (required);
+  venue_symbol:string;
   base_asset_id:string;
   quote_asset_id:string;
   status:ReferenceLifecycleStatus = UNSPECIFIED;

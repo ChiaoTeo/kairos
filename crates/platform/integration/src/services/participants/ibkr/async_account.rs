@@ -332,6 +332,7 @@ fn position(
     )
     .map_err(IntegrationError::InvalidPayload)?;
     Ok(ExternalPosition {
+        position_side: kairos_primitives::PositionSide::Net,
         provider_instrument,
         quantity: decimal_f64(value.position),
         average_price: Some(decimal_f64(value.average_cost)),

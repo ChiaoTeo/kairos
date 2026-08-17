@@ -21,15 +21,18 @@ impl<'a> ::flatbuffers::Follow<'a> for Quote<'a> {
 
 impl<'a> Quote<'a> {
     pub const VT_QUOTE_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_BID_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_BID_QUANTITY: ::flatbuffers::VOffsetT = 14;
     pub const VT_ASK_PRICE: ::flatbuffers::VOffsetT = 16;
     pub const VT_ASK_QUANTITY: ::flatbuffers::VOffsetT = 18;
-    pub const VT_SOURCE_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
-    pub const VT_RECEIVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_BID_VENUE_CODE: ::flatbuffers::VOffsetT = 20;
+    pub const VT_ASK_VENUE_CODE: ::flatbuffers::VOffsetT = 22;
+    pub const VT_TAPE: ::flatbuffers::VOffsetT = 24;
+    pub const VT_SOURCE_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_RECEIVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -48,6 +51,13 @@ impl<'a> Quote<'a> {
         let mut builder = QuoteBuilder::new(_fbb);
         builder.add_received_at_unix_nanos(args.received_at_unix_nanos);
         builder.add_source_observed_at_unix_nanos(args.source_observed_at_unix_nanos);
+        builder.add_tape(args.tape);
+        if let Some(x) = args.ask_venue_code {
+            builder.add_ask_venue_code(x);
+        }
+        if let Some(x) = args.bid_venue_code {
+            builder.add_bid_venue_code(x);
+        }
         if let Some(x) = args.ask_quantity {
             builder.add_ask_quantity(x);
         }
@@ -66,8 +76,8 @@ impl<'a> Quote<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
-        if let Some(x) = args.market_id {
-            builder.add_market_id(x);
+        if let Some(x) = args.scope {
+            builder.add_scope(x);
         }
         if let Some(x) = args.quote_id {
             builder.add_quote_id(x);
@@ -86,13 +96,13 @@ impl<'a> Quote<'a> {
         }
     }
     #[inline]
-    pub fn market_id(&self) -> &'a str {
+    pub fn scope(&self) -> ObservationScope<'a> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_MARKET_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<ObservationScope>>(Quote::VT_SCOPE, None)
                 .unwrap()
         }
     }
@@ -159,6 +169,33 @@ impl<'a> Quote<'a> {
         }
     }
     #[inline]
+    pub fn bid_venue_code(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_BID_VENUE_CODE, None)
+        }
+    }
+    #[inline]
+    pub fn ask_venue_code(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Quote::VT_ASK_VENUE_CODE, None)
+        }
+    }
+    #[inline]
+    pub fn tape(&self) -> u32 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<u32>(Quote::VT_TAPE, Some(0)).unwrap() }
+    }
+    #[inline]
     pub fn source_observed_at_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -194,9 +231,9 @@ impl ::flatbuffers::Verifiable for Quote<'_> {
                 Self::VT_QUOTE_ID,
                 false,
             )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_id",
-                Self::VT_MARKET_ID,
+            .visit_field::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                "scope",
+                Self::VT_SCOPE,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -229,6 +266,17 @@ impl ::flatbuffers::Verifiable for Quote<'_> {
                 Self::VT_ASK_QUANTITY,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "bid_venue_code",
+                Self::VT_BID_VENUE_CODE,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "ask_venue_code",
+                Self::VT_ASK_VENUE_CODE,
+                false,
+            )?
+            .visit_field::<u32>("tape", Self::VT_TAPE, false)?
             .visit_field::<u64>(
                 "source_observed_at_unix_nanos",
                 Self::VT_SOURCE_OBSERVED_AT_UNIX_NANOS,
@@ -245,13 +293,16 @@ impl ::flatbuffers::Verifiable for Quote<'_> {
 }
 pub struct QuoteArgs<'a> {
     pub quote_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub bid_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub bid_quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub ask_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub ask_quantity: Option<&'a super::super::common::v_2::Decimal64>,
+    pub bid_venue_code: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub ask_venue_code: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub tape: u32,
     pub source_observed_at_unix_nanos: u64,
     pub received_at_unix_nanos: u64,
 }
@@ -260,13 +311,16 @@ impl<'a> Default for QuoteArgs<'a> {
     fn default() -> Self {
         QuoteArgs {
             quote_id: None,
-            market_id: None,     // required field
+            scope: None,         // required field
             instrument_id: None, // required field
             source_id: None,     // required field
             bid_price: None,
             bid_quantity: None,
             ask_price: None,
             ask_quantity: None,
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: 0,
             source_observed_at_unix_nanos: 0,
             received_at_unix_nanos: 0,
         }
@@ -284,9 +338,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_QUOTE_ID, quote_id);
     }
     #[inline]
-    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_scope(&mut self, scope: ::flatbuffers::WIPOffset<ObservationScope<'b>>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Quote::VT_MARKET_ID, market_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<ObservationScope>>(Quote::VT_SCOPE, scope);
     }
     #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -333,6 +387,24 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
             );
     }
     #[inline]
+    pub fn add_bid_venue_code(&mut self, bid_venue_code: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Quote::VT_BID_VENUE_CODE,
+            bid_venue_code,
+        );
+    }
+    #[inline]
+    pub fn add_ask_venue_code(&mut self, ask_venue_code: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Quote::VT_ASK_VENUE_CODE,
+            ask_venue_code,
+        );
+    }
+    #[inline]
+    pub fn add_tape(&mut self, tape: u32) {
+        self.fbb_.push_slot::<u32>(Quote::VT_TAPE, tape, 0);
+    }
+    #[inline]
     pub fn add_source_observed_at_unix_nanos(&mut self, source_observed_at_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             Quote::VT_SOURCE_OBSERVED_AT_UNIX_NANOS,
@@ -356,7 +428,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> QuoteBuilder<'a, 'b, A> {
     #[inline]
     pub fn finish(self) -> ::flatbuffers::WIPOffset<Quote<'a>> {
         let o = self.fbb_.end_table(self.start_);
-        self.fbb_.required(o, Quote::VT_MARKET_ID, "market_id");
+        self.fbb_.required(o, Quote::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Quote::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, Quote::VT_SOURCE_ID, "source_id");
@@ -368,13 +440,16 @@ impl ::core::fmt::Debug for Quote<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("Quote");
         ds.field("quote_id", &self.quote_id());
-        ds.field("market_id", &self.market_id());
+        ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("source_id", &self.source_id());
         ds.field("bid_price", &self.bid_price());
         ds.field("bid_quantity", &self.bid_quantity());
         ds.field("ask_price", &self.ask_price());
         ds.field("ask_quantity", &self.ask_quantity());
+        ds.field("bid_venue_code", &self.bid_venue_code());
+        ds.field("ask_venue_code", &self.ask_venue_code());
+        ds.field("tape", &self.tape());
         ds.field(
             "source_observed_at_unix_nanos",
             &self.source_observed_at_unix_nanos(),

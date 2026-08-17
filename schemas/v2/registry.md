@@ -27,10 +27,6 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Reference | event | `AssetUpdated` | `RAD2` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `EntityUpserted` | `RENU` | Reference Actor | Reference consumers | owner event stream / retained target |
 | DRAFT | Reference | event | `EntityUpdated` | `REND` | Reference Actor | Reference consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ExecutionAccessUpserted` | `RXU2` | Reference Actor | Execution consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `ExecutionAccessUpdated` | `RXD2` | Reference Actor | Execution consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `MarketDataAccessUpserted` | `RMDA` | Reference Actor | Market consumers | owner event stream / retained target |
-| DRAFT | Reference | event | `MarketDataAccessUpdated` | `RMDD` | Reference Actor | Market consumers | owner event stream / retained target |
 | DRAFT | Market | event | `QuoteUpdated` | `MQU2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `TradeOccurred` | `MTO2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |
 | DRAFT | Market | event | `BarCompleted` | `MBV2` | Market Actor | Strategy Market application | Market event stream / ephemeral fail-closed initially |

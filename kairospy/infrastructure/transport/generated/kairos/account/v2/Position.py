@@ -39,18 +39,14 @@ class Position(object):
         return None
 
     # Position
-    def Quantity(self):
+    def PositionSide(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 1
 
     # Position
-    def AveragePrice(self):
+    def Quantity(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             x = o + self._tab.Pos
@@ -61,7 +57,7 @@ class Position(object):
         return None
 
     # Position
-    def MarkPrice(self):
+    def AveragePrice(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             x = o + self._tab.Pos
@@ -72,7 +68,7 @@ class Position(object):
         return None
 
     # Position
-    def UnrealizedPnl(self):
+    def MarkPrice(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             x = o + self._tab.Pos
@@ -83,7 +79,7 @@ class Position(object):
         return None
 
     # Position
-    def RealizedPnl(self):
+    def UnrealizedPnl(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             x = o + self._tab.Pos
@@ -94,14 +90,25 @@ class Position(object):
         return None
 
     # Position
-    def ObservedAtUnixNanos(self):
+    def RealizedPnl(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Position
+    def ObservedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def PositionStart(builder):
-    builder.StartObject(8)
+    builder.StartObject(9)
 
 def Start(builder):
     PositionStart(builder)
@@ -118,38 +125,44 @@ def PositionAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     PositionAddMarketId(builder, marketId)
 
+def PositionAddPositionSide(builder, positionSide):
+    builder.PrependUint8Slot(2, positionSide, 1)
+
+def AddPositionSide(builder, positionSide):
+    PositionAddPositionSide(builder, positionSide)
+
 def PositionAddQuantity(builder, quantity):
-    builder.PrependStructSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
+    builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
 
 def AddQuantity(builder, quantity):
     PositionAddQuantity(builder, quantity)
 
 def PositionAddAveragePrice(builder, averagePrice):
-    builder.PrependStructSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(averagePrice), 0)
+    builder.PrependStructSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(averagePrice), 0)
 
 def AddAveragePrice(builder, averagePrice):
     PositionAddAveragePrice(builder, averagePrice)
 
 def PositionAddMarkPrice(builder, markPrice):
-    builder.PrependStructSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(markPrice), 0)
+    builder.PrependStructSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(markPrice), 0)
 
 def AddMarkPrice(builder, markPrice):
     PositionAddMarkPrice(builder, markPrice)
 
 def PositionAddUnrealizedPnl(builder, unrealizedPnl):
-    builder.PrependStructSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(unrealizedPnl), 0)
+    builder.PrependStructSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(unrealizedPnl), 0)
 
 def AddUnrealizedPnl(builder, unrealizedPnl):
     PositionAddUnrealizedPnl(builder, unrealizedPnl)
 
 def PositionAddRealizedPnl(builder, realizedPnl):
-    builder.PrependStructSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(realizedPnl), 0)
+    builder.PrependStructSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(realizedPnl), 0)
 
 def AddRealizedPnl(builder, realizedPnl):
     PositionAddRealizedPnl(builder, realizedPnl)
 
 def PositionAddObservedAtUnixNanos(builder, observedAtUnixNanos):
-    builder.PrependUint64Slot(7, observedAtUnixNanos, 0)
+    builder.PrependUint64Slot(8, observedAtUnixNanos, 0)
 
 def AddObservedAtUnixNanos(builder, observedAtUnixNanos):
     PositionAddObservedAtUnixNanos(builder, observedAtUnixNanos)

@@ -1,7 +1,8 @@
 // Connection composition tests live outside the production module boundary.
 
 mod secret_tests {
-    use super::super::model::provider_instrument_from_execution_access;
+    use kairos_integration::application::ParticipantKind;
+    use super::super::model::{candidate_for_address, provider_instrument_for_route};
     use super::super::{compose_direct_execution_connections, ExecutionConnectionOptions};
     use crate::composition::{compose_execution_connections, compose_execution_routes};
 
@@ -20,6 +21,7 @@ mod secret_tests {
             base_url: "https://testnet.binance.vision".into(),
             websocket_url: "wss://ws-api.testnet.binance.vision/ws-api/v3".into(),
             isolated_symbol: None,
+            instruments: Vec::new(),
             request_weight_per_minute: 1_000,
             cancel_reserve_weight: 50,
             order_event_queue_capacity: 1_024,
@@ -44,24 +46,9 @@ mod secret_tests {
     }
 
     #[test]
-    fn reference_execution_access_maps_without_reconstructing_provider_facts() {
-        let access = kairos_reference_contract::ExecutionAccess {
-            access_id: "execution-access:okx:margin:btc-usdt".into(),
-            provider_id: "okx".into(),
-            provider_product: "margin".into(),
-            provider_symbol: "BTC-USDT".into(),
-            status: "active".into(),
-            ..Default::default()
-        };
-        let (access_id, provider_instrument) = provider_instrument_from_execution_access(
-            &access.access_id,
-            &access.provider_id,
-            &access.provider_product,
-            &access.provider_symbol,
-        )
-        .unwrap();
-
-        assert_eq!(access_id.as_str(), access.access_id);
+    fn execution_route_maps_configured_provider_address() {
+        let provider_instrument =
+            provider_instrument_for_route("okx", "margin", "BTC-USDT").unwrap();
         assert_eq!(provider_instrument.participant.id, "okx");
         assert_eq!(
             provider_instrument
@@ -73,15 +60,31 @@ mod secret_tests {
         );
         assert_eq!(provider_instrument.source_symbol.as_str(), "BTC-USDT");
 
-        let mut unsupported = access;
-        unsupported.provider_id = "future-provider".into();
-        assert!(provider_instrument_from_execution_access(
-            &unsupported.access_id,
-            &unsupported.provider_id,
-            &unsupported.provider_product,
-            &unsupported.provider_symbol,
+        assert!(provider_instrument_for_route("future-provider", "margin", "BTC-USDT").is_err());
+    }
+
+    #[test]
+    fn binance_equity_address_is_an_instrument_broker_route_without_a_fake_market() {
+        let mut options = binance_spot_options();
+        options.route_id = "binance.equity".into();
+        options.product = "equity".into();
+        options.segment_key = "equity".into();
+
+        let (candidate, provider_instrument) = candidate_for_address(
+            &options,
+            "instrument:equity:US:AAPL:common",
+            None,
+            "AAPL",
         )
-        .is_err());
+        .unwrap();
+
+        assert!(candidate.market_id.is_none());
+        assert_eq!(
+            candidate.instrument_id.unwrap().as_str(),
+            "instrument:equity:US:AAPL:common"
+        );
+        assert_eq!(provider_instrument.participant.kind, ParticipantKind::Broker);
+        assert_eq!(provider_instrument.participant.id.as_str(), "binance");
     }
 
     #[test]

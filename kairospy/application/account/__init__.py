@@ -50,6 +50,10 @@ from .models import (
     EquityChange,
     ObservedOrder,
     Position,
+    PositionSide,
+    SegmentCompleteness,
+    SegmentSyncLifecycle,
+    SegmentSyncMode,
 )
 
 
@@ -582,8 +586,12 @@ __all__ = [
     "ObservedOrder",
     "ObservedOrderChangedEvent",
     "Position",
+    "PositionSide",
     "PositionNotFoundError",
     "PositionChangedEvent",
+    "SegmentCompleteness",
+    "SegmentSyncLifecycle",
+    "SegmentSyncMode",
     "TradeLeaseApplication",
     "COIN_M_FUTURES",
     "CROSS_MARGIN",

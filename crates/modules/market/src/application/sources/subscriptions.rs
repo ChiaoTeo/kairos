@@ -50,21 +50,32 @@ impl MarketApplication {
         let mut desired =
             BTreeMap::<SourceId, BTreeMap<BusinessSubscriptionKey, ResolvedMarket>>::new();
         for subscription in subscriptions {
+            let selectors = subscription.selectors.clone();
             for (market_id, market) in subscription.members {
-                let matches = self
+                let route_matches = self
                     .actor
                     .attached_sources
                     .values()
                     .filter(|source| source_accepts(&source.descriptor, &market))
+                    .collect::<Vec<_>>();
+                let matches = route_matches
+                    .iter()
+                    .filter(|source| source_supports_selectors(&source.descriptor, &selectors))
                     .map(|source| source.descriptor.id.clone())
                     .collect::<Vec<_>>();
+                if matches.is_empty() && !route_matches.is_empty() {
+                    return Err(format!(
+                        "configured source for market {} does not support the requested observation",
+                        market.scope.key()
+                    ));
+                }
                 let source_id = match matches.as_slice() {
                     [source_id] => source_id.clone(),
                     [] => continue,
                     _ => {
                         return Err(format!(
                             "market {} matches multiple configured sources; select source_id",
-                            market.market_id
+                            market.scope.key()
                         ))
                     }
                 };
@@ -156,24 +167,24 @@ impl MarketApplication {
 }
 
 pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket) -> bool {
-    let source_id_matches = source.exchange_id.is_none()
-        || market
-            .source_id
-            .as_ref()
-            .is_none_or(|id| id.as_str().eq_ignore_ascii_case(source.id.as_str()));
+    let source_id_matches = market
+        .source_id
+        .as_ref()
+        .is_none_or(|id| id.as_str().eq_ignore_ascii_case(source.id.as_str()));
     source_id_matches
         && source.exchange_id.as_ref().is_none_or(|exchange| {
-            exchange
-                .as_str()
-                .strip_prefix("exchange:")
-                .unwrap_or(exchange.as_str())
-                .eq_ignore_ascii_case(
-                    market
-                        .exchange_id
-                        .as_str()
-                        .strip_prefix("exchange:")
-                        .unwrap_or(market.exchange_id.as_str()),
-                )
+            market.exchange_id.as_ref().is_some_and(|market_exchange| {
+                exchange
+                    .as_str()
+                    .strip_prefix("exchange:")
+                    .unwrap_or(exchange.as_str())
+                    .eq_ignore_ascii_case(
+                        market_exchange
+                            .as_str()
+                            .strip_prefix("exchange:")
+                            .unwrap_or(market_exchange.as_str()),
+                    )
+            })
         })
         && source
             .market_type
@@ -184,5 +195,17 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket)
                 .asset_type
                 .as_ref()
                 .is_none_or(|market_asset| market_asset == asset_type)
+        })
+}
+
+fn source_supports_selectors(
+    source: &SourceDescriptor,
+    selectors: &[crate::domain::subscription::ObservationSelector],
+) -> bool {
+    source.observation_capabilities.is_empty()
+        || selectors.iter().all(|selector| {
+            selector
+                .kind
+                .is_none_or(|kind| source.observation_capabilities.contains(&kind))
         })
 }

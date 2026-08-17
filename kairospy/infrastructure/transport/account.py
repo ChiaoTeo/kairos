@@ -115,6 +115,7 @@ def _decode_v2_change(root: Any, kind: str) -> AccountChangeRecord:
             "instrument_id": _required_text(
                 value.InstrumentId(), "position.instrument_id"
             ),
+            "position_side": _position_side(int(value.PositionSide())),
             "quantity": _decimal(value.Quantity()),
             "average_price": _decimal(value.AveragePrice()),
             "market_value": _market_value(value),
@@ -124,6 +125,7 @@ def _decode_v2_change(root: Any, kind: str) -> AccountChangeRecord:
         payload = {
             "instrument_id": _required_text(root.InstrumentId(), "position.instrument_id"),
             "market_id": _optional_text(root.MarketId()),
+            "position_side": _position_side(int(root.PositionSide())),
         }
     elif kind == "observed_order_changed":
         value = cast(Any, root.Order())
@@ -171,6 +173,10 @@ def _status_name(value: int) -> str:
 
 def _order_status_name(value: int) -> str:
     return {1: "open", 2: "partially_filled", 3: "pending_cancel", 4: "closed", 5: "unknown"}.get(value, "unknown")
+
+
+def _position_side(value: int) -> str:
+    return {0: "net", 1: "net", 2: "long", 3: "short"}.get(value, "net")
 
 
 def _decimal(value: object | None) -> str | None:

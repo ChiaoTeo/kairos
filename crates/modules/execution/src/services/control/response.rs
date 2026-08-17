@@ -81,6 +81,13 @@ impl ControlResponse {
         })
     }
 
+    pub(crate) fn routes<T: Serialize>(routes: &T) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            status: 200,
+            payload: json!({"routes":serde_json::to_value(routes)?}),
+        })
+    }
+
     pub(crate) fn intent_result<T: Serialize>(
         status: &str,
         result: &T,

@@ -1,9 +1,8 @@
 //! Reference domain entities and provider snapshots.
 
 use kairos_primitives::{
-    AssetClass, AssetId, Exchange, ExecutionAccessId, Generation, InstrumentId, InstrumentKind,
-    IssuerId, ListingId, MarketId, ProviderId, ProviderProductCode, ProviderSymbol, Rate,
-    ReferenceStatus, Symbol, UnixNanos,
+    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, IssuerId, ListingId,
+    MarketId, Rate, ReferenceStatus, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -106,8 +105,6 @@ pub struct Instrument {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
-    #[serde(default)]
-    pub source_id: Option<String>,
     pub listing_id: ListingId,
     pub instrument_id: InstrumentId,
     pub exchange_id: Exchange,
@@ -119,22 +116,18 @@ pub struct Listing {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Market {
-    #[serde(default)]
-    pub source_id: Option<String>,
     pub market_id: MarketId,
-    pub market_key: String,
     pub instrument_id: InstrumentId,
     #[serde(default)]
     pub listing_id: Option<ListingId>,
     pub exchange_id: Exchange,
-    /// Provider/venue product surface. The legacy field name is retained only
-    /// for persisted/wire compatibility; this is not a canonical market kind.
-    pub market_type: ProviderProductCode,
+    pub instrument_kind: InstrumentKind,
     #[serde(default)]
     pub asset_type: Option<AssetClass>,
     #[serde(default)]
     pub underlying_instrument_id: Option<InstrumentId>,
-    pub source_symbol: Symbol,
+    #[serde(default)]
+    pub venue_symbol: Option<Symbol>,
     pub base_asset_id: Option<AssetId>,
     pub quote_asset_id: Option<AssetId>,
     pub status: ReferenceStatus,
@@ -162,7 +155,7 @@ pub struct LifecycleEvent {
     pub instrument_id: Option<InstrumentId>,
     pub listing_id: Option<ListingId>,
     pub exchange_id: Option<Exchange>,
-    pub source_symbol: Option<Symbol>,
+    pub venue_symbol: Option<Symbol>,
     pub previous_status: Option<ReferenceStatus>,
     pub current_status: Option<ReferenceStatus>,
     pub previous_symbol: Option<String>,
@@ -173,91 +166,6 @@ pub struct LifecycleEvent {
     pub generation: Generation,
 }
 
-/// A provider-specific execution path for a canonical instrument.
-///
-/// ExecutionAccess is not a second market. It records how an instrument can
-/// be reached for order entry when the execution provider is not necessarily
-/// the primary exchange that defines its market price.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExecutionAccess {
-    #[serde(default)]
-    pub source_id: Option<String>,
-    pub access_id: ExecutionAccessId,
-    #[serde(default)]
-    pub instrument_id: Option<InstrumentId>,
-    #[serde(default)]
-    pub listing_id: Option<ListingId>,
-    #[serde(default)]
-    pub market_id: Option<MarketId>,
-    pub provider_id: ProviderId,
-    /// Provider-owned request discriminator, not a canonical product family.
-    #[serde(rename = "product_family")]
-    pub provider_product: ProviderProductCode,
-    pub provider_symbol: ProviderSymbol,
-    pub settlement_asset_id: Option<AssetId>,
-    pub status: ReferenceStatus,
-    pub effective_from_unix_nanos: UnixNanos,
-    pub effective_to_unix_nanos: Option<UnixNanos>,
-}
-
-/// Provider-specific market-data address for a canonical Market.
-///
-/// This is deliberately separate from ExecutionAccess: the provider and
-/// symbol used for observations do not imply the provider and symbol used for
-/// order entry.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MarketDataAccess {
-    #[serde(default)]
-    pub source_id: Option<String>,
-    pub access_id: String,
-    pub market_id: MarketId,
-    pub provider_id: ProviderId,
-    /// Provider-owned request discriminator, not a canonical product family.
-    #[serde(rename = "product_family")]
-    pub provider_product: ProviderProductCode,
-    pub provider_symbol: ProviderSymbol,
-    pub status: ReferenceStatus,
-    pub effective_from_unix_nanos: UnixNanos,
-    pub effective_to_unix_nanos: Option<UnixNanos>,
-}
-
-impl Default for MarketDataAccess {
-    fn default() -> Self {
-        Self {
-            source_id: None,
-            access_id: "market-data-access:default".into(),
-            market_id: MarketId::new("market:default").expect("valid market ID"),
-            provider_id: ProviderId::new("provider:unknown").expect("valid default provider"),
-            provider_product: ProviderProductCode::new("unknown")
-                .expect("valid default provider product"),
-            provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
-            status: ReferenceStatus::Unknown,
-            effective_from_unix_nanos: UnixNanos::default(),
-            effective_to_unix_nanos: None,
-        }
-    }
-}
-
-impl Default for ExecutionAccess {
-    fn default() -> Self {
-        Self {
-            source_id: None,
-            access_id: ExecutionAccessId::new("access:default").expect("valid access ID"),
-            instrument_id: None,
-            listing_id: None,
-            market_id: Some(MarketId::new("market:default").expect("valid market ID")),
-            provider_id: ProviderId::new("provider:unknown").expect("valid default provider"),
-            provider_product: ProviderProductCode::new("unknown")
-                .expect("valid default provider product"),
-            provider_symbol: ProviderSymbol::new("symbol:default").expect("valid provider symbol"),
-            settlement_asset_id: None,
-            status: ReferenceStatus::Unknown,
-            effective_from_unix_nanos: UnixNanos::default(),
-            effective_to_unix_nanos: None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCatalog {
     pub entities: Vec<Entity>,
@@ -265,9 +173,6 @@ pub struct ProviderCatalog {
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
-    pub execution_accesses: Vec<ExecutionAccess>,
-    #[serde(default)]
-    pub market_data_accesses: Vec<MarketDataAccess>,
 }
 
 impl ProviderCatalog {
@@ -282,8 +187,6 @@ impl ProviderCatalog {
         let mut instruments = std::collections::BTreeMap::new();
         let mut listings = std::collections::BTreeMap::new();
         let mut markets = std::collections::BTreeMap::new();
-        let mut execution_accesses = std::collections::BTreeMap::new();
-        let mut market_data_accesses = std::collections::BTreeMap::new();
         let mut conflicts = Vec::new();
 
         macro_rules! merge_exact {
@@ -310,12 +213,18 @@ impl ProviderCatalog {
                 |value: &Entity| value.entity_id.clone(),
                 "entity"
             );
-            merge_exact!(
-                catalog,
-                assets,
-                |value: &Asset| value.asset_id.clone(),
-                "asset"
-            );
+            for value in &catalog.assets {
+                if let Some(previous) = assets.get_mut(&value.asset_id) {
+                    merge_asset(previous, value).map_err(|reason| {
+                        ReferenceError::Invalid(format!(
+                            "canonical asset conflict for {}: {reason}",
+                            value.asset_id
+                        ))
+                    })?;
+                } else {
+                    assets.insert(value.asset_id.clone(), value.clone());
+                }
+            }
             for value in &catalog.instruments {
                 if let Some(previous) = instruments.get_mut(&value.instrument_id) {
                     if previous != value {
@@ -342,18 +251,6 @@ impl ProviderCatalog {
                 |value: &Market| value.market_id.clone(),
                 "market"
             );
-            merge_exact!(
-                catalog,
-                execution_accesses,
-                |value: &ExecutionAccess| value.access_id.clone(),
-                "execution_access"
-            );
-            merge_exact!(
-                catalog,
-                market_data_accesses,
-                |value: &MarketDataAccess| value.access_id.clone(),
-                "market_data_access"
-            );
         }
 
         if !conflicts.is_empty() {
@@ -370,8 +267,6 @@ impl ProviderCatalog {
             instruments: instruments.into_values().collect(),
             listings: listings.into_values().collect(),
             markets: markets.into_values().collect(),
-            execution_accesses: execution_accesses.into_values().collect(),
-            market_data_accesses: market_data_accesses.into_values().collect(),
         };
         Ok(candidate)
     }
@@ -436,12 +331,6 @@ impl ProviderCatalog {
         })?;
         unique(&self.listings, "listing", |value| &value.listing_id)?;
         unique(&self.markets, "market", |value| &value.market_id)?;
-        unique(&self.execution_accesses, "execution access", |value| {
-            &value.access_id
-        })?;
-        unique(&self.market_data_accesses, "market data access", |value| {
-            &value.access_id
-        })?;
 
         for entity in &self.entities {
             if entity.entity_type == EntityKind::Unknown {
@@ -569,11 +458,6 @@ impl ProviderCatalog {
             .iter()
             .map(|value| value.asset_id.as_str())
             .collect();
-        let market_ids: std::collections::BTreeSet<_> = self
-            .markets
-            .iter()
-            .map(|value| value.market_id.as_str())
-            .collect();
         for listing in &self.listings {
             required(
                 listing.exchange_symbol.as_str(),
@@ -608,18 +492,12 @@ impl ProviderCatalog {
                     market.market_id
                 )));
             }
-            required(
-                &market.market_key,
-                &format!("market {} key", market.market_id),
-            )?;
-            required(
-                market.market_type.as_str(),
-                &format!("market {} type", market.market_id),
-            )?;
-            required(
-                market.source_symbol.as_str(),
-                &format!("market {} source symbol", market.market_id),
-            )?;
+            if market.instrument_kind == InstrumentKind::Unknown {
+                return Err(ReferenceError::Invalid(format!(
+                    "market {} instrument kind is unknown",
+                    market.market_id
+                )));
+            }
             required(
                 market.status.as_str(),
                 &format!("market {} status", market.market_id),
@@ -659,6 +537,20 @@ impl ProviderCatalog {
                 return Err(ReferenceError::Invalid(format!(
                     "market {} references missing instrument {}",
                     market.market_id, market.instrument_id
+                )));
+            }
+            let instrument = self
+                .instruments
+                .iter()
+                .find(|instrument| instrument.instrument_id == market.instrument_id)
+                .expect("instrument membership checked above");
+            if instrument.instrument_type != market.instrument_kind {
+                return Err(ReferenceError::Invalid(format!(
+                    "market {} kind {:?} does not match instrument {} kind {:?}",
+                    market.market_id,
+                    market.instrument_kind,
+                    instrument.instrument_id,
+                    instrument.instrument_type
                 )));
             }
             if let Some(listing_id) = market.listing_id.as_ref() {
@@ -711,104 +603,6 @@ impl ProviderCatalog {
                 }
             }
         }
-        for access in &self.execution_accesses {
-            required(
-                access.provider_id.as_str(),
-                &format!("execution access {} provider", access.access_id),
-            )?;
-            required(
-                access.provider_product.as_str(),
-                &format!("execution access {} product family", access.access_id),
-            )?;
-            required(
-                &access.provider_symbol,
-                &format!("execution access {} provider symbol", access.access_id),
-            )?;
-            required(
-                access.status.as_str(),
-                &format!("execution access {} status", access.access_id),
-            )?;
-            if access.instrument_id.is_none() && access.market_id.is_none() {
-                return Err(ReferenceError::Invalid(format!(
-                    "execution access {} requires an instrument or market",
-                    access.access_id
-                )));
-            }
-            if let Some(instrument_id) = access.instrument_id.as_ref() {
-                if !instrument_ids.contains(instrument_id.as_str()) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing instrument {}",
-                        access.access_id, instrument_id
-                    )));
-                }
-            }
-            if let Some(listing_id) = access.listing_id.as_ref() {
-                if !listing_ids.contains(listing_id.as_str()) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing listing {}",
-                        access.access_id, listing_id
-                    )));
-                }
-            }
-            if let Some(market_id) = access.market_id.as_ref() {
-                if !market_ids.contains(market_id.as_str()) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing market {}",
-                        access.access_id, market_id
-                    )));
-                }
-            }
-            if let Some(asset_id) = access.settlement_asset_id.as_deref() {
-                if !asset_ids.contains(asset_id) {
-                    return Err(ReferenceError::Invalid(format!(
-                        "execution access {} references missing settlement asset {}",
-                        access.access_id, asset_id
-                    )));
-                }
-            }
-            if access
-                .effective_to_unix_nanos
-                .is_some_and(|end| end <= access.effective_from_unix_nanos)
-            {
-                return Err(ReferenceError::Invalid(format!(
-                    "execution access {} has an invalid effective interval",
-                    access.access_id
-                )));
-            }
-        }
-        for access in &self.market_data_accesses {
-            required(
-                access.provider_id.as_str(),
-                &format!("market data access {} provider", access.access_id),
-            )?;
-            required(
-                access.provider_product.as_str(),
-                &format!("market data access {} product family", access.access_id),
-            )?;
-            required(
-                &access.provider_symbol,
-                &format!("market data access {} provider symbol", access.access_id),
-            )?;
-            required(
-                access.status.as_str(),
-                &format!("market data access {} status", access.access_id),
-            )?;
-            if !market_ids.contains(access.market_id.as_str()) {
-                return Err(ReferenceError::Invalid(format!(
-                    "market data access {} references missing market {}",
-                    access.access_id, access.market_id
-                )));
-            }
-            if access
-                .effective_to_unix_nanos
-                .is_some_and(|end| end <= access.effective_from_unix_nanos)
-            {
-                return Err(ReferenceError::Invalid(format!(
-                    "market data access {} has an invalid effective interval",
-                    access.access_id
-                )));
-            }
-        }
         Ok(())
     }
 }
@@ -835,35 +629,40 @@ pub(crate) fn merge_instrument(
     previous: &mut Instrument,
     incoming: &Instrument,
 ) -> Result<(), String> {
-    let status = merged_instrument_status(previous.status, incoming.status);
+    let status = merged_reference_status(previous.status, incoming.status);
     let mut left = previous.clone();
     let mut right = incoming.clone();
     left.source_id = None;
     right.source_id = None;
     left.status = status;
     right.status = status;
+    let mut fields = Vec::new();
+    macro_rules! merge_optional {
+        ($field:ident) => {
+            match (&left.$field, &right.$field) {
+                (None, Some(value)) => left.$field = Some(value.clone()),
+                (Some(value), None) => right.$field = Some(value.clone()),
+                (Some(left_value), Some(right_value)) if left_value != right_value => {
+                    fields.push(stringify!($field));
+                }
+                _ => {}
+            }
+        };
+    }
+    merge_optional!(name);
+    merge_optional!(issuer_id);
+    merge_optional!(share_class);
+    merge_optional!(primary_currency_asset_id);
+    merge_optional!(underlying_instrument_id);
+    merge_optional!(expiry_unix_nanos);
+    merge_optional!(strike);
+    merge_optional!(option_right);
     if left != right {
-        let mut fields = Vec::new();
         if left.symbol != right.symbol {
             fields.push("symbol");
         }
         if left.instrument_type != right.instrument_type {
             fields.push("instrument_type");
-        }
-        if left.primary_currency_asset_id != right.primary_currency_asset_id {
-            fields.push("primary_currency_asset_id");
-        }
-        if left.underlying_instrument_id != right.underlying_instrument_id {
-            fields.push("underlying_instrument_id");
-        }
-        if left.expiry_unix_nanos != right.expiry_unix_nanos {
-            fields.push("expiry_unix_nanos");
-        }
-        if left.strike != right.strike {
-            fields.push("strike");
-        }
-        if left.option_right != right.option_right {
-            fields.push("option_right");
         }
         if fields.is_empty() {
             fields.push("canonical attributes");
@@ -874,7 +673,40 @@ pub(crate) fn merge_instrument(
     Ok(())
 }
 
-fn merged_instrument_status(
+pub(crate) fn merge_asset(previous: &mut Asset, incoming: &Asset) -> Result<(), String> {
+    let status = merged_reference_status(previous.status, incoming.status);
+    let mut left = previous.clone();
+    let mut right = incoming.clone();
+    left.source_id = None;
+    right.source_id = None;
+    left.status = status;
+    right.status = status;
+    match (&left.name, &right.name) {
+        (None, Some(value)) => left.name = Some(value.clone()),
+        (Some(value), None) => right.name = Some(value.clone()),
+        _ => {}
+    }
+    if left != right {
+        let mut fields = Vec::new();
+        if left.code != right.code {
+            fields.push("code");
+        }
+        if left.asset_class != right.asset_class {
+            fields.push("asset_class");
+        }
+        if left.name != right.name {
+            fields.push("name");
+        }
+        if fields.is_empty() {
+            fields.push("canonical attributes");
+        }
+        return Err(format!("different {}", fields.join(", ")));
+    }
+    *previous = left;
+    Ok(())
+}
+
+fn merged_reference_status(
     left: kairos_primitives::ReferenceStatus,
     right: kairos_primitives::ReferenceStatus,
 ) -> kairos_primitives::ReferenceStatus {

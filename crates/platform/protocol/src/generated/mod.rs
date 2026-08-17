@@ -36,10 +36,6 @@ pub mod kairos {
             pub use listing_generated::*;
             mod market_generated;
             pub use market_generated::*;
-            mod execution_access_generated;
-            pub use execution_access_generated::*;
-            mod market_data_access_generated;
-            pub use market_data_access_generated::*;
             mod reference_lifecycle_status_generated;
             pub use reference_lifecycle_status_generated::*;
             mod reference_record_kind_generated;
@@ -62,14 +58,6 @@ pub mod kairos {
             pub use asset_updated_generated::*;
             mod asset_upserted_generated;
             pub use asset_upserted_generated::*;
-            mod execution_access_updated_generated;
-            pub use execution_access_updated_generated::*;
-            mod execution_access_upserted_generated;
-            pub use execution_access_upserted_generated::*;
-            mod market_data_access_updated_generated;
-            pub use market_data_access_updated_generated::*;
-            mod market_data_access_upserted_generated;
-            pub use market_data_access_upserted_generated::*;
             mod entity_updated_generated;
             pub use entity_updated_generated::*;
             mod entity_upserted_generated;
@@ -80,6 +68,10 @@ pub mod kairos {
     pub mod market {
         pub use super::common;
         pub mod v_2 {
+            mod observation_scope_generated;
+            pub use observation_scope_generated::*;
+            mod observation_scope_kind_generated;
+            pub use observation_scope_kind_generated::*;
             mod bar_completed_generated;
             pub use bar_completed_generated::*;
             mod bar_generated;
@@ -216,6 +208,12 @@ pub mod kairos {
             pub use balance_upserted_generated::*;
             mod freshness_state_generated;
             pub use freshness_state_generated::*;
+            mod segment_completeness_generated;
+            pub use segment_completeness_generated::*;
+            mod segment_sync_lifecycle_generated;
+            pub use segment_sync_lifecycle_generated::*;
+            mod segment_sync_mode_generated;
+            pub use segment_sync_mode_generated::*;
             mod margin_mode_generated;
             pub use margin_mode_generated::*;
             mod observed_order_generated;
@@ -232,6 +230,8 @@ pub mod kairos {
             pub use position_generated::*;
             mod position_mode_generated;
             pub use position_mode_generated::*;
+            mod position_side_generated;
+            pub use position_side_generated::*;
             mod position_removed_generated;
             pub use position_removed_generated::*;
             mod position_upserted_generated;
@@ -261,6 +261,10 @@ pub mod kairos {
             pub use commitment_resource_kind_generated::*;
             mod current_execution_view_generated;
             pub use current_execution_view_generated::*;
+            mod delivery_certainty_generated;
+            pub use delivery_certainty_generated::*;
+            mod execution_attempt_generated;
+            pub use execution_attempt_generated::*;
             mod execution_intent_generated;
             pub use execution_intent_generated::*;
             mod execution_leg_state_generated;
@@ -333,6 +337,10 @@ pub mod kairos {
             pub use risk_reservation_saga_lifecycle_generated::*;
             mod risk_reservation_saga_state_generated;
             pub use risk_reservation_saga_state_generated::*;
+            mod route_selection_kind_generated;
+            pub use route_selection_kind_generated::*;
+            mod selected_execution_route_generated;
+            pub use selected_execution_route_generated::*;
             mod split_order_policy_generated;
             pub use split_order_policy_generated::*;
             mod time_in_force_generated;

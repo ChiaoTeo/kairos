@@ -111,6 +111,10 @@ Account server and CLI acquire the same normalized `host:port:client_id`
 `TotalCashValue` and `AvailableFunds` per currency so an available-only update
 cannot overwrite authoritative total cash; the complete account snapshot is
 the reconnect/recovery baseline.
+Production and CLI Account composition use the native async snapshot and
+account-update stream, and the old blocking Account synchronization projection
+has been removed. Account owns per-segment bootstrap, recovery/resync,
+freshness, current view, and publication.
 
 The execution slice is complete only when:
 

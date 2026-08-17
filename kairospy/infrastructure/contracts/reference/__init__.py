@@ -4,6 +4,13 @@ Reference exposes typed event payloads, contract-owned SQLite queries, and
 REST control commands. Business callers never know its persistence schema.
 """
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import ReferenceClient
+    from .control import ReferenceControlClient
+    from .events import decode_event
+
 
 def __getattr__(name: str):
     if name == "ReferenceClient":

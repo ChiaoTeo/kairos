@@ -13,19 +13,22 @@ impl MarketApplication {
         market: ResolvedMarket,
         reason: String,
     ) -> Result<(), MarketError> {
+        let canonical_market_id = market.market_id().cloned().ok_or_else(|| {
+            MarketError::Invalid("order-book resync requires a canonical market scope".into())
+        })?;
         if self.actor.pending_source_requests.values().any(|pending| {
             matches!(
                 pending,
                 PendingSourceRequest::ResyncOrderBook {
                     source_id: pending_source,
                     market_id,
-                } if pending_source == &source_id && market_id == &market.market_id
+                } if pending_source == &source_id && market_id == &canonical_market_id
             )
         }) {
             return Ok(());
         }
         self.actor
-            .begin_orderbook_resync(&source_id, epoch, &market.market_id, reason)
+            .begin_orderbook_resync(&source_id, epoch, &canonical_market_id, reason)
             .map_err(MarketError::Invalid)?;
         let request_id = self.next_request_id();
         self.actor
@@ -47,7 +50,7 @@ impl MarketApplication {
             request_id,
             PendingSourceRequest::ResyncOrderBook {
                 source_id,
-                market_id: market.market_id,
+                market_id: canonical_market_id,
             },
         );
         Ok(())

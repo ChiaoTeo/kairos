@@ -25,7 +25,7 @@ use std::str::FromStr;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let workspace = Workspace::open(&args.workspace)?;
-    let database = workspace.child(&["reference", "reference.sqlite"])?;
+    let database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     ensure_database_parent(&database)?;
     let output = args.output.unwrap_or_else(|| {
         workspace
@@ -117,7 +117,7 @@ fn execute_read(
                 market_id.as_deref().is_none_or(|expected| {
                     value.get("market_id").and_then(Value::as_str) == Some(expected)
                 }) && args.symbol.as_deref().is_none_or(|expected| {
-                    value.get("source_symbol").and_then(Value::as_str) == Some(expected)
+                    value.get("venue_symbol").and_then(Value::as_str) == Some(expected)
                 }) && args
                     .exchange_id
                     .as_deref()
@@ -126,11 +126,11 @@ fn execute_read(
                         value.get("exchange_id").and_then(Value::as_str) == Some(expected)
                     })
                     && args
-                        .market_type
+                        .instrument_kind
                         .as_deref()
                         .or(args.market.as_deref())
                         .is_none_or(|expected| {
-                            value.get("market_type").and_then(Value::as_str) == Some(expected)
+                            value.get("instrument_kind").and_then(Value::as_str) == Some(expected)
                         })
                     && args.asset_type.as_deref().is_none_or(|expected| {
                         value.get("asset_type").and_then(Value::as_str) == Some(expected)
@@ -216,8 +216,6 @@ fn diagnostic_snapshot(
         instruments: records(reader, ReferenceCollection::Instruments)?,
         listings: records(reader, ReferenceCollection::Listings)?,
         markets: records(reader, ReferenceCollection::Markets)?,
-        execution_accesses: records(reader, ReferenceCollection::ExecutionAccesses)?,
-        market_data_accesses: records(reader, ReferenceCollection::MarketDataAccesses)?,
         lifecycle_events: records(reader, ReferenceCollection::LifecycleEvents)?,
         ..Default::default()
     })
@@ -245,7 +243,11 @@ fn read_query(
                     "exchange_id",
                     query.exchange_id.as_ref().map(|value| value.as_str()),
                 )
-                && matches_field(value, "market_type", query.market_type.as_deref())
+                && matches_field(
+                    value,
+                    "instrument_kind",
+                    query.instrument_kind.map(|value| value.as_str()),
+                )
                 && matches_field(
                     value,
                     "underlying_instrument_id",
@@ -277,8 +279,6 @@ fn snapshot_collections(
     include!(Instrument, instruments);
     include!(Listing, listings);
     include!(Market, markets);
-    include!(ExecutionAccess, execution_accesses);
-    include!(MarketDataAccess, market_data_accesses);
     include!(Event, lifecycle_events);
     Ok(all)
 }
@@ -406,7 +406,7 @@ async fn execute(
                     .into_iter()
                     .filter(|event| {
                         event
-                            .source_symbol
+                            .venue_symbol
                             .as_deref()
                             .is_none_or(|symbol| symbol.to_ascii_lowercase() == ticker)
                             && sync.exchange_id.as_deref().is_none_or(|exchange| {
@@ -500,7 +500,11 @@ impl QueryArgs {
             exchange_id: self
                 .exchange_id
                 .map(|value| Exchange::new(value).expect("valid exchange id")),
-            market_type: self.market_type,
+            instrument_kind: self.instrument_kind.as_deref().map(|value| {
+                value
+                    .parse()
+                    .unwrap_or(kairos_primitives::InstrumentKind::Unknown)
+            }),
             underlying_instrument_id: self.underlying_instrument_id,
             status: self.status,
             active_only: self.active_only,
@@ -716,7 +720,7 @@ struct MarketQueryArgs {
     #[arg(long, visible_alias = "exchange")]
     exchange: Option<String>,
     #[arg(long)]
-    market_type: Option<String>,
+    instrument_kind: Option<String>,
     #[arg(long)]
     asset_type: Option<String>,
     #[arg(long, visible_alias = "market")]
@@ -738,7 +742,7 @@ struct QueryArgs {
     #[arg(long)]
     exchange_id: Option<String>,
     #[arg(long)]
-    market_type: Option<String>,
+    instrument_kind: Option<String>,
     #[arg(long, visible_alias = "underlying")]
     underlying_instrument_id: Option<String>,
     #[arg(long)]
@@ -801,10 +805,6 @@ impl QueryArgs {
             "instrument" => ReferenceKind::Instrument,
             "listing" => ReferenceKind::Listing,
             "market" => ReferenceKind::Market,
-            "execution-access" | "execution_access" | "access" => ReferenceKind::ExecutionAccess,
-            "market-data-access" | "market_data_access" | "data-access" => {
-                ReferenceKind::MarketDataAccess
-            }
             "event" => ReferenceKind::Event,
             _ => ReferenceKind::All,
         }

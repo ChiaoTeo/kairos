@@ -17,13 +17,72 @@ class WorkspaceIdentity:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkspacePaths:
+class ResourceScopePaths:
+    """The common resource layout used by Workspace and instance scopes."""
+
     root: Path
+
+    def child(self, *parts: str) -> Path:
+        if not parts or any(
+            not part or part in {".", ".."} or "/" in part or "\\" in part
+            for part in parts
+        ):
+            raise ValueError("scope resource path must contain named components")
+        return self.root.joinpath(*parts)
+
+    @property
+    def config(self) -> Path:
+        return self.child("config")
+
+    @property
+    def data(self) -> Path:
+        return self.child("data")
+
+    @property
+    def state(self) -> Path:
+        return self.child("state")
+
+    @property
+    def snapshots(self) -> Path:
+        return self.child("snapshots")
+
+    @property
+    def run(self) -> Path:
+        return self.child("run")
+
+    @property
+    def logs(self) -> Path:
+        return self.child("logs")
+
+    def process_dir(self, component: str) -> Path:
+        return self.child("run", component)
+
+    def process_socket(self, component: str) -> Path:
+        candidate = self.process_dir(component) / "control.sock"
+        if len(str(candidate).encode()) <= 100:
+            return candidate
+        digest = hashlib.sha256(f"{self.root}:{component}".encode()).hexdigest()[:20]
+        return Path("/tmp") / f"kairos-process-{digest}-{component}.sock"
+
+    def process_lock(self, component: str) -> Path:
+        return self.process_dir(component) / "process.lock"
+
+    def health_file(self, component: str) -> Path:
+        return self.process_dir(component) / "health.json"
+
+    def component_state(self, component: str, *parts: str) -> Path:
+        return self.child("state", component, *parts)
+
+    def component_snapshot(self, component: str, *parts: str) -> Path:
+        return self.child("snapshots", component, *parts)
+
+    def component_log(self, component: str, *parts: str) -> Path:
+        return self.child("logs", component, *parts)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspacePaths(ResourceScopePaths):
     manifest: Path
-    config: Path
-    state: Path
-    run: Path
-    logs: Path
     launches: Path
 
     @property
@@ -41,17 +100,21 @@ class WorkspacePaths:
             raise ValueError("workspace resource escapes workspace root") from error
         return candidate
 
+    @property
+    def scope(self) -> ResourceScopePaths:
+        return ResourceScopePaths(self.root)
+
     def reference_database(self) -> Path:
-        return self.child("reference", "reference.sqlite")
+        return self.reference_root() / "reference.sqlite"
 
     def data_root(self) -> Path:
         return self.child("data")
 
     def reference_root(self) -> Path:
-        return self.child("reference")
+        return self.child("state", "reference")
 
     def market_connections_root(self) -> Path:
-        return self.child("market", "connections")
+        return self.child("config", "market", "connections")
 
     def operations_journal(self) -> Path:
         return self.child("state", "operations.jsonl")
@@ -60,10 +123,10 @@ class WorkspacePaths:
         return self.child("state", "launch-index.json")
 
     def orders_root(self) -> Path:
-        return self.child("orders", "journals")
+        return self.child("state", "execution", "orders")
 
     def process_dir(self, name: str) -> Path:
-        return self.child("run", name)
+        return self.scope.process_dir(name)
 
     def aeron_dir(self) -> Path:
         """Workspace-owned Aeron Media Driver directory."""
@@ -77,23 +140,16 @@ class WorkspacePaths:
         return self.child("run", name, "health.json")
 
     def process_socket(self, process: str) -> Path:
-        candidate = self.child("run", process, f"{process}.sock")
-        # macOS limits AF_UNIX socket addresses to a small fixed byte length.
-        # Use the same stable alias as the Rust workspace library when the
-        # logical workspace path cannot be represented by the OS.
-        if len(str(candidate).encode()) <= 100:
-            return candidate
-        digest = hashlib.sha256(f"{self.root}:{process}".encode()).hexdigest()[:20]
-        return Path("/tmp") / f"kairos-process-{digest}-{process}.sock"
+        return self.scope.process_socket(process)
 
     def process_lock(self, process: str) -> Path:
-        return self.child("run", process, f"{process}.lock")
+        return self.scope.process_lock(process)
 
     def account_config(self) -> Path:
-        return self.child("accounts", "accounts.toml")
+        return self.child("config", "accounts", "accounts.toml")
 
     def credential_config(self) -> Path:
-        return self.child("credentials", "credentials.toml")
+        return self.child("config", "credentials", "credentials.toml")
 
     def account_state(self) -> Path:
         return self.child("state", "account", "account-state.json")
@@ -108,90 +164,27 @@ class WorkspacePaths:
         return self.child("state", "account-locks")
 
     def reference_socket(self) -> Path:
-        return self.child("run", "reference", "reference.sock")
+        return self.process_socket("reference")
 
     def reference_health(self) -> Path:
-        return self.child("run", "reference", "health.json")
+        return self.health_file("reference")
 
     def risk_socket(self) -> Path:
-        return self.child("run", "risk", "risk.sock")
+        return self.process_socket("risk")
 
     def risk_health(self) -> Path:
-        return self.child("run", "risk", "health.json")
+        return self.health_file("risk")
 
     def launch_socket(self, mode: str, launch_id: str, instance_id: str) -> Path:
-        candidate = self.child(
-            "launches", mode, launch_id, "instances", instance_id, "strategy.sock"
-        )
-        # macOS limits AF_UNIX socket addresses to a small fixed byte length.
-        # Keep the logical workspace path for normal roots, but use a stable
-        # short alias when temporary or deeply nested roots would not bind.
-        if len(str(candidate).encode()) <= 100:
-            return candidate
-        digest = hashlib.sha256(
-            f"{self.root}:{mode}:{launch_id}:{instance_id}".encode()
-        ).hexdigest()[:20]
-        return Path("/tmp") / f"kairos-strategy-{digest}.sock"
+        return ResourceScopePaths(
+            self.launch_instance_root(mode, launch_id, instance_id)
+        ).process_socket("strategy")
 
     def launch_root(self, mode: str, launch_id: str) -> Path:
         return self.child("launches", mode, launch_id)
 
     def launch_instance_root(self, mode: str, launch_id: str, instance_id: str) -> Path:
         return self.child("launches", mode, launch_id, "instances", instance_id)
-
-    def instance_socket(
-        self, mode: str, launch_id: str, instance_id: str, name: str
-    ) -> Path:
-        candidate = (
-            self.launch_instance_root(mode, launch_id, instance_id)
-            / "sockets"
-            / f"{name}.sock"
-        )
-        # macOS limits AF_UNIX socket addresses to a small fixed byte length.
-        # Instance paths contain a generated UUID and can exceed that limit
-        # even when the workspace itself is valid.  Keep the logical path
-        # where possible and use a stable alias for long paths.
-        if len(str(candidate).encode()) <= 100:
-            return candidate
-        digest = hashlib.sha256(
-            f"{self.root}:{mode}:{launch_id}:{instance_id}:{name}".encode()
-        ).hexdigest()[:20]
-        return Path("/tmp") / f"kairos-instance-{digest}-{name}.sock"
-
-    def instance_health(
-        self, mode: str, launch_id: str, instance_id: str, name: str
-    ) -> Path:
-        return (
-            self.launch_instance_root(mode, launch_id, instance_id)
-            / "health"
-            / f"{name}.json"
-        )
-
-    def instance_state(
-        self, mode: str, launch_id: str, instance_id: str, *parts: str
-    ) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
-            "state", *parts
-        )
-
-    def instance_snapshot(
-        self, mode: str, launch_id: str, instance_id: str, *parts: str
-    ) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
-            "snapshots", *parts
-        )
-
-    def instance_log(
-        self, mode: str, launch_id: str, instance_id: str, *parts: str
-    ) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id).joinpath(
-            "logs", *parts
-        )
-
-    def instance_manifest(self, mode: str, launch_id: str, instance_id: str) -> Path:
-        return self.instance_state(
-            mode, launch_id, instance_id, "component-endpoints.json"
-        )
 
     def launch_config(self, launch_id: str) -> Path:
         return self.child("config", "launches", f"{launch_id}.toml")
@@ -241,12 +234,12 @@ class InstanceWorkspace:
                 raise ValueError(f"{name} must be a single path component")
 
     @property
-    def paths(self) -> WorkspacePaths:
-        return self.workspace.paths
+    def paths(self) -> ResourceScopePaths:
+        return ResourceScopePaths(self.root)
 
     @property
     def root(self) -> Path:
-        return self.paths.launch_instance_root(
+        return self.workspace.paths.launch_instance_root(
             self.mode, self.launch_id, self.instance_id
         )
 
@@ -262,49 +255,48 @@ class InstanceWorkspace:
         return parts
 
     def socket(self, name: str) -> Path:
-        return self.paths.instance_socket(
-            self.mode, self.launch_id, self.instance_id, self._parts((name,))[0]
-        )
+        return self.paths.process_socket(self._parts((name,))[0])
 
     def health(self, name: str) -> Path:
-        return self.paths.instance_health(
-            self.mode, self.launch_id, self.instance_id, self._parts((name,))[0]
-        )
+        return self.paths.health_file(self._parts((name,))[0])
 
     def lock(self, name: str) -> Path:
-        component = self._parts((name,))[0]
-        return self.root / "locks" / f"{component}.lock"
+        return self.paths.process_lock(self._parts((name,))[0])
 
     def state(self, *parts: str) -> Path:
-        return self.paths.instance_state(
-            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
-        )
+        return self.paths.child("state", *self._parts(parts))
 
     def snapshot(self, *parts: str) -> Path:
-        return self.paths.instance_snapshot(
-            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
-        )
+        return self.paths.child("snapshots", *self._parts(parts))
 
     def log(self, *parts: str) -> Path:
-        return self.paths.instance_log(
-            self.mode, self.launch_id, self.instance_id, *self._parts(parts)
-        )
+        return self.paths.child("logs", *self._parts(parts))
 
     def component_manifest(self) -> Path:
-        return self.paths.instance_manifest(self.mode, self.launch_id, self.instance_id)
+        return self.root / "manifest.json"
 
     def market_state(self, name: str) -> Path:
         return self.state("market", name)
 
+    def normalized_config(self) -> Path:
+        return self.paths.child("config", "normalized.json")
+
+    def launch_status(self) -> Path:
+        return self.state("launch", "status.json")
+
+    def launch_command(self) -> Path:
+        return self.state("launch", "command.json")
+
+    def launch_database(self) -> Path:
+        return self.state("launch", "run.sqlite")
+
+    def lifecycle_journal(self) -> Path:
+        return self.state("launch", "lifecycle.jsonl")
+
+    def checkpoint(self, component: str, *parts: str) -> Path:
+        return self.state(
+            self._parts((component,))[0], "checkpoints", *self._parts(parts)
+        )
+
     def prepare(self) -> None:
-        for directory in (
-            self.root,
-            self.root / "sockets",
-            self.root / "health",
-            self.root / "locks",
-            self.root / "state",
-            self.root / "snapshots",
-            self.root / "logs",
-            self.root / "checkpoints",
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)

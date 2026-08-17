@@ -1,30 +1,50 @@
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
-use kairos_account_contract::decode_account_current;
+use kairos_account_contract::{
+    decode_account_current, AccountContractClient, DecimalValue, SimulatedSettlement,
+};
 use kairos_transport::{SharedSnapshotReader, SnapshotEnvelopeMetadata};
 use kairos_workspace::Workspace;
+use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
 
-struct Server(Child);
+struct Server {
+    child: Child,
+    stderr_path: PathBuf,
+}
 
 impl Server {
     fn stop(mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
+    fn exit_error(&mut self) -> Option<String> {
+        let status = self.child.try_wait().expect("inspect Account server");
+        status.map(|status| {
+            let stderr = std::fs::read_to_string(&self.stderr_path).unwrap_or_default();
+            format!("Account server exited with {status}: {stderr}")
+        })
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
-fn start_server(workspace: &Workspace) -> Server {
+fn start_server(workspace: &Workspace, aeron_dir: &Path) -> Server {
+    let stderr_path = workspace
+        .root()
+        .join(format!("account-server-{}.stderr.log", std::process::id()));
+    let stderr = File::create(&stderr_path).expect("create Account server stderr log");
     let child = Command::new(env!("CARGO_BIN_EXE_kairos-account-server"))
         .args([
             "--workspace",
@@ -39,40 +59,66 @@ fn start_server(workspace: &Workspace) -> Server {
             "instance-1",
             "--refresh-ms",
             "25",
+            "--aeron-dir",
+            aeron_dir.to_str().unwrap(),
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr))
         .spawn()
         .expect("start Account server");
-    Server(child)
+    Server { child, stderr_path }
 }
 
 fn wait_for_snapshot(
-    path: &std::path::Path,
+    path: &Path,
+    server: &mut Server,
     previous_incarnation: Option<u64>,
+    minimum_generation: u64,
+    expected_balance: &str,
 ) -> (SnapshotEnvelopeMetadata, String) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut last_error = String::new();
     while Instant::now() < deadline {
+        if let Some(error) = server.exit_error() {
+            panic!("{error}");
+        }
         match SharedSnapshotReader::open(path).and_then(|reader| reader.read_payload()) {
             Ok(frame) => match decode_account_current(&frame.payload) {
                 Ok(view)
                     if previous_incarnation
-                        .is_none_or(|value| value != frame.producer_incarnation) =>
+                        .is_none_or(|value| value != frame.producer_incarnation)
+                        && frame.generation >= minimum_generation =>
                 {
-                    let balance = view.segments().get(0).balances().get(0).total();
-                    return (
-                        SnapshotEnvelopeMetadata {
-                            resource_epoch: frame.resource_epoch,
-                            producer_incarnation: frame.producer_incarnation,
-                            generation: frame.generation,
-                            applied_event_sequence: frame.applied_event_sequence,
-                            published_at_unix_nanos: frame.published_at_unix_nanos,
-                        },
-                        format!("{}:{}", balance.mantissa(), balance.scale()),
-                    );
+                    let balances = view.segments().get(0).balances();
+                    if !balances.is_empty() {
+                        let balance = balances.get(0).total();
+                        let balance = format!("{}:{}", balance.mantissa(), balance.scale());
+                        if balance == expected_balance {
+                            return (
+                                SnapshotEnvelopeMetadata {
+                                    resource_epoch: frame.resource_epoch,
+                                    producer_incarnation: frame.producer_incarnation,
+                                    generation: frame.generation,
+                                    applied_event_sequence: frame.applied_event_sequence,
+                                    published_at_unix_nanos: frame.published_at_unix_nanos,
+                                },
+                                balance,
+                            );
+                        }
+                        last_error = format!(
+                            "balance is {balance}, expected {expected_balance}; generation={}",
+                            frame.generation
+                        );
+                    } else {
+                        last_error = "snapshot has no balances".into();
+                    }
                 }
-                Ok(_) => last_error = "snapshot still belongs to the previous producer".into(),
+                Ok(_) => {
+                    last_error = format!(
+                        "snapshot has not reached the expected incarnation/generation; incarnation={} generation={}",
+                        frame.producer_incarnation, frame.generation
+                    )
+                }
                 Err(error) => last_error = error.to_string(),
             },
             Err(error) => last_error = error.to_string(),
@@ -86,6 +132,12 @@ fn wait_for_snapshot(
 fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation() {
     let directory = tempfile::tempdir().unwrap();
     let workspace = Workspace::init(directory.path(), "account-restart-test").unwrap();
+    let aeron_dir = directory.path().join("aeron");
+    let driver_context = AeronDriverContext::new().unwrap();
+    driver_context
+        .set_dir(&aeron_dir.to_string_lossy().into_c_string())
+        .unwrap();
+    let _driver = AeronDriver::launch_embedded_guard(driver_context, true);
     let registry = AccountRegistry {
         accounts: vec![AccountBindingRecord {
             account_id: "paper-main".into(),
@@ -110,28 +162,73 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
         }],
     };
     registry
-        .save(workspace.child(&["accounts", "accounts.toml"]).unwrap())
+        .save(
+            workspace
+                .child(&["config", "accounts", "accounts.toml"])
+                .unwrap(),
+        )
         .unwrap();
 
     let instance = workspace
         .instance("paper", "restart-test", "instance-1")
         .unwrap();
     let snapshot_path = instance.service_snapshot("account").unwrap();
+    let socket_path = instance.socket("account").unwrap();
 
-    let first = start_server(&workspace);
-    let (first_metadata, first_balance) = wait_for_snapshot(&snapshot_path, None);
+    let mut first = start_server(&workspace, &aeron_dir);
+    let (first_metadata, first_balance) =
+        wait_for_snapshot(&snapshot_path, &mut first, None, 1, "1000:0");
+    let client = AccountContractClient::connect(&socket_path).unwrap();
+    client
+        .apply_simulated_settlement(&SimulatedSettlement {
+            fill_id: "restart-persisted-fill".into(),
+            order_id: "restart-persisted-order".into(),
+            segment_key: "spot".into(),
+            instrument_id: "paper:BTC-USDT".into(),
+            quantity: DecimalValue {
+                mantissa: 1,
+                scale: 0,
+            },
+            price: DecimalValue {
+                mantissa: 100,
+                scale: 0,
+            },
+            side: "buy".into(),
+            settlement_asset: "USDT".into(),
+            settlement_delta: DecimalValue {
+                mantissa: -100,
+                scale: 0,
+            },
+            fee_asset: None,
+            fee_amount: None,
+            occurred_at_unix_nanos: 1_000_000_000,
+        })
+        .unwrap();
+    let (persisted_metadata, persisted_balance) = wait_for_snapshot(
+        &snapshot_path,
+        &mut first,
+        None,
+        first_metadata.generation + 1,
+        "900:0",
+    );
     first.stop();
 
-    let second = start_server(&workspace);
-    let (second_metadata, second_balance) =
-        wait_for_snapshot(&snapshot_path, Some(first_metadata.producer_incarnation));
+    let mut second = start_server(&workspace, &aeron_dir);
+    let (second_metadata, second_balance) = wait_for_snapshot(
+        &snapshot_path,
+        &mut second,
+        Some(persisted_metadata.producer_incarnation),
+        persisted_metadata.generation,
+        "900:0",
+    );
     second.stop();
 
     assert_ne!(
-        first_metadata.producer_incarnation,
+        persisted_metadata.producer_incarnation,
         second_metadata.producer_incarnation
     );
-    assert!(second_metadata.generation >= first_metadata.generation);
-    assert_eq!(second_balance, first_balance);
-    assert_eq!(second_balance, "1000:0");
+    assert!(second_metadata.generation >= persisted_metadata.generation);
+    assert_eq!(first_balance, "1000:0");
+    assert_eq!(persisted_balance, "900:0");
+    assert_eq!(second_balance, persisted_balance);
 }

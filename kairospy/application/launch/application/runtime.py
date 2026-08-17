@@ -222,6 +222,25 @@ class LaunchRuntimeApplication:
             launch_id, instance, mode=mode
         )
 
+    @staticmethod
+    def _is_running_status(status: Mapping[str, Any]) -> bool:
+        return status.get("status") not in {
+            "not_running",
+            "stopped",
+            "failed",
+            "completed",
+        }
+
+    @staticmethod
+    def _latest_entry(entries: list[dict[str, Any]]) -> dict[str, Any]:
+        return max(
+            entries,
+            key=lambda entry: (
+                str(entry.get("updated_at") or entry.get("created_at") or ""),
+                str(entry.get("instance_id") or ""),
+            ),
+        )
+
     def running_instance(
         self, launch_id: str, mode: str | None = None
     ) -> dict[str, Any] | None:
@@ -239,7 +258,7 @@ class LaunchRuntimeApplication:
             status = control.status(
                 control.target(launch_id, instance, mode=entry_mode)
             )
-            if status.get("status") != "not_running":
+            if self._is_running_status(status):
                 running.append({**entry, **status})
         if mode is None and len(running) > 1:
             raise LaunchRuntimeError(
@@ -255,12 +274,22 @@ class LaunchRuntimeApplication:
     ) -> tuple[str, str]:
         if instance and mode:
             return instance, mode
+        entries = LaunchRegistryApplication(self.workspace).instances(launch_id)
+        if instance:
+            matching_instance = [
+                entry
+                for entry in entries
+                if entry.get("instance_id") == instance
+                and (mode is None or entry.get("mode") == mode)
+            ]
+            if matching_instance:
+                entry = self._latest_entry(matching_instance)
+                return instance, str(entry.get("mode") or mode or "paper")
         active = self.running_instance(launch_id, mode)
         if active is not None:
             return str(active["instance_id"]), str(
                 active.get("mode") or mode or "paper"
             )
-        entries = LaunchRegistryApplication(self.workspace).instances(launch_id)
         matching = [
             entry
             for entry in entries
@@ -268,7 +297,7 @@ class LaunchRuntimeApplication:
             and (instance is None or entry.get("instance_id") == instance)
         ]
         if matching:
-            entry = matching[-1]
+            entry = self._latest_entry(matching)
             return str(entry.get("instance_id") or instance or "default"), str(
                 entry.get("mode") or mode or "paper"
             )
@@ -299,7 +328,7 @@ class LaunchRuntimeApplication:
             status = control.status(
                 control.target(launch_id, entry_instance, mode=entry_mode)
             )
-            if status.get("status") != "not_running":
+            if self._is_running_status(status):
                 running.append({**entry, **status})
         if len(running) > 1:
             raise LaunchRuntimeError(
@@ -435,6 +464,21 @@ class LaunchRuntimeApplication:
             )
             account_endpoints: dict[str, dict[str, Any]] = {}
             for bound_account_id in lease_account_ids:
+                required_segments = tuple(
+                    plan.required_account_segments.get(bound_account_id, ())
+                )
+                configured_segments = {
+                    str(value)
+                    for value in account_records[bound_account_id].get("segments", [])
+                }
+                missing_segments = sorted(
+                    set(required_segments).difference(configured_segments)
+                )
+                if missing_segments:
+                    raise LaunchConfigError(
+                        f"account {bound_account_id} does not configure required segments: "
+                        + ", ".join(missing_segments)
+                    )
                 socket_name = account_component_name(bound_account_id)
                 components.ensure_running(
                     "account",
@@ -446,6 +490,7 @@ class LaunchRuntimeApplication:
                     "socket": str(instance_workspace.socket(socket_name)),
                     "health": str(instance_workspace.health(socket_name)),
                     "socket_name": socket_name,
+                    "required_segments": list(required_segments),
                     "snapshot": str(
                         instance_workspace.snapshot(
                             socket_name, f"{socket_name}.snapshot"

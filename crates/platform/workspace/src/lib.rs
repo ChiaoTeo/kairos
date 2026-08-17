@@ -13,5 +13,6 @@ pub use runtime::{
     STOP_PATH,
 };
 pub use workspace::{
-    InstanceWorkspace, Workspace, WorkspaceFencedLease, WorkspaceManifest, WorkspaceProcessLock,
+    InstanceWorkspace, ResourceScope, Workspace, WorkspaceFencedLease, WorkspaceManifest,
+    WorkspaceProcessLock,
 };

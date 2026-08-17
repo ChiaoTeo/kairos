@@ -29,19 +29,21 @@ impl<'a> OrderState<'a> {
     pub const VT_SEGMENT_KEY: ::flatbuffers::VOffsetT = 16;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 18;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 20;
-    pub const VT_EXECUTION_ACCESS_ID: ::flatbuffers::VOffsetT = 22;
-    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 24;
-    pub const VT_SIDE: ::flatbuffers::VOffsetT = 26;
-    pub const VT_ORDER_TYPE: ::flatbuffers::VOffsetT = 28;
-    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 30;
-    pub const VT_FILLED_QUANTITY: ::flatbuffers::VOffsetT = 32;
-    pub const VT_LIMIT_PRICE: ::flatbuffers::VOffsetT = 34;
-    pub const VT_AVERAGE_FILL_PRICE: ::flatbuffers::VOffsetT = 36;
-    pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 38;
-    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 40;
-    pub const VT_SUBMITTED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 42;
-    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 44;
-    pub const VT_REASON: ::flatbuffers::VOffsetT = 46;
+    pub const VT_EXECUTION_ROUTE_ID: ::flatbuffers::VOffsetT = 22;
+    pub const VT_SELECTED_ROUTE: ::flatbuffers::VOffsetT = 24;
+    pub const VT_ATTEMPTS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 28;
+    pub const VT_SIDE: ::flatbuffers::VOffsetT = 30;
+    pub const VT_ORDER_TYPE: ::flatbuffers::VOffsetT = 32;
+    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 34;
+    pub const VT_FILLED_QUANTITY: ::flatbuffers::VOffsetT = 36;
+    pub const VT_LIMIT_PRICE: ::flatbuffers::VOffsetT = 38;
+    pub const VT_AVERAGE_FILL_PRICE: ::flatbuffers::VOffsetT = 40;
+    pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 42;
+    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 44;
+    pub const VT_SUBMITTED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 46;
+    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 48;
+    pub const VT_REASON: ::flatbuffers::VOffsetT = 50;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -81,8 +83,14 @@ impl<'a> OrderState<'a> {
         if let Some(x) = args.remote_order_id {
             builder.add_remote_order_id(x);
         }
-        if let Some(x) = args.execution_access_id {
-            builder.add_execution_access_id(x);
+        if let Some(x) = args.attempts {
+            builder.add_attempts(x);
+        }
+        if let Some(x) = args.selected_route {
+            builder.add_selected_route(x);
+        }
+        if let Some(x) = args.execution_route_id {
+            builder.add_execution_route_id(x);
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
@@ -217,17 +225,44 @@ impl<'a> OrderState<'a> {
         }
     }
     #[inline]
-    pub fn execution_access_id(&self) -> &'a str {
+    pub fn execution_route_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    OrderState::VT_EXECUTION_ACCESS_ID,
+                    OrderState::VT_EXECUTION_ROUTE_ID,
                     None,
                 )
                 .unwrap()
+        }
+    }
+    #[inline]
+    pub fn selected_route(&self) -> Option<SelectedExecutionRoute<'a>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<SelectedExecutionRoute>>(
+                    OrderState::VT_SELECTED_ROUTE,
+                    None,
+                )
+        }
+    }
+    #[inline]
+    pub fn attempts(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAttempt<'a>>>>
+    {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAttempt>>,
+            >>(OrderState::VT_ATTEMPTS, None)
         }
     }
     #[inline]
@@ -409,10 +444,18 @@ impl ::flatbuffers::Verifiable for OrderState<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "execution_access_id",
-                Self::VT_EXECUTION_ACCESS_ID,
+                "execution_route_id",
+                Self::VT_EXECUTION_ROUTE_ID,
                 true,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<SelectedExecutionRoute>>(
+                "selected_route",
+                Self::VT_SELECTED_ROUTE,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<ExecutionAttempt>>,
+            >>("attempts", Self::VT_ATTEMPTS, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "remote_order_id",
                 Self::VT_REMOTE_ORDER_ID,
@@ -471,7 +514,13 @@ pub struct OrderStateArgs<'a> {
     pub segment_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub execution_access_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_route_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub selected_route: Option<::flatbuffers::WIPOffset<SelectedExecutionRoute<'a>>>,
+    pub attempts: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAttempt<'a>>>,
+        >,
+    >,
     pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: super::super::common::v_2::Side,
     pub order_type: OrderType,
@@ -489,16 +538,18 @@ impl<'a> Default for OrderStateArgs<'a> {
     #[inline]
     fn default() -> Self {
         OrderStateArgs {
-            order_id: None,            // required field
-            intent_id: None,           // required field
-            plan_id: None,             // required field
-            leg_id: None,              // required field
-            strategy_id: None,         // required field
-            account_id: None,          // required field
-            segment_key: None,         // required field
-            instrument_id: None,       // required field
-            market_id: None,           // required field
-            execution_access_id: None, // required field
+            order_id: None,           // required field
+            intent_id: None,          // required field
+            plan_id: None,            // required field
+            leg_id: None,             // required field
+            strategy_id: None,        // required field
+            account_id: None,         // required field
+            segment_key: None,        // required field
+            instrument_id: None,      // required field
+            market_id: None,          // required field
+            execution_route_id: None, // required field
+            selected_route: None,
+            attempts: None,
             remote_order_id: None,
             side: super::super::common::v_2::Side::UNSPECIFIED,
             order_type: OrderType::UNSPECIFIED,
@@ -572,14 +623,35 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderStateBuilder<'a, 'b, A> 
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(OrderState::VT_MARKET_ID, market_id);
     }
     #[inline]
-    pub fn add_execution_access_id(
+    pub fn add_execution_route_id(
         &mut self,
-        execution_access_id: ::flatbuffers::WIPOffset<&'b str>,
+        execution_route_id: ::flatbuffers::WIPOffset<&'b str>,
     ) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            OrderState::VT_EXECUTION_ACCESS_ID,
-            execution_access_id,
+            OrderState::VT_EXECUTION_ROUTE_ID,
+            execution_route_id,
         );
+    }
+    #[inline]
+    pub fn add_selected_route(
+        &mut self,
+        selected_route: ::flatbuffers::WIPOffset<SelectedExecutionRoute<'b>>,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<SelectedExecutionRoute>>(
+                OrderState::VT_SELECTED_ROUTE,
+                selected_route,
+            );
+    }
+    #[inline]
+    pub fn add_attempts(
+        &mut self,
+        attempts: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<ExecutionAttempt<'b>>>,
+        >,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(OrderState::VT_ATTEMPTS, attempts);
     }
     #[inline]
     pub fn add_remote_order_id(&mut self, remote_order_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -702,7 +774,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderStateBuilder<'a, 'b, A> 
             .required(o, OrderState::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, OrderState::VT_MARKET_ID, "market_id");
         self.fbb_
-            .required(o, OrderState::VT_EXECUTION_ACCESS_ID, "execution_access_id");
+            .required(o, OrderState::VT_EXECUTION_ROUTE_ID, "execution_route_id");
         self.fbb_.required(o, OrderState::VT_QUANTITY, "quantity");
         self.fbb_
             .required(o, OrderState::VT_FILLED_QUANTITY, "filled_quantity");
@@ -722,7 +794,9 @@ impl ::core::fmt::Debug for OrderState<'_> {
         ds.field("segment_key", &self.segment_key());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
-        ds.field("execution_access_id", &self.execution_access_id());
+        ds.field("execution_route_id", &self.execution_route_id());
+        ds.field("selected_route", &self.selected_route());
+        ds.field("attempts", &self.attempts());
         ds.field("remote_order_id", &self.remote_order_id());
         ds.field("side", &self.side());
         ds.field("order_type", &self.order_type());

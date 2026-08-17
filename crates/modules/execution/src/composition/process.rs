@@ -1,11 +1,12 @@
 //! Complete assembly of the reusable Execution process.
 
 use super::{
-    compose_execution_routes, configure_execution_dependencies, load_reference_execution_accesses,
-    AeronExecutionEventPublisher, ExecutionAsyncEventSource, ExecutionAsyncOrderEntryRoutes,
-    ExecutionAsyncOrderQueryRoutes, ExecutionConnectionOptions, ExecutionSimulator,
-    ExecutionWriterFence, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
-    SimulatedAccountSettlement, SimulationConfig, SqlxExecutionAudit, SqlxExecutionStore,
+    compose_execution_routes, configure_execution_dependencies,
+    load_execution_routes_from_reference_markets, AeronExecutionEventPublisher,
+    ExecutionAsyncEventSource, ExecutionAsyncOrderEntryRoutes, ExecutionAsyncOrderQueryRoutes,
+    ExecutionConnectionOptions, ExecutionSimulator, ExecutionWriterFence,
+    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulatedAccountSettlement,
+    SimulationConfig, SqlxExecutionAudit, SqlxExecutionStore,
 };
 use crate::application::core::ExecutionApplicationWiring;
 use crate::application::{ExecutionApplication, ExecutionProcess};
@@ -85,14 +86,15 @@ pub fn compose_execution_process(
     )?;
 
     if config.reference_database.exists() {
-        for (access_id, provider_instrument) in
-            load_reference_execution_accesses(&config.reference_database)?
-        {
-            application.configure_execution_access(access_id, provider_instrument);
+        for (access_id, provider_instrument) in load_execution_routes_from_reference_markets(
+            &config.reference_database,
+            &config.route_options,
+        )? {
+            application.configure_execution_route(access_id, provider_instrument);
         }
     } else if !config.simulated {
         return Err(format!(
-            "live Execution requires Reference execution accesses: {}",
+            "live Execution requires canonical Reference markets: {}",
             config.reference_database.display()
         )
         .into());

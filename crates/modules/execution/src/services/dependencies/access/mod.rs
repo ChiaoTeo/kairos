@@ -91,16 +91,10 @@ impl ExecutionDependencyAccess {
                     .and_then(Value::as_str)
                     .map(|instance_id| format!("risk:{instance_id}"))
             });
-        let instance_root = manifest_path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf);
-        let market_snapshot = instance_root.clone().map(|root| {
-            root.join("snapshots")
-                .join("v2")
-                .join("market")
-                .join("market-shared")
-        });
+        let instance_root = manifest_path.parent().map(Path::to_path_buf);
+        let market_snapshot = instance_root
+            .clone()
+            .map(|root| root.join("snapshots").join("market").join("market-shared"));
         let market_source_id = components
             .and_then(|items| items.get("market"))
             .and_then(|item| item.get("source_id"))
@@ -175,6 +169,12 @@ impl ExecutionDependencyAccess {
         if !quote.instrument_id().eq_ignore_ascii_case(instrument_id) {
             return Ok(None);
         }
+        let observed_market_id = quote.scope().market_id().ok_or_else(|| {
+            "Execution quote dependency requires a market-scoped Market view".to_string()
+        })?;
+        if !observed_market_id.eq_ignore_ascii_case(market_id) {
+            return Ok(None);
+        }
         let decimal =
             |value: Option<&kairos_protocol::generated::kairos::common::v_2::Decimal64>| {
                 value.map(|value| {
@@ -197,7 +197,7 @@ impl ExecutionDependencyAccess {
             };
         Ok(Some((
             MarketQuote {
-                market_id: quote.market_id().to_owned(),
+                market_id: observed_market_id.to_owned(),
                 instrument_id: quote.instrument_id().to_owned(),
                 bid_price: decimal(quote.bid_price()),
                 ask_price: decimal(quote.ask_price()),

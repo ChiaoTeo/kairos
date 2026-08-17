@@ -56,13 +56,11 @@ def build_strategy_access(
     if config.scope == "shared":
         command_socket = workspace.paths.process_socket("market")
         event_socket = workspace.paths.process_socket("market-events")
-        snapshot = workspace.paths.child(
-            "snapshots", "v2", "market", "market-shared"
-        )
+        snapshot = workspace.paths.child("snapshots", "market", "market-shared")
     else:
         command_socket = instance.socket("market")
         event_socket = instance.socket("market-events")
-        snapshot = instance.root / "snapshots" / "v2" / "market" / "market-shared"
+        snapshot = instance.snapshot("market", "market-shared")
 
     commands = MarketCommandClient(
         UnixJsonCommandClient(command_socket),

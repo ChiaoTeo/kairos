@@ -81,6 +81,34 @@ enabled = false
     assert plan.execution["enabled"] is False
 
 
+def test_launch_config_preserves_required_segments_per_account(tmp_path: Path) -> None:
+    config = tmp_path / "required-segments.toml"
+    config.write_text(
+        """[launch]
+id = "required-segments"
+mode = "paper"
+strategy = "builtin:interactive"
+
+[accounts.primary]
+ref = "main"
+required_segments = ["spot", "usd_m_futures", "spot"]
+
+[execution]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+
+    plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
+
+    assert plan.required_account_segments == {
+        "main": ("spot", "usd_m_futures")
+    }
+    assert plan.normalized()["account_requirements"] == {
+        "main": {"required_segments": ["spot", "usd_m_futures"]}
+    }
+
+
 def test_launch_draft_preserves_advanced_values_and_writes_valid_toml(
     tmp_path: Path,
 ) -> None:

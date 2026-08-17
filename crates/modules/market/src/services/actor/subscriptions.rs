@@ -46,7 +46,7 @@ impl MarketActor {
             return Err("subscription owner is required".into());
         }
         let mut members = BTreeMap::new();
-        let market_id = market.market_id.to_string();
+        let market_id = market.member_id();
         members.insert(market_id.clone(), market);
         self.static_subscriptions.insert(
             id.clone(),

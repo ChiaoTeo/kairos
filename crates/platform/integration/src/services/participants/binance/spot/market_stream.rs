@@ -225,6 +225,7 @@ fn normalize_bar(
             .and_then(serde_json::Value::as_u64)
             .map(Sequence::new),
         observed_at_unix_nanos: (open_time * 1_000_000).into(),
+        venue: Default::default(),
     })
 }
 

@@ -225,6 +225,7 @@ fn fetch_snapshot(
                         &value.contract.symbol.to_string(),
                     )?;
                     positions.push(ExternalPosition {
+                        position_side: kairos_primitives::PositionSide::Net,
                         provider_instrument,
                         quantity: decimal_f64_value(value.position),
                         average_price: Some(decimal_f64_value(value.average_cost)),

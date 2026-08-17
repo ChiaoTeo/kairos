@@ -298,8 +298,24 @@ fn encode_fill_event(
     let strategy_id = builder.create_string(strategy_id);
     let account_id = builder.create_string(account_id);
     let segment_key = builder.create_string("");
-    let execution_access_id = builder.create_string("");
-    let remote_order_id = remote_order_id.map(|value| builder.create_string(value));
+    let execution_route_id = builder.create_string("");
+    let remote_order_id = fill
+        .remote_order_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()))
+        .or_else(|| remote_order_id.map(|value| builder.create_string(value)));
+    let reported_provider_id = fill
+        .reported_provider_id
+        .as_ref()
+        .map(|value| builder.create_string(value));
+    let provider_product = fill
+        .provider_product
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let provider_symbol = fill
+        .provider_symbol
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
     let fee_asset_id = fill
         .fee_currency
         .as_ref()
@@ -318,8 +334,11 @@ fn encode_fill_event(
             segment_key: Some(segment_key),
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
-            execution_access_id: Some(execution_access_id),
+            execution_route_id: Some(execution_route_id),
             remote_order_id,
+            reported_provider_id,
+            provider_product,
+            provider_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
                 OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,

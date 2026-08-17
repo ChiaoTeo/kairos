@@ -60,7 +60,7 @@ class IntentLeg(object):
         return None
 
     # IntentLeg
-    def ExecutionAccessId(self):
+    def ExecutionRouteId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -149,11 +149,11 @@ def IntentLegAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     IntentLegAddMarketId(builder, marketId)
 
-def IntentLegAddExecutionAccessId(builder, executionAccessId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(executionAccessId), 0)
+def IntentLegAddExecutionRouteId(builder, executionRouteId):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(executionRouteId), 0)
 
-def AddExecutionAccessId(builder, executionAccessId):
-    IntentLegAddExecutionAccessId(builder, executionAccessId)
+def AddExecutionRouteId(builder, executionRouteId):
+    IntentLegAddExecutionRouteId(builder, executionRouteId)
 
 def IntentLegAddSide(builder, side):
     builder.PrependUint8Slot(6, side, 0)

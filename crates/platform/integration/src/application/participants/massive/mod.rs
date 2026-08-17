@@ -125,7 +125,7 @@ mod tests {
                 .contains("\"action\":\"subscribe\""));
             socket
                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                    r#"[{"ev":"Q","sym":"SPY","bp":"500.1","bs":"10","ap":"500.2","as":"11","t":1800000000000}]"#
+                    r#"[{"ev":"Q","sym":"SPY","bp":500.1,"bs":10,"ap":500.2,"as":11,"t":1800000000000}]"#
                         .into(),
                 ))
                 .await
@@ -153,6 +153,10 @@ mod tests {
             .unwrap();
         let event = live.next_market_event().await.unwrap();
         assert_eq!(event.symbol.as_str(), "SPY");
+        assert_eq!(event.price.unwrap().to_string(), "500.1");
+        assert_eq!(event.quantity.unwrap().to_string(), "10");
+        assert_eq!(event.ask_price.unwrap().to_string(), "500.2");
+        assert_eq!(event.ask_quantity.unwrap().to_string(), "11");
         live.disconnect_channel().await.unwrap();
         server.await.unwrap();
     }

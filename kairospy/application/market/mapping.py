@@ -9,6 +9,7 @@ from . import (
     GreeksEvent,
     MarketEvent,
     OptionGreeks,
+    ObservationScope,
     Quote,
     QuoteEvent,
     Trade,
@@ -18,7 +19,6 @@ from kairospy.application.reference import InstrumentRef
 from kairospy.domain_types import (
     EventMetadata,
     InstrumentId,
-    MarketId,
     datetime_from_unix_nanos,
 )
 
@@ -67,7 +67,7 @@ def map_market_view(
         _require_attributes(
             value,
             "instrument_id",
-            "market_id",
+            "scope",
             "timeframe",
             "open",
             "high",
@@ -77,7 +77,7 @@ def map_market_view(
         )
         occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
         return Bar(
-            market_id=MarketId(_required(raw.market_id, "bar market_id")),
+            scope=_observation_scope(raw.scope),
             instrument=_instrument(raw.instrument_id),
             timeframe=raw.timeframe,
             open=Decimal(raw.open.value),
@@ -93,14 +93,14 @@ def map_market_view(
         _require_attributes(
             value,
             "instrument_id",
-            "market_id",
+            "scope",
             "bid_price",
             "ask_price",
             "event_time_unix_nanos",
         )
         occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
         return Quote(
-            market_id=MarketId(_required(raw.market_id, "quote market_id")),
+            scope=_observation_scope(raw.scope),
             instrument=_instrument(raw.instrument_id),
             bid_price=_decimal(raw.bid_price),
             bid_quantity=_decimal(raw.bid_quantity),
@@ -109,12 +109,15 @@ def map_market_view(
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
             source_id=raw.source_id,
+            bid_venue_code=getattr(raw, "bid_venue_code", None),
+            ask_venue_code=getattr(raw, "ask_venue_code", None),
+            tape=getattr(raw, "tape", None),
         )
     if kind == "trade" or (kind is None and hasattr(value, "trade_id")):
         _require_attributes(
             value,
             "instrument_id",
-            "market_id",
+            "scope",
             "price",
             "quantity",
             "event_time_unix_nanos",
@@ -123,7 +126,7 @@ def map_market_view(
             raise ValueError("trade price and quantity are required")
         occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
         return Trade(
-            market_id=MarketId(_required(raw.market_id, "trade market_id")),
+            scope=_observation_scope(raw.scope),
             instrument=_instrument(raw.instrument_id),
             price=Decimal(raw.price.value),
             quantity=Decimal(raw.quantity.value),
@@ -131,12 +134,21 @@ def map_market_view(
             occurred_at=occurred_at,
             occurred_at_unix_nanos=raw.event_time_unix_nanos,
             source_id=raw.source_id,
+            venue_code=getattr(raw, "venue_code", None),
+            tape=getattr(raw, "tape", None),
+            trf_id=getattr(raw, "trf_id", None),
+            participant_timestamp_unix_nanos=getattr(
+                raw, "participant_timestamp_unix_nanos", None
+            ),
+            trf_timestamp_unix_nanos=getattr(
+                raw, "trf_timestamp_unix_nanos", None
+            ),
         )
     if kind == "greeks" or (kind is None and hasattr(value, "implied_volatility")):
         _require_attributes(
             value,
             "instrument_id",
-            "market_id",
+            "scope",
             "expiry_unix_nanos",
             "strike",
             "delta",
@@ -148,7 +160,7 @@ def map_market_view(
         )
         occurred_at = datetime_from_unix_nanos(raw.event_time_unix_nanos)
         return OptionGreeks(
-            market_id=MarketId(_required(raw.market_id, "greeks market_id")),
+            scope=_observation_scope(raw.scope),
             instrument=_instrument(raw.instrument_id),
             expiry_unix_nanos=raw.expiry_unix_nanos,
             strike=_decimal(raw.strike),
@@ -200,6 +212,12 @@ def _require_attributes(value: object, *names: str) -> None:
 def _instrument(value: str) -> InstrumentRef:
     identifier = InstrumentId(value)
     return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
+
+
+def _observation_scope(value: object) -> ObservationScope:
+    if isinstance(value, ObservationScope):
+        return value
+    raise TypeError(f"unsupported Market observation scope: {type(value).__name__}")
 
 
 def _required(value: str | None, name: str) -> str:

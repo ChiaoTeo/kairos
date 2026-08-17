@@ -32,10 +32,14 @@ class Quote(object):
         return None
 
     # Quote
-    def MarketId(self):
+    def Scope(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
-            return self._tab.String(o + self._tab.Pos)
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.market.v2.ObservationScope import ObservationScope
+            obj = ObservationScope()
+            obj.Init(self._tab.Bytes, x)
+            return obj
         return None
 
     # Quote
@@ -97,21 +101,42 @@ class Quote(object):
         return None
 
     # Quote
-    def SourceObservedAtUnixNanos(self):
+    def BidVenueCode(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Quote
+    def AskVenueCode(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Quote
+    def Tape(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
+        return 0
+
+    # Quote
+    def SourceObservedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Quote
     def ReceivedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def QuoteStart(builder):
-    builder.StartObject(10)
+    builder.StartObject(13)
 
 def Start(builder):
     QuoteStart(builder)
@@ -122,11 +147,11 @@ def QuoteAddQuoteId(builder, quoteId):
 def AddQuoteId(builder, quoteId):
     QuoteAddQuoteId(builder, quoteId)
 
-def QuoteAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+def QuoteAddScope(builder, scope):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(scope), 0)
 
-def AddMarketId(builder, marketId):
-    QuoteAddMarketId(builder, marketId)
+def AddScope(builder, scope):
+    QuoteAddScope(builder, scope)
 
 def QuoteAddInstrumentId(builder, instrumentId):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
@@ -164,14 +189,32 @@ def QuoteAddAskQuantity(builder, askQuantity):
 def AddAskQuantity(builder, askQuantity):
     QuoteAddAskQuantity(builder, askQuantity)
 
+def QuoteAddBidVenueCode(builder, bidVenueCode):
+    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(bidVenueCode), 0)
+
+def AddBidVenueCode(builder, bidVenueCode):
+    QuoteAddBidVenueCode(builder, bidVenueCode)
+
+def QuoteAddAskVenueCode(builder, askVenueCode):
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(askVenueCode), 0)
+
+def AddAskVenueCode(builder, askVenueCode):
+    QuoteAddAskVenueCode(builder, askVenueCode)
+
+def QuoteAddTape(builder, tape):
+    builder.PrependUint32Slot(10, tape, 0)
+
+def AddTape(builder, tape):
+    QuoteAddTape(builder, tape)
+
 def QuoteAddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos):
-    builder.PrependUint64Slot(8, sourceObservedAtUnixNanos, 0)
+    builder.PrependUint64Slot(11, sourceObservedAtUnixNanos, 0)
 
 def AddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos):
     QuoteAddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos)
 
 def QuoteAddReceivedAtUnixNanos(builder, receivedAtUnixNanos):
-    builder.PrependUint64Slot(9, receivedAtUnixNanos, 0)
+    builder.PrependUint64Slot(12, receivedAtUnixNanos, 0)
 
 def AddReceivedAtUnixNanos(builder, receivedAtUnixNanos):
     QuoteAddReceivedAtUnixNanos(builder, receivedAtUnixNanos)

@@ -5,9 +5,7 @@ use kairos_protocol::generated::kairos::common::v_2::{
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
 use kairos_protocol::InstanceIdentity;
 
-use crate::transport::{
-    Asset, Entity, ExecutionAccess, Instrument, Listing, Market, MarketDataAccess,
-};
+use crate::transport::{Asset, Entity, Instrument, Listing, Market};
 use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug)]
@@ -146,38 +144,6 @@ impl ReferenceEncoder {
         occurred_at_unix_nanos: u64,
     ) -> ContractResult<Vec<u8>> {
         encode_market(record, context, occurred_at_unix_nanos, true)
-    }
-
-    pub fn execution_access_upserted(
-        record: &ExecutionAccess,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_execution_access(record, context, occurred_at_unix_nanos, false)
-    }
-
-    pub fn execution_access_updated(
-        record: &ExecutionAccess,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_execution_access(record, context, occurred_at_unix_nanos, true)
-    }
-
-    pub fn market_data_access_upserted(
-        record: &MarketDataAccess,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_market_data_access(record, context, occurred_at_unix_nanos, false)
-    }
-
-    pub fn market_data_access_updated(
-        record: &MarketDataAccess,
-        context: &EncodeContext,
-        occurred_at_unix_nanos: u64,
-    ) -> ContractResult<Vec<u8>> {
-        encode_market_data_access(record, context, occurred_at_unix_nanos, true)
     }
 }
 
@@ -380,12 +346,11 @@ fn encode_market(
     let minimum_notional = decimal(record.minimum_notional.as_deref())?;
     let contract_size = decimal(record.contract_size.as_deref())?;
     let market_id = builder.create_string(&record.market_id);
-    let market_key = builder.create_string(&record.market_key);
     let instrument_id = builder.create_string(&record.instrument_id);
     let listing_id = optional_string(&mut builder, record.listing_id.as_deref());
     let exchange_id = builder.create_string(&record.exchange_id);
-    let market_type = builder.create_string(record.market_type.as_str());
-    let source_symbol = builder.create_string(&record.source_symbol);
+    let instrument_kind = builder.create_string(record.instrument_kind.as_str());
+    let venue_symbol = optional_string(&mut builder, record.venue_symbol.as_deref());
     let base_asset_id = optional_string(&mut builder, record.base_asset_id.as_deref());
     let quote_asset_id = optional_string(&mut builder, record.quote_asset_id.as_deref());
     let asset_type = optional_string(
@@ -396,12 +361,11 @@ fn encode_market(
         optional_string(&mut builder, record.underlying_instrument_id.as_deref());
     let market_args = fb::MarketArgs {
         market_id: Some(market_id),
-        market_key: Some(market_key),
         instrument_id: Some(instrument_id),
         listing_id,
         exchange_id: Some(exchange_id),
-        market_type: Some(market_type),
-        source_symbol: Some(source_symbol),
+        instrument_kind: Some(instrument_kind),
+        venue_symbol,
         base_asset_id,
         quote_asset_id,
         status: status(&record.status)?,
@@ -438,95 +402,6 @@ fn encode_market(
             },
         );
         fb::finish_market_upserted_buffer(&mut builder, root);
-    }
-    Ok(builder.finished_data().to_vec())
-}
-
-fn encode_execution_access(
-    record: &ExecutionAccess,
-    context: &EncodeContext,
-    occurred_at_unix_nanos: u64,
-    updated: bool,
-) -> ContractResult<Vec<u8>> {
-    let mut builder = FlatBufferBuilder::new();
-    let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
-    let args = fb::ExecutionAccessArgs {
-        access_id: Some(builder.create_string(&record.access_id)),
-        instrument_id: optional_string(&mut builder, record.instrument_id.as_deref()),
-        listing_id: optional_string(&mut builder, record.listing_id.as_deref()),
-        market_id: optional_string(&mut builder, record.market_id.as_deref()),
-        provider_id: Some(builder.create_string(&record.provider_id)),
-        product_family: Some(builder.create_string(&record.provider_product)),
-        provider_symbol: Some(builder.create_string(&record.provider_symbol)),
-        settlement_asset_id: optional_string(&mut builder, record.settlement_asset_id.as_deref()),
-        status: status(&record.status)?,
-        effective_from_unix_nanos: record.effective_from_unix_nanos,
-        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default(),
-    };
-    let access = fb::ExecutionAccess::create(&mut builder, &args);
-    if updated {
-        let root = fb::ExecutionAccessUpdated::create(
-            &mut builder,
-            &fb::ExecutionAccessUpdatedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                access: Some(access),
-            },
-        );
-        fb::finish_execution_access_updated_buffer(&mut builder, root);
-    } else {
-        let root = fb::ExecutionAccessUpserted::create(
-            &mut builder,
-            &fb::ExecutionAccessUpsertedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                access: Some(access),
-            },
-        );
-        fb::finish_execution_access_upserted_buffer(&mut builder, root);
-    }
-    Ok(builder.finished_data().to_vec())
-}
-
-fn encode_market_data_access(
-    record: &MarketDataAccess,
-    context: &EncodeContext,
-    occurred_at_unix_nanos: u64,
-    updated: bool,
-) -> ContractResult<Vec<u8>> {
-    let mut builder = FlatBufferBuilder::new();
-    let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
-    let args = fb::MarketDataAccessArgs {
-        access_id: Some(builder.create_string(&record.access_id)),
-        market_id: Some(builder.create_string(&record.market_id)),
-        provider_id: Some(builder.create_string(&record.provider_id)),
-        product_family: Some(builder.create_string(&record.provider_product)),
-        provider_symbol: Some(builder.create_string(&record.provider_symbol)),
-        status: status(&record.status)?,
-        effective_from_unix_nanos: record.effective_from_unix_nanos,
-        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default(),
-    };
-    let access = fb::MarketDataAccess::create(&mut builder, &args);
-    if updated {
-        let root = fb::MarketDataAccessUpdated::create(
-            &mut builder,
-            &fb::MarketDataAccessUpdatedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                access: Some(access),
-            },
-        );
-        fb::finish_market_data_access_updated_buffer(&mut builder, root);
-    } else {
-        let root = fb::MarketDataAccessUpserted::create(
-            &mut builder,
-            &fb::MarketDataAccessUpsertedArgs {
-                metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
-                access: Some(access),
-            },
-        );
-        fb::finish_market_data_access_upserted_buffer(&mut builder, root);
     }
     Ok(builder.finished_data().to_vec())
 }

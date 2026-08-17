@@ -32,7 +32,7 @@ use kairos_integration::application::{
 };
 use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use kairos_primitives::{
-    AccountId, ClientOrderId, Currency, ExecutionAccessId, FillId, InstrumentId, IntentId, LegId,
+    AccountId, ClientOrderId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId,
     MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
 };
 use kairos_primitives::{Money, Price};
@@ -55,6 +55,10 @@ fn fill_report(
         fee_currency: None,
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
         execution_market_id: None,
+        reported_provider_id: None,
+        provider_product: None,
+        provider_symbol: None,
+        remote_order_id: None,
     }
 }
 
@@ -78,7 +82,7 @@ fn submit_order(
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: market_id.map(|value| MarketId::new(value).unwrap()),
-        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
+        execution_route_id: Some(ExecutionRouteId::new("execution-route:test").unwrap()),
         side,
         order_type,
         quantity: Quantity::new(quantity, 0).unwrap(),
@@ -100,7 +104,7 @@ fn strategy_intent(
         instance_id: "instance".into(),
         instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
         market_id: None,
-        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
+        execution_route_id: Some(ExecutionRouteId::new("execution-route:test").unwrap()),
         account_ids: vec![AccountId::new("main").unwrap()],
         segment_key: SegmentKey::new("spot").unwrap(),
         target_quantity: Quantity::new(quantity, 0).unwrap(),
@@ -141,7 +145,7 @@ fn intent_leg(
         segment_key: SegmentKey::new(segment_key).unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: market_id.map(|value| MarketId::new(value).unwrap()),
-        execution_access_id: Some(ExecutionAccessId::new("execution-access:test").unwrap()),
+        execution_route_id: Some(ExecutionRouteId::new("execution-route:test").unwrap()),
         side,
         quantity: Quantity::new(quantity, 0).unwrap(),
         limit_price: limit_price.map(|value| Price::new(value, 0).unwrap()),
@@ -222,6 +226,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -241,8 +246,32 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         Some(Box::new(FileExecutionStore::new(path))),
     )
     .unwrap();
-    application.configure_execution_access(
-        ExecutionAccessId::new("execution-access:test").unwrap(),
+    application.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:test").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: None,
+            market_id: None,
+            participant_id: "simulated".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            supported_order_types: vec![
+                crate::application::OrderType::Market,
+                crate::application::OrderType::Limit,
+            ],
+            supported_options: vec![
+                "time_in_force".into(),
+                "reduce_only".into(),
+                "post_only".into(),
+                "position_side".into(),
+                "quote_asset".into(),
+                "wallet_type".into(),
+                "trading_session".into(),
+                "tokenize".into(),
+            ],
+            ready: true,
+        },
         ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
@@ -255,8 +284,32 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
 }
 
 fn configure_test_access(application: &mut ExecutionApplication) {
-    application.configure_execution_access(
-        ExecutionAccessId::new("execution-access:test").unwrap(),
+    application.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:test").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: None,
+            market_id: None,
+            participant_id: "simulated".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            supported_order_types: vec![
+                crate::application::OrderType::Market,
+                crate::application::OrderType::Limit,
+            ],
+            supported_options: vec![
+                "time_in_force".into(),
+                "reduce_only".into(),
+                "post_only".into(),
+                "position_side".into(),
+                "quote_asset".into(),
+                "wallet_type".into(),
+                "trading_session".into(),
+                "tokenize".into(),
+            ],
+            ready: true,
+        },
         ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
@@ -264,6 +317,135 @@ fn configure_test_access(application: &mut ExecutionApplication) {
         )
         .unwrap(),
     );
+}
+
+#[test]
+fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    app.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:test").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: Some(InstrumentId::new("BTCUSDT").unwrap()),
+            market_id: None,
+            participant_id: "simulated".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            supported_order_types: vec![OrderType::Market, OrderType::Limit],
+            supported_options: Vec::new(),
+            ready: true,
+        },
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap(),
+    );
+    let error = app
+        .submit(submit_order(
+            "wrong-route-instrument",
+            None,
+            "main",
+            "ETHUSDT",
+            OrderSide::Buy,
+            OrderType::Market,
+            1,
+            None,
+            None,
+        ))
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("configured for instrument BTCUSDT"));
+    assert!(app.orders(None).is_empty());
+}
+
+#[test]
+fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    app.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:test").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: None,
+            market_id: None,
+            participant_id: "simulated".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            supported_order_types: vec![OrderType::Market],
+            supported_options: Vec::new(),
+            ready: true,
+        },
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap(),
+    );
+    assert!(app
+        .available_execution_routes(&crate::application::ExecutionRouteQuery {
+            order_type: Some(OrderType::Limit),
+            ..Default::default()
+        })
+        .is_empty());
+    let error = app
+        .submit(submit_order(
+            "unsupported-order-type",
+            None,
+            "main",
+            "BTCUSDT",
+            OrderSide::Buy,
+            OrderType::Limit,
+            1,
+            Some(100),
+            None,
+        ))
+        .unwrap_err();
+    assert!(error.to_string().contains("does not support Limit orders"));
+    assert!(app.orders(None).is_empty());
+}
+
+#[test]
+fn selected_route_snapshot_is_persisted_with_the_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    app.submit(submit_order(
+        "selected-route-order",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Market,
+        1,
+        None,
+        None,
+    ))
+    .unwrap();
+
+    let selected = app.orders(None)[0].selected_route.clone().unwrap();
+    let attempts = app.orders(None)[0].attempts.clone();
+    assert_eq!(selected.route_id, "execution-route:test");
+    assert_eq!(selected.participant_id, "simulated");
+    assert_eq!(selected.provider_product, "spot");
+    assert_eq!(selected.provider_symbol, "BTCUSDT");
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].selected_route, selected);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(restored.orders(None)[0].selected_route, Some(selected));
+    assert_eq!(restored.orders(None)[0].attempts, attempts);
 }
 
 fn attach_simulated_risk(application: &mut ExecutionApplication, behavior: SimulatedRiskBehavior) {
@@ -486,6 +668,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -601,6 +784,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -835,7 +1019,7 @@ async fn execution_server_control_round_trip_uses_same_application_path() {
                 "segment_key": "spot",
                 "instrument_id": "BTCUSDT",
                 "market_id": "BTCUSDT",
-                "execution_access_id": "execution-access:test",
+                "execution_route_id": "execution-route:test",
                 "side": "buy",
                 "quantity": "1",
                 "quantity_semantics": "order_quantity",
@@ -889,7 +1073,7 @@ async fn simulated_execution_server_fills_from_market_observation() {
                 "segment_key": "spot",
                 "instrument_id": "BTCUSDT",
                 "market_id": "binance:spot",
-                "execution_access_id": "execution-access:test",
+                "execution_route_id": "execution-route:test",
                 "side": "buy",
                 "quantity": "2",
                 "quantity_semantics": "order_quantity",
@@ -982,6 +1166,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -1043,6 +1228,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -1942,6 +2128,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
         isolated_symbol: None,
+        instruments: Vec::new(),
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -2182,6 +2369,7 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
             reason: String::new(),
             fill_id: None,
             filled_quantity: None,
+            attempt: None,
         })
         .unwrap();
     audit
@@ -2196,6 +2384,7 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
             reason: String::new(),
             fill_id: None,
             filled_quantity: None,
+            attempt: None,
         })
         .unwrap();
     let events = audit
@@ -2272,5 +2461,62 @@ fn fills_are_recorded_cumulatively_and_restore_with_order_state() {
     assert_eq!(
         restored.orders(None)[0].status,
         ExecutionOrderStatus::Filled
+    );
+}
+
+#[test]
+fn reported_execution_market_does_not_overwrite_the_selected_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = application(&directory.path().join("execution.json"));
+    let selected_market = MarketId::new("market:broker:smart").unwrap();
+    app.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: ExecutionRouteId::new("execution-route:test").unwrap(),
+            account_id: None,
+            segment_key: None,
+            instrument_id: None,
+            market_id: Some(selected_market.clone()),
+            participant_id: "broker".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("smart").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTC").unwrap(),
+            supported_order_types: vec![OrderType::Market],
+            supported_options: Vec::new(),
+            ready: true,
+        },
+        ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Broker, "broker").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("smart").unwrap()),
+            "BTC",
+        )
+        .unwrap(),
+    );
+    app.submit(submit_order(
+        "smart-route-order",
+        None,
+        "main",
+        "BTCUSDT",
+        OrderSide::Buy,
+        OrderType::Market,
+        1,
+        None,
+        Some(selected_market.as_str()),
+    ))
+    .unwrap();
+    let mut report = fill_report("smart-fill", "smart-route-order", 1, 100, 0, Some(10));
+    report.execution_market_id = Some(MarketId::new("market:exchange:actual").unwrap());
+    report.reported_provider_id = Some("broker".into());
+    app.record_fill(report).unwrap();
+
+    let order = &app.orders(None)[0];
+    assert_eq!(
+        order
+            .selected_route
+            .as_ref()
+            .and_then(|route| route.destination_market_id.as_deref()),
+        Some("market:broker:smart")
+    );
+    assert_eq!(
+        app.fills(None)[0].execution_market_id.as_deref(),
+        Some("market:exchange:actual")
     );
 }

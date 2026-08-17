@@ -1,6 +1,0 @@
-include "../../common/metadata.fbs";
-include "../types/market_data_access.fbs";
-namespace kairos.reference.v2;
-table MarketDataAccessUpserted { metadata:kairos.common.v2.EventMetadata (required); catalog_revision:ulong; access:MarketDataAccess (required); }
-root_type MarketDataAccessUpserted;
-file_identifier "RMDA";

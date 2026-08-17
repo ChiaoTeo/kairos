@@ -45,6 +45,46 @@ pub(super) fn parse_operation(
     body: &[u8],
 ) -> Result<ControlOperation, (u16, Value)> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if method == "GET" && path == "/v1/routes" {
+        let parse = |key: &str| query_value(query, key);
+        return Ok(ControlOperation::AvailableRoutes(ExecutionRouteQuery {
+            account_id: parse("account_id")
+                .map(kairos_primitives::AccountId::new)
+                .transpose()
+                .map_err(|error| (422, json!({"error": error.to_string()})))?,
+            segment_key: parse("segment_key")
+                .map(kairos_primitives::SegmentKey::new)
+                .transpose()
+                .map_err(|error| (422, json!({"error": error.to_string()})))?,
+            instrument_id: parse("instrument_id")
+                .map(kairos_primitives::InstrumentId::new)
+                .transpose()
+                .map_err(|error| (422, json!({"error": error.to_string()})))?,
+            market_id: parse("market_id")
+                .map(kairos_primitives::MarketId::new)
+                .transpose()
+                .map_err(|error| (422, json!({"error": error.to_string()})))?,
+            order_type: parse("order_type")
+                .map(|value| match value.to_ascii_lowercase().as_str() {
+                    "market" => Ok(crate::application::OrderType::Market),
+                    "limit" => Ok(crate::application::OrderType::Limit),
+                    _ => Err((
+                        422,
+                        json!({"error": format!("unsupported order_type: {value}")}),
+                    )),
+                })
+                .transpose()?,
+            required_options: parse("options")
+                .map(|value| {
+                    value
+                        .split(',')
+                        .filter(|item| !item.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }));
+    }
     if method == "GET" && path != kairos_workspace::runtime::HEALTH_PATH {
         return Err((
             405,

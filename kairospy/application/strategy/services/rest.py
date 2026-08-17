@@ -34,7 +34,10 @@ class StrategyControlServer:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         application = web.Application(client_max_size=1024 * 1024)
         application.router.add_route("*", "/{path_info:.*}", self._handle)
-        self._runner = web.AppRunner(application)
+        # This server listens on AF_UNIX, where SO_KEEPALIVE is not a valid
+        # socket option.  aiohttp otherwise applies TCP keepalive to every
+        # accepted transport, which raises EINVAL on macOS.
+        self._runner = web.AppRunner(application, tcp_keepalive=False)
         await self._runner.setup()
         self._site = web.UnixSite(self._runner, str(self.socket_path))
         await self._site.start()

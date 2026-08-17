@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_primitives::{
-    ActorId, Currency, DurationNanos, ExecutionAccessId, FillId, IntentId, Money, OrderId, Price,
-    Quantity, StrategyId, UnixNanos,
+    ActorId, Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, Money, OrderId, Price,
+    Quantity, RemoteOrderId, StrategyId, UnixNanos,
 };
 
 use super::model::*;
@@ -121,8 +121,7 @@ pub struct ExecutionApplication {
     actor_id: String,
     actor: crate::services::actor::ExecutionActor,
     pending_business_events: std::collections::VecDeque<ExecutionBusinessEvent>,
-    execution_accesses:
-        BTreeMap<ExecutionAccessId, kairos_integration::application::ProviderInstrumentRef>,
+    execution_routes: BTreeMap<ExecutionRouteId, ConfiguredExecutionRoute>,
     order_entry: Option<Box<dyn OrderEntryConnection>>,
     order_query: Option<Box<dyn OrderQueryConnection>>,
     execution_stream: Option<Box<dyn OrderEventSource>>,
@@ -135,6 +134,11 @@ pub struct ExecutionApplication {
     writer_recovery_ready: bool,
     risk_recovery_ready: bool,
     risk_recovery_error: Option<String>,
+}
+
+struct ConfiguredExecutionRoute {
+    candidate: ExecutionRouteCandidate,
+    provider_instrument: kairos_integration::application::ProviderInstrumentRef,
 }
 
 /// Concrete process wiring selected by Execution composition.
@@ -173,7 +177,7 @@ impl ExecutionApplication {
             actor_id,
             actor: crate::services::actor::ExecutionActor::new(),
             pending_business_events: std::collections::VecDeque::new(),
-            execution_accesses: BTreeMap::new(),
+            execution_routes: BTreeMap::new(),
             order_entry: wiring.order_entry_gateway,
             order_query: wiring.order_query_gateway,
             execution_stream: wiring.legacy_execution_stream,
@@ -275,16 +279,31 @@ impl ExecutionApplication {
         )
     }
 
-    /// Install Reference-owned provider addresses for explicit execution
-    /// access IDs. The application never reconstructs these addresses from a
-    /// canonical MarketId or provider symbol.
-    pub(crate) fn configure_execution_access(
+    /// Install one configured, Execution-owned route and its provider address.
+    pub(crate) fn configure_execution_route(
         &mut self,
-        access_id: ExecutionAccessId,
+        candidate: ExecutionRouteCandidate,
         provider_instrument: kairos_integration::application::ProviderInstrumentRef,
     ) {
-        self.execution_accesses
-            .insert(access_id, provider_instrument);
+        self.execution_routes.insert(
+            candidate.route_id.clone(),
+            ConfiguredExecutionRoute {
+                candidate,
+                provider_instrument,
+            },
+        );
+    }
+
+    pub fn available_execution_routes(
+        &self,
+        query: &ExecutionRouteQuery,
+    ) -> Vec<ExecutionRouteCandidate> {
+        self.execution_routes
+            .values()
+            .map(|route| &route.candidate)
+            .filter(|candidate| query.matches(candidate))
+            .cloned()
+            .collect()
     }
 
     pub fn snapshot(&self) -> ExecutionSnapshot {
@@ -492,17 +511,14 @@ fn to_connection_request(
     order: &ExecutionOrder,
     segment_key: &str,
     options: &ExecutionOrderOptions,
-    execution_accesses: &BTreeMap<
-        ExecutionAccessId,
-        kairos_integration::application::ProviderInstrumentRef,
-    >,
+    execution_routes: &BTreeMap<ExecutionRouteId, ConfiguredExecutionRoute>,
 ) -> Result<OrderEntryRequest, String> {
-    let access_id = order.execution_access_id.as_ref().ok_or_else(|| {
-        "execution_access_id is required; provider identity is not inferred".to_string()
+    let access_id = order.execution_route_id.as_ref().ok_or_else(|| {
+        "execution_route_id is required; provider identity is not inferred".to_string()
     })?;
-    let provider_instrument = execution_accesses
+    let provider_instrument = execution_routes
         .get(access_id)
-        .cloned()
+        .map(|route| route.provider_instrument.clone())
         .ok_or_else(|| format!("execution access is not configured: {access_id}"))?;
     Ok(OrderEntryRequest {
         order_id: order.order_id.clone(),

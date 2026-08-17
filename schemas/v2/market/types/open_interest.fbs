@@ -1,9 +1,10 @@
 include "../../common/decimal.fbs";
+include "observation_scope.fbs";
 
 namespace kairos.market.v2;
 
 table OpenInterest {
-  market_id:string (required);
+  scope:ObservationScope (required);
   instrument_id:string (required);
   source_id:string (required);
   contracts:kairos.common.v2.Decimal64 (required);

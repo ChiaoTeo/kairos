@@ -22,12 +22,13 @@ impl<'a> ::flatbuffers::Follow<'a> for Position<'a> {
 impl<'a> Position<'a> {
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 4;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 8;
-    pub const VT_AVERAGE_PRICE: ::flatbuffers::VOffsetT = 10;
-    pub const VT_MARK_PRICE: ::flatbuffers::VOffsetT = 12;
-    pub const VT_UNREALIZED_PNL: ::flatbuffers::VOffsetT = 14;
-    pub const VT_REALIZED_PNL: ::flatbuffers::VOffsetT = 16;
-    pub const VT_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 18;
+    pub const VT_POSITION_SIDE: ::flatbuffers::VOffsetT = 8;
+    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 10;
+    pub const VT_AVERAGE_PRICE: ::flatbuffers::VOffsetT = 12;
+    pub const VT_MARK_PRICE: ::flatbuffers::VOffsetT = 14;
+    pub const VT_UNREALIZED_PNL: ::flatbuffers::VOffsetT = 16;
+    pub const VT_REALIZED_PNL: ::flatbuffers::VOffsetT = 18;
+    pub const VT_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -66,6 +67,7 @@ impl<'a> Position<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
+        builder.add_position_side(args.position_side);
         builder.finish()
     }
 
@@ -88,6 +90,17 @@ impl<'a> Position<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Position::VT_MARKET_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn position_side(&self) -> PositionSide {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<PositionSide>(Position::VT_POSITION_SIDE, Some(PositionSide::NET))
                 .unwrap()
         }
     }
@@ -172,6 +185,7 @@ impl ::flatbuffers::Verifiable for Position<'_> {
                 Self::VT_MARKET_ID,
                 true,
             )?
+            .visit_field::<PositionSide>("position_side", Self::VT_POSITION_SIDE, false)?
             .visit_field::<super::super::common::v_2::Decimal64>(
                 "quantity",
                 Self::VT_QUANTITY,
@@ -209,6 +223,7 @@ impl ::flatbuffers::Verifiable for Position<'_> {
 pub struct PositionArgs<'a> {
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub position_side: PositionSide,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub average_price: Option<&'a super::super::common::v_2::Decimal64>,
     pub mark_price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -222,7 +237,8 @@ impl<'a> Default for PositionArgs<'a> {
         PositionArgs {
             instrument_id: None, // required field
             market_id: None,     // required field
-            quantity: None,      // required field
+            position_side: PositionSide::NET,
+            quantity: None, // required field
             average_price: None,
             mark_price: None,
             unrealized_pnl: None,
@@ -248,6 +264,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> PositionBuilder<'a, 'b, A> {
     pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Position::VT_MARKET_ID, market_id);
+    }
+    #[inline]
+    pub fn add_position_side(&mut self, position_side: PositionSide) {
+        self.fbb_.push_slot::<PositionSide>(
+            Position::VT_POSITION_SIDE,
+            position_side,
+            PositionSide::NET,
+        );
     }
     #[inline]
     pub fn add_quantity(&mut self, quantity: &super::super::common::v_2::Decimal64) {
@@ -323,6 +347,7 @@ impl ::core::fmt::Debug for Position<'_> {
         let mut ds = f.debug_struct("Position");
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
+        ds.field("position_side", &self.position_side());
         ds.field("quantity", &self.quantity());
         ds.field("average_price", &self.average_price());
         ds.field("mark_price", &self.mark_price());

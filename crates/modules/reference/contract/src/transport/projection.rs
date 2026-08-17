@@ -5,22 +5,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceMarket {
     pub market_id: String,
-    #[serde(default)]
-    pub source_id: Option<String>,
-    #[serde(default)]
-    pub market_key: String,
     pub instrument_id: String,
     #[serde(default)]
     pub listing_id: Option<String>,
     pub exchange_id: String,
-    pub market_type: String,
+    pub instrument_kind: String,
     #[serde(default)]
     pub asset_type: Option<String>,
-    pub source_symbol: String,
     #[serde(default)]
-    pub market_data_access_id: Option<String>,
-    #[serde(default)]
-    pub provider_symbol: Option<String>,
+    pub venue_symbol: Option<String>,
     #[serde(default)]
     pub base_asset_id: Option<String>,
     #[serde(default)]

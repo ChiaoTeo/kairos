@@ -70,8 +70,6 @@ pub(super) fn okx_provider_catalog(
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
     crate::domain::reconcile_instruments(&mut catalog.instruments)?;
-    populate_execution_accesses(&mut catalog, "okx")?;
-    populate_market_data_accesses(&mut catalog, "okx")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -82,7 +80,13 @@ fn append_okx_instrument(
 ) -> ReferenceResult<()> {
     let source_symbol = value.source_symbol.as_str().to_ascii_uppercase();
     let (base, quote) = okx_base_quote(&value)?;
-    let (family, canonical_family, instrument_id, canonical_symbol, underlying_instrument_id) =
+    let (
+        _provider_family,
+        canonical_family,
+        instrument_id,
+        canonical_symbol,
+        underlying_instrument_id,
+    ) =
         match value.kind {
             ExternalInstrumentKind::Equity | ExternalInstrumentKind::EquityPerpetual => {
                 return Err(ReferenceError::Provider(
@@ -169,20 +173,21 @@ fn append_okx_instrument(
         });
     }
     let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_primitives::ListingId::new(if family == "spot" {
+    let listing_id = kairos_primitives::ListingId::new(if canonical_family == "spot" {
         format!("listing:okx:spot:{base}:{quote}")
     } else {
-        format!("listing:okx:{family}:{source_symbol}")
+        format!("listing:okx:{canonical_family}:{source_symbol}")
     })?;
     let exchange_id = kairos_primitives::Exchange::new("exchange:okx")?;
     let market_id =
-        kairos_primitives::MarketId::new(format!("market:okx:{family}:{source_symbol}"))?;
+        kairos_primitives::MarketId::new(format!("market:okx:{canonical_family}:{source_symbol}"))?;
+    let instrument_kind = canonical_instrument_kind(value.kind)?;
     let status: kairos_primitives::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
-        instrument_type: canonical_instrument_kind(value.kind)?,
+        instrument_type: instrument_kind,
         primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
@@ -215,13 +220,12 @@ fn append_okx_instrument(
     });
     catalog.markets.push(Market {
         market_id,
-        market_key: format!("okx.{family}.{source_symbol}"),
         instrument_id,
         listing_id: Some(listing_id),
         exchange_id,
-        market_type: ProviderProductCode::new(family)?,
+        instrument_kind,
         asset_type: Some(AssetClass::Crypto),
-        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+        venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
         base_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{base}"
         ))?),

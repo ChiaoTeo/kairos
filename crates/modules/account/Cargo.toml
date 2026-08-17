@@ -32,6 +32,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sy
 
 [dev-dependencies]
 tempfile = "3"
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 
 [[bin]]
 name = "kairos-account-server"

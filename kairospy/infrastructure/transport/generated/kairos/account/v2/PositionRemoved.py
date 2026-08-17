@@ -68,8 +68,15 @@ class PositionRemoved(object):
         return None
 
     # PositionRemoved
-    def Provenance(self):
+    def PositionSide(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 1
+
+    # PositionRemoved
+    def Provenance(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             x = self._tab.Indirect(o + self._tab.Pos)
             from kairos.account.v2.AccountFactProvenance import AccountFactProvenance
@@ -79,7 +86,7 @@ class PositionRemoved(object):
         return None
 
 def PositionRemovedStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(7)
 
 def Start(builder):
     PositionRemovedStart(builder)
@@ -114,8 +121,14 @@ def PositionRemovedAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     PositionRemovedAddMarketId(builder, marketId)
 
+def PositionRemovedAddPositionSide(builder, positionSide):
+    builder.PrependUint8Slot(5, positionSide, 1)
+
+def AddPositionSide(builder, positionSide):
+    PositionRemovedAddPositionSide(builder, positionSide)
+
 def PositionRemovedAddProvenance(builder, provenance):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(provenance), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(provenance), 0)
 
 def AddProvenance(builder, provenance):
     PositionRemovedAddProvenance(builder, provenance)

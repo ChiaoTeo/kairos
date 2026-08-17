@@ -13,6 +13,16 @@ table AccountSegmentState {
   observed_account_model:AccountModel = UNSPECIFIED;
   status:AccountStatus = UNSPECIFIED;
   freshness:FreshnessState = UNSPECIFIED;
+  sync_mode:SegmentSyncMode = UNSPECIFIED;
+  sync_lifecycle:SegmentSyncLifecycle = UNSPECIFIED;
+  completeness:SegmentCompleteness = UNSPECIFIED;
+  snapshot_watermark:ulong;
+  event_watermark:ulong;
+  channel_epoch:ulong;
+  last_event_at_unix_nanos:ulong;
+  last_success_at_unix_nanos:ulong;
+  last_error:string;
+  recovery_buffer_depth:ulong;
   observed_at_unix_nanos:ulong;
   state_generation:ulong;
   valuation:AccountValuation;

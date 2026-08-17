@@ -31,15 +31,18 @@ impl<'a> Fill<'a> {
     pub const VT_SEGMENT_KEY: ::flatbuffers::VOffsetT = 20;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 22;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 24;
-    pub const VT_EXECUTION_ACCESS_ID: ::flatbuffers::VOffsetT = 26;
+    pub const VT_EXECUTION_ROUTE_ID: ::flatbuffers::VOffsetT = 26;
     pub const VT_REMOTE_ORDER_ID: ::flatbuffers::VOffsetT = 28;
-    pub const VT_SIDE: ::flatbuffers::VOffsetT = 30;
-    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 32;
-    pub const VT_PRICE: ::flatbuffers::VOffsetT = 34;
-    pub const VT_FEE: ::flatbuffers::VOffsetT = 36;
-    pub const VT_FEE_ASSET_ID: ::flatbuffers::VOffsetT = 38;
-    pub const VT_NOTIONAL: ::flatbuffers::VOffsetT = 40;
-    pub const VT_SOURCE_FILLED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 42;
+    pub const VT_REPORTED_PROVIDER_ID: ::flatbuffers::VOffsetT = 30;
+    pub const VT_PROVIDER_PRODUCT: ::flatbuffers::VOffsetT = 32;
+    pub const VT_PROVIDER_SYMBOL: ::flatbuffers::VOffsetT = 34;
+    pub const VT_SIDE: ::flatbuffers::VOffsetT = 36;
+    pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 38;
+    pub const VT_PRICE: ::flatbuffers::VOffsetT = 40;
+    pub const VT_FEE: ::flatbuffers::VOffsetT = 42;
+    pub const VT_FEE_ASSET_ID: ::flatbuffers::VOffsetT = 44;
+    pub const VT_NOTIONAL: ::flatbuffers::VOffsetT = 46;
+    pub const VT_SOURCE_FILLED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 48;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -72,11 +75,20 @@ impl<'a> Fill<'a> {
         if let Some(x) = args.quantity {
             builder.add_quantity(x);
         }
+        if let Some(x) = args.provider_symbol {
+            builder.add_provider_symbol(x);
+        }
+        if let Some(x) = args.provider_product {
+            builder.add_provider_product(x);
+        }
+        if let Some(x) = args.reported_provider_id {
+            builder.add_reported_provider_id(x);
+        }
         if let Some(x) = args.remote_order_id {
             builder.add_remote_order_id(x);
         }
-        if let Some(x) = args.execution_access_id {
-            builder.add_execution_access_id(x);
+        if let Some(x) = args.execution_route_id {
+            builder.add_execution_route_id(x);
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
@@ -236,13 +248,13 @@ impl<'a> Fill<'a> {
         }
     }
     #[inline]
-    pub fn execution_access_id(&self) -> &'a str {
+    pub fn execution_route_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_EXECUTION_ACCESS_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_EXECUTION_ROUTE_ID, None)
                 .unwrap()
         }
     }
@@ -254,6 +266,36 @@ impl<'a> Fill<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_REMOTE_ORDER_ID, None)
+        }
+    }
+    #[inline]
+    pub fn reported_provider_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_REPORTED_PROVIDER_ID, None)
+        }
+    }
+    #[inline]
+    pub fn provider_product(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_PROVIDER_PRODUCT, None)
+        }
+    }
+    #[inline]
+    pub fn provider_symbol(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Fill::VT_PROVIDER_SYMBOL, None)
         }
     }
     #[inline]
@@ -386,13 +428,28 @@ impl ::flatbuffers::Verifiable for Fill<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "execution_access_id",
-                Self::VT_EXECUTION_ACCESS_ID,
+                "execution_route_id",
+                Self::VT_EXECUTION_ROUTE_ID,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "remote_order_id",
                 Self::VT_REMOTE_ORDER_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "reported_provider_id",
+                Self::VT_REPORTED_PROVIDER_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "provider_product",
+                Self::VT_PROVIDER_PRODUCT,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "provider_symbol",
+                Self::VT_PROVIDER_SYMBOL,
                 false,
             )?
             .visit_field::<super::super::common::v_2::Side>("side", Self::VT_SIDE, false)?
@@ -434,8 +491,11 @@ pub struct FillArgs<'a> {
     pub segment_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub execution_access_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_route_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub remote_order_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub reported_provider_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider_product: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub provider_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: super::super::common::v_2::Side,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub price: Option<&'a super::super::common::v_2::Decimal64>,
@@ -450,17 +510,20 @@ impl<'a> Default for FillArgs<'a> {
         FillArgs {
             fill_id: None, // required field
             trade_id: None,
-            order_id: None,            // required field
-            intent_id: None,           // required field
-            plan_id: None,             // required field
-            leg_id: None,              // required field
-            strategy_id: None,         // required field
-            account_id: None,          // required field
-            segment_key: None,         // required field
-            instrument_id: None,       // required field
-            market_id: None,           // required field
-            execution_access_id: None, // required field
+            order_id: None,           // required field
+            intent_id: None,          // required field
+            plan_id: None,            // required field
+            leg_id: None,             // required field
+            strategy_id: None,        // required field
+            account_id: None,         // required field
+            segment_key: None,        // required field
+            instrument_id: None,      // required field
+            market_id: None,          // required field
+            execution_route_id: None, // required field
             remote_order_id: None,
+            reported_provider_id: None,
+            provider_product: None,
+            provider_symbol: None,
             side: super::super::common::v_2::Side::UNSPECIFIED,
             quantity: None, // required field
             price: None,    // required field
@@ -533,13 +596,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FillBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Fill::VT_MARKET_ID, market_id);
     }
     #[inline]
-    pub fn add_execution_access_id(
+    pub fn add_execution_route_id(
         &mut self,
-        execution_access_id: ::flatbuffers::WIPOffset<&'b str>,
+        execution_route_id: ::flatbuffers::WIPOffset<&'b str>,
     ) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Fill::VT_EXECUTION_ACCESS_ID,
-            execution_access_id,
+            Fill::VT_EXECUTION_ROUTE_ID,
+            execution_route_id,
         );
     }
     #[inline]
@@ -547,6 +610,30 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FillBuilder<'a, 'b, A> {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             Fill::VT_REMOTE_ORDER_ID,
             remote_order_id,
+        );
+    }
+    #[inline]
+    pub fn add_reported_provider_id(
+        &mut self,
+        reported_provider_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Fill::VT_REPORTED_PROVIDER_ID,
+            reported_provider_id,
+        );
+    }
+    #[inline]
+    pub fn add_provider_product(&mut self, provider_product: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Fill::VT_PROVIDER_PRODUCT,
+            provider_product,
+        );
+    }
+    #[inline]
+    pub fn add_provider_symbol(&mut self, provider_symbol: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Fill::VT_PROVIDER_SYMBOL,
+            provider_symbol,
         );
     }
     #[inline]
@@ -613,7 +700,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FillBuilder<'a, 'b, A> {
             .required(o, Fill::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, Fill::VT_MARKET_ID, "market_id");
         self.fbb_
-            .required(o, Fill::VT_EXECUTION_ACCESS_ID, "execution_access_id");
+            .required(o, Fill::VT_EXECUTION_ROUTE_ID, "execution_route_id");
         self.fbb_.required(o, Fill::VT_QUANTITY, "quantity");
         self.fbb_.required(o, Fill::VT_PRICE, "price");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -634,8 +721,11 @@ impl ::core::fmt::Debug for Fill<'_> {
         ds.field("segment_key", &self.segment_key());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
-        ds.field("execution_access_id", &self.execution_access_id());
+        ds.field("execution_route_id", &self.execution_route_id());
         ds.field("remote_order_id", &self.remote_order_id());
+        ds.field("reported_provider_id", &self.reported_provider_id());
+        ds.field("provider_product", &self.provider_product());
+        ds.field("provider_symbol", &self.provider_symbol());
         ds.field("side", &self.side());
         ds.field("quantity", &self.quantity());
         ds.field("price", &self.price());

@@ -1,16 +1,20 @@
 include "../../common/decimal.fbs";
+include "observation_scope.fbs";
 
 namespace kairos.market.v2;
 
 table Quote {
   quote_id:string;
-  market_id:string (required);
+  scope:ObservationScope (required);
   instrument_id:string (required);
   source_id:string (required);
   bid_price:kairos.common.v2.Decimal64;
   bid_quantity:kairos.common.v2.Decimal64;
   ask_price:kairos.common.v2.Decimal64;
   ask_quantity:kairos.common.v2.Decimal64;
+  bid_venue_code:string;
+  ask_venue_code:string;
+  tape:uint;
   source_observed_at_unix_nanos:ulong;
   received_at_unix_nanos:ulong;
 }

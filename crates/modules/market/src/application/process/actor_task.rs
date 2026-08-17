@@ -152,7 +152,7 @@ mod tests {
     fn bar_and_greeks_have_event_wire_messages() {
         let identity = InstanceIdentity::new("workspace", "launch", "instance");
         let bar = MarketObservation::Bar(Bar {
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            scope: crate::ObservationScope::market("market:btc").unwrap(),
             instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),
@@ -165,7 +165,7 @@ mod tests {
             derivation: "aggregated".into(),
         });
         let greeks = MarketObservation::OptionGreeks(OptionGreeks {
-            market_id: kairos_primitives::MarketId::new("market:btc-option").unwrap(),
+            scope: crate::ObservationScope::market("market:btc-option").unwrap(),
             instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-option").unwrap(),
             expiry_unix_nanos: None,
             strike: None,
@@ -231,7 +231,7 @@ mod tests {
             "source".to_string(),
         );
         let ticker = MarketObservation::Ticker24h(Ticker24h {
-            market_id: common.0.clone(),
+            scope: crate::ObservationScope::from(common.0.clone()),
             instrument_id: common.1.clone(),
             last_price: Some("1".parse().unwrap()),
             bid_price: None,
@@ -251,7 +251,7 @@ mod tests {
             source_id: common.2.clone(),
         });
         let mark = MarketObservation::MarkPrice(MarkPrice {
-            market_id: common.0.clone(),
+            scope: crate::ObservationScope::from(common.0.clone()),
             instrument_id: common.1.clone(),
             mark_price: "1".parse().unwrap(),
             index_price: None,
@@ -262,7 +262,7 @@ mod tests {
             source_id: common.2.clone(),
         });
         let index = MarketObservation::IndexPrice(IndexPrice {
-            market_id: common.0.clone(),
+            scope: crate::ObservationScope::from(common.0.clone()),
             instrument_id: common.1.clone(),
             spot_index_price: Some("1".parse().unwrap()),
             contract_index_price: None,
@@ -272,7 +272,7 @@ mod tests {
             source_id: common.2.clone(),
         });
         let funding = MarketObservation::FundingRate(FundingRate {
-            market_id: common.0.clone(),
+            scope: crate::ObservationScope::from(common.0.clone()),
             instrument_id: common.1.clone(),
             funding_rate: "0.001".parse().unwrap(),
             funding_period_seconds: Some(28_800),
@@ -281,7 +281,7 @@ mod tests {
             source_id: common.2.clone(),
         });
         let open_interest = MarketObservation::OpenInterest(OpenInterest {
-            market_id: common.0,
+            scope: crate::ObservationScope::from(common.0),
             instrument_id: common.1,
             contracts: "10".parse().unwrap(),
             quote_value: None,
@@ -479,7 +479,7 @@ mod tests {
         crate::composition::attach_replay_source_with_policy(
             &mut application,
             [MarketObservation::Bar(crate::Bar {
-                market_id: kairos_primitives::MarketId::new("market:test:spot:TEST").unwrap(),
+                scope: crate::ObservationScope::market("market:test:spot:TEST").unwrap(),
                 instrument_id: kairos_primitives::InstrumentId::new("instrument:test:spot:TEST")
                     .unwrap(),
                 timeframe: "1m".into(),

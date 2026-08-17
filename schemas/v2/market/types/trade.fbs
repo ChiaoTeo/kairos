@@ -1,16 +1,22 @@
 include "../../common/decimal.fbs";
+include "observation_scope.fbs";
 include "../../common/types.fbs";
 
 namespace kairos.market.v2;
 
 table Trade {
   trade_id:string;
-  market_id:string (required);
+  scope:ObservationScope (required);
   instrument_id:string (required);
   source_id:string (required);
   price:kairos.common.v2.Decimal64 (required);
   quantity:kairos.common.v2.Decimal64 (required);
   aggressor_side:kairos.common.v2.Side = UNSPECIFIED;
+  venue_code:string;
+  tape:uint;
+  trf_id:uint;
+  participant_timestamp_unix_nanos:ulong;
+  trf_timestamp_unix_nanos:ulong;
   source_observed_at_unix_nanos:ulong;
   received_at_unix_nanos:ulong;
 }

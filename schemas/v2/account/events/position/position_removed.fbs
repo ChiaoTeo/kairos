@@ -1,5 +1,6 @@
 include "../../../common/metadata.fbs";
 include "../../types/provenance.fbs";
+include "../../types/common.fbs";
 
 namespace kairos.account.v2;
 
@@ -9,6 +10,7 @@ table PositionRemoved {
   segment_key:string (required);
   instrument_id:string (required);
   market_id:string (required);
+  position_side:PositionSide = NET;
   provenance:AccountFactProvenance;
 }
 

@@ -1,9 +1,9 @@
-use kairos_primitives::{InstrumentId, MarketId, Money, Quantity, Rate, UnixNanos};
+use kairos_primitives::{InstrumentId, Money, Quantity, Rate, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OpenInterest {
-    pub market_id: MarketId,
+    pub scope: super::ObservationScope,
     pub instrument_id: InstrumentId,
     pub contracts: Quantity,
     pub quote_value: Option<Money>,

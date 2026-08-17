@@ -51,6 +51,7 @@ pub(crate) fn normalize_market_message(payload: &str) -> Result<Option<MarketEve
             last_sequence: None,
             sequence: value.get("t").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: observed_at_unix_nanos.into(),
+            venue: Default::default(),
         })),
         "bookTicker" => Ok(Some(MarketEvent {
             symbol,
@@ -68,6 +69,7 @@ pub(crate) fn normalize_market_message(payload: &str) -> Result<Option<MarketEve
             last_sequence: None,
             sequence: value.get("u").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: observed_at_unix_nanos.into(),
+            venue: Default::default(),
         })),
         "depthUpdate" => Ok(Some(MarketEvent {
             symbol,
@@ -85,6 +87,7 @@ pub(crate) fn normalize_market_message(payload: &str) -> Result<Option<MarketEve
             last_sequence: value.get("u").and_then(Value::as_u64).map(Sequence::new),
             sequence: value.get("u").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: observed_at_unix_nanos.into(),
+            venue: Default::default(),
         })),
         "kline" => {
             let kline = value
@@ -125,6 +128,7 @@ pub(crate) fn normalize_market_message(payload: &str) -> Result<Option<MarketEve
                 last_sequence: None,
                 sequence: kline.get("L").and_then(Value::as_u64).map(Sequence::new),
                 observed_at_unix_nanos: observed_at_unix_nanos.into(),
+                venue: Default::default(),
             }))
         }
         _ => Ok(None),
@@ -174,6 +178,7 @@ fn snapshot_event(symbol: &str, value: &Value, sequence: u64) -> Result<MarketEv
         last_sequence: Some(Sequence::new(sequence)),
         sequence: Some(Sequence::new(sequence)),
         observed_at_unix_nanos: now_unix_nanos().into(),
+        venue: Default::default(),
     })
 }
 

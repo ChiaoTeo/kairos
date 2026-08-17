@@ -40,6 +40,8 @@ slice. The long-term boundary is defined in
 
 - Focused tests cover async snapshot/profile normalization, login/subscription readiness, private
   event normalization, and Account continuity behavior.
-- Canonical identity still crosses through the temporary `canonical_account_identity` compatibility
-  mapping. The slice is not the final Reference identity state until provider instrument identity is
-  resolved through Reference-owned mappings.
+- Provider instrument identity is resolved through the Reference current-view database using
+  `exchange_id`, `venue_symbol`, and `instrument_kind`; the temporary canonical-identity mapping is
+  no longer part of Account composition.
+- Production server and CLI use only the native async OKX Account snapshot/private-event path; the
+  legacy blocking Account registry/synchronization path has been removed.

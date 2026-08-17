@@ -330,16 +330,12 @@ pub(super) fn read_reference_projection(
         .into_iter()
         .map(|value| ReferenceMarket {
             market_id: value.market_id,
-            source_id: None,
-            market_key: value.market_key,
             instrument_id: value.instrument_id,
             listing_id: value.listing_id,
             exchange_id: value.exchange_id,
-            market_type: value.market_type.to_string(),
+            instrument_kind: value.instrument_kind.to_string(),
             asset_type: value.asset_type.map(|item| item.to_string()),
-            source_symbol: value.source_symbol,
-            market_data_access_id: None,
-            provider_symbol: None,
+            venue_symbol: value.venue_symbol,
             base_asset_id: value.base_asset_id,
             quote_asset_id: value.quote_asset_id,
             underlying_instrument_id: value.underlying_instrument_id,

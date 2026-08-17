@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use kairos_primitives::{AssetClass, Exchange, ProviderProductCode};
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +17,12 @@ impl SourceRouteKey {
     pub fn from_market(market: &crate::domain::market::ResolvedMarket) -> Self {
         Self {
             source_id: market.source_id.as_ref().map(ToString::to_string),
-            exchange: market.exchange_id.to_string().to_ascii_lowercase(),
+            exchange: market
+                .exchange_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "consolidated".into())
+                .to_ascii_lowercase(),
             market_type: market.route.provider_product.clone(),
             asset_type: market.asset_type,
         }
@@ -28,6 +35,9 @@ pub struct SourceDescriptor {
     pub exchange_id: Option<Exchange>,
     pub market_type: Option<ProviderProductCode>,
     pub asset_type: Option<AssetClass>,
+    /// Realtime observations implemented by this concrete source adapter.
+    #[serde(default)]
+    pub observation_capabilities: BTreeSet<crate::domain::observation::ObservationKind>,
 }
 
 impl SourceDescriptor {
@@ -48,6 +58,7 @@ impl SourceDescriptor {
             exchange_id: Some(exchange_id),
             market_type: Some(market_type),
             asset_type,
+            observation_capabilities: BTreeSet::new(),
         })
     }
 
@@ -57,6 +68,15 @@ impl SourceDescriptor {
             exchange_id: None,
             market_type: None,
             asset_type: None,
+            observation_capabilities: BTreeSet::new(),
         }
+    }
+
+    pub fn with_observation_capabilities(
+        mut self,
+        capabilities: impl IntoIterator<Item = crate::domain::observation::ObservationKind>,
+    ) -> Self {
+        self.observation_capabilities = capabilities.into_iter().collect();
+        self
     }
 }

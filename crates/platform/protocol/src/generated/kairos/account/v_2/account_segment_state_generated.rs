@@ -27,14 +27,24 @@ impl<'a> AccountSegmentState<'a> {
     pub const VT_OBSERVED_ACCOUNT_MODEL: ::flatbuffers::VOffsetT = 12;
     pub const VT_STATUS: ::flatbuffers::VOffsetT = 14;
     pub const VT_FRESHNESS: ::flatbuffers::VOffsetT = 16;
-    pub const VT_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 18;
-    pub const VT_STATE_GENERATION: ::flatbuffers::VOffsetT = 20;
-    pub const VT_VALUATION: ::flatbuffers::VOffsetT = 22;
-    pub const VT_BALANCES: ::flatbuffers::VOffsetT = 24;
-    pub const VT_COLLATERAL: ::flatbuffers::VOffsetT = 26;
-    pub const VT_POSITIONS: ::flatbuffers::VOffsetT = 28;
-    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 30;
-    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 32;
+    pub const VT_SYNC_MODE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_SYNC_LIFECYCLE: ::flatbuffers::VOffsetT = 20;
+    pub const VT_COMPLETENESS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_SNAPSHOT_WATERMARK: ::flatbuffers::VOffsetT = 24;
+    pub const VT_EVENT_WATERMARK: ::flatbuffers::VOffsetT = 26;
+    pub const VT_CHANNEL_EPOCH: ::flatbuffers::VOffsetT = 28;
+    pub const VT_LAST_EVENT_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 30;
+    pub const VT_LAST_SUCCESS_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 32;
+    pub const VT_LAST_ERROR: ::flatbuffers::VOffsetT = 34;
+    pub const VT_RECOVERY_BUFFER_DEPTH: ::flatbuffers::VOffsetT = 36;
+    pub const VT_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 38;
+    pub const VT_STATE_GENERATION: ::flatbuffers::VOffsetT = 40;
+    pub const VT_VALUATION: ::flatbuffers::VOffsetT = 42;
+    pub const VT_BALANCES: ::flatbuffers::VOffsetT = 44;
+    pub const VT_COLLATERAL: ::flatbuffers::VOffsetT = 46;
+    pub const VT_POSITIONS: ::flatbuffers::VOffsetT = 48;
+    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 50;
+    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 52;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -53,6 +63,12 @@ impl<'a> AccountSegmentState<'a> {
         let mut builder = AccountSegmentStateBuilder::new(_fbb);
         builder.add_state_generation(args.state_generation);
         builder.add_observed_at_unix_nanos(args.observed_at_unix_nanos);
+        builder.add_recovery_buffer_depth(args.recovery_buffer_depth);
+        builder.add_last_success_at_unix_nanos(args.last_success_at_unix_nanos);
+        builder.add_last_event_at_unix_nanos(args.last_event_at_unix_nanos);
+        builder.add_channel_epoch(args.channel_epoch);
+        builder.add_event_watermark(args.event_watermark);
+        builder.add_snapshot_watermark(args.snapshot_watermark);
         if let Some(x) = args.positions {
             builder.add_positions(x);
         }
@@ -65,6 +81,9 @@ impl<'a> AccountSegmentState<'a> {
         if let Some(x) = args.valuation {
             builder.add_valuation(x);
         }
+        if let Some(x) = args.last_error {
+            builder.add_last_error(x);
+        }
         if let Some(x) = args.broker {
             builder.add_broker(x);
         }
@@ -76,6 +95,9 @@ impl<'a> AccountSegmentState<'a> {
         }
         builder.add_position_mode(args.position_mode);
         builder.add_margin_mode(args.margin_mode);
+        builder.add_completeness(args.completeness);
+        builder.add_sync_lifecycle(args.sync_lifecycle);
+        builder.add_sync_mode(args.sync_mode);
         builder.add_freshness(args.freshness);
         builder.add_status(args.status);
         builder.add_observed_account_model(args.observed_account_model);
@@ -175,6 +197,126 @@ impl<'a> AccountSegmentState<'a> {
                     AccountSegmentState::VT_FRESHNESS,
                     Some(FreshnessState::UNSPECIFIED),
                 )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn sync_mode(&self) -> SegmentSyncMode {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<SegmentSyncMode>(
+                    AccountSegmentState::VT_SYNC_MODE,
+                    Some(SegmentSyncMode::UNSPECIFIED),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn sync_lifecycle(&self) -> SegmentSyncLifecycle {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<SegmentSyncLifecycle>(
+                    AccountSegmentState::VT_SYNC_LIFECYCLE,
+                    Some(SegmentSyncLifecycle::UNSPECIFIED),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn completeness(&self) -> SegmentCompleteness {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<SegmentCompleteness>(
+                    AccountSegmentState::VT_COMPLETENESS,
+                    Some(SegmentCompleteness::UNSPECIFIED),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn snapshot_watermark(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_SNAPSHOT_WATERMARK, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn event_watermark(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_EVENT_WATERMARK, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn channel_epoch(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_CHANNEL_EPOCH, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn last_event_at_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_LAST_EVENT_AT_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn last_success_at_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_LAST_SUCCESS_AT_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn last_error(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                AccountSegmentState::VT_LAST_ERROR,
+                None,
+            )
+        }
+    }
+    #[inline]
+    pub fn recovery_buffer_depth(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_RECOVERY_BUFFER_DEPTH, Some(0))
                 .unwrap()
         }
     }
@@ -318,6 +460,32 @@ impl ::flatbuffers::Verifiable for AccountSegmentState<'_> {
             )?
             .visit_field::<AccountStatus>("status", Self::VT_STATUS, false)?
             .visit_field::<FreshnessState>("freshness", Self::VT_FRESHNESS, false)?
+            .visit_field::<SegmentSyncMode>("sync_mode", Self::VT_SYNC_MODE, false)?
+            .visit_field::<SegmentSyncLifecycle>("sync_lifecycle", Self::VT_SYNC_LIFECYCLE, false)?
+            .visit_field::<SegmentCompleteness>("completeness", Self::VT_COMPLETENESS, false)?
+            .visit_field::<u64>("snapshot_watermark", Self::VT_SNAPSHOT_WATERMARK, false)?
+            .visit_field::<u64>("event_watermark", Self::VT_EVENT_WATERMARK, false)?
+            .visit_field::<u64>("channel_epoch", Self::VT_CHANNEL_EPOCH, false)?
+            .visit_field::<u64>(
+                "last_event_at_unix_nanos",
+                Self::VT_LAST_EVENT_AT_UNIX_NANOS,
+                false,
+            )?
+            .visit_field::<u64>(
+                "last_success_at_unix_nanos",
+                Self::VT_LAST_SUCCESS_AT_UNIX_NANOS,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "last_error",
+                Self::VT_LAST_ERROR,
+                false,
+            )?
+            .visit_field::<u64>(
+                "recovery_buffer_depth",
+                Self::VT_RECOVERY_BUFFER_DEPTH,
+                false,
+            )?
             .visit_field::<u64>(
                 "observed_at_unix_nanos",
                 Self::VT_OBSERVED_AT_UNIX_NANOS,
@@ -352,6 +520,16 @@ pub struct AccountSegmentStateArgs<'a> {
     pub observed_account_model: AccountModel,
     pub status: AccountStatus,
     pub freshness: FreshnessState,
+    pub sync_mode: SegmentSyncMode,
+    pub sync_lifecycle: SegmentSyncLifecycle,
+    pub completeness: SegmentCompleteness,
+    pub snapshot_watermark: u64,
+    pub event_watermark: u64,
+    pub channel_epoch: u64,
+    pub last_event_at_unix_nanos: u64,
+    pub last_success_at_unix_nanos: u64,
+    pub last_error: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub recovery_buffer_depth: u64,
     pub observed_at_unix_nanos: u64,
     pub state_generation: u64,
     pub valuation: Option<::flatbuffers::WIPOffset<AccountValuation<'a>>>,
@@ -384,6 +562,16 @@ impl<'a> Default for AccountSegmentStateArgs<'a> {
             observed_account_model: AccountModel::UNSPECIFIED,
             status: AccountStatus::UNSPECIFIED,
             freshness: FreshnessState::UNSPECIFIED,
+            sync_mode: SegmentSyncMode::UNSPECIFIED,
+            sync_lifecycle: SegmentSyncLifecycle::UNSPECIFIED,
+            completeness: SegmentCompleteness::UNSPECIFIED,
+            snapshot_watermark: 0,
+            event_watermark: 0,
+            channel_epoch: 0,
+            last_event_at_unix_nanos: 0,
+            last_success_at_unix_nanos: 0,
+            last_error: None,
+            recovery_buffer_depth: 0,
             observed_at_unix_nanos: 0,
             state_generation: 0,
             valuation: None,
@@ -452,6 +640,79 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AccountSegmentStateBuilder<'a
             AccountSegmentState::VT_FRESHNESS,
             freshness,
             FreshnessState::UNSPECIFIED,
+        );
+    }
+    #[inline]
+    pub fn add_sync_mode(&mut self, sync_mode: SegmentSyncMode) {
+        self.fbb_.push_slot::<SegmentSyncMode>(
+            AccountSegmentState::VT_SYNC_MODE,
+            sync_mode,
+            SegmentSyncMode::UNSPECIFIED,
+        );
+    }
+    #[inline]
+    pub fn add_sync_lifecycle(&mut self, sync_lifecycle: SegmentSyncLifecycle) {
+        self.fbb_.push_slot::<SegmentSyncLifecycle>(
+            AccountSegmentState::VT_SYNC_LIFECYCLE,
+            sync_lifecycle,
+            SegmentSyncLifecycle::UNSPECIFIED,
+        );
+    }
+    #[inline]
+    pub fn add_completeness(&mut self, completeness: SegmentCompleteness) {
+        self.fbb_.push_slot::<SegmentCompleteness>(
+            AccountSegmentState::VT_COMPLETENESS,
+            completeness,
+            SegmentCompleteness::UNSPECIFIED,
+        );
+    }
+    #[inline]
+    pub fn add_snapshot_watermark(&mut self, snapshot_watermark: u64) {
+        self.fbb_.push_slot::<u64>(
+            AccountSegmentState::VT_SNAPSHOT_WATERMARK,
+            snapshot_watermark,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_event_watermark(&mut self, event_watermark: u64) {
+        self.fbb_
+            .push_slot::<u64>(AccountSegmentState::VT_EVENT_WATERMARK, event_watermark, 0);
+    }
+    #[inline]
+    pub fn add_channel_epoch(&mut self, channel_epoch: u64) {
+        self.fbb_
+            .push_slot::<u64>(AccountSegmentState::VT_CHANNEL_EPOCH, channel_epoch, 0);
+    }
+    #[inline]
+    pub fn add_last_event_at_unix_nanos(&mut self, last_event_at_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            AccountSegmentState::VT_LAST_EVENT_AT_UNIX_NANOS,
+            last_event_at_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_last_success_at_unix_nanos(&mut self, last_success_at_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            AccountSegmentState::VT_LAST_SUCCESS_AT_UNIX_NANOS,
+            last_success_at_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_last_error(&mut self, last_error: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            AccountSegmentState::VT_LAST_ERROR,
+            last_error,
+        );
+    }
+    #[inline]
+    pub fn add_recovery_buffer_depth(&mut self, recovery_buffer_depth: u64) {
+        self.fbb_.push_slot::<u64>(
+            AccountSegmentState::VT_RECOVERY_BUFFER_DEPTH,
+            recovery_buffer_depth,
+            0,
         );
     }
     #[inline]
@@ -569,6 +830,19 @@ impl ::core::fmt::Debug for AccountSegmentState<'_> {
         ds.field("observed_account_model", &self.observed_account_model());
         ds.field("status", &self.status());
         ds.field("freshness", &self.freshness());
+        ds.field("sync_mode", &self.sync_mode());
+        ds.field("sync_lifecycle", &self.sync_lifecycle());
+        ds.field("completeness", &self.completeness());
+        ds.field("snapshot_watermark", &self.snapshot_watermark());
+        ds.field("event_watermark", &self.event_watermark());
+        ds.field("channel_epoch", &self.channel_epoch());
+        ds.field("last_event_at_unix_nanos", &self.last_event_at_unix_nanos());
+        ds.field(
+            "last_success_at_unix_nanos",
+            &self.last_success_at_unix_nanos(),
+        );
+        ds.field("last_error", &self.last_error());
+        ds.field("recovery_buffer_depth", &self.recovery_buffer_depth());
         ds.field("observed_at_unix_nanos", &self.observed_at_unix_nanos());
         ds.field("state_generation", &self.state_generation());
         ds.field("valuation", &self.valuation());

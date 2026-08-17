@@ -27,11 +27,11 @@ impl MarketSelectionQuery {
         if self
             .market_id
             .as_deref()
-            .is_some_and(|value| market.market_id != *value)
+            .is_some_and(|value| market.market_id().map(|id| id.as_str()) != Some(value))
             || self
                 .exchange_id
                 .as_ref()
-                .is_some_and(|value| value != &market.exchange_id)
+                .is_some_and(|value| market.exchange_id.as_ref() != Some(value))
             || self
                 .instrument_kind
                 .is_some_and(|value| value != market.instrument_kind)

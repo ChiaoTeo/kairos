@@ -15,8 +15,11 @@ table Fill {
   segment_key:string (required);
   instrument_id:string (required);
   market_id:string (required);
-  execution_access_id:string (required);
+  execution_route_id:string (required);
   remote_order_id:string;
+  reported_provider_id:string;
+  provider_product:string;
+  provider_symbol:string;
   side:kairos.common.v2.Side = UNSPECIFIED;
   quantity:kairos.common.v2.Decimal64 (required);
   price:kairos.common.v2.Decimal64 (required);

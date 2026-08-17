@@ -20,6 +20,7 @@ impl ExecutionActor {
     pub(crate) fn prepare_submission(
         &mut self,
         request: &SubmitOrder,
+        selected_route: crate::domain::SelectedExecutionRoute,
         commitment: OrderCommitment,
         risk_reservation: RiskReservationEvidence,
         now: u64,
@@ -40,7 +41,16 @@ impl ExecutionActor {
         order.intent_id = request.intent_id.clone();
         order.strategy_id = request.strategy_id.clone();
         order.market_id = request.market_id.clone();
-        order.execution_access_id = request.execution_access_id.clone();
+        order.execution_route_id = request.execution_route_id.clone();
+        order.attempts.push(crate::domain::ExecutionAttempt {
+            attempt_id: format!("{}:attempt:1", order.order_id),
+            provider_connection_id: selected_route.route_id.to_string(),
+            selected_route: selected_route.clone(),
+            command_started_at_unix_nanos: now.into(),
+            delivery_certainty: crate::domain::DeliveryCertainty::NotSent,
+            remote_order_id: None,
+        });
+        order.selected_route = Some(selected_route);
         order.limit_price = request.limit_price;
         order.status = ExecutionOrderStatus::Pending;
         let event = order_event(&order, now, String::new());
@@ -159,6 +169,14 @@ impl ExecutionActor {
         let occurred_at = event.occurred_at_unix_nanos;
         crate::application::apply_connection_event(&mut order, event)
             .map_err(|error| error.to_string())?;
+        if let Some(attempt) = order.attempts.last_mut() {
+            attempt.delivery_certainty = if order.status == ExecutionOrderStatus::Rejected {
+                crate::domain::DeliveryCertainty::Rejected
+            } else {
+                crate::domain::DeliveryCertainty::Confirmed
+            };
+            attempt.remote_order_id = order.remote_order_id.clone();
+        }
         if order.status == ExecutionOrderStatus::Accepted && order.remote_order_id.is_none() {
             order.status = ExecutionOrderStatus::Unknown;
             order.reason = "accepted order did not return a exchange order id".into();
@@ -179,7 +197,30 @@ impl ExecutionActor {
         order.status = status;
         order.reason = reason.clone();
         order.updated_at_unix_nanos = UnixNanos::new(now);
+        if let Some(attempt) = order.attempts.last_mut() {
+            attempt.delivery_certainty = match status {
+                ExecutionOrderStatus::Unknown => crate::domain::DeliveryCertainty::Indeterminate,
+                ExecutionOrderStatus::Failed => crate::domain::DeliveryCertainty::NotSent,
+                ExecutionOrderStatus::Rejected => crate::domain::DeliveryCertainty::Rejected,
+                _ => attempt.delivery_certainty,
+            };
+        }
         let event = order_event(&order, now, reason);
+        self.orders.insert(order.order_id.clone(), order.clone());
+        Some((order, event))
+    }
+
+    pub(crate) fn mark_attempt_dispatched(
+        &mut self,
+        order_id: &str,
+        now: u64,
+    ) -> Option<(ExecutionOrder, ExecutionEvent)> {
+        let mut order = self.order(order_id)?.clone();
+        let attempt = order.attempts.last_mut()?;
+        attempt.command_started_at_unix_nanos = now.into();
+        attempt.delivery_certainty = crate::domain::DeliveryCertainty::Indeterminate;
+        order.updated_at_unix_nanos = now.into();
+        let event = order_event(&order, now, "order-entry command dispatch started".into());
         self.orders.insert(order.order_id.clone(), order.clone());
         Some((order, event))
     }

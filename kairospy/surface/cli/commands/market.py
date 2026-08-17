@@ -24,7 +24,7 @@ Canonical commands:
   validate, once, replay
 
 Running-process commands:
-  status, snapshot, refresh, recover, stop, subscribe, unsubscribe
+  status, data-sources, snapshot, refresh, recover, stop, subscribe, unsubscribe
 
 Snapshot views:
   snapshot quote --market-id market:binance:spot:BTCUSDT --source-id binance-spot
@@ -68,6 +68,7 @@ def market_passthrough(ctx: typer.Context) -> None:
     workspace, arguments = _workspace_and_arguments(ctx.args)
     if arguments and arguments[0] in {
         "status",
+        "data-sources",
         "snapshot",
         "refresh",
         "recover",
@@ -106,6 +107,13 @@ def _run_control_command(arguments: Sequence[str], workspace: Path | None) -> No
         parser.add_argument("--exchange", default="binance")
         parser.add_argument("--market-type", default="spot")
         parser.add_argument("--timeframe", default=None)
+    elif arguments[0] == "data-sources":
+        parser.add_argument("--market-id")
+        parser.add_argument("--instrument-id")
+        parser.add_argument("--observation-kind")
+        parser.add_argument("--provider-id")
+        parser.add_argument("--configured-only", action="store_true")
+        parser.add_argument("--ready-only", action="store_true")
     parsed = parser.parse_args(list(arguments[1:]))
     owner = WorkspaceApplication().open(workspace)
     if arguments[0] == "snapshot":
@@ -113,8 +121,23 @@ def _run_control_command(arguments: Sequence[str], workspace: Path | None) -> No
         typer.echo(render(value, OutputFormat(parsed.output)))
         return
     client = _market_client(owner)
-    operation = getattr(client, arguments[0])
-    value = operation()
+    if arguments[0] == "data-sources":
+        query = "&".join(
+            f"{key}={value}"
+            for key, value in {
+                "market_id": parsed.market_id,
+                "instrument_id": parsed.instrument_id,
+                "observation_kind": parsed.observation_kind,
+                "provider_id": parsed.provider_id,
+                "configured_only": "true" if parsed.configured_only else None,
+                "ready_only": "true" if parsed.ready_only else None,
+            }.items()
+            if value is not None
+        )
+        value = client.data_sources(query)
+    else:
+        operation = getattr(client, arguments[0])
+        value = operation()
     typer.echo(render(value, OutputFormat(parsed.output)))
 
 
@@ -130,7 +153,7 @@ def _read_mmap_snapshot(
             f"{parsed.symbol.upper()}"
         )
     projection = MarketProjection(
-        owner.paths.child("snapshots", "v2", "market", "market-shared")
+        owner.paths.child("snapshots", "market", "market-shared")
     )
     if parsed.kind == "quote":
         value = projection.read_quote(market_id, parsed.source_id)
@@ -161,6 +184,10 @@ def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) 
     parser.add_argument("--subscription-id", required=True)
     if arguments[0] == "subscribe":
         parser.add_argument("--subject", required=True)
+        parser.add_argument(
+            "--source-id",
+            help="Select one Market-owned data source when more than one route can satisfy the subscription",
+        )
         parser.add_argument("--strategy-id", default="cli")
         parser.add_argument("--instance-id", default="cli")
         parser.add_argument("--selector", action="append", default=[])
@@ -201,6 +228,7 @@ def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) 
                 "payload": {
                     "subject": parsed.subject,
                     "selectors": parsed.selector,
+                    "source_id": parsed.source_id,
                     "exchange": parsed.exchange,
                     "market_type": parsed.market_type,
                     "asset_type": parsed.asset_type,

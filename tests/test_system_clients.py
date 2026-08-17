@@ -56,7 +56,35 @@ def test_execution_system_client_owns_intent_endpoint() -> None:
 
     client = RecordingExecutionClient()
     client.submit_intent({"intent_id": "i-1"})
-    assert client.calls == [("POST", "/v1/intents", {"intent_id": "i-1"})]
+    client.routes("account_id=main&order_type=limit")
+    assert client.calls == [
+        ("POST", "/v1/intents", {"intent_id": "i-1"}),
+        ("GET", "/v1/routes?account_id=main&order_type=limit", None),
+    ]
+
+
+def test_market_system_client_owns_current_data_source_query() -> None:
+    @dataclass(frozen=True, slots=True)
+    class RecordingMarketClient(MarketSystemClient):
+        calls: list[tuple[str, str, object]] = field(default_factory=list)
+
+        def __init__(self) -> None:
+            super().__init__(Path("/tmp/market.sock"))
+            object.__setattr__(self, "calls", [])
+
+        def request(self, method, path, body=None):
+            self.calls.append((method, path, body))
+            return {"data_sources": []}
+
+    client = RecordingMarketClient()
+    client.data_sources("market_id=market:btc&observation_kind=quote")
+    assert client.calls == [
+        (
+            "GET",
+            "/v1/data-sources?market_id=market:btc&observation_kind=quote",
+            None,
+        )
+    ]
 
 
 def test_system_process_factory_returns_typed_business_clients() -> None:

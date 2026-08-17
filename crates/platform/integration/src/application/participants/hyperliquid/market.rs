@@ -219,6 +219,7 @@ fn normalize_book(row: &Value) -> Result<MarketEvent, IntegrationError> {
         last_sequence: Some(Sequence::new(time)),
         sequence: Some(Sequence::new(time)),
         observed_at_unix_nanos: UnixNanos::new(time.saturating_mul(1_000_000)),
+        venue: Default::default(),
     })
 }
 
@@ -240,6 +241,7 @@ fn normalize_trade(row: &Value) -> Result<MarketEvent, IntegrationError> {
         last_sequence: None,
         sequence: row.get("tid").and_then(Value::as_u64).map(Sequence::new),
         observed_at_unix_nanos: UnixNanos::new(time.saturating_mul(1_000_000)),
+        venue: Default::default(),
     })
 }
 fn levels(value: Option<&Value>) -> Result<Vec<(Price, Quantity)>, IntegrationError> {
@@ -361,6 +363,7 @@ impl AsyncMarketSnapshotConnection for HyperliquidMarketSnapshot {
                     last_sequence: None,
                     sequence: None,
                     observed_at_unix_nanos,
+                    venue: Default::default(),
                 })
             })
             .collect()

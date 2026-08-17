@@ -4,15 +4,11 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_primitives::{
-    ExecutionAccessId, Generation, InstrumentId, ListingId, MarketId, ReferenceStatus, Sequence,
-    UnixNanos,
+    Generation, InstrumentId, ListingId, MarketId, ReferenceStatus, Sequence, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{
-    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, MarketDataAccess,
-    ProviderCatalog,
-};
+use super::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceCatalog {
@@ -21,10 +17,6 @@ pub struct ReferenceCatalog {
     pub instruments: BTreeMap<InstrumentId, Instrument>,
     pub listings: BTreeMap<ListingId, Listing>,
     pub markets: BTreeMap<MarketId, Market>,
-    #[serde(default)]
-    pub execution_accesses: BTreeMap<ExecutionAccessId, ExecutionAccess>,
-    #[serde(default)]
-    pub market_data_accesses: BTreeMap<String, MarketDataAccess>,
     pub lifecycle_events: Vec<LifecycleEvent>,
     pub generation: Generation,
     pub event_sequence: Sequence,
@@ -37,8 +29,6 @@ impl ReferenceCatalog {
         let previous_instruments = std::mem::take(&mut self.instruments);
         let previous_listings = std::mem::take(&mut self.listings);
         let previous_markets = std::mem::take(&mut self.markets);
-        let previous_execution_accesses = std::mem::take(&mut self.execution_accesses);
-        let previous_market_data_accesses = std::mem::take(&mut self.market_data_accesses);
         self.entities = incoming
             .entities
             .into_iter()
@@ -58,16 +48,6 @@ impl ReferenceCatalog {
             .listings
             .into_iter()
             .map(|v| (v.listing_id.clone(), v))
-            .collect();
-        self.execution_accesses = incoming
-            .execution_accesses
-            .into_iter()
-            .map(|v| (v.access_id.clone(), v))
-            .collect();
-        self.market_data_accesses = incoming
-            .market_data_accesses
-            .into_iter()
-            .map(|v| (v.access_id.clone(), v))
             .collect();
 
         // Canonical identity is retained after a provider withdrawal. A
@@ -103,26 +83,6 @@ impl ReferenceCatalog {
                 retained
             });
         }
-        for (id, previous) in &previous_execution_accesses {
-            self.execution_accesses
-                .entry(id.clone())
-                .or_insert_with(|| {
-                    let mut retained = previous.clone();
-                    retained.status = ReferenceStatus::Inactive;
-                    retained.effective_to_unix_nanos.get_or_insert(now);
-                    retained
-                });
-        }
-        for (id, previous) in &previous_market_data_accesses {
-            self.market_data_accesses
-                .entry(id.clone())
-                .or_insert_with(|| {
-                    let mut retained = previous.clone();
-                    retained.status = ReferenceStatus::Inactive;
-                    retained.effective_to_unix_nanos.get_or_insert(now);
-                    retained
-                });
-        }
 
         let mut next_markets: BTreeMap<_, _> = incoming
             .markets
@@ -156,16 +116,6 @@ impl ReferenceCatalog {
         diff_records!("asset", previous_assets, self.assets);
         diff_records!("instrument", previous_instruments, self.instruments);
         diff_records!("listing", previous_listings, self.listings);
-        diff_records!(
-            "execution_access",
-            previous_execution_accesses,
-            self.execution_accesses
-        );
-        diff_records!(
-            "market_data_access",
-            previous_market_data_accesses,
-            self.market_data_accesses
-        );
 
         for (id, next) in &next_markets {
             match previous_markets.get(id) {
@@ -175,7 +125,7 @@ impl ReferenceCatalog {
                     self.event_sequence.get() + events.len() as u64 + 1,
                 )),
                 Some(previous) if previous != next => {
-                    let event_type = if previous.source_symbol != next.source_symbol {
+                    let event_type = if previous.venue_symbol != next.venue_symbol {
                         "symbol_changed"
                     } else if previous.status != next.status {
                         "status_changed"
@@ -195,11 +145,11 @@ impl ReferenceCatalog {
                         instrument_id: Some(next.instrument_id.clone()),
                         listing_id: next.listing_id.clone(),
                         exchange_id: Some(next.exchange_id.clone()),
-                        source_symbol: Some(next.source_symbol.clone()),
+                        venue_symbol: next.venue_symbol.clone(),
                         previous_status: Some(previous.status),
                         current_status: Some(next.status),
-                        previous_symbol: Some(previous.source_symbol.to_string()),
-                        current_symbol: Some(next.source_symbol.to_string()),
+                        previous_symbol: previous.venue_symbol.as_ref().map(ToString::to_string),
+                        current_symbol: next.venue_symbol.as_ref().map(ToString::to_string),
                         ..LifecycleEvent::default()
                     });
                 }
@@ -225,7 +175,7 @@ impl ReferenceCatalog {
                     instrument_id: Some(previous.instrument_id.clone()),
                     listing_id: previous.listing_id.clone(),
                     exchange_id: Some(previous.exchange_id.clone()),
-                    source_symbol: Some(previous.source_symbol.clone()),
+                    venue_symbol: previous.venue_symbol.clone(),
                     previous_status: Some(previous.status),
                     current_status: Some(ReferenceStatus::Delisted),
                     previous_symbol: None,
@@ -250,8 +200,6 @@ impl ReferenceCatalog {
             || previous_instruments != self.instruments
             || previous_listings != self.listings
             || previous_markets != self.markets
-            || previous_execution_accesses != self.execution_accesses
-            || previous_market_data_accesses != self.market_data_accesses
         {
             self.generation = Generation::new(self.generation.get().saturating_add(1));
         }
@@ -303,7 +251,13 @@ mod tests {
                 status: "active".into(),
                 ..Default::default()
             }],
-            instruments: vec![Default::default()],
+            instruments: vec![Instrument {
+                instrument_id: instrument_id("instrument:test"),
+                symbol: Symbol::new("TEST").unwrap(),
+                instrument_type: kairos_primitives::InstrumentKind::Spot,
+                status: status.into(),
+                ..Default::default()
+            }],
             listings: vec![Listing {
                 listing_id: listing_id("listing:test"),
                 instrument_id: instrument_id("instrument:test"),
@@ -315,12 +269,11 @@ mod tests {
             }],
             markets: vec![Market {
                 market_id: market_id("market:test"),
-                market_key: "test.spot.TEST".into(),
                 instrument_id: instrument_id("instrument:test"),
                 listing_id: Some(listing_id("listing:test")),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-                source_symbol: kairos_primitives::Symbol::new("TEST").unwrap(),
+                instrument_kind: kairos_primitives::InstrumentKind::Spot,
+                venue_symbol: Some(kairos_primitives::Symbol::new("TEST").unwrap()),
                 status: status.into(),
                 effective_from_unix_nanos: 1.into(),
                 ..Default::default()
@@ -434,7 +387,7 @@ impl LifecycleEvent {
             instrument_id: Some(market.instrument_id.clone()),
             listing_id: market.listing_id.clone(),
             exchange_id: Some(market.exchange_id.clone()),
-            source_symbol: Some(market.source_symbol.clone()),
+            venue_symbol: market.venue_symbol.clone(),
             current_status: Some(market.status),
             ..Self::default()
         }

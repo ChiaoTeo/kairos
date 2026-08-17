@@ -16,6 +16,11 @@
 - Reference owns the durable cursor and page staging, canonical
   entities/assets/instruments/listings/markets, last-known-good promotion,
   lifecycle events, snapshots, and publication.
+- Massive is a DataProvider, not a canonical exchange. Stock ticker
+  `primary_exchange` is mapped only to the primary Listing. Option
+  `primary_exchange=BATO` maps to Cboe BZX Options Listing; `OPRA` is treated
+  as a consolidated network and does not create an Exchange, Listing, or
+  Market. Massive reference rows never generate `market:massive:*`.
 - Stock and option catalogs are independent capability projections. Each page
   is persisted as its own SQLite staging row before its cursor is exposed as
   completed progress; only a page with no next cursor promotes a candidate.
@@ -48,3 +53,12 @@
   pagination progress only—the final catalog promotion is still a scale gate,
   not evidence that an all-market options universe is suitable for the
   steady-state Reference snapshot.
+- A 2026-08-17 read-only live sample confirmed that AAPL has
+  `primary_exchange=XNAS` while trades in the same feed report multiple venue
+  codes, including Cboe BZX and FINRA ADF/TRF. A SPY option contract reported
+  `primary_exchange=BATO`. The key was not copied into source, fixtures, logs,
+  or this note.
+- Massive REST/WebSocket market normalizers preserve provider-native trade,
+  bid, and ask exchange codes, tape, TRF identity, participant timestamp, and
+  TRF timestamp in `MarketVenueEvidence`. They do not construct canonical
+  `MarketId`s; Market composition owns that resolution.

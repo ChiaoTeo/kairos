@@ -10,8 +10,6 @@ pub(super) fn merge_provider_catalog_views<'a>(
     let mut instruments = BTreeMap::new();
     let mut listings = BTreeMap::new();
     let mut markets = BTreeMap::new();
-    let mut execution_accesses = BTreeMap::new();
-    let mut market_data_accesses = BTreeMap::new();
     let mut conflicts = Vec::new();
     let mut reconciled_instruments = 0usize;
 
@@ -25,11 +23,15 @@ pub(super) fn merge_provider_catalog_views<'a>(
             }
         }
         for value in &catalog.assets {
-            if assets
-                .insert(value.asset_id.clone(), value.clone())
-                .is_some_and(|previous| previous != *value)
-            {
-                conflicts.push(format!("asset:{}", value.asset_id));
+            if let Some(previous) = assets.get_mut(&value.asset_id) {
+                crate::domain::merge_asset(previous, value).map_err(|error| {
+                    ReferenceError::Provider(format!(
+                        "canonical asset conflict for {}: {error}",
+                        value.asset_id
+                    ))
+                })?;
+            } else {
+                assets.insert(value.asset_id.clone(), value.clone());
             }
         }
         for value in &catalog.instruments {
@@ -63,22 +65,6 @@ pub(super) fn merge_provider_catalog_views<'a>(
                 conflicts.push(format!("market:{}", value.market_id));
             }
         }
-        for value in &catalog.execution_accesses {
-            if execution_accesses
-                .insert(value.access_id.clone(), value.clone())
-                .is_some_and(|previous| previous != *value)
-            {
-                conflicts.push(format!("execution_access:{}", value.access_id));
-            }
-        }
-        for value in &catalog.market_data_accesses {
-            if market_data_accesses
-                .insert(value.access_id.clone(), value.clone())
-                .is_some_and(|previous| previous != *value)
-            {
-                conflicts.push(format!("market_data_access:{}", value.access_id));
-            }
-        }
     }
     if !conflicts.is_empty() {
         let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
@@ -102,8 +88,6 @@ pub(super) fn merge_provider_catalog_views<'a>(
         instruments: instruments.into_values().collect(),
         listings: listings.into_values().collect(),
         markets: markets.into_values().collect(),
-        execution_accesses: execution_accesses.into_values().collect(),
-        market_data_accesses: market_data_accesses.into_values().collect(),
     })
 }
 pub(crate) struct ParticipantAugmentedSource<S> {
@@ -337,7 +321,7 @@ where
                 Err(error) => return Err(error),
             };
             match result {
-                Ok(mut update) if update.complete => {
+                Ok(update) if update.complete => {
                     tracing::info!(
                         event = "reference_provider_scan_completed",
                         component = "reference",
@@ -346,7 +330,6 @@ where
                         "normalized provider facts are ready for atomic promotion"
                     );
                     if !update.facts_persisted {
-                        tag_catalog_source(&mut update.catalog, &source_id);
                         update.catalog.validate()?;
                         self.sync_store
                             .as_mut()
@@ -510,7 +493,6 @@ where
             let mut instruments = BTreeMap::new();
             let mut listings = BTreeMap::new();
             let mut markets = BTreeMap::new();
-            let mut execution_accesses = BTreeMap::new();
             let mut conflicts = Vec::new();
             let mut reconciled_instruments = 0usize;
             let mut successful_sources = 0usize;
@@ -545,8 +527,7 @@ where
                         } else {
                             successful_sources += 1;
                             self.mark_success(&source_id);
-                            let mut catalog = update.catalog;
-                            tag_catalog_source(&mut catalog, &source_id);
+                            let catalog = update.catalog;
                             self.last_good.insert(source_id.clone(), catalog);
                             if let Some(store) = self.sync_store.as_mut() {
                                 store
@@ -582,11 +563,15 @@ where
                     }
                 }
                 for value in &catalog.assets {
-                    if assets
-                        .insert(value.asset_id.clone(), value.clone())
-                        .is_some_and(|previous| previous != *value)
-                    {
-                        conflicts.push(format!("asset:{}", value.asset_id));
+                    if let Some(previous) = assets.get_mut(&value.asset_id) {
+                        crate::domain::merge_asset(previous, value).map_err(|error| {
+                            ReferenceError::Provider(format!(
+                                "canonical asset conflict for {}: {error}",
+                                value.asset_id
+                            ))
+                        })?;
+                    } else {
+                        assets.insert(value.asset_id.clone(), value.clone());
                     }
                 }
                 for value in &catalog.instruments {
@@ -618,14 +603,6 @@ where
                         .is_some_and(|previous| previous != *value)
                     {
                         conflicts.push(format!("market:{}", value.market_id));
-                    }
-                }
-                for value in &catalog.execution_accesses {
-                    if execution_accesses
-                        .insert(value.access_id.clone(), value.clone())
-                        .is_some_and(|previous| previous != *value)
-                    {
-                        conflicts.push(format!("execution_access:{}", value.access_id));
                     }
                 }
             }
@@ -726,9 +703,8 @@ where
                 ReferenceError::Provider(format!("provider fetch timed out: {error}"))
             })?;
             return match result {
-                Ok(mut update) if update.complete => {
+                Ok(update) if update.complete => {
                     if !update.facts_persisted {
-                        tag_catalog_source(&mut update.catalog, source_id);
                         update.catalog.validate()?;
                         self.sync_store
                             .as_mut()
@@ -805,8 +781,7 @@ where
                     self.last_good.clear();
                     Ok(None)
                 }
-                Ok(mut update) => {
-                    tag_catalog_source(&mut update.catalog, source_id);
+                Ok(update) => {
                     self.last_good.insert(source_id.to_owned(), update.catalog);
                     if let Some(store) = self.sync_store.as_mut() {
                         store
@@ -906,27 +881,6 @@ where
                     })
             })
             .collect()
-    }
-}
-
-fn tag_catalog_source(catalog: &mut ProviderCatalog, source_id: &str) {
-    let source_id = source_id.to_owned();
-    // Entity, Asset, and Instrument are canonical records and may be observed
-    // by several providers. A single provider ID on those records is both
-    // lossy and order-dependent. Provider provenance belongs on the concrete
-    // Listing/Market/access projections until the domain supports a provenance
-    // set explicitly.
-    for value in &mut catalog.listings {
-        value.source_id = Some(source_id.clone());
-    }
-    for value in &mut catalog.markets {
-        value.source_id = Some(source_id.clone());
-    }
-    for value in &mut catalog.execution_accesses {
-        value.source_id = Some(source_id.clone());
-    }
-    for value in &mut catalog.market_data_accesses {
-        value.source_id = Some(source_id.clone());
     }
 }
 

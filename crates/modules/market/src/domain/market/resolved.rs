@@ -4,6 +4,7 @@ use kairos_primitives::{
 use serde::{Deserialize, Serialize};
 
 use super::MarketDataRoute;
+use crate::domain::observation::ObservationScope;
 use crate::domain::source::SourceId;
 
 /// Canonical market identity joined with one active provider access.
@@ -12,10 +13,10 @@ use crate::domain::source::SourceId;
 /// every provider-facing fact is available only through `route`.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ResolvedMarket {
-    pub market_id: MarketId,
+    pub scope: ObservationScope,
     pub instrument_id: InstrumentId,
     pub instrument_kind: InstrumentKind,
-    pub exchange_id: Exchange,
+    pub exchange_id: Option<Exchange>,
     #[serde(default)]
     pub asset_type: Option<AssetClass>,
     #[serde(default)]
@@ -39,11 +40,15 @@ impl ResolvedMarket {
             return Err("market instrument kind must be known".into());
         }
         let value = Self {
-            market_id: MarketId::new(market_id.into()).map_err(|error| error.to_string())?,
+            scope: ObservationScope::market(
+                MarketId::new(market_id.into())
+                    .map_err(|error| error.to_string())?
+                    .to_string(),
+            )?,
             instrument_id: InstrumentId::new(instrument_id.into())
                 .map_err(|error| error.to_string())?,
             instrument_kind,
-            exchange_id: Exchange::new(exchange_id).map_err(|error| error.to_string())?,
+            exchange_id: Some(Exchange::new(exchange_id).map_err(|error| error.to_string())?),
             asset_type: None,
             underlying_instrument_id: None,
             route,
@@ -52,6 +57,42 @@ impl ResolvedMarket {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Resolve a provider route whose observations describe an instrument-wide
+    /// or consolidated feed, rather than one canonical exchange market.
+    pub fn consolidated(
+        instrument_id: impl Into<String>,
+        network_id: Option<String>,
+        instrument_kind: InstrumentKind,
+        route: MarketDataRoute,
+    ) -> Result<Self, String> {
+        if instrument_kind == InstrumentKind::Unknown {
+            return Err("market instrument kind must be known".into());
+        }
+        let instrument_id =
+            InstrumentId::new(instrument_id.into()).map_err(|error| error.to_string())?;
+        let value = Self {
+            scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
+            instrument_id,
+            instrument_kind,
+            exchange_id: None,
+            asset_type: None,
+            underlying_instrument_id: None,
+            route,
+            source_id: None,
+            status: ReferenceStatus::Active,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn market_id(&self) -> Option<&MarketId> {
+        self.scope.market_id()
+    }
+
+    pub fn member_id(&self) -> String {
+        self.scope.key()
     }
 
     pub fn with_source(mut self, source_id: impl Into<String>) -> Result<Self, String> {

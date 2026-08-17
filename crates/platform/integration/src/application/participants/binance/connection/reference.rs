@@ -155,6 +155,7 @@ impl AsyncMarketSnapshotConnection for BinanceEquityMarketQuote {
                 last_sequence: None,
                 sequence: None,
                 observed_at_unix_nanos: quote.observed_at_unix_nanos,
+                venue: Default::default(),
             });
         }
         Ok(events)

@@ -153,13 +153,12 @@ pub(super) fn hyperliquid_provider_catalog(
             market_id: kairos_primitives::MarketId::new(format!(
                 "market:hyperliquid:{family}:{source_symbol}"
             ))?,
-            market_key: format!("hyperliquid.{family}.{source_symbol}"),
             instrument_id: instrument_id.clone(),
             listing_id: Some(listing_id.clone()),
             exchange_id,
-            market_type: ProviderProductCode::new(family)?,
+            instrument_kind,
             asset_type: Some(AssetClass::Crypto),
-            source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+            venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
             base_asset_id: Some(kairos_primitives::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),
@@ -184,7 +183,6 @@ pub(super) fn hyperliquid_provider_catalog(
     catalog
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
-    populate_market_data_accesses(&mut catalog, "hyperliquid")?;
     catalog.validate()?;
     Ok(catalog)
 }

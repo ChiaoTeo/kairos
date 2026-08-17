@@ -2,13 +2,10 @@
 
 use super::super::config::{self, BinanceDerivativeProduct, MarketSourceBinding};
 
-pub(super) fn binding_matches_market(
+pub(crate) fn binding_provider_product(
     binding: &MarketSourceBinding,
-    market: &crate::ResolvedMarket,
-) -> bool {
-    let provider = market.route.provider_id.as_str();
-    let provider_product = market.route.provider_product.as_str();
-    let (expected_provider, expected_product) = match binding {
+) -> (&'static str, &'static str) {
+    match binding {
         MarketSourceBinding::BinanceSpot { .. } => ("binance", "spot"),
         MarketSourceBinding::BinanceEquity { .. } => ("binance", "equity"),
         MarketSourceBinding::BinanceDerivatives { product, .. } => (
@@ -47,6 +44,61 @@ pub(super) fn binding_matches_market(
                 config::HyperliquidMarketType::Perpetual => "perpetual",
             },
         ),
-    };
+    }
+}
+
+pub(crate) fn binding_supports_canonical_market(
+    binding: &MarketSourceBinding,
+    exchange_id: &str,
+    kind: kairos_primitives::InstrumentKind,
+) -> bool {
+    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+    match binding {
+        MarketSourceBinding::BinanceSpot { .. } => {
+            exchange_id.eq_ignore_ascii_case("exchange:binance") && kind == Spot
+        }
+        MarketSourceBinding::BinanceDerivatives { product, .. } => {
+            exchange_id.eq_ignore_ascii_case("exchange:binance")
+                && match product {
+                    BinanceDerivativeProduct::Options => kind == Option,
+                    BinanceDerivativeProduct::UsdMFutures
+                    | BinanceDerivativeProduct::CoinMFutures => {
+                        matches!(kind, Future | Perpetual)
+                    }
+                }
+        }
+        MarketSourceBinding::Okx {
+            instrument_type, ..
+        } => {
+            exchange_id.eq_ignore_ascii_case("exchange:okx")
+                && match instrument_type {
+                    config::OkxInstrumentType::Spot => kind == Spot,
+                    config::OkxInstrumentType::Swap => kind == Perpetual,
+                    config::OkxInstrumentType::Futures => kind == Future,
+                    config::OkxInstrumentType::Options => kind == Option,
+                }
+        }
+        MarketSourceBinding::Hyperliquid {
+            market_type: configured,
+            ..
+        } => {
+            exchange_id.eq_ignore_ascii_case("exchange:hyperliquid")
+                && match configured {
+                    config::HyperliquidMarketType::Spot => kind == Spot,
+                    config::HyperliquidMarketType::Perpetual => kind == Perpetual,
+                }
+        }
+        // Both are broker/data-provider surfaces rather than canonical venues.
+        MarketSourceBinding::BinanceEquity { .. } | MarketSourceBinding::Massive { .. } => false,
+    }
+}
+
+pub(super) fn binding_matches_market(
+    binding: &MarketSourceBinding,
+    market: &crate::ResolvedMarket,
+) -> bool {
+    let provider = market.route.provider_id.as_str();
+    let provider_product = market.route.provider_product.as_str();
+    let (expected_provider, expected_product) = binding_provider_product(binding);
     provider == expected_provider && provider_product == expected_product
 }

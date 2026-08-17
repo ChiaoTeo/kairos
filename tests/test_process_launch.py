@@ -41,10 +41,10 @@ def test_component_process_application_starts_bin_and_waits_for_health(
             parser = argparse.ArgumentParser()
             parser.add_argument('--workspace', required=True)
             args = parser.parse_args()
-            path = Path(args.workspace) / 'run' / 'execution' / 'execution.sock'
+            path = Path(args.workspace) / 'run' / 'execution' / 'control.sock'
             path.parent.mkdir(parents=True, exist_ok=True)
             path.unlink(missing_ok=True)
-            lock_path = path.with_suffix('.lock')
+            lock_path = path.parent / 'process.lock'
             lock = lock_path.open('w')
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             lock.write(str(os.getpid()))
@@ -246,7 +246,7 @@ def test_component_list_includes_process_metadata_from_health_file(
     assert value["pid"] == 999999
     assert value["pid_alive"] is False
     assert value["health_file"] == str(health)
-    assert value["log_file"].endswith("logs/processes/market.log")
+    assert value["log_file"].endswith("logs/market/process.log")
 
 
 def test_component_list_marks_dead_health_pid_as_stale(tmp_path: Path) -> None:
@@ -407,7 +407,9 @@ def test_market_command_passes_only_runtime_profile_selection(tmp_path: Path) ->
     assert "--secret" not in command
 
 
-def test_execution_command_uses_instance_normalized_route_configuration(tmp_path: Path) -> None:
+def test_execution_command_uses_instance_normalized_route_configuration(
+    tmp_path: Path,
+) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="execution-routes"
     )

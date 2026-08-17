@@ -44,11 +44,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(event = "workspace_ready", component = "account", workspace = %workspace.root().display(), socket = %socket.display(), "workspace and instance resources resolved");
     let state = instance.state(&["account", &format!("{socket_name}-state.json")])?;
     let snapshot = instance.service_snapshot(socket_name)?;
-    let registry = AccountRegistry::load(workspace.child(&["accounts", "accounts.toml"])?)
-        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
-    let credential_store =
-        CredentialStore::load(workspace.child(&["credentials", "credentials.toml"])?)
-            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    let registry = AccountRegistry::load(workspace.existing_path(
+        &["config", "accounts", "accounts.toml"],
+        &["accounts", "accounts.toml"],
+    )?)
+    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    let credential_store = CredentialStore::load(workspace.existing_path(
+        &["config", "credentials", "credentials.toml"],
+        &["credentials", "credentials.toml"],
+    )?)
+    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     let record = registry
         .accounts
         .iter()
@@ -96,7 +101,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|value| value.passphrase_value())
         .unwrap_or_default();
     let mut options = args.options(&record, api_key, secret, passphrase)?;
-    options.reference_database = Some(workspace.child(&["reference", "reference.sqlite"])?);
+    options.reference_database =
+        Some(workspace.child(&["state", "reference", "reference.sqlite"])?);
     let shared_quota_ledger = workspace
         .state_root()
         .join("integration")
@@ -201,26 +207,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .expect("validated account lease path")
     });
+    let mut snapshot_publisher =
+        MmapAccountPublisher::create(snapshot, 1024 * 1024, "account", transport_identity.clone())?;
+    let mut event_publisher = AeronAccountEventPublisher::connect(
+        args.aeron_dir.as_deref(),
+        &args.aeron_channel,
+        args.account_events_stream_id,
+        "account",
+        transport_identity,
+    )?;
     let process = composition
         .into_process(
             args.account_id,
             socket.to_string_lossy().into_owned(),
             Duration::from_millis(args.refresh_ms),
             Some(health),
-            Some(Box::new(MmapAccountPublisher::create(
-                snapshot,
-                1024 * 1024,
-                "account",
-                transport_identity.clone(),
-            )?)),
+            Some(Box::new(move |view| snapshot_publisher.publish(view))),
         )?
-        .with_event_publisher(AeronAccountEventPublisher::connect(
-            args.aeron_dir.as_deref(),
-            &args.aeron_channel,
-            args.account_events_stream_id,
-            "account",
-            transport_identity,
-        )?);
+        .with_event_publisher(move |event| event_publisher.publish(event));
     let process = match lease_file {
         Some(path) => process.with_trade_lease(path, args.instance_id.clone()),
         None => process,

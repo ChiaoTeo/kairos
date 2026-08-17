@@ -25,6 +25,7 @@ from .models import (
     EquityChange,
     ObservedOrder,
     Position,
+    PositionSide,
 )
 
 
@@ -86,6 +87,7 @@ def map_account_event(record: AccountEventRecord) -> tuple[AccountEvent, ...]:
                         segment_key,
                         InstrumentRef(InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]),
                         Decimal("0"),
+                        _position_side(row.get("position_side")),
                     ),
                     metadata,
                 )
@@ -256,10 +258,21 @@ def map_position(
             InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
         ),
         quantity=_decimal(row.get("quantity")) or Decimal("0"),
+        position_side=_position_side(row.get("position_side")),
         average_price=_decimal(row.get("average_price")),
         market_value=_decimal(row.get("market_value")),
         unrealized_pnl=_decimal(row.get("unrealized_pnl")),
     )
+
+
+def _position_side(value: object) -> PositionSide:
+    raw = str(value or "net").lower()
+    if raw in {"both", "unspecified"}:
+        raw = "net"
+    try:
+        return PositionSide(raw)
+    except ValueError as exc:
+        raise ValueError(f"unknown Account position side {value!r}") from exc
 
 
 def _freshness(row: Mapping[str, object]) -> DataFreshness:

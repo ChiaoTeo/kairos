@@ -12,6 +12,8 @@ mod okx;
 mod replay;
 mod routing;
 
+pub(crate) use routing::{binding_provider_product, binding_supports_canonical_market};
+
 pub(crate) use activation::ConfiguredMarketSourceActivator;
 pub(crate) use activation::{
     attach_binance_snapshot, attach_binance_stream, attach_massive_source_with_id, attach_stream,

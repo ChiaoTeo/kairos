@@ -13,7 +13,6 @@ impl MarketActor {
             );
             if freshness.status != next_status {
                 freshness.status = next_status;
-                self.event_sequence += 1;
                 freshness.event_sequence = self.event_sequence;
                 changed.push((self.event_sequence, freshness.clone()));
             }
@@ -28,5 +27,39 @@ impl MarketActor {
                 view: Some(MarketViewUpdate::Freshness(freshness)),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::freshness::{DataFreshnessStatus, MarketFreshness};
+    use crate::ObservationKind;
+    use kairos_primitives::{Sequence, UnixNanos};
+
+    #[test]
+    fn freshness_view_change_does_not_create_an_event_stream_gap() {
+        let mut actor = MarketActor::new("market", 16, 16).unwrap();
+        actor.event_sequence = Sequence::new(9);
+        actor.freshness.insert(
+            "aapl".into(),
+            MarketFreshness {
+                source_id: "source".into(),
+                scope: crate::ObservationScope::market("market:exchange:nasdaq:equity:AAPL")
+                    .unwrap(),
+                data_kind: ObservationKind::Quote,
+                last_event_time_unix_nanos: UnixNanos::new(1),
+                last_received_time_unix_nanos: UnixNanos::new(1),
+                event_sequence: Sequence::new(9),
+                status: DataFreshnessStatus::Current,
+            },
+        );
+
+        actor.evaluate_freshness(100, 10);
+
+        assert_eq!(actor.event_sequence.get(), 9);
+        let change = actor.pending_changes.pop().unwrap();
+        assert_eq!(change.sequence.get(), 9);
+        assert!(change.event.is_none());
     }
 }

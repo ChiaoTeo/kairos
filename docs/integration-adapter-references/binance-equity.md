@@ -23,7 +23,8 @@ those facts.
   `MarketQuote` query projections.
 - `BUY_SELL`, `BUY_ONLY`, and `SELL_ONLY` are active; `NONE` and `OFFMARKET` are inactive.
 - Provider symbols become canonical US equity instruments in Reference.
-- Reference records Binance as an execution access and retains the provider symbol.
+- Reference retains Binance source provenance and the provider symbol; Execution determines
+  whether a configured order-entry route exists at runtime.
 - The source is opt-in and independently healthy as `binance-equity`.
 - Because the catalog omits primary venue, Reference does not label every symbol as Nasdaq; venue
   enrichment must come from an authoritative listing source if consumers need that distinction.

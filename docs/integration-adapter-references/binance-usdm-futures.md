@@ -61,6 +61,10 @@ adopted.
 - Stop and stop-limit submission is explicitly unsupported until the public
   business request carries a trigger price; it is not silently downgraded to
   MARKET/LIMIT.
+- Account projects USD-M balance/position snapshots and the authenticated
+  private event stream through one segment-scoped bootstrap barrier. Spot or
+  USD-M reconnect/resync does not stop the other segment, and Funding remains
+  an explicit snapshot-only segment rather than a fabricated private stream.
 
 ## Remaining exit criteria
 

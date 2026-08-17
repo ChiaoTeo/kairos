@@ -211,11 +211,11 @@ class ComponentProcessApplication:
             instance_workspace=runtime,
         )
         log_dir = (
-            runtime.log("processes")
+            runtime.log(component)
             if runtime is not None
-            else self.workspace.paths.logs / "processes"
+            else self.workspace.paths.logs / component
         )
-        log_path = log_dir / f"{component}.log"
+        log_path = log_dir / "process.log"
         # Each process run gets a fresh active JSONL file; previous runs are
         # retained by the rotating sink as numbered backups.
         startup_log_offset = 0
@@ -258,7 +258,7 @@ class ComponentProcessApplication:
         binary = self.binaries.get("aeron") or resolve_binary("kairos-aeron-driver")
         aeron_dir = self.workspace.paths.aeron_dir()
         aeron_dir.mkdir(parents=True, exist_ok=True)
-        log_dir = self.workspace.paths.logs / "processes"
+        log_dir = self.workspace.paths.logs / "aeron"
         start_logged_process(
             [
                 binary,
@@ -268,7 +268,7 @@ class ComponentProcessApplication:
                 str(health_file),
             ],
             component="aeron",
-            log_path=log_dir / "aeron.log",
+            log_path=log_dir / "process.log",
             cwd=str(self.workspace.paths.root),
             environment=os.environ.copy(),
         )
@@ -471,9 +471,7 @@ class ComponentProcessApplication:
             "process_state": process["state"],
             "process_command": process["command"],
             "health_file": str(health_file),
-            "log_file": str(
-                self.workspace.paths.logs / "processes" / f"{component}.log"
-            ),
+            "log_file": str(self.workspace.paths.logs / component / "process.log"),
             "process_lock": str(self.workspace.paths.process_lock(component)),
         }
 

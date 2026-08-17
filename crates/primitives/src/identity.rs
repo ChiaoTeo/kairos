@@ -121,7 +121,7 @@ text_type!(AssetId);
 // Canonical identity of a listing relationship in the Reference catalog.
 text_type!(ListingId);
 // Canonical identity of an execution route in the Reference catalog.
-text_type!(ExecutionAccessId);
+text_type!(ExecutionRouteId);
 // Provider-owned symbol. It is valid only at an integration boundary.
 text_type!(ProviderSymbol);
 // Stable provider identity shared by Reference access records and composition.
@@ -173,7 +173,7 @@ macro_rules! default_text_type {
 default_text_type!(InstrumentId, "instrument:unresolved");
 default_text_type!(ListingId, "listing:unresolved");
 default_text_type!(MarketId, "market:unresolved");
-default_text_type!(ExecutionAccessId, "access:unresolved");
+default_text_type!(ExecutionRouteId, "route:unresolved");
 default_text_type!(Symbol, "symbol:unresolved");
 default_text_type!(AssetId, "asset:unresolved");
 default_text_type!(ProviderId, "provider:unknown");

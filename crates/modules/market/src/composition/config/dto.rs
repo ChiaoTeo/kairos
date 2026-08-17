@@ -32,8 +32,9 @@ pub struct MarketCollectionConfig {
     pub market_id: Option<String>,
     #[serde(default)]
     pub instrument_id: Option<String>,
+    /// Optional consolidation network/tape identity for instrument-scoped data.
     #[serde(default)]
-    pub market_data_access_id: Option<String>,
+    pub network_id: Option<String>,
     #[serde(default)]
     pub selectors: Vec<String>,
     #[serde(default)]

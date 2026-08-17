@@ -72,6 +72,22 @@ pub struct MarketGreeks {
     pub derivation: String,
 }
 
+/// Provider-native venue evidence carried across the Integration boundary.
+///
+/// These values are deliberately not canonical `MarketId`s. Market
+/// composition resolves them against Reference venue identity, while unknown
+/// codes remain explicit evidence instead of falling back to a listing venue.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MarketVenueEvidence {
+    pub trade_exchange: Option<String>,
+    pub bid_exchange: Option<String>,
+    pub ask_exchange: Option<String>,
+    pub tape: Option<u32>,
+    pub trf_id: Option<u32>,
+    pub participant_timestamp_unix_nanos: Option<UnixNanos>,
+    pub trf_timestamp_unix_nanos: Option<UnixNanos>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketEvent {
     pub symbol: Symbol,
@@ -89,6 +105,7 @@ pub struct MarketEvent {
     pub last_sequence: Option<Sequence>,
     pub sequence: Option<Sequence>,
     pub observed_at_unix_nanos: UnixNanos,
+    pub venue: MarketVenueEvidence,
 }
 
 impl MarketEvent {

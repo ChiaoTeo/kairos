@@ -20,4 +20,6 @@ pub struct ExecutionAuditEvent {
     pub remote_order_id: Option<RemoteOrderId>,
     pub occurred_at_unix_nanos: UnixNanos,
     pub reason: String,
+    #[serde(default)]
+    pub attempt: Option<crate::domain::ExecutionAttempt>,
 }

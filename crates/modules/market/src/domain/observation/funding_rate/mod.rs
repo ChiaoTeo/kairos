@@ -1,9 +1,9 @@
-use kairos_primitives::{InstrumentId, MarketId, Rate, UnixNanos};
+use kairos_primitives::{InstrumentId, Rate, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FundingRate {
-    pub market_id: MarketId,
+    pub scope: super::ObservationScope,
     pub instrument_id: InstrumentId,
     pub funding_rate: Rate,
     pub funding_period_seconds: Option<u64>,

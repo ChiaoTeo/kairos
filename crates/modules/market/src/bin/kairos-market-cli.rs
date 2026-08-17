@@ -16,7 +16,7 @@ use kairos_market::composition::{
 use kairos_market::{
     load_replay_events_many, MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId,
 };
-use kairos_primitives::{InstrumentId, MarketId};
+use kairos_primitives::InstrumentId;
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
 use serde_json::{json, Value};
@@ -104,7 +104,8 @@ async fn download(
                 let workspace = workspace
                     .as_ref()
                     .ok_or("Massive download workspace could not be opened")?;
-                let credentials_root = workspace.child(&["credentials"])?;
+                let credentials_root =
+                    workspace.existing_path(&["config", "credentials"], &["credentials"])?;
                 load_workspace_credential(
                     &credentials_root,
                     "massive",
@@ -152,7 +153,7 @@ async fn download(
             MarketEventKind::Bar => {
                 let bar = event.bar.ok_or("historical bar payload is missing")?;
                 kairos_market::MarketObservation::Bar(kairos_market::Bar {
-                    market_id: MarketId::new(&market_id)?,
+                    scope: kairos_market::ObservationScope::market(&market_id)?,
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     timeframe: bar.timeframe,
                     open: bar.open,
@@ -167,19 +168,22 @@ async fn download(
             }
             MarketEventKind::Quote => {
                 kairos_market::MarketObservation::Quote(kairos_market::Quote {
-                    market_id: MarketId::new(&market_id)?,
+                    scope: kairos_market::ObservationScope::market(&market_id)?,
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     bid_price: event.price,
                     bid_quantity: event.quantity,
                     ask_price: event.ask_price,
                     ask_quantity: event.ask_quantity,
+                    bid_venue_code: event.venue.bid_exchange,
+                    ask_venue_code: event.venue.ask_exchange,
+                    tape: event.venue.tape,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
                     source_id: provider.as_str().into(),
                 })
             }
             MarketEventKind::Trade => {
                 kairos_market::MarketObservation::Trade(kairos_market::Trade {
-                    market_id: MarketId::new(&market_id)?,
+                    scope: kairos_market::ObservationScope::market(&market_id)?,
                     instrument_id: InstrumentId::new(&instrument_id)?,
                     trade_id: event
                         .sequence
@@ -190,6 +194,11 @@ async fn download(
                         .ok_or("historical trade quantity is missing")?,
                     cost: None,
                     aggressor_side: None,
+                    venue_code: event.venue.trade_exchange,
+                    tape: event.venue.tape,
+                    trf_id: event.venue.trf_id,
+                    participant_timestamp_unix_nanos: event.venue.participant_timestamp_unix_nanos,
+                    trf_timestamp_unix_nanos: event.venue.trf_timestamp_unix_nanos,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
                     source_id: provider.as_str().into(),
                 })

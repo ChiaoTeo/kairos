@@ -22,6 +22,7 @@ fn router(sender: Sender<EngineCommand>) -> Router {
     Router::new()
         .route(HEALTH_PATH, any(market_http_handler))
         .route(STOP_PATH, any(market_http_handler))
+        .route("/v1/data-sources", any(market_http_handler))
         .route("/v1/subscriptions", any(market_http_handler))
         .route(
             "/v1/subscriptions/{subscription_id}",
@@ -108,7 +109,12 @@ async fn market_http_handler(
 
 async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Request) -> Response {
     let method = request.method().clone();
-    let path = request.uri().path().to_owned();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| request.uri().path())
+        .to_owned();
     let delete_command_id = request_header(&request, "x-kairos-command-id");
     let delete_idempotency_key = request_header(&request, "idempotency-key");
     let delete_caller_id = request_header(&request, "x-kairos-caller-id");

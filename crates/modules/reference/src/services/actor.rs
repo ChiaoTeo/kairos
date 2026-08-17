@@ -421,8 +421,6 @@ fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
         instruments: catalog.instruments.values().cloned().collect(),
         listings: catalog.listings.values().cloned().collect(),
         markets: catalog.markets.values().cloned().collect(),
-        execution_accesses: catalog.execution_accesses.values().cloned().collect(),
-        market_data_accesses: catalog.market_data_accesses.values().cloned().collect(),
     }
 }
 

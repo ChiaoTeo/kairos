@@ -9,6 +9,7 @@ const SEGMENT_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
 const CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
 
+#[derive(Clone)]
 pub(crate) struct RefreshFetch {
     pub segment: AccountSegment,
     pub result: Result<AccountSnapshot, String>,

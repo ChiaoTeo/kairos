@@ -60,7 +60,7 @@ def compose_strategy_process(
     )
     instance = workspace.instance(mode, launch_id, instance_id)
     config = StrategyLaunchConfig.load(
-        instance.root / "normalized-config.json",
+        instance.normalized_config(),
         launch_id=launch_id,
         mode=mode,
     )
@@ -99,6 +99,11 @@ def compose_strategy_process(
     account = build_account_access(
         instance=instance,
         account_snapshots=account_snapshots,
+        required_segments={
+            account_id: endpoint.required_segments
+            for account_id, endpoint in endpoints.accounts.items()
+            if endpoint.required_segments
+        },
     )
     risk = build_risk_access(
         instance=instance,
@@ -131,7 +136,7 @@ def compose_strategy_process(
         account=account,
         risk=risk,
         execution=execution,
-        journal=StrategyLifecycleJournal(instance.root / "lifecycle.jsonl"),
+        journal=StrategyLifecycleJournal(instance.lifecycle_journal()),
         state_path=instance.state("strategy", "state.json"),
         backtest=build_backtest_driver(
             mode=mode,

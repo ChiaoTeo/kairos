@@ -75,7 +75,7 @@ outcomes, and compatibility for its contract.
 
 | Owner | Owns in v2 | Explicitly does not own |
 | --- | --- | --- |
-| Reference | Canonical assets, instruments, listings, markets, execution-access definitions, effective dating, lifecycle revision | Provider sessions, market observations, orders |
+| Reference | Canonical assets, instruments, listings, markets, effective dating, lifecycle revision | Runtime data-source capability, execution routes, provider sessions, market observations, orders |
 | Market | Observations, synchronized order books, subscription state, source freshness | Reference identity definitions, strategy indicators |
 | Account | Balances, collateral, positions, equity/PnL, account freshness, account-side observed order facts | Exchange-facing order lifecycle, risk reservations |
 | Risk | Policies, circuits, authorization decisions, allocations, reservations | Balances, positions, orders, provider facts |
@@ -265,7 +265,7 @@ Wire identifiers remain canonical strings for interoperability, but readers
 and writers must parse them into owner-defined identifier types at the
 contract boundary.
 
-- `instrument_id`, `market_id`, `listing_id`, and `execution_access_id` are
+- `instrument_id`, `market_id`, `listing_id`, and `execution_route_id` are
   never interchangeable.
 - Provider symbols do not substitute for canonical Reference identities.
 - `market_id` is required for a market-scoped observation or order. If the

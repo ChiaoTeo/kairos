@@ -51,6 +51,11 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
 
     if isinstance(event, QuoteEvent):
         quote = event.data
+        if quote.market_id is None:
+            raise ValueError(
+                "Execution backtest input requires a market-scoped quote; "
+                "resolve consolidated data through an Execution destination route first"
+            )
         body: dict[str, object] = {
             "Quote": {
                 "market_id": str(quote.market_id),
@@ -69,6 +74,11 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
         }
     elif isinstance(event, BarEvent):
         bar = event.data
+        if bar.market_id is None:
+            raise ValueError(
+                "Execution backtest input requires a market-scoped bar; "
+                "resolve consolidated data through an Execution destination route first"
+            )
         body = {
             "Bar": {
                 "market_id": str(bar.market_id),

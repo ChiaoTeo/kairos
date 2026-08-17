@@ -14,6 +14,26 @@ pub struct ExecutionControlError {
     pub message: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionRouteCandidateResponse {
+    pub route_id: String,
+    pub account_id: Option<String>,
+    pub segment_key: Option<String>,
+    pub instrument_id: Option<String>,
+    pub market_id: Option<String>,
+    pub participant_id: String,
+    pub provider_product: String,
+    pub provider_symbol: String,
+    pub supported_order_types: Vec<String>,
+    pub supported_options: Vec<String>,
+    pub ready: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionRoutesResponse {
+    pub routes: Vec<ExecutionRouteCandidateResponse>,
+}
+
 /// JSON control-plane values belong to UDS; they are not event or view models.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommandEnvelope {
@@ -46,7 +66,7 @@ pub struct ReplaceOrderRequest {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReconcileExecutionRequest {
     pub account_id: Option<String>,
-    pub execution_access_id: Option<String>,
+    pub execution_route_id: Option<String>,
     pub order_id: Option<String>,
     pub reason: Option<String>,
 }

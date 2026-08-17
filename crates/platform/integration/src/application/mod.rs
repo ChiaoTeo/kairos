@@ -50,6 +50,7 @@ pub use capabilities::market::{
 };
 pub use capabilities::market_facts::{
     MarketBar, MarketDataKind, MarketGreeks, MarketQuote, MarketStreamCapabilities, MarketTrade,
+    MarketVenueEvidence,
 };
 pub use error::IntegrationError;
 pub use external_event::ExternalEventEnvelope;

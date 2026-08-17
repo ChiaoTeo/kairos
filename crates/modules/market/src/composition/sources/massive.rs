@@ -15,7 +15,6 @@ pub(super) fn attach(
 ) -> Result<(), String> {
     let MarketSourceBinding::Massive {
         product,
-        exchange,
         credential_id,
         endpoint,
         ..
@@ -41,7 +40,6 @@ pub(super) fn attach(
     attach_massive_source_with_id(
         application,
         source_id,
-        exchange,
         market_type,
         "equity",
         product,

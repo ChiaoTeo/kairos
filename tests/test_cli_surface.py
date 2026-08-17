@@ -9,6 +9,7 @@ from kairospy.application.launch.application import (
     LaunchControlApplication,
     LaunchInstanceTimelineApplication,
     LaunchRegistryApplication,
+    LaunchRuntimeApplication,
 )
 from kairospy.application.launch.application import new_instance_id
 from kairospy.application.workspace import WorkspaceApplication
@@ -643,7 +644,7 @@ def test_system_logs_reads_component_process_output(tmp_path) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    log = workspace.paths.logs / "processes" / "market.log"
+    log = workspace.paths.logs / "market" / "process.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("first\nsecond\n", encoding="utf-8")
     output = StringIO()
@@ -673,7 +674,7 @@ def test_system_logs_accepts_component_option(tmp_path) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    log = workspace.paths.logs / "processes" / "reference.log"
+    log = workspace.paths.logs / "reference" / "process.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("ready\n", encoding="utf-8")
     output = StringIO()
@@ -711,7 +712,7 @@ def test_system_logs_filters_current_structured_run(tmp_path) -> None:
     workspace = WorkspaceApplication().init_project(
         tmp_path / "demo", workspace_id="demo"
     )
-    log = workspace.paths.logs / "processes" / "reference.log"
+    log = workspace.paths.logs / "reference" / "process.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     values = [
         {
@@ -874,6 +875,74 @@ def test_launch_commands_resolve_latest_instance_when_instance_is_omitted(
     assert _resolve_instance(workspace, "btc-options", "paper", "run-1") == "run-1"
 
 
+def test_launch_target_resolution_uses_recency_instead_of_instance_sort_order(
+    tmp_path,
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="recent"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc-options", mode="paper", instance_id="z-old")
+    registry.add("btc-options", mode="paper", instance_id="a-new")
+
+    assert _resolve_launch_target(workspace, "btc-options", "paper", None) == (
+        "a-new",
+        "paper",
+    )
+
+
+def test_launch_target_resolution_honors_explicit_instance_before_active_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="explicit"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc-options", mode="paper", instance_id="requested")
+    registry.add("btc-options", mode="paper", instance_id="active")
+
+    monkeypatch.setattr(
+        LaunchControlApplication,
+        "status",
+        lambda _self, target: {
+            "status": "ready" if target.instance_id == "active" else "not_running"
+        },
+    )
+
+    assert _resolve_launch_target(workspace, "btc-options", None, "requested") == (
+        "requested",
+        "paper",
+    )
+
+
+def test_running_instance_ignores_terminal_control_statuses(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="terminal"
+    )
+    registry = LaunchRegistryApplication(workspace)
+    registry.add("btc-options", mode="paper", instance_id="old")
+    registry.add("btc-options", mode="paper", instance_id="current")
+
+    monkeypatch.setattr(
+        LaunchControlApplication,
+        "status",
+        lambda _self, target: {
+            "status": "stopped" if target.instance_id == "old" else "ready"
+        },
+    )
+
+    assert LaunchRuntimeApplication(workspace).running_instance("btc-options") == {
+        **next(
+            entry
+            for entry in registry.instances("btc-options")
+            if entry["instance_id"] == "current"
+        ),
+        "status": "ready",
+    }
+
+
 def test_launch_target_resolution_discovers_non_paper_mode(tmp_path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="mode")
     LaunchRegistryApplication(workspace).add(
@@ -1013,7 +1082,8 @@ def test_launch_instance_timeline_application_reads_and_exports(tmp_path) -> Non
         "btc", mode="backtest", instance_id="run-1"
     )
     instance = workspace.instance("backtest", "btc", "run-1")
-    timeline = instance.root / "lifecycle.jsonl"
+    timeline = instance.lifecycle_journal()
+    timeline.parent.mkdir(parents=True, exist_ok=True)
     timeline.write_text(
         '{"sequence": 1, "kind": "started"}\n{"sequence": 2, "kind": "stopped"}\n',
         encoding="utf-8",
@@ -1033,7 +1103,9 @@ def test_launch_instance_timeline_cli_requires_instance_identity(tmp_path) -> No
     LaunchRegistryApplication(workspace).add(
         "btc", mode="backtest", instance_id="run-1"
     )
-    timeline = workspace.instance("backtest", "btc", "run-1").root / "lifecycle.jsonl"
+    instance = workspace.instance("backtest", "btc", "run-1")
+    timeline = instance.lifecycle_journal()
+    timeline.parent.mkdir(parents=True, exist_ok=True)
     timeline.write_text('{"sequence": 1, "kind": "started"}\n', encoding="utf-8")
     destination = tmp_path / "timeline.jsonl"
 

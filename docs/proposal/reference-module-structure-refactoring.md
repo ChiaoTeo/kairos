@@ -12,10 +12,22 @@ server loop in `bin/` as allowed by the repository architecture; reusable
 catalog, query, synchronization, and publication behavior lives behind
 Application.
 
+Access ownership was subsequently superseded by
+[`access-capability-and-route-refactoring.md`](./access-capability-and-route-refactoring.md):
+Reference no longer owns or persists MarketDataAccess/ExecutionAccess. Market
+owns current data-source availability and subscription paths; Execution owns
+route candidates, selected routes, attempts, and reported outcomes.
+
+Canonical identity and provider-route separation is further refined by
+[`reference-identity-and-business-route-separation.md`](./reference-identity-and-business-route-separation.md):
+provider provenance remains internal to ingestion or business-owned route
+composition and must not become canonical Listing/Market identity or a single
+provider owner field on those records.
+
 ## Mission
 
-Reference is Kairos's authority for canonical tradable identity, effective
-reference relationships, and provider access addresses. It converts
+Reference is Kairos's authority for canonical tradable identity and effective
+reference relationships. It converts
 Integration-owned provider facts into stable Reference-owned identities and
 publishes revisioned facts that other business modules can consume without
 knowing a provider payload or the Reference persistence schema.
@@ -23,8 +35,7 @@ knowing a provider payload or the Reference persistence schema.
 Reference owns:
 
 - canonical assets, instruments, venues, listings, and tradable markets;
-- market-data and execution access addresses;
-- effective lifecycle, provenance, catalog revision, and event sequence;
+- effective lifecycle, provider-ingestion provenance, catalog revision, and event sequence;
 - provider-fact conflict policy, last-known-good promotion, and catalog
   coverage state;
 - typed current projections and lifecycle events.
@@ -66,9 +77,12 @@ One catalog commit has these semantics:
 - `Listing` is an optional venue listing. A tradable market is not required to
   invent a securities listing.
 - `Market` is a canonical tradable venue/product surface for an instrument.
-- `MarketDataAccess` is a provider address used to observe a Market.
-- `ExecutionAccess` is a provider address used to submit for an Instrument or
-  Market. Smart-route selection and destination policy belong to Execution.
+- Provider provenance belongs to ingestion staging or business-owned route
+  composition; it is not canonical Market identity or a single owner/source
+  field on the Market record.
+- Market and Execution compose current capability and route queries from
+  canonical identity, Integration capabilities, workspace configuration, and
+  runtime state.
 - Reference participants use a closed kind. Arbitrary `entity_type` strings
   and parallel unused Provider/Broker/Exchange wire models are not both kept.
 - Provenance is metadata and does not silently become part of canonical
@@ -98,9 +112,9 @@ FlatBuffers codecs and the only read-only SQLite adapter. Reference remains
 the only database writer and table names remain private to that adapter.
 Consumers receive bounded typed projections tailored to their current callers:
 
-- Market: active Market plus MarketDataAccess and watermark;
-- Execution: active ExecutionAccess and watermark;
-- Account: access identity to canonical Instrument/Market and watermark;
+- Market: active Market, Instrument, and watermark;
+- Execution: active Market/Instrument identity and watermark;
+- Account: canonical Instrument/Market identity and watermark;
 - CLI/diagnostics: typed paginated query results.
 
 A full workspace universe, provider health, option coverage, and lifecycle

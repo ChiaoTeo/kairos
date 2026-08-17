@@ -129,7 +129,9 @@ class UserStrategy(Strategy):
         self.events: list[int] = []
 
     def on_start(self, context) -> None:
-        context.market.subscribe_bars(_MARKET, timeframe="1m")
+        context.market.subscribe_bars(
+            _MARKET, timeframe="1m", source_id="market-source:primary"
+        )
 
     def on_market(self, context, event) -> None:
         if not isinstance(event, BarEvent):
@@ -371,7 +373,6 @@ def test_strategy_clock_fires_deterministic_catch_up_timers_before_market_event(
             datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
         )
     )
-
     assert strategy.clock_events == [
         ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc)),
         ("rebalance", datetime(2024, 1, 1, 2, tzinfo=timezone.utc)),
@@ -451,6 +452,7 @@ def test_strategy_clock_can_fire_without_a_market_event(tmp_path: Path) -> None:
     assert strategy.clock_events == [
         ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc))
     ]
+    assert host.context.now == datetime(2024, 1, 1, 1, tzinfo=timezone.utc)
 
 
 def test_external_clock_event_advances_context_business_time(tmp_path: Path) -> None:
@@ -473,7 +475,22 @@ def test_external_clock_event_advances_context_business_time(tmp_path: Path) -> 
     assert strategy.clock_events == [
         ("rebalance", datetime(2024, 1, 1, 1, tzinfo=timezone.utc))
     ]
-    assert host.context.now == datetime(2024, 1, 1, 1, tzinfo=timezone.utc)
+
+
+def test_live_market_events_do_not_move_business_time_backwards(tmp_path: Path) -> None:
+    host, strategy, bus, _ = _host(tmp_path)
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+    newer = datetime(2024, 1, 1, 2, tzinfo=timezone.utc)
+    older = datetime(2024, 1, 1, 1, tzinfo=timezone.utc)
+
+    host.dispatch(EventEnvelope("market.events", 1, "data", "bar", {}, newer))
+    host.dispatch(EventEnvelope("market.events", 2, "data", "bar", {}, older))
+
+    assert strategy.events == [1, 2]
+    assert host.context.clock.now == newer
 
 
 def test_replay_driver_fires_each_timer_in_empty_market_gap(tmp_path: Path) -> None:
@@ -546,6 +563,7 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert status.subscriptions[0]["status"] == "pending"
     assert len(bus.requests) == 1
     assert bus.requests[0].operation == "market.subscribe"
+    assert bus.requests[0].payload.source_id == "market-source:primary"
     assert strategy.events == []
 
     bus.resolve(bus.requests[0].request_id)
@@ -571,6 +589,30 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert bus.requests[1].payload.instrument_id == "instrument:test:BTCUSDT"
     assert bus.requests[1].payload.source_event_sequence == 1
     assert bus.requests[1].payload.source_event_time_unix_nanos is not None
+
+
+def test_market_subscription_uses_reference_market_route(tmp_path: Path) -> None:
+    host, _, bus, _ = _host(tmp_path)
+    market = Market(
+        MarketId("market:exchange:nasdaq:equity:AAPL"),
+        InstrumentRef(InstrumentId("instrument:equity:US:AAPL:common"), "AAPL"),
+        ListingId("listing:exchange:nasdaq:equity:AAPL:USD"),
+        ExchangeId("exchange:nasdaq"),
+        "AAPL",
+        "equity",
+        status=MarketStatus.ACTIVE,
+        source_id="massive-equity",
+    )
+
+    host.context.market.subscribe_quotes(market)
+
+    request = bus.requests[-1].payload
+    assert request.subject == "AAPL"
+    assert request.identity == str(market.id)
+    assert request.source_id == "massive-equity"
+    assert request.exchange == "exchange:nasdaq"
+    assert request.market_type == "equity"
+    assert request.params == {"market_id": str(market.id)}
 
 
 def test_strategy_start_fails_when_enabled_business_event_source_is_not_ready(
@@ -810,7 +852,7 @@ def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
         for record in records
         if record.get("event") == "market_subscription_requested"
     )
-    assert requested["data"]["market_type"] is None
+    assert requested["data"]["market_type"] == "spot"
     assert any(
         record.get("event") == "market_subscriptions_active" for record in records
     )
@@ -865,7 +907,14 @@ def test_launch_instance_owns_strategy_lifecycle(tmp_path: Path) -> None:
     assert application.instance.state.value == "stopped"
 
 
-def test_strategy_control_uses_instance_unix_rest_socket(tmp_path: Path) -> None:
+def test_strategy_control_uses_instance_unix_rest_socket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_tcp_keepalive(_transport: asyncio.Transport) -> None:
+        raise AssertionError("TCP keepalive must not be applied to an AF_UNIX socket")
+
+    monkeypatch.setattr("aiohttp.web_protocol.tcp_keepalive", reject_tcp_keepalive)
+
     async def scenario() -> None:
         host, _, bus, _ = _host(tmp_path)
         socket = Path(f"/tmp/kairos-strategy-{os.getpid()}.sock")

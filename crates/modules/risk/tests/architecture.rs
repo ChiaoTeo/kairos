@@ -40,7 +40,8 @@ fn risk_server_selects_a_profile_instead_of_an_account_or_exchange() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-risk-server.rs"),
     )
     .expect("read Risk server");
-    assert!(server.contains("normalized-config.json"));
+    assert!(server.contains("normalized_config()"));
+    assert!(!server.contains("normalized-config.json"));
     assert!(server.contains("risk_profile"));
     assert!(server.contains("unknown Risk profile"));
     assert!(server.contains("Risk profile is required for a live launch"));

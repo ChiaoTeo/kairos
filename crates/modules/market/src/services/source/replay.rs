@@ -61,7 +61,7 @@ impl ReplaySource {
             left.observed_at_unix_nanos()
                 .cmp(&right.observed_at_unix_nanos())
                 .then_with(|| left.source_id().cmp(right.source_id()))
-                .then_with(|| left.market_id().cmp(right.market_id()))
+                .then_with(|| left.scope().cmp(right.scope()))
                 .then_with(|| left.kind().cmp(&right.kind()))
         });
         Self {
@@ -257,11 +257,14 @@ async fn run(
                         }).await.is_err() { return; }
                     }
                     SourceCommand::ResyncOrderBook { request_id, market } => {
+                        let Some(market_id) = market.market_id().cloned() else {
+                            continue;
+                        };
                         if inputs.send(SourceInput::ResyncRejected {
                             source_id: source_id.clone(),
                             epoch,
                             request_id,
-                            market_id: market.market_id,
+                            market_id,
                             error: "replay observations do not provide a live resync operation".into(),
                         }).await.is_err() { return; }
                     }
@@ -362,11 +365,11 @@ async fn send_status(
 mod tests {
     use super::{ReplayClock, ReplaySource};
     use crate::domain::observation::{Bar, MarketObservation};
-    use kairos_primitives::{InstrumentId, MarketId, UnixNanos};
+    use kairos_primitives::{InstrumentId, UnixNanos};
 
     fn bar(time: u64) -> MarketObservation {
         MarketObservation::Bar(Bar {
-            market_id: MarketId::new("market:test:spot:TEST").unwrap(),
+            scope: crate::ObservationScope::market("market:test:spot:TEST").unwrap(),
             instrument_id: InstrumentId::new("instrument:test:spot:TEST").unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),

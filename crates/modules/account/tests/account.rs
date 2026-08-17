@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kairos_account::composition::account::{
-    compose_blocking_account_application, compose_blocking_account_application_for_segments,
-    compose_in_memory_account_application, AccountOptions, AccountSegmentBinding,
+    compose_in_memory_account_application, compose_local_account_application_for_segments,
+    AccountOptions, AccountSegmentBinding,
 };
 use kairos_account::composition::{
     empty_snapshot, FlatbuffersAccountPublisher, MmapAccountPublisher,
@@ -42,11 +42,10 @@ fn segment_key(value: &str) -> SegmentKey {
     SegmentKey::new(value).unwrap()
 }
 
-use kairos_account::application::AccountProjection;
+use kairos_account::application::AccountSegmentView;
 use kairos_account::composition::registry::AccountRegistry;
 use kairos_account::{
-    AccountApplication, AccountSnapshotPublisher, AccountsSnapshot, MarkToMarket, ReconcileAccount,
-    RefreshAccount,
+    AccountApplication, AccountCurrentView, MarkToMarket, ReconcileAccount, RefreshAccount,
 };
 use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
 use kairos_protocol::generated::kairos::account::v_2::root_as_account_current_view;
@@ -63,24 +62,24 @@ fn segment(key: &str) -> AccountSegment {
 }
 
 #[derive(Default)]
-struct CapturingSnapshotPublisher(Option<AccountsSnapshot>);
+struct CapturingSnapshotPublisher(Option<AccountCurrentView>);
 
-impl AccountSnapshotPublisher for CapturingSnapshotPublisher {
-    fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
-        self.0 = Some(snapshot.clone());
+impl CapturingSnapshotPublisher {
+    fn publish(&mut self, view: &AccountCurrentView) -> Result<(), String> {
+        self.0 = Some(view.clone());
         Ok(())
     }
 }
 
-fn account_snapshot(app: &AccountApplication) -> AccountsSnapshot {
+fn account_snapshot(app: &AccountApplication) -> AccountCurrentView {
     let mut publisher = CapturingSnapshotPublisher::default();
-    app.publish_current(&mut publisher).unwrap();
+    app.publish_current(|view| publisher.publish(view)).unwrap();
     publisher.0.expect("Account published a current snapshot")
 }
 
-fn account_projection(app: &AccountApplication) -> AccountProjection {
+fn account_projection(app: &AccountApplication) -> AccountSegmentView {
     account_snapshot(app)
-        .accounts
+        .segments
         .into_iter()
         .next()
         .expect("test Account has one configured segment")
@@ -133,6 +132,7 @@ fn position(instrument_id: &str, quantity: SignedQuantity) -> Position {
     Position {
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: None,
+        position_side: kairos_primitives::PositionSide::Net,
         quantity,
         average_price: None,
         mark_price: None,
@@ -274,9 +274,12 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
         isolated_margin_symbol: None,
         reference_database: None,
     };
-    let mut composition =
-        compose_blocking_account_application(&options, Some(directory.path().join("account.json")))
-            .unwrap();
+    let mut composition = compose_local_account_application_for_segments(
+        &options,
+        &[binding("spot")],
+        Some(directory.path().join("account.json")),
+    )
+    .unwrap();
     assert_eq!(composition.provider, "paper");
     assert_eq!(
         composition
@@ -288,9 +291,9 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
             .unwrap(),
         1
     );
-    assert_eq!(account_snapshot(&composition.application).accounts.len(), 1);
+    assert_eq!(account_snapshot(&composition.application).segments.len(), 1);
     assert_eq!(
-        account_snapshot(&composition.application).accounts[0].balances[0].total,
+        account_snapshot(&composition.application).segments[0].balances[0].total,
         signed(1_000_050, 2)
     );
 }
@@ -316,7 +319,7 @@ fn paper_account_composition_restores_multiple_configured_segments() {
         isolated_margin_symbol: None,
         reference_database: None,
     };
-    let mut composition = compose_blocking_account_application_for_segments(
+    let mut composition = compose_local_account_application_for_segments(
         &options,
         &[binding("spot"), binding("margin")],
         Some(directory.path().join("account.json")),
@@ -329,31 +332,7 @@ fn paper_account_composition_restores_multiple_configured_segments() {
             segments: vec![],
         })
         .unwrap();
-    assert_eq!(account_snapshot(&composition.application).accounts.len(), 2);
-}
-
-#[test]
-fn ibkr_account_composition_selects_native_equity_connection() {
-    let options = AccountOptions {
-        provider: "ibkr".into(),
-        product: "equity".into(),
-        api_key: String::new().into(),
-        secret: String::new().into(),
-        passphrase: String::new().into(),
-        base_url: String::new(),
-        account_id: "DU123".into(),
-        segment: "equity".into(),
-        environment: "live".into(),
-        account_model: None,
-        initial_balances: Vec::new(),
-        host: "127.0.0.1".into(),
-        port: 4002,
-        client_id: 0,
-        isolated_margin_symbol: None,
-        reference_database: None,
-    };
-    let composition = compose_blocking_account_application(&options, None).unwrap();
-    assert_eq!(composition.provider, "ibkr");
+    assert_eq!(account_snapshot(&composition.application).segments.len(), 2);
 }
 
 #[test]
@@ -388,7 +367,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
         .unwrap(),
         1
     );
-    let result = account_snapshot(&app).accounts;
+    let result = account_snapshot(&app).segments;
     assert_eq!(result.len(), 1);
     assert_eq!(
         result[0]
@@ -432,7 +411,7 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
     assert!(reconciliation
         .differences
         .iter()
-        .any(|value| value.field == "position.quantity" && value.key == "instrument:btc"));
+        .any(|value| value.field == "position.quantity" && value.key == "instrument:btc:net"));
     let projection = account_projection(&app);
     assert_eq!(projection.balances[0].asset_code, "USDT");
     assert_eq!(projection.positions.len(), 1);
@@ -440,9 +419,16 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
 
 #[test]
 fn publisher_emits_current_account_snapshot() {
-    let snapshots = BTreeMap::from([("spot".into(), empty_snapshot("spot"))]);
-    let mut app =
-        compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
+    let snapshots = BTreeMap::from([
+        ("funding".into(), empty_snapshot("funding")),
+        ("spot".into(), empty_snapshot("spot")),
+    ]);
+    let mut app = compose_in_memory_account_application(
+        vec![segment("spot"), segment("funding")],
+        snapshots,
+        None,
+    )
+    .unwrap();
     app.refresh(RefreshAccount {
         account_id: account_id("main"),
         segments: vec![],
@@ -466,7 +452,9 @@ fn publisher_emits_current_account_snapshot() {
         Some(snapshot.event_sequence.get())
     );
     assert_eq!(decoded.account_id(), "main");
-    assert_eq!(decoded.segments().get(0).segment_key(), "spot");
+    assert_eq!(decoded.segments().len(), 2);
+    assert_eq!(decoded.segments().get(0).segment_key(), "funding");
+    assert_eq!(decoded.segments().get(1).segment_key(), "spot");
 }
 
 #[test]
@@ -778,7 +766,61 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
         .unwrap();
     assert!(account.state().balances().contains_key("asset:usdt"));
     assert!(account.state().balances().contains_key("asset:usdc"));
-    assert!(!account.state().positions().contains_key("instrument:btc"));
+    assert!(!account.state().positions().contains_key(&(
+        InstrumentId::new("instrument:btc").unwrap(),
+        kairos_primitives::PositionSide::Net,
+    )));
+}
+
+#[test]
+fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
+    let segment = AccountSegment {
+        identity: ExternalAccountIdentity::new("fixture", "main").unwrap(),
+        segment_key: SegmentKey::new("usd_m_futures").unwrap(),
+        environment: "live".into(),
+        account_model: None,
+    };
+    let mut account = Account::new(segment).unwrap();
+    let mut long = position("instrument:btc-perp", signed(2, 0));
+    long.position_side = kairos_primitives::PositionSide::Long;
+    let mut short = position("instrument:btc-perp", signed(-1, 0));
+    short.position_side = kairos_primitives::PositionSide::Short;
+    account
+        .apply_snapshot(AccountSnapshot {
+            segment_key: SegmentKey::new("usd_m_futures").unwrap(),
+            positions: vec![long.clone(), short.clone()],
+            observed_at_unix_nanos: 1.into(),
+            kind: kairos_account::domain::SnapshotKind::Full,
+            ..empty_snapshot("usd_m_futures")
+        })
+        .unwrap();
+
+    assert_eq!(account.state().positions().len(), 2);
+    assert!(account.state().positions().contains_key(&(
+        InstrumentId::new("instrument:btc-perp").unwrap(),
+        kairos_primitives::PositionSide::Long,
+    )));
+    assert!(account.state().positions().contains_key(&(
+        InstrumentId::new("instrument:btc-perp").unwrap(),
+        kairos_primitives::PositionSide::Short,
+    )));
+
+    long.quantity = signed(0, 0);
+    account
+        .apply_snapshot(AccountSnapshot {
+            segment_key: SegmentKey::new("usd_m_futures").unwrap(),
+            positions: vec![long],
+            observed_at_unix_nanos: 2.into(),
+            kind: kairos_account::domain::SnapshotKind::Delta,
+            ..empty_snapshot("usd_m_futures")
+        })
+        .unwrap();
+
+    assert_eq!(account.state().positions().len(), 1);
+    assert!(account.state().positions().contains_key(&(
+        InstrumentId::new("instrument:btc-perp").unwrap(),
+        kairos_primitives::PositionSide::Short,
+    )));
 }
 
 #[test]
@@ -810,12 +852,12 @@ fn json_store_restores_account_state() {
     .unwrap();
     assert_eq!(account_snapshot(&restored).generation, generation);
     assert_eq!(
-        account_snapshot(&restored).accounts[0].balances[0].total,
+        account_snapshot(&restored).segments[0].balances[0].total,
         signed(42, 0)
     );
     let persisted: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(persisted["schema_version"], 1);
+    assert_eq!(persisted["schema_version"], 2);
 }
 
 #[test]
@@ -859,7 +901,7 @@ fn journal_restores_high_frequency_fill_without_checkpoint_rewrite() {
             .unwrap();
     assert_eq!(account_snapshot(&restored).generation, generation);
     assert_eq!(
-        account_snapshot(&restored).accounts[0].positions[0].quantity,
+        account_snapshot(&restored).segments[0].positions[0].quantity,
         signed(1, 0)
     );
 }
@@ -1053,5 +1095,5 @@ fn persistence_failure_does_not_commit_simulated_fill() {
     assert!(result.is_err());
     let after = account_snapshot(&application);
     assert_eq!(after.generation, generation_before);
-    assert!(after.accounts[0].positions.is_empty());
+    assert!(after.segments[0].positions.is_empty());
 }

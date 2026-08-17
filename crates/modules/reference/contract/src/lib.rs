@@ -18,13 +18,13 @@ pub use encode::{event_metadata, EncodeContext, ReferenceEncoder};
 pub use error::{ContractError, ContractResult};
 pub use event::{decode_event, ReferenceEvent, ReferenceEventFrame, ReferenceEventStream};
 pub use transport::{
-    Asset, Entity, ExecutionAccess, Instrument, LifecycleEntry, Listing, Market, MarketDataAccess,
-    ProviderHealthState, ReferenceProjectionSnapshot,
+    Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
+    ReferenceProjectionSnapshot,
 };
 pub use transport::{
     ReferenceCatalogStats, ReferenceCollection, ReferenceMarketPage, ReferenceProjection,
-    ReferenceSqliteReader, ReferenceWatermark, SqliteExecutionAccessQuery, SqliteInstrumentQuery,
-    SqliteMarketDataAccessQuery, SqliteMarketQuery, REFERENCE_SQLITE_SCHEMA_VERSION,
+    ReferenceSqliteReader, ReferenceWatermark, SqliteInstrumentQuery, SqliteMarketQuery,
+    REFERENCE_SQLITE_SCHEMA_VERSION,
 };
 pub use transport::{ReferenceHealth, ReferenceMarket};
 

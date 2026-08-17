@@ -102,7 +102,7 @@ class Fill(object):
         return None
 
     # Fill
-    def ExecutionAccessId(self):
+    def ExecutionRouteId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
@@ -116,15 +116,36 @@ class Fill(object):
         return None
 
     # Fill
-    def Side(self):
+    def ReportedProviderId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Fill
+    def ProviderProduct(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Fill
+    def ProviderSymbol(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Fill
+    def Side(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # Fill
     def Quantity(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -135,35 +156,6 @@ class Fill(object):
 
     # Fill
     def Price(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
-        if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # Fill
-    def Fee(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
-        if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
-
-    # Fill
-    def FeeAssetId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # Fill
-    def Notional(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
         if o != 0:
             x = o + self._tab.Pos
@@ -174,14 +166,43 @@ class Fill(object):
         return None
 
     # Fill
-    def SourceFilledAtUnixNanos(self):
+    def Fee(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Fill
+    def FeeAssetId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Fill
+    def Notional(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Fill
+    def SourceFilledAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def FillStart(builder):
-    builder.StartObject(20)
+    builder.StartObject(23)
 
 def Start(builder):
     FillStart(builder)
@@ -252,11 +273,11 @@ def FillAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     FillAddMarketId(builder, marketId)
 
-def FillAddExecutionAccessId(builder, executionAccessId):
-    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(executionAccessId), 0)
+def FillAddExecutionRouteId(builder, executionRouteId):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(executionRouteId), 0)
 
-def AddExecutionAccessId(builder, executionAccessId):
-    FillAddExecutionAccessId(builder, executionAccessId)
+def AddExecutionRouteId(builder, executionRouteId):
+    FillAddExecutionRouteId(builder, executionRouteId)
 
 def FillAddRemoteOrderId(builder, remoteOrderId):
     builder.PrependUOffsetTRelativeSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(remoteOrderId), 0)
@@ -264,44 +285,62 @@ def FillAddRemoteOrderId(builder, remoteOrderId):
 def AddRemoteOrderId(builder, remoteOrderId):
     FillAddRemoteOrderId(builder, remoteOrderId)
 
+def FillAddReportedProviderId(builder, reportedProviderId):
+    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(reportedProviderId), 0)
+
+def AddReportedProviderId(builder, reportedProviderId):
+    FillAddReportedProviderId(builder, reportedProviderId)
+
+def FillAddProviderProduct(builder, providerProduct):
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(providerProduct), 0)
+
+def AddProviderProduct(builder, providerProduct):
+    FillAddProviderProduct(builder, providerProduct)
+
+def FillAddProviderSymbol(builder, providerSymbol):
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(providerSymbol), 0)
+
+def AddProviderSymbol(builder, providerSymbol):
+    FillAddProviderSymbol(builder, providerSymbol)
+
 def FillAddSide(builder, side):
-    builder.PrependUint8Slot(13, side, 0)
+    builder.PrependUint8Slot(16, side, 0)
 
 def AddSide(builder, side):
     FillAddSide(builder, side)
 
 def FillAddQuantity(builder, quantity):
-    builder.PrependStructSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
+    builder.PrependStructSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(quantity), 0)
 
 def AddQuantity(builder, quantity):
     FillAddQuantity(builder, quantity)
 
 def FillAddPrice(builder, price):
-    builder.PrependStructSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(price), 0)
+    builder.PrependStructSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(price), 0)
 
 def AddPrice(builder, price):
     FillAddPrice(builder, price)
 
 def FillAddFee(builder, fee):
-    builder.PrependStructSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(fee), 0)
+    builder.PrependStructSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(fee), 0)
 
 def AddFee(builder, fee):
     FillAddFee(builder, fee)
 
 def FillAddFeeAssetId(builder, feeAssetId):
-    builder.PrependUOffsetTRelativeSlot(17, flatbuffers.number_types.UOffsetTFlags.py_type(feeAssetId), 0)
+    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(feeAssetId), 0)
 
 def AddFeeAssetId(builder, feeAssetId):
     FillAddFeeAssetId(builder, feeAssetId)
 
 def FillAddNotional(builder, notional):
-    builder.PrependStructSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(notional), 0)
+    builder.PrependStructSlot(21, flatbuffers.number_types.UOffsetTFlags.py_type(notional), 0)
 
 def AddNotional(builder, notional):
     FillAddNotional(builder, notional)
 
 def FillAddSourceFilledAtUnixNanos(builder, sourceFilledAtUnixNanos):
-    builder.PrependUint64Slot(19, sourceFilledAtUnixNanos, 0)
+    builder.PrependUint64Slot(22, sourceFilledAtUnixNanos, 0)
 
 def AddSourceFilledAtUnixNanos(builder, sourceFilledAtUnixNanos):
     FillAddSourceFilledAtUnixNanos(builder, sourceFilledAtUnixNanos)

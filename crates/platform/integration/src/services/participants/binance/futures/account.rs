@@ -603,6 +603,12 @@ pub(crate) fn normalize_account(
             .ok()?;
             Some(Ok(Position {
                 provider_instrument,
+                position_side: item
+                    .get("positionSide")
+                    .and_then(Value::as_str)
+                    .unwrap_or("BOTH")
+                    .parse()
+                    .ok()?,
                 quantity,
                 average_price: required_decimal_field(item, "entryPrice").ok(),
                 mark_price: required_decimal_field(item, "markPrice").ok(),
@@ -990,6 +996,12 @@ pub(super) fn parse_user_event(
                     .ok()?;
                     Some(Position {
                         provider_instrument,
+                        position_side: row
+                            .get("ps")
+                            .and_then(Value::as_str)
+                            .unwrap_or("BOTH")
+                            .parse()
+                            .ok()?,
                         quantity,
                         average_price: stream_decimal_field(row, "ep"),
                         unrealized_pnl: stream_decimal_field(row, "up"),
@@ -1052,7 +1064,11 @@ mod tests {
             account_model: Some("contract".into()),
         };
         let account = serde_json::json!({"assets":[{"asset":"USDT","walletBalance":"100.5","availableBalance":"90.25"}]});
-        let positions = serde_json::json!([{"symbol":"BTCUSDT","positionAmt":"0.25","entryPrice":"60000","markPrice":"61000","unRealizedProfit":"250"},{"symbol":"ETHUSDT","positionAmt":"0"}]);
+        let positions = serde_json::json!([
+            {"symbol":"BTCUSDT","positionSide":"LONG","positionAmt":"0.25","entryPrice":"60000","markPrice":"61000","unRealizedProfit":"250"},
+            {"symbol":"BTCUSDT","positionSide":"SHORT","positionAmt":"-0.10","entryPrice":"62000","markPrice":"61000","unRealizedProfit":"100"},
+            {"symbol":"ETHUSDT","positionSide":"BOTH","positionAmt":"0"}
+        ]);
         let result = normalize_account(
             &segment,
             &account,
@@ -1061,8 +1077,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.balances[0].asset_code, "USDT");
-        assert_eq!(result.positions.len(), 1);
+        assert_eq!(result.positions.len(), 2);
         assert_eq!(result.positions[0].quantity.mantissa, 25);
+        assert_eq!(
+            result.positions[0].position_side,
+            kairos_primitives::PositionSide::Long
+        );
+        assert_eq!(
+            result.positions[1].position_side,
+            kairos_primitives::PositionSide::Short
+        );
         assert_eq!(result.open_orders[0].order_id, "future-8");
     }
 }

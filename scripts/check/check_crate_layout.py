@@ -13,6 +13,7 @@ CRATES = ROOT / "crates"
 MODULES = CRATES / "modules"
 PLATFORM = CRATES / "platform"
 FORBIDDEN_MODULE_LAYERS = {"app", "domain", "runtime", "service"}
+IGNORED_PLATFORM_DIRECTORIES = {"legacy"}
 
 
 def manifest(path: Path) -> dict:
@@ -23,7 +24,11 @@ def main() -> int:
     failures: list[str] = []
 
     module_names = {path.name for path in MODULES.iterdir() if path.is_dir()}
-    platform_names = {path.name for path in PLATFORM.iterdir() if path.is_dir()}
+    platform_names = {
+        path.name
+        for path in PLATFORM.iterdir()
+        if path.is_dir() and path.name not in IGNORED_PLATFORM_DIRECTORIES
+    }
     if not module_names:
         failures.append("crates/modules contains no business modules")
     if not platform_names:

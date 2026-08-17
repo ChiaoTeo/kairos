@@ -1,4 +1,5 @@
 include "../../common/decimal.fbs";
+include "observation_scope.fbs";
 
 namespace kairos.market.v2;
 
@@ -10,7 +11,7 @@ enum BarKind:ubyte {
 }
 
 table Bar {
-  market_id:string (required);
+  scope:ObservationScope (required);
   instrument_id:string (required);
   source_id:string (required);
   bar_spec_id:string (required);

@@ -21,7 +21,7 @@ impl<'a> ::flatbuffers::Follow<'a> for FreshnessEntry<'a> {
 
 impl<'a> FreshnessEntry<'a> {
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_DATA_KIND: ::flatbuffers::VOffsetT = 8;
     pub const VT_LAST_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 10;
     pub const VT_LAST_RECEIVED_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 12;
@@ -51,8 +51,8 @@ impl<'a> FreshnessEntry<'a> {
         if let Some(x) = args.data_kind {
             builder.add_data_kind(x);
         }
-        if let Some(x) = args.market_id {
-            builder.add_market_id(x);
+        if let Some(x) = args.scope {
+            builder.add_scope(x);
         }
         if let Some(x) = args.source_id {
             builder.add_source_id(x);
@@ -73,13 +73,16 @@ impl<'a> FreshnessEntry<'a> {
         }
     }
     #[inline]
-    pub fn market_id(&self) -> &'a str {
+    pub fn scope(&self) -> ObservationScope<'a> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(FreshnessEntry::VT_MARKET_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                    FreshnessEntry::VT_SCOPE,
+                    None,
+                )
                 .unwrap()
         }
     }
@@ -166,9 +169,9 @@ impl ::flatbuffers::Verifiable for FreshnessEntry<'_> {
                 Self::VT_SOURCE_ID,
                 true,
             )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_id",
-                Self::VT_MARKET_ID,
+            .visit_field::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                "scope",
+                Self::VT_SCOPE,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -195,7 +198,7 @@ impl ::flatbuffers::Verifiable for FreshnessEntry<'_> {
 }
 pub struct FreshnessEntryArgs<'a> {
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub data_kind: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub last_event_time_unix_nanos: u64,
     pub last_received_time_unix_nanos: u64,
@@ -208,7 +211,7 @@ impl<'a> Default for FreshnessEntryArgs<'a> {
     fn default() -> Self {
         FreshnessEntryArgs {
             source_id: None, // required field
-            market_id: None, // required field
+            scope: None,     // required field
             data_kind: None, // required field
             last_event_time_unix_nanos: 0,
             last_received_time_unix_nanos: 0,
@@ -232,11 +235,12 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FreshnessEntryBuilder<'a, 'b,
         );
     }
     #[inline]
-    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            FreshnessEntry::VT_MARKET_ID,
-            market_id,
-        );
+    pub fn add_scope(&mut self, scope: ::flatbuffers::WIPOffset<ObservationScope<'b>>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<ObservationScope>>(
+                FreshnessEntry::VT_SCOPE,
+                scope,
+            );
     }
     #[inline]
     pub fn add_data_kind(&mut self, data_kind: ::flatbuffers::WIPOffset<&'b str>) {
@@ -294,8 +298,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FreshnessEntryBuilder<'a, 'b,
         let o = self.fbb_.end_table(self.start_);
         self.fbb_
             .required(o, FreshnessEntry::VT_SOURCE_ID, "source_id");
-        self.fbb_
-            .required(o, FreshnessEntry::VT_MARKET_ID, "market_id");
+        self.fbb_.required(o, FreshnessEntry::VT_SCOPE, "scope");
         self.fbb_
             .required(o, FreshnessEntry::VT_DATA_KIND, "data_kind");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -306,7 +309,7 @@ impl ::core::fmt::Debug for FreshnessEntry<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("FreshnessEntry");
         ds.field("source_id", &self.source_id());
-        ds.field("market_id", &self.market_id());
+        ds.field("scope", &self.scope());
         ds.field("data_kind", &self.data_kind());
         ds.field(
             "last_event_time_unix_nanos",

@@ -113,7 +113,7 @@ impl MarketActor {
             format!("{source_id}:{market_id}:order_book"),
             MarketFreshness {
                 source_id: source_id.to_owned(),
-                market_id: kairos_primitives::MarketId::new(market_id.to_owned())
+                scope: crate::ObservationScope::market(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: crate::ObservationKind::OrderBook,
                 last_event_time_unix_nanos: kairos_primitives::UnixNanos::new(

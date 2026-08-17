@@ -104,7 +104,7 @@ class SystemRuntimeSupervisor:
                 return
             except (OSError, ValueError):
                 pass
-        log_dir = self.processes.workspace.paths.logs / "processes"
+        log_dir = self.processes.workspace.paths.logs / "system-supervisor"
         start_logged_process(
             [
                 sys.executable,
@@ -114,7 +114,7 @@ class SystemRuntimeSupervisor:
                 str(self.processes.workspace.paths.root),
             ],
             component="system-supervisor",
-            log_path=log_dir / "system-supervisor.log",
+            log_path=log_dir / "process.log",
             cwd=str(self.processes.workspace.paths.root),
             environment={**os.environ, "KAIROS_SUPERVISOR_CHILD": "1"},
         )

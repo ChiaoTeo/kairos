@@ -78,7 +78,9 @@ def build_backtest_driver(
     account_id = next(iter(endpoints.accounts), None)
     return StrategyBacktestDriver(
         account_socket=(None if account_endpoint is None else account_endpoint.socket),
-        account_snapshot=(None if account_endpoint is None else account_endpoint.snapshot),
+        account_snapshot=(
+            None if account_endpoint is None else account_endpoint.snapshot
+        ),
         account_id=account_id,
         risk_socket=None if endpoints.risk is None else endpoints.risk.socket,
         execution_socket=(
@@ -95,12 +97,12 @@ def release_strategy_market_owner(
 ) -> dict[str, object] | None:
     """Launch-owned reconciliation for a Strategy process that may be dead."""
 
-    strategy_id = _journal_strategy_id(instance.root / "lifecycle.jsonl")
+    strategy_id = _journal_strategy_id(instance.lifecycle_journal())
     if strategy_id is None:
         return None
     try:
         config = StrategyLaunchConfig.load(
-            instance.root / "normalized-config.json",
+            instance.normalized_config(),
             launch_id=instance.launch_id,
             mode=instance.mode,
         )

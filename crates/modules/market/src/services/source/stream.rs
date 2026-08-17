@@ -183,7 +183,12 @@ async fn run<C>(
                             return;
                         }
                         for market in affected {
-                            blocked_markets.insert(market.market_id.clone());
+                            let Some(market_id) = market.market_id().cloned() else {
+                                fail(&inputs, &source_id, epoch, SourceFailureKind::InvalidPayload,
+                                    "consolidated source cannot perform market-scoped order-book resync".into()).await;
+                                return;
+                            };
+                            blocked_markets.insert(market_id);
                             if inputs.send(SourceInput::ResyncRequired {
                                 source_id: source_id.clone(),
                                 epoch,
@@ -214,7 +219,7 @@ async fn run<C>(
                 let Some(market) = markets.values().find(|market| {
                     market.route.provider_symbol.eq_ignore_ascii_case(event.symbol.as_str())
                 }) else { continue };
-                if blocked_markets.contains(&market.market_id)
+                if market.market_id().is_some_and(|id| blocked_markets.contains(id))
                     && event.kind != MarketEventKind::BookSnapshot
                 {
                     continue;
@@ -236,7 +241,12 @@ async fn run<C>(
                                 mpsc::error::TrySendError::Closed(_) => return,
                                 mpsc::error::TrySendError::Full(SourceInput::OrderBook { update, .. }) => {
                                     let market = update.market;
-                                    blocked_markets.insert(market.market_id.clone());
+                                    let Some(market_id) = market.market_id().cloned() else {
+                                        fail(&inputs, &source_id, epoch, SourceFailureKind::InvalidPayload,
+                                            "consolidated source emitted an order book".into()).await;
+                                        return;
+                                    };
+                                    blocked_markets.insert(market_id);
                                     let _ = inputs.send(SourceInput::ResyncRequired {
                                         source_id: source_id.clone(),
                                         epoch,
@@ -283,9 +293,12 @@ async fn resync<C: AsyncMarketEventSource>(
     request_id: SourceRequestId,
     market: ResolvedMarket,
 ) {
+    let Some(market_id) = market.market_id().cloned() else {
+        return;
+    };
     let previous = markets
         .iter()
-        .find_map(|(handle, current)| (current.market_id == market.market_id).then_some(*handle));
+        .find_map(|(handle, current)| (current.market_id() == Some(&market_id)).then_some(*handle));
     let result = async {
         if let Some(previous) = previous {
             connection.unsubscribe(previous).await?;
@@ -303,7 +316,7 @@ async fn resync<C: AsyncMarketEventSource>(
     .await;
     match result {
         Ok(()) => {
-            resyncing.insert(market.market_id, request_id);
+            resyncing.insert(market_id, request_id);
         }
         Err(error) => {
             let _ = inputs
@@ -311,7 +324,7 @@ async fn resync<C: AsyncMarketEventSource>(
                     source_id: source_id.clone(),
                     epoch,
                     request_id,
-                    market_id: market.market_id,
+                    market_id,
                     error: error.to_string(),
                 })
                 .await;
@@ -485,6 +498,7 @@ mod tests {
             last_sequence: None,
             sequence: None,
             observed_at_unix_nanos: UnixNanos::new(1),
+            venue: Default::default(),
         }
     }
 
@@ -512,7 +526,10 @@ mod tests {
             panic!("quote became an order book")
         };
         assert_eq!(observation.source_id(), "binance.spot");
-        assert_eq!(observation.market_id(), "market:btc");
+        assert_eq!(
+            observation.market_id().map(|value| value.as_str()),
+            Some("market:btc")
+        );
     }
 
     #[test]

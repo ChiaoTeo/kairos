@@ -1,7 +1,7 @@
-use kairos_primitives::{MarketId, Sequence, UnixNanos};
+use kairos_primitives::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::observation::ObservationKind;
+use crate::domain::observation::{ObservationKind, ObservationScope};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FeedStatus {
@@ -24,7 +24,7 @@ pub enum DataFreshnessStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketFreshness {
     pub source_id: String,
-    pub market_id: MarketId,
+    pub scope: ObservationScope,
     pub data_kind: ObservationKind,
     pub last_event_time_unix_nanos: UnixNanos,
     pub last_received_time_unix_nanos: UnixNanos,

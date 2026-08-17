@@ -12,7 +12,7 @@ use crate::application::capabilities::{
 use crate::application::{
     AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, HistoricalMarketDataConnection,
     HistoricalMarketRequest, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
-    SubscriptionId,
+    MarketVenueEvidence, SubscriptionId,
 };
 use crate::services::transport::websocket::{AsyncSocketEvent, AsyncTokioSocket};
 
@@ -216,6 +216,15 @@ fn normalize_historical_quotes(
                 last_sequence: None,
                 sequence: row.sequence_number.map(Sequence::new),
                 observed_at_unix_nanos: row.sip_timestamp_unix_nanos.into(),
+                venue: MarketVenueEvidence {
+                    bid_exchange: row.bid_exchange,
+                    ask_exchange: row.ask_exchange,
+                    tape: row.tape,
+                    participant_timestamp_unix_nanos: row
+                        .participant_timestamp_unix_nanos
+                        .map(Into::into),
+                    ..Default::default()
+                },
             })
         })
         .collect()
@@ -244,6 +253,16 @@ fn normalize_historical_trades(
                 last_sequence: None,
                 sequence: row.sequence_number.map(Sequence::new),
                 observed_at_unix_nanos: row.sip_timestamp_unix_nanos.into(),
+                venue: MarketVenueEvidence {
+                    trade_exchange: row.exchange,
+                    tape: row.tape,
+                    trf_id: row.trf_id,
+                    participant_timestamp_unix_nanos: row
+                        .participant_timestamp_unix_nanos
+                        .map(Into::into),
+                    trf_timestamp_unix_nanos: row.trf_timestamp_unix_nanos.map(Into::into),
+                    ..Default::default()
+                },
             })
         })
         .collect()
@@ -301,6 +320,7 @@ fn normalize_historical(
                 last_sequence: None,
                 sequence: None,
                 observed_at_unix_nanos: ((row.open_time_unix_millis as u64) * 1_000_000).into(),
+                venue: Default::default(),
             })
         })
         .collect()
@@ -564,11 +584,13 @@ fn normalize(value: &Value) -> Result<Option<MarketEvent>, IntegrationError> {
             symbol: Symbol::new(symbol)
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             kind: MarketEventKind::Quote,
-            price: parse_optional::<Price>(text(value, "bp").or_else(|| text(value, "ap")))?,
-            quantity: parse_optional::<Quantity>(text(value, "bs"))?,
+            price: parse_optional::<Price>(
+                scalar_text(value, "bp").or_else(|| scalar_text(value, "ap")),
+            )?,
+            quantity: parse_optional::<Quantity>(scalar_text(value, "bs"))?,
             rate: None,
-            ask_price: parse_optional::<Price>(text(value, "ap"))?,
-            ask_quantity: parse_optional::<Quantity>(text(value, "as"))?,
+            ask_price: parse_optional::<Price>(scalar_text(value, "ap"))?,
+            ask_quantity: parse_optional::<Quantity>(scalar_text(value, "as"))?,
             bids: Vec::new(),
             asks: Vec::new(),
             bar: None,
@@ -577,13 +599,22 @@ fn normalize(value: &Value) -> Result<Option<MarketEvent>, IntegrationError> {
             last_sequence: None,
             sequence: value.get("q").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: timestamp.into(),
+            venue: MarketVenueEvidence {
+                bid_exchange: scalar_text(value, "bx"),
+                ask_exchange: scalar_text(value, "ax"),
+                tape: value
+                    .get("z")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
+                ..Default::default()
+            },
         })),
         "T" => Ok(Some(MarketEvent {
             symbol: Symbol::new(symbol)
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             kind: MarketEventKind::Trade,
-            price: Some(parse_required::<Price>(text(value, "p"))?),
-            quantity: Some(parse_required::<Quantity>(text(value, "s"))?),
+            price: Some(parse_required::<Price>(scalar_text(value, "p"))?),
+            quantity: Some(parse_required::<Quantity>(scalar_text(value, "s"))?),
             rate: None,
             ask_price: None,
             ask_quantity: None,
@@ -595,13 +626,30 @@ fn normalize(value: &Value) -> Result<Option<MarketEvent>, IntegrationError> {
             last_sequence: None,
             sequence: value.get("q").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: timestamp.into(),
+            venue: MarketVenueEvidence {
+                trade_exchange: scalar_text(value, "x"),
+                tape: value
+                    .get("z")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
+                trf_id: value
+                    .get("trfi")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()),
+                trf_timestamp_unix_nanos: value.get("trft").and_then(Value::as_u64).map(Into::into),
+                ..Default::default()
+            },
         })),
         _ => Ok(None),
     }
 }
 
-fn text(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
+fn scalar_text(value: &Value, key: &str) -> Option<String> {
+    match value.get(key)? {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 fn parse_optional<T>(value: Option<String>) -> Result<Option<T>, IntegrationError>
@@ -635,8 +683,69 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarketType, MassiveAsyncMarketStream};
-    use crate::application::{AsyncMarketEventSource, SubscriptionId};
+    use super::{normalize, MarketType, MassiveAsyncMarketStream};
+    use crate::application::{AsyncMarketEventSource, MarketEventKind, SubscriptionId};
+    use serde_json::json;
+
+    #[test]
+    fn official_numeric_quote_fields_are_preserved() {
+        let event = normalize(&json!({
+            "ev": "Q",
+            "sym": "AAPL",
+            "bp": 224.10,
+            "bs": 2,
+            "ap": 224.12,
+            "as": 3,
+            "bx": 301,
+            "ax": 302,
+            "z": 3,
+            "t": 1_536_036_818_784_u64,
+            "q": 7
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.kind, MarketEventKind::Quote);
+        assert_eq!(event.price.unwrap().to_string(), "224.1");
+        assert_eq!(event.quantity.unwrap().to_string(), "2");
+        assert_eq!(event.ask_price.unwrap().to_string(), "224.12");
+        assert_eq!(event.ask_quantity.unwrap().to_string(), "3");
+        assert_eq!(event.venue.bid_exchange.as_deref(), Some("301"));
+        assert_eq!(event.venue.ask_exchange.as_deref(), Some("302"));
+        assert_eq!(event.venue.tape, Some(3));
+    }
+
+    #[test]
+    fn numeric_trade_fields_are_preserved() {
+        let event = normalize(&json!({
+            "ev": "T",
+            "sym": "AAPL",
+            "p": 224.11,
+            "s": 5,
+            "x": 19,
+            "z": 3,
+            "trfi": 202,
+            "trft": 1_536_036_818_780_u64,
+            "t": 1_536_036_818_784_u64,
+            "q": 8
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.kind, MarketEventKind::Trade);
+        assert_eq!(event.price.unwrap().to_string(), "224.11");
+        assert_eq!(event.quantity.unwrap().to_string(), "5");
+        assert_eq!(event.venue.trade_exchange.as_deref(), Some("19"));
+        assert_eq!(event.venue.tape, Some(3));
+        assert_eq!(event.venue.trf_id, Some(202));
+        assert_eq!(
+            event
+                .venue
+                .trf_timestamp_unix_nanos
+                .map(|value| value.get()),
+            Some(1_536_036_818_780)
+        );
+    }
 
     #[tokio::test]
     async fn transport_disconnect_preserves_desired_subscriptions_for_reconnect() {

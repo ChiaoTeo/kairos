@@ -171,20 +171,12 @@ def _wait_for_socket(socket_path: Path, process: subprocess.Popen[str]) -> None:
 
 
 def _risk_socket_path(workspace: Path) -> Path:
-    candidate = (
-        workspace
-        / "launches"
-        / "paper"
-        / "otel"
-        / "instances"
-        / "instance"
-        / "sockets"
-        / "risk.sock"
-    )
+    instance_root = workspace / "launches" / "paper" / "otel" / "instances" / "instance"
+    candidate = instance_root / "run" / "risk" / "control.sock"
     if len(str(candidate)) <= 100:
         return candidate
-    digest = sha256(f"{workspace}:paper:otel:instance:risk".encode()).digest()[:10]
-    return Path(f"/tmp/kairos-instance-{digest.hex()}-risk.sock")
+    digest = sha256(f"{instance_root}:risk".encode()).digest()[:10]
+    return Path(f"/tmp/kairos-process-{digest.hex()}-risk.sock")
 
 
 def _request(

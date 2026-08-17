@@ -30,7 +30,7 @@ def build_strategy_access(
         if enabled
         else None,
         AeronRiskEventSource(
-            aeron_dir=instance.paths.aeron_dir(),
+            aeron_dir=instance.workspace.paths.aeron_dir(),
         )
         if enabled
         else None,

@@ -1,27 +1,18 @@
 use std::collections::BTreeMap;
 
+use crate::composition::config::MarketSourceBinding;
+use crate::composition::sources::{binding_provider_product, binding_supports_canonical_market};
 use crate::{MarketDataRoute, ReconcileMarketUniverse, ResolvedMarket};
 
 pub(crate) fn project_market_universe(
     snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
+    sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {
     let instruments = snapshot
         .instruments
         .iter()
         .map(|instrument| (instrument.instrument_id.as_str(), instrument))
         .collect::<BTreeMap<_, _>>();
-    let mut accesses = BTreeMap::<&str, Vec<&kairos_reference_contract::MarketDataAccess>>::new();
-    for access in snapshot
-        .market_data_accesses
-        .iter()
-        .filter(|access| is_active(&access.status))
-    {
-        accesses
-            .entry(access.market_id.as_str())
-            .or_default()
-            .push(access);
-    }
-
     let mut markets = Vec::new();
     for market in snapshot
         .markets
@@ -36,36 +27,58 @@ pub(crate) fn project_market_universe(
                     market.market_id, market.instrument_id
                 )
             })?;
-        let market_accesses = accesses
-            .get(market.market_id.as_str())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let access = match market_accesses {
-            [access] => *access,
-            [] => {
-                return Err(format!(
-                    "Reference market {} has no active market-data access",
-                    market.market_id
-                ))
+        let Some(provider_symbol) = market.venue_symbol.as_deref() else {
+            continue;
+        };
+        let mut candidates = sources
+            .iter()
+            .filter(|(_, binding)| {
+                binding.enabled()
+                    && binding_supports_canonical_market(
+                        binding,
+                        &market.exchange_id,
+                        market.instrument_kind,
+                    )
+            })
+            .map(|(source_id, binding)| {
+                let (provider_id, provider_product) = binding_provider_product(binding);
+                (Some(source_id.as_str()), provider_id, provider_product)
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty()
+            && market.exchange_id.eq_ignore_ascii_case("exchange:binance")
+            && market.instrument_kind == kairos_primitives::InstrumentKind::Spot
+        {
+            candidates.push((None, "binance", "spot"));
+        }
+        let [(source_id, provider_id, provider_product)] = candidates.as_slice() else {
+            if candidates.is_empty() {
+                continue;
             }
-            _ => {
-                return Err(format!(
-                    "Reference market {} has ambiguous market-data accesses: {}",
-                    market.market_id,
-                    market_accesses
-                        .iter()
-                        .map(|access| access.access_id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ))
-            }
+            return Err(format!(
+                "canonical market {} has ambiguous Market source bindings: {}",
+                market.market_id,
+                candidates
+                    .iter()
+                    .filter_map(|(source_id, _, _)| *source_id)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
         };
         let route = MarketDataRoute::new(
-            access.access_id.clone(),
-            access.provider_id.clone(),
-            access.provider_product.clone(),
-            access.provider_symbol.clone(),
-        )?;
+            format!(
+                "market-route:{}:{}",
+                source_id.unwrap_or(provider_id),
+                market.market_id
+            ),
+            *provider_id,
+            *provider_product,
+            provider_symbol,
+        )?
+        .with_observation_capabilities(adapter_observation_capabilities(
+            provider_id,
+            provider_product,
+        ));
         let mut descriptor = ResolvedMarket::new(
             market.market_id.clone(),
             market.instrument_id.clone(),
@@ -80,6 +93,9 @@ pub(crate) fn project_market_universe(
             .map(kairos_primitives::InstrumentId::new)
             .transpose()
             .map_err(|error| error.to_string())?;
+        if let Some(source_id) = source_id {
+            descriptor = descriptor.with_source(*source_id)?;
+        }
         markets.push(descriptor);
     }
 
@@ -90,9 +106,28 @@ pub(crate) fn project_market_universe(
     })
 }
 
+pub(crate) fn adapter_observation_capabilities(
+    provider_id: &str,
+    provider_product: &str,
+) -> Vec<crate::ObservationKind> {
+    use crate::ObservationKind::{Bar, OptionGreeks, OrderBook, Quote, Trade};
+    match provider_id.to_ascii_lowercase().as_str() {
+        "binance" if provider_product.eq_ignore_ascii_case("spot") => {
+            vec![Quote, Trade, Bar, OrderBook]
+        }
+        "binance" if provider_product.eq_ignore_ascii_case("options") => {
+            vec![Quote, Trade, OrderBook, OptionGreeks]
+        }
+        "binance" | "okx" | "hyperliquid" => vec![Quote, Trade, OrderBook],
+        "massive" => vec![Quote, Trade],
+        _ => Vec::new(),
+    }
+}
+
 pub(super) fn project_market_universe_at_sequence(
     snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
     required_sequence: u64,
+    sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {
     if snapshot.event_sequence < required_sequence {
         return Err(format!(
@@ -100,7 +135,7 @@ pub(super) fn project_market_universe_at_sequence(
             snapshot.event_sequence, required_sequence
         ));
     }
-    project_market_universe(snapshot)
+    project_market_universe(snapshot, sources)
 }
 
 fn is_active(status: &str) -> bool {
@@ -109,6 +144,8 @@ fn is_active(status: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{project_market_universe, project_market_universe_at_sequence};
 
     #[test]
@@ -130,50 +167,43 @@ mod tests {
             market_id: "market:btc".into(),
             instrument_id: "instrument:btc".into(),
             exchange_id: "exchange:binance".into(),
-            market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            source_symbol: "BTCUSDT".into(),
+            instrument_kind: kairos_primitives::InstrumentKind::Spot,
+            venue_symbol: Some("BTCUSDT".into()),
             status: "active".into(),
             ..Default::default()
         });
-        snapshot
-            .market_data_accesses
-            .push(kairos_reference_contract::MarketDataAccess {
-                access_id: "access:btc".into(),
-                market_id: "market:btc".into(),
-                provider_id: "provider:binance".into(),
-                provider_product: "spot".into(),
-                provider_symbol: "BTCUSDT".into(),
-                status: "active".into(),
-                ..Default::default()
-            });
-
-        let update = project_market_universe(&snapshot).unwrap();
+        let update = project_market_universe(&snapshot, &BTreeMap::new()).unwrap();
         assert_eq!(update.generation.get(), 7);
         assert_eq!(update.event_sequence.get(), 11);
         assert_eq!(update.markets.len(), 1);
-        assert_eq!(update.markets[0].market_id, "market:btc");
-        assert_eq!(update.markets[0].route.access_id, "access:btc");
-        assert_eq!(update.markets[0].route.provider_id, "provider:binance");
+        assert_eq!(update.markets[0].market_id().unwrap(), "market:btc");
+        assert_eq!(
+            update.markets[0].route.route_id,
+            "market-route:binance:market:btc"
+        );
+        assert_eq!(update.markets[0].route.provider_id, "binance");
         assert_eq!(update.markets[0].route.provider_product, "spot");
         assert_eq!(update.markets[0].route.provider_symbol, "BTCUSDT");
+        assert!(update.markets[0]
+            .route
+            .observation_capabilities
+            .contains(&crate::ObservationKind::Quote));
     }
 
     #[test]
-    fn rejects_market_without_an_active_access() {
+    fn excludes_market_without_venue_symbol() {
         let mut snapshot = fixture();
-        snapshot.market_data_accesses.clear();
-        let error = project_market_universe(&snapshot).unwrap_err();
-        assert!(error.contains("has no active market-data access"));
+        snapshot.markets[0].venue_symbol = None;
+        let update = project_market_universe(&snapshot, &BTreeMap::new()).unwrap();
+        assert!(update.markets.is_empty());
     }
 
     #[test]
-    fn rejects_market_with_ambiguous_active_accesses() {
+    fn excludes_market_without_a_configured_or_builtin_venue_adapter() {
         let mut snapshot = fixture();
-        let mut second = snapshot.market_data_accesses[0].clone();
-        second.access_id = "access:btc:second".into();
-        snapshot.market_data_accesses.push(second);
-        let error = project_market_universe(&snapshot).unwrap_err();
-        assert!(error.contains("ambiguous market-data accesses"));
+        snapshot.markets[0].exchange_id = "exchange:curated".into();
+        let update = project_market_universe(&snapshot, &BTreeMap::new()).unwrap();
+        assert!(update.markets.is_empty());
     }
 
     #[test]
@@ -182,7 +212,8 @@ mod tests {
             event_sequence: 4,
             ..Default::default()
         };
-        let error = project_market_universe_at_sequence(&snapshot, 5).unwrap_err();
+        let error =
+            project_market_universe_at_sequence(&snapshot, 5, &BTreeMap::new()).unwrap_err();
         assert!(error.contains("behind required sequence 5"));
     }
 
@@ -200,22 +231,11 @@ mod tests {
             market_id: "market:btc".into(),
             instrument_id: "instrument:btc".into(),
             exchange_id: "exchange:binance".into(),
-            market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            source_symbol: "BTCUSDT".into(),
+            instrument_kind: kairos_primitives::InstrumentKind::Spot,
+            venue_symbol: Some("BTCUSDT".into()),
             status: "active".into(),
             ..Default::default()
         });
-        snapshot
-            .market_data_accesses
-            .push(kairos_reference_contract::MarketDataAccess {
-                access_id: "access:btc".into(),
-                market_id: "market:btc".into(),
-                provider_id: "provider:binance".into(),
-                provider_product: "spot".into(),
-                provider_symbol: "BTCUSDT".into(),
-                status: "active".into(),
-                ..Default::default()
-            });
         snapshot
     }
 }

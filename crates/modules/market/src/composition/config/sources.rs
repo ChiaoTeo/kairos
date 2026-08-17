@@ -35,7 +35,6 @@ pub enum MarketSourceBinding {
         #[serde(default = "enabled_by_default")]
         enabled: bool,
         product: MassiveMarketProduct,
-        exchange: String,
         credential_id: String,
         endpoint: Option<String>,
     },

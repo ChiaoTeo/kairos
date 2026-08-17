@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from kairospy.application.reference.models import Market
+from kairospy.application.reference import Market
 from kairospy.domain_types import MarketId
 
 from .events import BarEvent, MarketEvent, TradeEvent
@@ -73,7 +73,7 @@ class MarketApplication:
         self._launch_id = launch_id
         self._source_id = source_id
         self._event_sequence: int | None = None
-        self._latest_trades: dict[MarketId, Trade] = {}
+        self._latest_trades: dict[str, Trade] = {}
         self._event_source_ready = event_source is None
         self._request_counter = 0
         self._handles: dict[str, Any] = {}
@@ -143,7 +143,7 @@ class MarketApplication:
                 continue
             event = record if typed else map_market_event(record)
             if isinstance(event, TradeEvent):
-                self._latest_trades[event.value.market_id] = event.value
+                self._latest_trades[event.value.scope.key()] = event.value
             if self._matches_subscription(event):
                 yield event
 
@@ -163,41 +163,39 @@ class MarketApplication:
         self._event_sequence = sequence
 
     def subscribe_bars(
-        self, market: Market | MarketId, *, timeframe: str
+        self,
+        market: Market | MarketId,
+        *,
+        timeframe: str,
+        source_id: str | None = None,
     ) -> Subscription:
         if not timeframe.strip():
             raise ValueError("bar timeframe is required")
-        market_id = _market_id(market)
         return self._subscribe(
-            SubscriptionRequest(
-                subject=str(market_id),
-                selectors=(f"bar:{timeframe}",),
-                identity=str(market_id),
+            _market_subscription_request(
+                market, (f"bar:{timeframe}",), source_id=source_id
             )
         )
 
-    def subscribe_quotes(self, market: Market | MarketId) -> Subscription:
-        market_id = _market_id(market)
+    def subscribe_quotes(
+        self, market: Market | MarketId, *, source_id: str | None = None
+    ) -> Subscription:
         return self._subscribe(
-            SubscriptionRequest(
-                subject=str(market_id), selectors=("quote",), identity=str(market_id)
-            )
+            _market_subscription_request(market, ("quote",), source_id=source_id)
         )
 
-    def subscribe_trades(self, market: Market | MarketId) -> Subscription:
-        market_id = _market_id(market)
+    def subscribe_trades(
+        self, market: Market | MarketId, *, source_id: str | None = None
+    ) -> Subscription:
         return self._subscribe(
-            SubscriptionRequest(
-                subject=str(market_id), selectors=("trade",), identity=str(market_id)
-            )
+            _market_subscription_request(market, ("trade",), source_id=source_id)
         )
 
-    def subscribe_greeks(self, market: Market | MarketId) -> Subscription:
-        market_id = _market_id(market)
+    def subscribe_greeks(
+        self, market: Market | MarketId, *, source_id: str | None = None
+    ) -> Subscription:
         return self._subscribe(
-            SubscriptionRequest(
-                subject=str(market_id), selectors=("greeks",), identity=str(market_id)
-            )
+            _market_subscription_request(market, ("greeks",), source_id=source_id)
         )
 
     def unsubscribe(self, subscription: Subscription) -> None:
@@ -239,7 +237,7 @@ class MarketApplication:
         delivered a trade, rather than through an aggregate snapshot read.
         """
 
-        return self._latest_trades.get(_market_id(market))
+        return self._latest_trades.get(str(_market_id(market)))
 
     def latest_greeks(
         self, market: Market | MarketId, *, source_id: str | None = None
@@ -358,18 +356,42 @@ class MarketApplication:
 
         if self.events_replayable or not self._subscription_requests:
             return True
-        market_id = str(event.data.market_id)
+        scope_key = event.data.scope.key()
         selector = (
             f"bar:{event.data.timeframe}" if isinstance(event, BarEvent) else event.kind
         )
         return any(
-            request.subject == market_id and selector in request.selectors
+            (request.identity or request.subject) == scope_key
+            and selector in request.selectors
             for request in self._subscription_requests.values()
         )
 
 
 def _market_id(value: Market | MarketId) -> MarketId:
     return value.id if isinstance(value, Market) else value
+
+
+def _market_subscription_request(
+    market: Market | MarketId,
+    selectors: tuple[str, ...],
+    *,
+    source_id: str | None,
+) -> SubscriptionRequest:
+    market_id = _market_id(market)
+    if isinstance(market, Market):
+        return SubscriptionRequest(
+            subject=str(market_id),
+            selectors=selectors,
+            identity=str(market_id),
+            source_id=source_id,
+            params={"market_id": str(market_id)},
+        )
+    return SubscriptionRequest(
+        subject=str(market_id),
+        selectors=selectors,
+        identity=str(market_id),
+        source_id=source_id,
+    )
 
 
 def _subscription(value: Any) -> Subscription:

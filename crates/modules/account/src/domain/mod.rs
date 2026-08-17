@@ -110,6 +110,8 @@ pub struct Balance {
 pub struct Position {
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
+    #[serde(default)]
+    pub position_side: kairos_primitives::PositionSide,
     pub quantity: SignedQuantity,
     pub average_price: Option<Price>,
     pub mark_price: Option<Price>,
@@ -146,7 +148,7 @@ impl AccountStatus {
 pub struct AccountState {
     balances: BTreeMap<AssetId, Balance>,
     collateral: BTreeMap<AssetId, Balance>,
-    positions: BTreeMap<InstrumentId, Position>,
+    positions: BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position>,
     open_orders: BTreeMap<OrderId, OpenOrder>,
     status: AccountStatus,
     stale: bool,
@@ -188,7 +190,9 @@ impl AccountState {
         &self.collateral
     }
 
-    pub fn positions(&self) -> &BTreeMap<InstrumentId, Position> {
+    pub fn positions(
+        &self,
+    ) -> &BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position> {
         &self.positions
     }
 
@@ -313,12 +317,11 @@ impl Account {
                     .insert(balance.asset_id.clone(), balance);
             }
             for position in snapshot.positions {
+                let key = (position.instrument_id.clone(), position.position_side);
                 if position.quantity.is_zero() {
-                    self.state.positions.remove(&position.instrument_id);
+                    self.state.positions.remove(&key);
                 } else {
-                    self.state
-                        .positions
-                        .insert(position.instrument_id.clone(), position);
+                    self.state.positions.insert(key, position);
                 }
             }
             for order in snapshot.open_orders {
@@ -338,7 +341,7 @@ impl Account {
             self.state.positions = snapshot
                 .positions
                 .into_iter()
-                .map(|v| (v.instrument_id.clone(), v))
+                .map(|v| ((v.instrument_id.clone(), v.position_side), v))
                 .collect();
             self.state.open_orders = snapshot
                 .open_orders

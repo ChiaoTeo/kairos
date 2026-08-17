@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use kairos_primitives::{Generation, Sequence};
 
 use crate::application::{
-    AccountBusinessChange, AccountBusinessEvent, AccountProjection, AccountsSnapshot,
+    AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentView,
 };
 use crate::domain::{
     Account, AccountEvent, AccountSegment, AccountSnapshot, AccountState, ApplyOutcome, Balance,
@@ -264,21 +264,21 @@ impl AccountActor {
         (&self.actor_id, self.generation, self.event_sequence)
     }
 
-    pub(crate) fn projection(&self, segment_key: &SegmentKey) -> Option<AccountProjection> {
+    pub(crate) fn projection(&self, segment_key: &SegmentKey) -> Option<AccountSegmentView> {
         self.accounts
             .get(segment_key)
-            .map(AccountProjection::from_account)
+            .map(AccountSegmentView::from_account)
     }
 
-    pub fn snapshot(&self) -> AccountsSnapshot {
-        AccountsSnapshot {
+    pub fn current_view(&self) -> AccountCurrentView {
+        AccountCurrentView {
             actor_id: kairos_primitives::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
             event_sequence: self.event_sequence,
-            accounts: self
+            segments: self
                 .accounts
                 .values()
-                .map(AccountProjection::from_account)
+                .map(AccountSegmentView::from_account)
                 .collect(),
         }
     }
@@ -301,11 +301,11 @@ impl AccountActor {
         let mut final_changes = BTreeMap::<_, Vec<AccountBusinessChange>>::new();
         let mut occurred_at = BTreeMap::new();
         for (key, current) in &self.accounts {
-            let current = AccountProjection::from_account(current);
+            let current = AccountSegmentView::from_account(current);
             let old = previous
                 .accounts
                 .get(key)
-                .map(AccountProjection::from_account);
+                .map(AccountSegmentView::from_account);
             let changes = final_changes.entry(current.account_id.clone()).or_default();
             collect_business_changes(old.as_ref(), &current, changes);
             occurred_at
@@ -340,8 +340,8 @@ impl AccountActor {
 }
 
 fn collect_business_changes(
-    old: Option<&AccountProjection>,
-    current: &AccountProjection,
+    old: Option<&AccountSegmentView>,
+    current: &AccountSegmentView,
     out: &mut Vec<AccountBusinessChange>,
 ) {
     let old_balances = old
@@ -380,29 +380,40 @@ fn collect_business_changes(
             value
                 .positions
                 .iter()
-                .map(|position| (position.instrument_id.clone(), position))
+                .map(|position| {
+                    (
+                        (position.instrument_id.clone(), position.position_side),
+                        position,
+                    )
+                })
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
     let current_positions = current
         .positions
         .iter()
-        .map(|position| (position.instrument_id.clone(), position))
+        .map(|position| {
+            (
+                (position.instrument_id.clone(), position.position_side),
+                position,
+            )
+        })
         .collect::<BTreeMap<_, _>>();
-    for position in current_positions.values() {
-        if old_positions.get(&position.instrument_id).copied() != Some(*position) {
+    for (key, position) in &current_positions {
+        if old_positions.get(key).copied() != Some(*position) {
             out.push(AccountBusinessChange::Position {
                 segment_key: current.segment_key.clone(),
                 value: (*position).clone(),
             });
         }
     }
-    for (instrument_id, removed) in &old_positions {
-        if !current_positions.contains_key(instrument_id) {
+    for (key, removed) in &old_positions {
+        if !current_positions.contains_key(key) {
             out.push(AccountBusinessChange::PositionRemoved {
                 segment_key: current.segment_key.clone(),
                 instrument_id: removed.instrument_id.clone(),
                 market_id: removed.market_id.clone(),
+                position_side: removed.position_side,
             });
         }
     }
@@ -445,11 +456,13 @@ fn collect_business_changes(
             value: current.equity,
         });
     }
-    if old.is_none_or(|value| value.status != current.status || value.stale != current.stale) {
+    if old
+        .is_none_or(|value| value.status != current.status || value.freshness != current.freshness)
+    {
         out.push(AccountBusinessChange::Status {
             segment_key: current.segment_key.clone(),
             status: current.status,
-            stale: current.stale,
+            stale: current.freshness == crate::application::AccountSegmentFreshness::Stale,
         });
     }
 }
@@ -513,9 +526,9 @@ fn compare_snapshot(
     let external_positions: BTreeMap<_, _> = snapshot
         .positions
         .iter()
-        .map(|value| (value.instrument_id.clone(), value))
+        .map(|value| ((value.instrument_id.clone(), value.position_side), value))
         .collect();
-    let position_keys: Vec<crate::domain::InstrumentId> = if snapshot.kind == SnapshotKind::Delta {
+    let position_keys: Vec<_> = if snapshot.kind == SnapshotKind::Delta {
         external_positions.keys().cloned().collect()
     } else {
         state
@@ -531,7 +544,7 @@ fn compare_snapshot(
         compare_decimal(
             &mut differences,
             "position.quantity",
-            key.to_string(),
+            format!("{}:{}", key.0, key.1.as_str()),
             local,
             external,
         );

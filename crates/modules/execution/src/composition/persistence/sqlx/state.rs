@@ -278,6 +278,7 @@ mod tests {
             reason: String::new(),
             fill_id: None,
             filled_quantity: None,
+            attempt: None,
         };
         let mut store = SqlxExecutionStore::new(&path).unwrap();
         store.append_event(&event).unwrap();
@@ -308,6 +309,7 @@ mod tests {
             reason: String::new(),
             fill_id: None,
             filled_quantity: None,
+            attempt: None,
         };
         let mut store = SqlxExecutionStore::new(path).unwrap();
         store.append_event(&event).unwrap();

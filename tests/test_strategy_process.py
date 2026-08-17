@@ -41,7 +41,9 @@ def test_strategy_process_starts_without_snapshot_event_join(
         launch_id="l",
         instance_id="i",
     )
-    assert workspace.instance("paper", "l", "i").log("strategy.log").is_file()
+    assert (
+        workspace.instance("paper", "l", "i").log("strategy", "process.log").is_file()
+    )
     assert not (
         workspace.paths.logs / "launches" / "paper" / "l" / "i" / "strategy.log"
     ).exists()
@@ -79,7 +81,8 @@ def test_launch_cleanup_releases_subscriptions_for_dead_strategy_process(
         json.dumps({"components": {"market": {"socket": str(market_socket)}}}),
         encoding="utf-8",
     )
-    (instance.root / "lifecycle.jsonl").write_text(
+    instance.lifecycle_journal().parent.mkdir(parents=True, exist_ok=True)
+    instance.lifecycle_journal().write_text(
         json.dumps(
             {
                 "launch_id": "launch",
@@ -164,11 +167,11 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
         mode="backtest",
     )
     assert composition.application.context.market._snapshots.path == (
-        instance.root / "snapshots" / "v2" / "market" / "market-shared"
+        instance.snapshot("market", "market-shared")
     )
     assert (
         composition.application.context.execution._commands.client.socket_path
-        == workspace.paths.instance_socket("backtest", "launch", "run-1", "execution")
+        == instance.paths.process_socket("execution")
     )
 
 
@@ -223,7 +226,8 @@ def test_authoritative_config_requires_enabled_execution_endpoint(
     )
     instance = workspace.instance("paper", "launch", "run-1")
     instance.prepare()
-    (instance.root / "normalized-config.json").write_text(
+    instance.normalized_config().parent.mkdir(parents=True, exist_ok=True)
+    instance.normalized_config().write_text(
         json.dumps(
             {
                 "launch": {"id": "launch", "mode": "paper"},
@@ -255,7 +259,8 @@ def test_disabled_execution_ignores_a_residual_manifest_endpoint(
     )
     instance = workspace.instance("paper", "launch", "run-1")
     instance.prepare()
-    (instance.root / "normalized-config.json").write_text(
+    instance.normalized_config().parent.mkdir(parents=True, exist_ok=True)
+    instance.normalized_config().write_text(
         json.dumps(
             {
                 "launch": {"id": "launch", "mode": "paper"},

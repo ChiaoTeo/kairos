@@ -20,85 +20,121 @@ const MAX_DYNAMIC_MEMBERS: usize = 10_000;
 
 fn collection_market_descriptor(
     reference: &kairos_reference_contract::ReferenceProjectionSnapshot,
+    sources: &std::collections::BTreeMap<String, super::super::config::MarketSourceBinding>,
     name: &str,
     collection: &super::super::config::MarketCollectionConfig,
 ) -> Result<ResolvedMarket, MarketStartupError> {
-    let market_id = collection.market_id.as_deref().ok_or_else(|| {
+    if collection.market_id.is_some() == collection.instrument_id.is_some() {
+        return Err(MarketStartupError::new(format!(
+            "Market collection {name} requires exactly one of market_id or instrument_id"
+        )));
+    }
+    let source_id = collection.source_id.as_deref().ok_or_else(|| {
         MarketStartupError::new(format!(
-            "Market collection {name} requires canonical market_id"
+            "Market collection {name} requires source_id; provider routes are Market-owned"
         ))
     })?;
-    let market = reference
-        .markets
-        .iter()
-        .find(|market| market.market_id == market_id)
-        .ok_or_else(|| {
-            MarketStartupError::new(format!(
-                "Market collection {name} references missing market {market_id}"
-            ))
-        })?;
-    let instrument = reference
-        .instruments
-        .iter()
-        .find(|instrument| instrument.instrument_id == market.instrument_id)
-        .ok_or_else(|| {
-            MarketStartupError::new(format!(
-                "Market collection {name} references missing instrument {}",
-                market.instrument_id
-            ))
-        })?;
-    let selected = reference
-        .market_data_accesses
-        .iter()
-        .filter(|access| {
-            access.market_id == market_id
-                && matches!(access.status.as_str(), "active" | "trading")
-                && collection
-                    .market_data_access_id
-                    .as_deref()
-                    .is_none_or(|id| id == access.access_id)
-        })
-        .collect::<Vec<_>>();
-    let access = match selected.as_slice() {
-        [access] => *access,
-        [] => {
-            return Err(MarketStartupError::new(format!(
-                "Market collection {name} has no selected market-data access"
-            )))
-        }
-        _ => {
-            return Err(MarketStartupError::new(format!(
-                "Market collection {name} has ambiguous market-data accesses"
-            )))
-        }
-    };
-    let route = MarketDataRoute::new(
-        access.access_id.clone(),
-        access.provider_id.clone(),
-        access.provider_product.clone(),
-        access.provider_symbol.clone(),
-    )
-    .map_err(MarketStartupError::new)?;
-    let mut descriptor = ResolvedMarket::new(
-        market.market_id.clone(),
-        market.instrument_id.clone(),
-        instrument.instrument_type,
-        market.exchange_id.clone(),
-        route,
-    )
-    .map_err(MarketStartupError::new)?;
-    descriptor.asset_type = market.asset_type;
-    descriptor.underlying_instrument_id = market
-        .underlying_instrument_id
-        .clone()
-        .map(kairos_primitives::InstrumentId::new)
-        .transpose()
-        .map_err(MarketStartupError::new)?;
-    if let Some(source_id) = &collection.source_id {
-        descriptor = descriptor
-            .with_source(source_id.clone())
-            .map_err(MarketStartupError::new)?;
+    let binding = sources.get(source_id).ok_or_else(|| {
+        MarketStartupError::new(format!(
+            "Market collection {name} references unknown source {source_id}"
+        ))
+    })?;
+    if !binding.enabled() {
+        return Err(MarketStartupError::new(format!(
+            "Market collection {name} references disabled source {source_id}"
+        )));
     }
+    let (provider, provider_product) = super::super::sources::binding_provider_product(binding);
+    let target_id = collection
+        .market_id
+        .as_deref()
+        .or(collection.instrument_id.as_deref())
+        .expect("collection identity validated");
+    let route = MarketDataRoute::new(
+        format!("market-route:{source_id}:{target_id}"),
+        provider,
+        provider_product,
+        collection.subject.clone(),
+    )
+    .map_err(MarketStartupError::new)?
+    .with_observation_capabilities(super::super::reference::adapter_observation_capabilities(
+        provider,
+        provider_product,
+    ));
+    let mut descriptor = if let Some(market_id) = collection.market_id.as_deref() {
+        let market = reference
+            .markets
+            .iter()
+            .find(|market| market.market_id == market_id)
+            .ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} references missing market {market_id}"
+                ))
+            })?;
+        let instrument = reference
+            .instruments
+            .iter()
+            .find(|instrument| instrument.instrument_id == market.instrument_id)
+            .ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} references missing instrument {}",
+                    market.instrument_id
+                ))
+            })?;
+        let mut value = ResolvedMarket::new(
+            market.market_id.clone(),
+            market.instrument_id.clone(),
+            instrument.instrument_type,
+            market.exchange_id.clone(),
+            route,
+        )
+        .map_err(MarketStartupError::new)?;
+        value.asset_type = market.asset_type;
+        value.underlying_instrument_id = market
+            .underlying_instrument_id
+            .clone()
+            .map(kairos_primitives::InstrumentId::new)
+            .transpose()
+            .map_err(MarketStartupError::new)?;
+        value
+    } else {
+        let instrument_id = collection
+            .instrument_id
+            .as_deref()
+            .expect("collection identity validated");
+        let instrument = reference
+            .instruments
+            .iter()
+            .find(|instrument| instrument.instrument_id == instrument_id)
+            .ok_or_else(|| {
+                MarketStartupError::new(format!(
+                    "Market collection {name} references missing instrument {instrument_id}"
+                ))
+            })?;
+        let mut value = ResolvedMarket::consolidated(
+            instrument.instrument_id.clone(),
+            collection.network_id.clone(),
+            instrument.instrument_type,
+            route,
+        )
+        .map_err(MarketStartupError::new)?;
+        value.underlying_instrument_id = instrument
+            .underlying_instrument_id
+            .clone()
+            .map(kairos_primitives::InstrumentId::new)
+            .transpose()
+            .map_err(MarketStartupError::new)?;
+        value.asset_type = collection
+            .asset_type
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .map_err(|error| MarketStartupError::new(format!("{error}")))?;
+        value
+    };
+    descriptor = descriptor
+        .with_source(source_id)
+        .map_err(MarketStartupError::new)?;
     Ok(descriptor)
 }
 
@@ -107,7 +143,7 @@ fn reference_endpoint(
 ) -> Result<kairos_reference_contract::ReferenceEndpoint, MarketStartupError> {
     Ok(kairos_reference_contract::ReferenceEndpoint {
         database: workspace
-            .child(&["reference", "reference.sqlite"])
+            .child(&["state", "reference", "reference.sqlite"])
             .map_err(MarketStartupError::new)?,
         actor_id: "reference-actor".into(),
         aeron_dir: std::env::var("AERON_DIR").ok(),
@@ -204,6 +240,11 @@ pub async fn build_market_process(
                 .process_socket("market-events")
                 .map_err(MarketStartupError::new)?,
         );
+    let market_config = if profile.scope != MarketRuntimeScope::Replay {
+        MarketCompositionConfig::load(&workspace).map_err(MarketStartupError::new)?
+    } else {
+        MarketCompositionConfig::default()
+    };
     let reference_client = (profile.scope != MarketRuntimeScope::Replay)
         .then(|| {
             reference_endpoint(&workspace).map(kairos_reference_contract::ReferenceClient::connect)
@@ -211,18 +252,21 @@ pub async fn build_market_process(
         .transpose()?;
     let initial_reference_snapshot = reference_client
         .as_ref()
-        .and_then(|client| read_reference_snapshot(client).ok());
+        .map(read_reference_snapshot)
+        .transpose()?;
 
     if let Some(parent) = snapshot_path.parent() {
         std::fs::create_dir_all(parent).map_err(MarketStartupError::new)?;
     }
-    let replay_checkpoint_path = (profile.scope == MarketRuntimeScope::Replay)
-        .then(|| {
-            instance
-                .as_ref()
-                .map(|value| value.root().join("checkpoints/market-replay.json"))
-        })
-        .flatten();
+    let replay_checkpoint_path = if profile.scope == MarketRuntimeScope::Replay {
+        instance
+            .as_ref()
+            .map(|value| value.checkpoint("market", "replay.json"))
+            .transpose()
+            .map_err(MarketStartupError::new)?
+    } else {
+        None
+    };
     let restored_checkpoint = replay_checkpoint_path
         .as_deref()
         .map(load_replay_checkpoint)
@@ -246,7 +290,8 @@ pub async fn build_market_process(
     if let Some(snapshot) = initial_reference_snapshot.as_ref() {
         application
             .reconcile_market_universe(
-                project_market_universe(snapshot).map_err(MarketStartupError::new)?,
+                project_market_universe(snapshot, &market_config.sources)
+                    .map_err(MarketStartupError::new)?,
             )
             .map_err(MarketStartupError::new)?;
     }
@@ -283,8 +328,6 @@ pub async fn build_market_process(
 
     let mut history_specs = Vec::new();
     if profile.scope != MarketRuntimeScope::Replay {
-        let market_config =
-            MarketCompositionConfig::load(&workspace).map_err(MarketStartupError::new)?;
         for (name, collection) in &market_config.collections {
             if !collection.enabled {
                 continue;
@@ -310,7 +353,8 @@ pub async fn build_market_process(
                     "Market collection {name} requires the Reference current view"
                 ))
             })?;
-            let descriptor = collection_market_descriptor(reference, name, collection)?;
+            let descriptor =
+                collection_market_descriptor(reference, &market_config.sources, name, collection)?;
             let subscription_id = SubscriptionId::new(format!("collection:{name}"))
                 .map_err(MarketStartupError::new)?;
             let owner_id = format!("collection:{name}");
@@ -329,7 +373,7 @@ pub async fn build_market_process(
                 .map_err(MarketStartupError::new)?;
             history_specs.push(HistoryCollectionSpec {
                 name: name.clone(),
-                market_id: descriptor.market_id.to_string(),
+                scope_key: descriptor.scope.key(),
                 selectors: collection.selectors.clone(),
                 root: workspace
                     .data_root()
@@ -391,6 +435,7 @@ pub async fn build_market_process(
             kairos_reference_contract::ReferenceClient::connect(reference_endpoint(&workspace)?);
         let (updates, guard) = spawn_market_universe_watcher(
             client,
+            market_config.sources.clone(),
             profile.reference_recovery_interval,
             profile.publication_queue_capacity.max(1),
         )

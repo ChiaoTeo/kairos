@@ -47,7 +47,8 @@ Execution 不拥有：
 - Account 所有的余额、仓位、权益、freshness 和账户侧订单事实；
 - Risk 所有的预算、reservation 和风险决策权威状态；
 - Market 所有的行情、order book、subscription 和 market freshness；
-- Reference 所有的 canonical identity、catalog 和 execution access 生命周期；
+- Reference 所有的 canonical identity 与 catalog 生命周期；Execution 路由候选由
+  Execution 将这些身份与 Integration 能力、workspace 配置和 readiness 组合得到；
 - Integration 所有的 provider connection、认证、签名、技术 quota、外部 payload 和 normalizer；
 - Workspace/System 所有的路径、实例资源、全局进程生命周期和启动协调。
 
@@ -506,7 +507,7 @@ Account 端只暴露 `/v1/simulation/settlements` 作为该例外的 control com
 
 ### 7.9 Application 公共构造边界收敛（已完成）
 
-`ExecutionApplication` 不再公开接收 `OrderEntryConnection`、`OrderQueryConnection`、`OrderEventSource` 或 `ExecutionStateStore` 的依赖注入构造器。具体连接和 store 由 `composition/process.rs` 选择，经 crate-private `ExecutionApplicationWiring` 交给唯一的 `assemble` 入口；连接的 take/install、Reference execution access 安装、live 模式配置和 Risk 恢复也仅在 crate 内可见。
+`ExecutionApplication` 不再公开接收 `OrderEntryConnection`、`OrderQueryConnection`、`OrderEventSource` 或 `ExecutionStateStore` 的依赖注入构造器。具体连接和 store 由 `composition/process.rs` 选择，经 crate-private `ExecutionApplicationWiring` 交给唯一的 `assemble` 入口；连接的 take/install、Execution-owned route 安装、live 模式配置和 Risk 恢复也仅在 crate 内可见。
 
 这里的单个 entry/query gateway 是多个 account/segment/provider binding 的路由聚合，不表示进程只能控制一个账号。`ExecutionActor` 仍是唯一业务状态 owner；独立异步事件订阅继续以 route 列表接入 `ExecutionProcess`，保留各 route 的 ordering、readiness 和 recovery barrier。
 

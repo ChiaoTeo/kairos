@@ -1,5 +1,5 @@
-use crate::domain::{Account, AccountEvent};
-use crate::services::persistence::JsonAccountStore;
+use crate::domain::Account;
+use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 enum PersistenceJob {
     Append {
-        events: Vec<AccountEvent>,
+        records: Vec<AccountJournalRecord>,
         response: Option<SyncSender<Result<(), String>>>,
     },
     Checkpoint {
@@ -16,6 +16,7 @@ enum PersistenceJob {
         generation: u64,
         event_sequence: u64,
         accounts: Vec<Account>,
+        pending_business_events: Vec<crate::application::AccountBusinessEvent>,
         response: SyncSender<Result<(), String>>,
     },
 }
@@ -42,13 +43,13 @@ impl AccountPersistenceWorker {
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
                     match job {
-                        PersistenceJob::Append { events, response } => {
-                            let mut batch = vec![(events, response)];
+                        PersistenceJob::Append { records, response } => {
+                            let mut batch = vec![(records, response)];
                             let mut checkpoint = None;
                             while let Ok(next) = receiver.try_recv() {
                                 match next {
-                                    PersistenceJob::Append { events, response } => {
-                                        batch.push((events, response));
+                                    PersistenceJob::Append { records, response } => {
+                                        batch.push((records, response));
                                     }
                                     other @ PersistenceJob::Checkpoint { .. } => {
                                         checkpoint = Some(other);
@@ -56,11 +57,11 @@ impl AccountPersistenceWorker {
                                     }
                                 }
                             }
-                            let mut all_events = Vec::new();
-                            for (events, _) in &batch {
-                                all_events.extend(events.iter().cloned());
+                            let mut all_records = Vec::new();
+                            for (records, _) in &batch {
+                                all_records.extend(records.iter().cloned());
                             }
-                            let result = store.append_events(&all_events);
+                            let result = store.append_journal(&all_records);
                             if let Err(error) = &result {
                                 record_error(&worker_error, error);
                             }
@@ -75,11 +76,17 @@ impl AccountPersistenceWorker {
                                 generation,
                                 event_sequence,
                                 accounts,
+                                pending_business_events,
                                 response,
                             }) = checkpoint
                             {
-                                let result =
-                                    store.save(&actor_id, generation, event_sequence, &accounts);
+                                let result = store.save(
+                                    &actor_id,
+                                    generation,
+                                    event_sequence,
+                                    &accounts,
+                                    &pending_business_events,
+                                );
                                 if let Err(error) = &result {
                                     record_error(&worker_error, error);
                                 }
@@ -93,10 +100,16 @@ impl AccountPersistenceWorker {
                             generation,
                             event_sequence,
                             accounts,
+                            pending_business_events,
                             response,
                         } => {
-                            let result =
-                                store.save(&actor_id, generation, event_sequence, &accounts);
+                            let result = store.save(
+                                &actor_id,
+                                generation,
+                                event_sequence,
+                                &accounts,
+                                &pending_business_events,
+                            );
                             if let Err(error) = &result {
                                 record_error(&worker_error, error);
                             }
@@ -115,8 +128,8 @@ impl AccountPersistenceWorker {
         }
     }
 
-    pub(crate) fn append_events(&self, events: Vec<AccountEvent>) -> Result<(), String> {
-        if events.is_empty() {
+    pub(crate) fn append_journal(&self, records: Vec<AccountJournalRecord>) -> Result<(), String> {
+        if records.is_empty() {
             return Ok(());
         }
         let (response, receiver) = mpsc::sync_channel(1);
@@ -126,7 +139,7 @@ impl AccountPersistenceWorker {
             .as_ref()
             .ok_or_else(|| "account persistence worker is stopped".to_string())?
             .send(PersistenceJob::Append {
-                events,
+                records,
                 response: Some(response),
             })
             .map_err(|_| "account persistence worker is stopped".to_string())
@@ -142,8 +155,8 @@ impl AccountPersistenceWorker {
     /// Enqueue ordinary stream events without making the account loop wait
     /// for fsync. The bounded queue still applies backpressure if storage is
     /// persistently slower than the event source.
-    pub(crate) fn enqueue_events(&self, events: Vec<AccountEvent>) -> Result<(), String> {
-        if events.is_empty() {
+    pub(crate) fn enqueue_journal(&self, records: Vec<AccountJournalRecord>) -> Result<(), String> {
+        if records.is_empty() {
             return Ok(());
         }
         let sender = self
@@ -152,7 +165,7 @@ impl AccountPersistenceWorker {
             .ok_or_else(|| "account persistence worker is stopped".to_string())?;
         self.pending.fetch_add(1, Ordering::Relaxed);
         match sender.try_send(PersistenceJob::Append {
-            events,
+            records,
             response: None,
         }) {
             Ok(()) => Ok(()),
@@ -180,6 +193,7 @@ impl AccountPersistenceWorker {
         generation: u64,
         event_sequence: u64,
         accounts: Vec<Account>,
+        pending_business_events: Vec<crate::application::AccountBusinessEvent>,
     ) -> Result<(), String> {
         let (response, receiver) = mpsc::sync_channel(1);
         self.pending.fetch_add(1, Ordering::Relaxed);
@@ -192,6 +206,7 @@ impl AccountPersistenceWorker {
                 generation,
                 event_sequence,
                 accounts,
+                pending_business_events,
                 response,
             })
             .map_err(|_| "account persistence worker is stopped".to_string())

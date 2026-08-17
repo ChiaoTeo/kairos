@@ -535,7 +535,7 @@ def attach(
     instance = str(active["instance_id"])
     mode = str(active.get("mode") or "paper")
     target = _target(launch_id, instance, mode, workspace)
-    log_path = owner.instance(mode, launch_id, instance).log("strategy.log")
+    log_path = owner.instance(mode, launch_id, instance).log("strategy", "process.log")
     if python:
         if effective_output(output) is not OutputFormat.TEXT:
             raise typer.BadParameter("--python requires text output")
@@ -774,7 +774,7 @@ def logs(
         "files": [str(path) for path in files],
     }
     if files:
-        strategy_log = root / "strategy.log"
+        strategy_log = root / "strategy" / "process.log"
         latest = strategy_log if strategy_log.is_file() else files[-1]
         payload["latest"] = str(latest)
         content = latest.read_text(encoding="utf-8", errors="replace").splitlines()

@@ -1,4 +1,4 @@
-use crate::application::AccountProjection;
+use crate::application::AccountSegmentView;
 use crate::domain::{
     AccountDomainError, AccountFill, AccountSnapshot, AssetId, Balance, Money, OrderSide, Position,
     SignedQuantity, SnapshotKind,
@@ -8,7 +8,7 @@ use crate::domain::{
 /// Live fills never use this calculation; live balances and positions come
 /// from provider observations.
 pub(crate) fn settle_paper_fill(
-    account: &AccountProjection,
+    account: &AccountSegmentView,
     fill: &AccountFill,
 ) -> Result<AccountSnapshot, AccountDomainError> {
     if account.segment_key != fill.segment_key {
@@ -26,6 +26,7 @@ pub(crate) fn settle_paper_fill(
         .unwrap_or_else(|| Position {
             instrument_id: fill.instrument_id.clone(),
             market_id: None,
+            position_side: kairos_primitives::PositionSide::Net,
             quantity: SignedQuantity::ZERO,
             average_price: None,
             mark_price: None,
@@ -136,7 +137,7 @@ pub(crate) fn settle_paper_fill(
 }
 
 fn balance_after_delta(
-    account: &AccountProjection,
+    account: &AccountSegmentView,
     asset: &str,
     delta: SignedQuantity,
 ) -> Result<Balance, AccountDomainError> {

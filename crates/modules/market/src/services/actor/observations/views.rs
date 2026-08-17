@@ -35,8 +35,7 @@ impl MarketActor {
             freshness_key,
             MarketFreshness {
                 source_id: observation.source_id().to_owned(),
-                market_id: kairos_primitives::MarketId::new(observation.market_id().to_owned())
-                    .expect("validated market observation market id"),
+                scope: observation.scope().clone(),
                 data_kind: observation.kind(),
                 last_event_time_unix_nanos: observation.observed_at_unix_nanos(),
                 last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(
@@ -62,11 +61,23 @@ impl MarketActor {
         let qualifier = observation.qualifier();
         let kind = observation.kind();
         self.static_subscriptions.values().any(|subscription| {
-            subscription.members.contains_key(observation.market_id())
+            scope_matches_members(observation.scope(), &subscription.members)
                 && selector_matches_observation(&subscription.selectors, kind, qualifier)
         }) || self.dynamic_intents.values().any(|intent| {
-            intent.members.contains_key(observation.market_id())
+            scope_matches_members(observation.scope(), &intent.members)
                 && selector_matches_observation(&intent.selectors, kind, qualifier)
         }) || (self.static_subscriptions.is_empty() && self.dynamic_intents.is_empty())
+    }
+}
+
+fn scope_matches_members(
+    scope: &crate::ObservationScope,
+    members: &std::collections::BTreeMap<String, crate::ResolvedMarket>,
+) -> bool {
+    match scope {
+        crate::ObservationScope::Market { market_id } => members.contains_key(market_id.as_str()),
+        crate::ObservationScope::Consolidated { instrument_id, .. } => members
+            .values()
+            .any(|market| &market.instrument_id == instrument_id),
     }
 }

@@ -13,8 +13,8 @@ pub use crate::domain::{
     observation::{
         order_book::{OrderBook, OrderBookDelta, PriceLevel},
         Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketViewKey, ObservationKind,
-        ObservationQualifier, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate, Ticker24h, Trade,
-        TradeBar,
+        ObservationQualifier, ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate,
+        Ticker24h, Trade, TradeBar,
     },
     source::{
         MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId,
@@ -27,7 +27,8 @@ pub use crate::domain::{
     view::{MarketView, MarketViewFreshness},
 };
 pub use model::{
-    ExecutionEstimate, MarketError, MarketObservationResult, MarketQueryResult, OrderBookSide,
+    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
+    MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
 pub(crate) use process::MarketProcessSettings;
 pub use process::{MarketChangePublisher, MarketProcess};

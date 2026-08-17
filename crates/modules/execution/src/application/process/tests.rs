@@ -15,7 +15,7 @@ use kairos_integration::application::{
 };
 use kairos_integration::blocking::OrderEventSource;
 use kairos_primitives::{
-    AccountId, ExecutionAccessId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId,
+    AccountId, ExecutionRouteId, InstrumentId, OrderId, Quantity, SegmentKey, StrategyId,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -107,9 +107,21 @@ fn initial_execution_snapshot_never_synthesizes_events() {
 fn execution_commit_publishes_its_direct_business_event() {
     let mut application = ExecutionApplication::assemble_for_test("execution", None, None)
         .expect("fixture application");
-    let execution_access_id = ExecutionAccessId::new("execution-access:test").unwrap();
-    application.configure_execution_access(
-        execution_access_id.clone(),
+    let execution_route_id = ExecutionRouteId::new("execution-route:test").unwrap();
+    application.configure_execution_route(
+        crate::application::ExecutionRouteCandidate {
+            route_id: execution_route_id.clone(),
+            account_id: Some(AccountId::new("account-1").unwrap()),
+            segment_key: Some(SegmentKey::new("spot").unwrap()),
+            instrument_id: Some(InstrumentId::new("BTCUSDT").unwrap()),
+            market_id: None,
+            participant_id: "fixture".into(),
+            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
+            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            supported_order_types: vec![crate::application::OrderType::Market],
+            supported_options: Vec::new(),
+            ready: true,
+        },
         ProviderInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "fixture").unwrap(),
             None,
@@ -133,7 +145,7 @@ fn execution_commit_publishes_its_direct_business_event() {
             segment_key: SegmentKey::new("spot").unwrap(),
             instrument_id: InstrumentId::new("BTCUSDT").unwrap(),
             market_id: None,
-            execution_access_id: Some(execution_access_id),
+            execution_route_id: Some(execution_route_id),
             side: DomainOrderSide::Buy,
             order_type: OrderType::Market,
             quantity: Quantity::new(1, 0).unwrap(),

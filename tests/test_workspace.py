@@ -13,22 +13,23 @@ def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> N
     assert 'workspace_id = "demo"' in workspace.paths.manifest.read_text()
     assert workspace.cli_format == "json"
     assert workspace.paths.run.is_dir()
-    assert (
-        workspace.paths.reference_socket().parent
-        == workspace.paths.root / "run" / "reference"
+    logical_reference_socket = (
+        workspace.paths.root / "run" / "reference" / "control.sock"
     )
+    if len(str(logical_reference_socket).encode()) <= 100:
+        assert workspace.paths.reference_socket() == logical_reference_socket
+    else:
+        assert workspace.paths.reference_socket().parent == Path("/tmp")
     assert (
         workspace.paths.account_config()
-        == workspace.paths.root / "accounts" / "accounts.toml"
+        == workspace.paths.root / "config" / "accounts" / "accounts.toml"
     )
     assert (
         workspace.paths.account_state()
         == workspace.paths.root / "state" / "account" / "account-state.json"
     )
     instance = workspace.instance("paper", "demo", "run-001")
-    assert instance.socket("account") == workspace.paths.instance_socket(
-        "paper", "demo", "run-001", "account"
-    )
+    assert instance.socket("account") == instance.paths.process_socket("account")
     assert (
         instance.state("execution", "execution-state.json")
         == instance.root / "state" / "execution" / "execution-state.json"
@@ -42,6 +43,16 @@ def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> N
         == workspace.paths.root / "state" / "account-locks"
     )
     assert workspace.paths.market_connections_root().is_dir()
+    assert workspace.paths.reference_database() == (
+        workspace.paths.root / "state" / "reference" / "reference.sqlite"
+    )
+    assert workspace.paths.orders_root() == (
+        workspace.paths.root / "state" / "execution" / "orders"
+    )
+    assert not (workspace.paths.root / "accounts").exists()
+    assert not (workspace.paths.root / "credentials").exists()
+    assert not (workspace.paths.root / "reference").exists()
+    assert not (workspace.paths.root / "orders").exists()
 
 
 def test_project_init_creates_dot_kairos_resource_layout(tmp_path: Path) -> None:
@@ -54,7 +65,7 @@ def test_project_init_creates_dot_kairos_resource_layout(tmp_path: Path) -> None
     assert workspace.paths.manifest.name == "kairos.toml"
     assert (
         workspace.paths.account_config()
-        == workspace.paths.root / "accounts" / "accounts.toml"
+        == workspace.paths.root / "config" / "accounts" / "accounts.toml"
     )
     assert (
         workspace.paths.account_leases()
@@ -78,7 +89,7 @@ def test_project_init_backtest_template_creates_complete_offline_starter(
 
     assert (project / "kairos_demo" / "strategy.py").is_file()
     assert (project / "KAIROS_QUICKSTART.md").is_file()
-    assert (workspace.paths.root / "accounts" / "demo-paper.toml").is_file()
+    assert (workspace.paths.account_config().parent / "demo-paper.toml").is_file()
     events = workspace.paths.data_root() / "examples" / "demo-market.jsonl"
     assert len(events.read_text(encoding="utf-8").splitlines()) == 5
     launch = workspace.paths.launch_config("demo-backtest")
@@ -275,9 +286,7 @@ def test_instance_workspace_scopes_runtime_resources(tmp_path: Path) -> None:
         / "instances"
         / "run-001"
     )
-    assert instance.socket("market") == workspace.paths.instance_socket(
-        "paper", "btc-sma", "run-001", "market"
-    )
+    assert instance.socket("market") == instance.paths.process_socket("market")
     assert (
         instance.snapshot("market.snapshot")
         == instance.root / "snapshots" / "market.snapshot"
@@ -287,6 +296,14 @@ def test_instance_workspace_scopes_runtime_resources(tmp_path: Path) -> None:
         == instance.root / "state" / "account" / "account-state.json"
     )
     assert instance.root.is_dir()
+    assert instance.paths.root == instance.root
+    assert instance.component_manifest() == instance.root / "manifest.json"
+    assert instance.normalized_config() == instance.root / "config" / "normalized.json"
+    assert instance.lifecycle_journal() == (
+        instance.root / "state" / "launch" / "lifecycle.jsonl"
+    )
+    for legacy_directory in ("sockets", "health", "locks", "checkpoints"):
+        assert not (instance.root / legacy_directory).exists()
     assert (
         instance.market_state("cursor.json")
         == instance.root / "state" / "market" / "cursor.json"
@@ -305,10 +322,10 @@ def test_instance_socket_uses_stable_alias_when_workspace_path_is_too_long(
     workspace = WorkspaceApplication().init(
         tmp_path / ("workspace-" + "x" * 70), workspace_id="long"
     )
-    socket = workspace.paths.instance_socket(
-        "paper", "aapl-paper", "0df2adc3-b650-4a93-aa47-e3f12fc7cd69", "market"
-    )
+    socket = workspace.instance(
+        "paper", "aapl-paper", "0df2adc3-b650-4a93-aa47-e3f12fc7cd69"
+    ).socket("market")
 
     assert socket.parent == Path("/tmp")
-    assert socket.name.startswith("kairos-instance-")
+    assert socket.name.startswith("kairos-process-")
     assert socket.name.endswith("-market.sock")

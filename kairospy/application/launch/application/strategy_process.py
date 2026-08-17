@@ -49,7 +49,7 @@ class StrategyProcessController:
                 return socket
 
         instance_workspace = self.workspace.instance(mode, launch_id, instance_id)
-        log_path = instance_workspace.log("strategy.log")
+        log_path = instance_workspace.log("strategy", "process.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log = log_path.open("ab")
         command = [

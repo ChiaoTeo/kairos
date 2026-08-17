@@ -41,7 +41,7 @@ fn activate_workspace_source(
     source_input_capacity: usize,
 ) -> Result<SourceHandle, String> {
     let credentials_root = workspace
-        .child(&["credentials"])
+        .existing_path(&["config", "credentials"], &["credentials"])
         .map_err(|error| error.to_string())?;
     let market_config = MarketConfig::load(&workspace)?;
     let configured_route_exists = market_config
@@ -84,7 +84,7 @@ fn activate_workspace_source(
     let [(source_id, binding)] = candidates.as_slice() else {
         return Err(if candidates.is_empty() {
             format!(
-                "no Market source supports exchange={} market_type={} asset_type={:?}",
+                "no Market source supports exchange={:?} market_type={} asset_type={:?}",
                 market.exchange_id, market.route.provider_product, market.asset_type
             )
         } else {
@@ -191,6 +191,7 @@ mod manual {
         exchange: &str,
         market_type: &str,
         asset_type: &str,
+        capabilities: impl IntoIterator<Item = crate::ObservationKind>,
         connection: C,
     ) -> Result<(), String> {
         let descriptor = SourceDescriptor::new(
@@ -198,7 +199,8 @@ mod manual {
             kairos_primitives::Exchange::new(exchange).map_err(|error| error.to_string())?,
             market_type,
             Some(asset_type.into()),
-        )?;
+        )?
+        .with_observation_capabilities(capabilities);
         let input_capacity = runtime.source_input_capacity();
         runtime.attach_source(spawn_stream(descriptor, connection, input_capacity))
     }
@@ -215,7 +217,13 @@ mod manual {
             kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
             market_type,
             Some(asset_type.into()),
-        )?;
+        )?
+        .with_observation_capabilities([
+            crate::ObservationKind::Quote,
+            crate::ObservationKind::Trade,
+            crate::ObservationKind::Bar,
+            crate::ObservationKind::OrderBook,
+        ]);
         let input_capacity = runtime.source_input_capacity();
         runtime.attach_source(spawn_stream_with_policy(
             descriptor,
@@ -241,7 +249,15 @@ mod manual {
             kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
             market_type,
             Some(asset_type.into()),
-        )?;
+        )?
+        .with_observation_capabilities(if market_type.eq_ignore_ascii_case("options") {
+            vec![
+                crate::ObservationKind::Quote,
+                crate::ObservationKind::OptionGreeks,
+            ]
+        } else {
+            vec![crate::ObservationKind::Quote]
+        });
         let input_capacity = runtime.source_input_capacity();
         runtime.attach_source(spawn_snapshot(
             descriptor,
@@ -271,7 +287,8 @@ mod manual {
             kairos_primitives::Exchange::new("okx").map_err(|error| error.to_string())?,
             market_type,
             Some(asset_type.into()),
-        )?;
+        )?
+        .with_observation_capabilities([crate::ObservationKind::Quote]);
         let handle = spawn_snapshot(
             descriptor,
             provider.market_snapshot(instrument_type),
@@ -298,6 +315,10 @@ mod manual {
             "okx",
             market_type,
             "crypto",
+            [
+                crate::ObservationKind::Trade,
+                crate::ObservationKind::OrderBook,
+            ],
             provider
                 .live_market(endpoint)
                 .map_err(|error| error.to_string())?,
@@ -321,7 +342,8 @@ mod manual {
             kairos_primitives::Exchange::new("hyperliquid").map_err(|error| error.to_string())?,
             market_type,
             Some("crypto".into()),
-        )?;
+        )?
+        .with_observation_capabilities([crate::ObservationKind::Quote]);
         let handle = spawn_snapshot(
             descriptor,
             provider.market_snapshot(),
@@ -348,6 +370,10 @@ mod manual {
             "hyperliquid",
             market_type,
             "crypto",
+            [
+                crate::ObservationKind::Trade,
+                crate::ObservationKind::OrderBook,
+            ],
             provider
                 .live_market(endpoint)
                 .map_err(|error| error.to_string())?,
@@ -369,7 +395,6 @@ mod manual {
         attach_massive_source_with_id(
             runtime,
             source_id,
-            "massive",
             market_type,
             "equity",
             product,
@@ -378,11 +403,9 @@ mod manual {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn attach_massive_source_with_id(
         runtime: &mut MarketApplication,
         source_id: &str,
-        exchange: &str,
         route_market_type: &str,
         asset_type: &str,
         product: MarketProduct,
@@ -410,12 +433,20 @@ mod manual {
                 },
             )
             .map_err(|error| error.to_string())?;
-        let descriptor = SourceDescriptor::new(
-            SourceId::new(source_id)?,
-            kairos_primitives::Exchange::new(exchange).map_err(|error| error.to_string())?,
-            route_market_type,
-            Some(asset_type.into()),
-        )?;
+        let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
+        descriptor.market_type = Some(
+            kairos_primitives::ProviderProductCode::new(route_market_type)
+                .map_err(|error| error.to_string())?,
+        );
+        descriptor.asset_type = Some(
+            asset_type
+                .parse::<kairos_primitives::AssetClass>()
+                .map_err(|error| error.to_string())?,
+        );
+        let descriptor = descriptor.with_observation_capabilities([
+            crate::ObservationKind::Quote,
+            crate::ObservationKind::Trade,
+        ]);
         let handle = spawn_stream(descriptor, connection, runtime.source_input_capacity());
         runtime.attach_source(handle)
     }

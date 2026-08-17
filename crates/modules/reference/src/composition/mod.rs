@@ -292,10 +292,9 @@ async fn build_default_source(
         ));
     }
 
-    let credentials_root = config
-        .workspace
+    let credentials_root = workspace
         .as_ref()
-        .map(|root| root.join("credentials"));
+        .map(|workspace| workspace.config_root().join("credentials"));
     if !provider_disabled(reference, "okx") {
         for (product, source_id, instrument_type) in [
             ("spot", "okx-spot", OkxInstrumentType::Spot),

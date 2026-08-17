@@ -37,7 +37,7 @@ impl MarketViewKind {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MarketViewKey {
-    pub market_id: String,
+    pub scope_key: String,
     pub source_id: String,
     pub kind: MarketViewKind,
     pub qualifier: Option<String>,
@@ -45,19 +45,19 @@ pub struct MarketViewKey {
 
 impl MarketViewKey {
     pub fn new(
-        market_id: impl Into<String>,
+        scope_key: impl Into<String>,
         source_id: impl Into<String>,
         kind: MarketViewKind,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Self> {
-        let market_id = market_id.into();
+        let scope_key = scope_key.into();
         let source_id = source_id.into();
         let qualifier = qualifier.map(Into::into);
-        if market_id.trim().is_empty() || source_id.trim().is_empty() {
+        if scope_key.trim().is_empty() || source_id.trim().is_empty() {
             return Err(ContractError::Invalid("view identity is incomplete".into()));
         }
         Ok(Self {
-            market_id,
+            scope_key,
             source_id,
             kind,
             qualifier,
@@ -66,8 +66,8 @@ impl MarketViewKey {
 
     pub fn canonical_key(&self) -> String {
         format!(
-            "market={};source={};view={};qualifier={}",
-            self.market_id,
+            "scope={};source={};view={};qualifier={}",
+            self.scope_key,
             self.source_id,
             self.kind.as_str(),
             self.qualifier.as_deref().unwrap_or("")
@@ -82,8 +82,8 @@ impl MarketViewKey {
     pub fn resource_id(&self) -> String {
         let qualifier = self.qualifier.as_deref().unwrap_or("none");
         format!(
-            "market-{}-{}-{}-{}",
-            component(&self.market_id),
+            "scope-{}-{}-{}-{}",
+            component(&self.scope_key),
             component(&self.source_id),
             self.kind.as_str(),
             component(qualifier)

@@ -21,26 +21,25 @@ impl<'a> ::flatbuffers::Follow<'a> for Market<'a> {
 
 impl<'a> Market<'a> {
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MARKET_KEY: ::flatbuffers::VOffsetT = 6;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
-    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_EXCHANGE_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_MARKET_TYPE: ::flatbuffers::VOffsetT = 14;
-    pub const VT_SOURCE_SYMBOL: ::flatbuffers::VOffsetT = 16;
-    pub const VT_BASE_ASSET_ID: ::flatbuffers::VOffsetT = 18;
-    pub const VT_QUOTE_ASSET_ID: ::flatbuffers::VOffsetT = 20;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 22;
-    pub const VT_PRICE_TICK: ::flatbuffers::VOffsetT = 24;
-    pub const VT_QUANTITY_TICK: ::flatbuffers::VOffsetT = 26;
-    pub const VT_PRICE_PRECISION: ::flatbuffers::VOffsetT = 28;
-    pub const VT_QUANTITY_PRECISION: ::flatbuffers::VOffsetT = 30;
-    pub const VT_MINIMUM_QUANTITY: ::flatbuffers::VOffsetT = 32;
-    pub const VT_MINIMUM_NOTIONAL: ::flatbuffers::VOffsetT = 34;
-    pub const VT_CONTRACT_SIZE: ::flatbuffers::VOffsetT = 36;
-    pub const VT_EFFECTIVE_FROM_UNIX_NANOS: ::flatbuffers::VOffsetT = 38;
-    pub const VT_EFFECTIVE_TO_UNIX_NANOS: ::flatbuffers::VOffsetT = 40;
-    pub const VT_ASSET_TYPE: ::flatbuffers::VOffsetT = 42;
-    pub const VT_UNDERLYING_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 44;
+    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_LISTING_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_EXCHANGE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_INSTRUMENT_KIND: ::flatbuffers::VOffsetT = 12;
+    pub const VT_VENUE_SYMBOL: ::flatbuffers::VOffsetT = 14;
+    pub const VT_BASE_ASSET_ID: ::flatbuffers::VOffsetT = 16;
+    pub const VT_QUOTE_ASSET_ID: ::flatbuffers::VOffsetT = 18;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_PRICE_TICK: ::flatbuffers::VOffsetT = 22;
+    pub const VT_QUANTITY_TICK: ::flatbuffers::VOffsetT = 24;
+    pub const VT_PRICE_PRECISION: ::flatbuffers::VOffsetT = 26;
+    pub const VT_QUANTITY_PRECISION: ::flatbuffers::VOffsetT = 28;
+    pub const VT_MINIMUM_QUANTITY: ::flatbuffers::VOffsetT = 30;
+    pub const VT_MINIMUM_NOTIONAL: ::flatbuffers::VOffsetT = 32;
+    pub const VT_CONTRACT_SIZE: ::flatbuffers::VOffsetT = 34;
+    pub const VT_EFFECTIVE_FROM_UNIX_NANOS: ::flatbuffers::VOffsetT = 36;
+    pub const VT_EFFECTIVE_TO_UNIX_NANOS: ::flatbuffers::VOffsetT = 38;
+    pub const VT_ASSET_TYPE: ::flatbuffers::VOffsetT = 40;
+    pub const VT_UNDERLYING_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 42;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -88,11 +87,11 @@ impl<'a> Market<'a> {
         if let Some(x) = args.base_asset_id {
             builder.add_base_asset_id(x);
         }
-        if let Some(x) = args.source_symbol {
-            builder.add_source_symbol(x);
+        if let Some(x) = args.venue_symbol {
+            builder.add_venue_symbol(x);
         }
-        if let Some(x) = args.market_type {
-            builder.add_market_type(x);
+        if let Some(x) = args.instrument_kind {
+            builder.add_instrument_kind(x);
         }
         if let Some(x) = args.exchange_id {
             builder.add_exchange_id(x);
@@ -102,9 +101,6 @@ impl<'a> Market<'a> {
         }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
-        }
-        if let Some(x) = args.market_key {
-            builder.add_market_key(x);
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
@@ -121,17 +117,6 @@ impl<'a> Market<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_MARKET_ID, None)
-                .unwrap()
-        }
-    }
-    #[inline]
-    pub fn market_key(&self) -> &'a str {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_MARKET_KEY, None)
                 .unwrap()
         }
     }
@@ -168,25 +153,24 @@ impl<'a> Market<'a> {
         }
     }
     #[inline]
-    pub fn market_type(&self) -> &'a str {
+    pub fn instrument_kind(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_MARKET_TYPE, None)
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_INSTRUMENT_KIND, None)
                 .unwrap()
         }
     }
     #[inline]
-    pub fn source_symbol(&self) -> &'a str {
+    pub fn venue_symbol(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_SOURCE_SYMBOL, None)
-                .unwrap()
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Market::VT_VENUE_SYMBOL, None)
         }
     }
     #[inline]
@@ -354,11 +338,6 @@ impl ::flatbuffers::Verifiable for Market<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_key",
-                Self::VT_MARKET_KEY,
-                true,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "instrument_id",
                 Self::VT_INSTRUMENT_ID,
                 true,
@@ -374,14 +353,14 @@ impl ::flatbuffers::Verifiable for Market<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_type",
-                Self::VT_MARKET_TYPE,
+                "instrument_kind",
+                Self::VT_INSTRUMENT_KIND,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "source_symbol",
-                Self::VT_SOURCE_SYMBOL,
-                true,
+                "venue_symbol",
+                Self::VT_VENUE_SYMBOL,
+                false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "base_asset_id",
@@ -447,12 +426,11 @@ impl ::flatbuffers::Verifiable for Market<'_> {
 }
 pub struct MarketArgs<'a> {
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub listing_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub exchange_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_type: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub source_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub instrument_kind: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub venue_symbol: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub base_asset_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub quote_asset_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: ReferenceLifecycleStatus,
@@ -473,12 +451,11 @@ impl<'a> Default for MarketArgs<'a> {
     fn default() -> Self {
         MarketArgs {
             market_id: None,     // required field
-            market_key: None,    // required field
             instrument_id: None, // required field
             listing_id: None,
-            exchange_id: None,   // required field
-            market_type: None,   // required field
-            source_symbol: None, // required field
+            exchange_id: None,     // required field
+            instrument_kind: None, // required field
+            venue_symbol: None,
             base_asset_id: None,
             quote_asset_id: None,
             status: ReferenceLifecycleStatus::UNSPECIFIED,
@@ -508,11 +485,6 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarketBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Market::VT_MARKET_ID, market_id);
     }
     #[inline]
-    pub fn add_market_key(&mut self, market_key: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Market::VT_MARKET_KEY, market_key);
-    }
-    #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             Market::VT_INSTRUMENT_ID,
@@ -530,16 +502,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarketBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Market::VT_EXCHANGE_ID, exchange_id);
     }
     #[inline]
-    pub fn add_market_type(&mut self, market_type: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Market::VT_MARKET_TYPE, market_type);
+    pub fn add_instrument_kind(&mut self, instrument_kind: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Market::VT_INSTRUMENT_KIND,
+            instrument_kind,
+        );
     }
     #[inline]
-    pub fn add_source_symbol(&mut self, source_symbol: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            Market::VT_SOURCE_SYMBOL,
-            source_symbol,
-        );
+    pub fn add_venue_symbol(&mut self, venue_symbol: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Market::VT_VENUE_SYMBOL, venue_symbol);
     }
     #[inline]
     pub fn add_base_asset_id(&mut self, base_asset_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -662,13 +634,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> MarketBuilder<'a, 'b, A> {
     pub fn finish(self) -> ::flatbuffers::WIPOffset<Market<'a>> {
         let o = self.fbb_.end_table(self.start_);
         self.fbb_.required(o, Market::VT_MARKET_ID, "market_id");
-        self.fbb_.required(o, Market::VT_MARKET_KEY, "market_key");
         self.fbb_
             .required(o, Market::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, Market::VT_EXCHANGE_ID, "exchange_id");
-        self.fbb_.required(o, Market::VT_MARKET_TYPE, "market_type");
         self.fbb_
-            .required(o, Market::VT_SOURCE_SYMBOL, "source_symbol");
+            .required(o, Market::VT_INSTRUMENT_KIND, "instrument_kind");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -677,12 +647,11 @@ impl ::core::fmt::Debug for Market<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("Market");
         ds.field("market_id", &self.market_id());
-        ds.field("market_key", &self.market_key());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("listing_id", &self.listing_id());
         ds.field("exchange_id", &self.exchange_id());
-        ds.field("market_type", &self.market_type());
-        ds.field("source_symbol", &self.source_symbol());
+        ds.field("instrument_kind", &self.instrument_kind());
+        ds.field("venue_symbol", &self.venue_symbol());
         ds.field("base_asset_id", &self.base_asset_id());
         ds.field("quote_asset_id", &self.quote_asset_id());
         ds.field("status", &self.status());

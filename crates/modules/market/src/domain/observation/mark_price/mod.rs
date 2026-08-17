@@ -1,9 +1,9 @@
-use kairos_primitives::{InstrumentId, MarketId, Price, Rate, UnixNanos};
+use kairos_primitives::{InstrumentId, Price, Rate, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarkPrice {
-    pub market_id: MarketId,
+    pub scope: super::ObservationScope,
     pub instrument_id: InstrumentId,
     pub mark_price: Price,
     pub index_price: Option<Price>,

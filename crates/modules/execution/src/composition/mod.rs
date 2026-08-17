@@ -18,10 +18,11 @@ pub use crate::services::risk::{SimulatedRiskBehavior, SimulatedRiskReconciliati
 pub use connections::{
     compose_direct_execution_connections, compose_execution_connections, compose_execution_routes,
     compose_execution_stream, compose_order_entry, compose_order_query,
-    load_reference_execution_accesses, DirectExecutionConnections, DirectExecutionRuntime,
-    ExecutionAsyncEventSource, ExecutionAsyncOrderEntry, ExecutionAsyncOrderEntryRoutes,
-    ExecutionAsyncOrderQuery, ExecutionAsyncOrderQueryRoutes, ExecutionConnectionOptions,
-    ExecutionConnections, ExecutionWriterFence, SimulatedOrderEntry,
+    load_execution_routes_from_reference_markets, DirectExecutionConnections,
+    DirectExecutionRuntime, ExecutionAsyncEventSource, ExecutionAsyncOrderEntry,
+    ExecutionAsyncOrderEntryRoutes, ExecutionAsyncOrderQuery, ExecutionAsyncOrderQueryRoutes,
+    ExecutionConnectionOptions, ExecutionConnections, ExecutionInstrumentRoute,
+    ExecutionWriterFence, SimulatedOrderEntry,
 };
 pub use dependencies::{configure_execution_dependencies, configure_simulated_risk};
 pub use persistence::{FileExecutionStore, MemoryStateStore, SqlxExecutionStore};

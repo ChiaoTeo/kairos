@@ -12,10 +12,10 @@ pub struct SubmitOrder {
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
-    /// Explicit Reference ExecutionAccess selected by planning or the caller.
+    /// Explicit Execution route selected by planning or the caller.
     /// Execution never derives provider identity from a MarketId or symbol.
     #[serde(default)]
-    pub execution_access_id: Option<ExecutionAccessId>,
+    pub execution_route_id: Option<ExecutionRouteId>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Quantity,
@@ -101,6 +101,14 @@ pub struct ExecutionFillReport {
     pub occurred_at_unix_nanos: Option<UnixNanos>,
     #[serde(default)]
     pub execution_market_id: Option<MarketId>,
+    #[serde(default)]
+    pub reported_provider_id: Option<String>,
+    #[serde(default)]
+    pub provider_product: Option<kairos_primitives::ProviderProductCode>,
+    #[serde(default)]
+    pub provider_symbol: Option<kairos_primitives::ProviderSymbol>,
+    #[serde(default)]
+    pub remote_order_id: Option<RemoteOrderId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -112,7 +120,7 @@ pub struct ExecuteStrategyIntent {
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
     #[serde(default)]
-    pub execution_access_id: Option<ExecutionAccessId>,
+    pub execution_route_id: Option<ExecutionRouteId>,
     pub account_ids: Vec<AccountId>,
     pub segment_key: SegmentKey,
     pub target_quantity: Quantity,
@@ -150,7 +158,7 @@ impl Default for ExecuteStrategyIntent {
             instrument_id: InstrumentId::new("instrument:default")
                 .expect("valid default instrument ID"),
             market_id: None,
-            execution_access_id: None,
+            execution_route_id: None,
             account_ids: Vec::new(),
             segment_key: SegmentKey::new("segment:default").expect("valid default segment key"),
             target_quantity: Quantity::new(0, 0).expect("valid default quantity"),
@@ -183,7 +191,7 @@ pub struct IntentLegRequest {
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
     #[serde(default)]
-    pub execution_access_id: Option<ExecutionAccessId>,
+    pub execution_route_id: Option<ExecutionRouteId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub limit_price: Option<Price>,

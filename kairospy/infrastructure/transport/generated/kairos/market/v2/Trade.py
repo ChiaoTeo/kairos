@@ -32,10 +32,14 @@ class Trade(object):
         return None
 
     # Trade
-    def MarketId(self):
+    def Scope(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
-            return self._tab.String(o + self._tab.Pos)
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.market.v2.ObservationScope import ObservationScope
+            obj = ObservationScope()
+            obj.Init(self._tab.Bytes, x)
+            return obj
         return None
 
     # Trade
@@ -82,21 +86,56 @@ class Trade(object):
         return 0
 
     # Trade
-    def SourceObservedAtUnixNanos(self):
+    def VenueCode(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Trade
+    def Tape(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
+        return 0
+
+    # Trade
+    def TrfId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint32Flags, o + self._tab.Pos)
+        return 0
+
+    # Trade
+    def ParticipantTimestampUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Trade
+    def TrfTimestampUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Trade
+    def SourceObservedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Trade
     def ReceivedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def TradeStart(builder):
-    builder.StartObject(9)
+    builder.StartObject(14)
 
 def Start(builder):
     TradeStart(builder)
@@ -107,11 +146,11 @@ def TradeAddTradeId(builder, tradeId):
 def AddTradeId(builder, tradeId):
     TradeAddTradeId(builder, tradeId)
 
-def TradeAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+def TradeAddScope(builder, scope):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(scope), 0)
 
-def AddMarketId(builder, marketId):
-    TradeAddMarketId(builder, marketId)
+def AddScope(builder, scope):
+    TradeAddScope(builder, scope)
 
 def TradeAddInstrumentId(builder, instrumentId):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
@@ -143,14 +182,44 @@ def TradeAddAggressorSide(builder, aggressorSide):
 def AddAggressorSide(builder, aggressorSide):
     TradeAddAggressorSide(builder, aggressorSide)
 
+def TradeAddVenueCode(builder, venueCode):
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(venueCode), 0)
+
+def AddVenueCode(builder, venueCode):
+    TradeAddVenueCode(builder, venueCode)
+
+def TradeAddTape(builder, tape):
+    builder.PrependUint32Slot(8, tape, 0)
+
+def AddTape(builder, tape):
+    TradeAddTape(builder, tape)
+
+def TradeAddTrfId(builder, trfId):
+    builder.PrependUint32Slot(9, trfId, 0)
+
+def AddTrfId(builder, trfId):
+    TradeAddTrfId(builder, trfId)
+
+def TradeAddParticipantTimestampUnixNanos(builder, participantTimestampUnixNanos):
+    builder.PrependUint64Slot(10, participantTimestampUnixNanos, 0)
+
+def AddParticipantTimestampUnixNanos(builder, participantTimestampUnixNanos):
+    TradeAddParticipantTimestampUnixNanos(builder, participantTimestampUnixNanos)
+
+def TradeAddTrfTimestampUnixNanos(builder, trfTimestampUnixNanos):
+    builder.PrependUint64Slot(11, trfTimestampUnixNanos, 0)
+
+def AddTrfTimestampUnixNanos(builder, trfTimestampUnixNanos):
+    TradeAddTrfTimestampUnixNanos(builder, trfTimestampUnixNanos)
+
 def TradeAddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos):
-    builder.PrependUint64Slot(7, sourceObservedAtUnixNanos, 0)
+    builder.PrependUint64Slot(12, sourceObservedAtUnixNanos, 0)
 
 def AddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos):
     TradeAddSourceObservedAtUnixNanos(builder, sourceObservedAtUnixNanos)
 
 def TradeAddReceivedAtUnixNanos(builder, receivedAtUnixNanos):
-    builder.PrependUint64Slot(8, receivedAtUnixNanos, 0)
+    builder.PrependUint64Slot(13, receivedAtUnixNanos, 0)
 
 def AddReceivedAtUnixNanos(builder, receivedAtUnixNanos):
     TradeAddReceivedAtUnixNanos(builder, receivedAtUnixNanos)

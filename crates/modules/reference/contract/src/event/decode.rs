@@ -6,10 +6,6 @@ pub enum ReferenceEvent<'a> {
     EntityUpdated(fb::EntityUpdated<'a>),
     AssetUpserted(fb::AssetUpserted<'a>),
     AssetUpdated(fb::AssetUpdated<'a>),
-    ExecutionAccessUpserted(fb::ExecutionAccessUpserted<'a>),
-    ExecutionAccessUpdated(fb::ExecutionAccessUpdated<'a>),
-    MarketDataAccessUpserted(fb::MarketDataAccessUpserted<'a>),
-    MarketDataAccessUpdated(fb::MarketDataAccessUpdated<'a>),
     InstrumentUpserted(fb::InstrumentUpserted<'a>),
     InstrumentUpdated(fb::InstrumentUpdated<'a>),
     ListingUpserted(fb::ListingUpserted<'a>),
@@ -47,26 +43,6 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ReferenceEvent<'_>> {
         asset_updated_buffer_has_identifier,
         root_as_asset_updated,
         AssetUpdated
-    );
-    decode!(
-        execution_access_upserted_buffer_has_identifier,
-        root_as_execution_access_upserted,
-        ExecutionAccessUpserted
-    );
-    decode!(
-        execution_access_updated_buffer_has_identifier,
-        root_as_execution_access_updated,
-        ExecutionAccessUpdated
-    );
-    decode!(
-        market_data_access_upserted_buffer_has_identifier,
-        root_as_market_data_access_upserted,
-        MarketDataAccessUpserted
-    );
-    decode!(
-        market_data_access_updated_buffer_has_identifier,
-        root_as_market_data_access_updated,
-        MarketDataAccessUpdated
     );
     decode!(
         instrument_upserted_buffer_has_identifier,

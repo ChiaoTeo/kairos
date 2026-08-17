@@ -26,18 +26,27 @@ pub(crate) struct MassiveHistoricalBar {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MassiveHistoricalQuote {
     pub(crate) sip_timestamp_unix_nanos: u64,
+    pub(crate) participant_timestamp_unix_nanos: Option<u64>,
     pub(crate) bid_price: Option<String>,
     pub(crate) bid_size: Option<String>,
+    pub(crate) bid_exchange: Option<String>,
     pub(crate) ask_price: Option<String>,
     pub(crate) ask_size: Option<String>,
+    pub(crate) ask_exchange: Option<String>,
+    pub(crate) tape: Option<u32>,
     pub(crate) sequence_number: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MassiveHistoricalTrade {
     pub(crate) sip_timestamp_unix_nanos: u64,
+    pub(crate) participant_timestamp_unix_nanos: Option<u64>,
+    pub(crate) trf_timestamp_unix_nanos: Option<u64>,
     pub(crate) price: String,
     pub(crate) size: String,
+    pub(crate) exchange: Option<String>,
+    pub(crate) tape: Option<u32>,
+    pub(crate) trf_id: Option<u32>,
     pub(crate) sequence_number: Option<u64>,
 }
 
@@ -851,10 +860,19 @@ fn massive_historical_quote(value: &Value) -> Result<MassiveHistoricalQuote, Str
             .get("sip_timestamp")
             .and_then(Value::as_u64)
             .ok_or_else(|| "Massive historical quote has no sip_timestamp".to_string())?,
+        participant_timestamp_unix_nanos: value
+            .get("participant_timestamp")
+            .and_then(Value::as_u64),
         bid_price: value_text(value, "bid_price"),
         bid_size: value_text(value, "bid_size"),
+        bid_exchange: value_text(value, "bid_exchange"),
         ask_price: value_text(value, "ask_price"),
         ask_size: value_text(value, "ask_size"),
+        ask_exchange: value_text(value, "ask_exchange"),
+        tape: value
+            .get("tape")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
         sequence_number: value.get("sequence_number").and_then(Value::as_u64),
     })
 }
@@ -865,10 +883,23 @@ fn massive_historical_trade(value: &Value) -> Result<MassiveHistoricalTrade, Str
             .get("sip_timestamp")
             .and_then(Value::as_u64)
             .ok_or_else(|| "Massive historical trade has no sip_timestamp".to_string())?,
+        participant_timestamp_unix_nanos: value
+            .get("participant_timestamp")
+            .and_then(Value::as_u64),
+        trf_timestamp_unix_nanos: value.get("trf_timestamp").and_then(Value::as_u64),
         price: value_text(value, "price")
             .ok_or_else(|| "Massive historical trade has no price".to_string())?,
         size: value_text(value, "size")
             .ok_or_else(|| "Massive historical trade has no size".to_string())?,
+        exchange: value_text(value, "exchange"),
+        tape: value
+            .get("tape")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+        trf_id: value
+            .get("trf_id")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
         sequence_number: value.get("sequence_number").and_then(Value::as_u64),
     })
 }
@@ -1040,7 +1071,8 @@ fn date_to_unix_nanos(value: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        equity_rows_from_payload, private_next_url, rows_from_payload, MassiveAsyncRestClient,
+        equity_rows_from_payload, massive_historical_trade, private_next_url, rows_from_payload,
+        MassiveAsyncRestClient,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1188,7 +1220,7 @@ mod tests {
             assert!(request
                 .to_ascii_lowercase()
                 .contains("authorization: bearer test-secret\r\n"));
-            let body = r#"{"results":[{"bid_price":1.1,"bid_size":2,"ask_price":1.2,"ask_size":3,"sequence_number":7,"sip_timestamp":150}]}"#;
+            let body = r#"{"results":[{"bid_price":1.1,"bid_size":2,"bid_exchange":301,"ask_price":1.2,"ask_size":3,"ask_exchange":302,"participant_timestamp":140,"sequence_number":7,"sip_timestamp":150,"tape":3}]}"#;
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -1210,6 +1242,35 @@ mod tests {
         assert_eq!(rows[0].ask_size.as_deref(), Some("3"));
         assert_eq!(rows[0].sequence_number, Some(7));
         assert_eq!(rows[0].sip_timestamp_unix_nanos, 150);
+        assert_eq!(rows[0].participant_timestamp_unix_nanos, Some(140));
+        assert_eq!(rows[0].bid_exchange.as_deref(), Some("301"));
+        assert_eq!(rows[0].ask_exchange.as_deref(), Some("302"));
+        assert_eq!(rows[0].tape, Some(3));
+    }
+
+    #[test]
+    fn historical_trade_preserves_exchange_tape_and_trf_evidence() {
+        let row = massive_historical_trade(&serde_json::json!({
+            "price": 306.64,
+            "size": 1,
+            "exchange": 4,
+            "tape": 3,
+            "trf_id": 202,
+            "participant_timestamp": 1786970875219715143_u64,
+            "sip_timestamp": 1786970875220887116_u64,
+            "trf_timestamp": 1786970875220868005_u64,
+            "sequence_number": 353918
+        }))
+        .unwrap();
+
+        assert_eq!(row.exchange.as_deref(), Some("4"));
+        assert_eq!(row.tape, Some(3));
+        assert_eq!(row.trf_id, Some(202));
+        assert_eq!(
+            row.participant_timestamp_unix_nanos,
+            Some(1786970875219715143)
+        );
+        assert_eq!(row.trf_timestamp_unix_nanos, Some(1786970875220868005));
     }
 
     #[test]

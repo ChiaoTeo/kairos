@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, cast
 
 from ...data import DatasetSetRef
+from ...workspace import ResourceScopePaths
 from .semantics import OptionBacktestConstraints
 
 
@@ -47,6 +48,7 @@ class LaunchPlan:
     strategy_ref: str
     strategy_params: Mapping[str, Any]
     account_refs: tuple[str, ...]
+    required_account_segments: Mapping[str, tuple[str, ...]]
     execution: Mapping[str, Any]
     mode_config: Mapping[str, Any]
     market_scope: str
@@ -76,6 +78,10 @@ class LaunchPlan:
                     },
                     "strategy": {"params": dict(self.strategy_params)},
                     "accounts": list(self.account_refs),
+                    "account_requirements": {
+                        account_id: {"required_segments": list(segments)}
+                        for account_id, segments in self.required_account_segments.items()
+                    },
                     "execution": dict(self.execution),
                     self.mode: dict(self.mode_config),
                     "market_scope": self.market_scope,
@@ -189,6 +195,47 @@ class LaunchConfig:
                     continue
                 refs.append(_text(value["ref"], f"accounts.{alias}.ref"))
         return tuple(dict.fromkeys(refs))
+
+    @property
+    def required_account_segments(self) -> Mapping[str, tuple[str, ...]]:
+        requirements: dict[str, list[str]] = {}
+
+        def include(account_id: str, value: object, name: str) -> None:
+            if value is None:
+                return
+            if not isinstance(value, list) or any(
+                not isinstance(segment, str) or not segment.strip() for segment in value
+            ):
+                raise LaunchConfigError(f"{name} must be an array of segment names")
+            selected = requirements.setdefault(account_id, [])
+            selected.extend(segment.strip() for segment in value)
+
+        account = _optional_table(self.values.get("account"), "account")
+        if self.account_ref is not None and account.get("enabled", True):
+            include(
+                self.account_ref,
+                account.get("required_segments"),
+                "account.required_segments",
+            )
+        accounts = self.values.get("accounts")
+        if isinstance(accounts, Mapping):
+            for alias, value in accounts.items():
+                if (
+                    not isinstance(value, Mapping)
+                    or "ref" not in value
+                    or not value.get("enabled", True)
+                ):
+                    continue
+                account_id = _text(value["ref"], f"accounts.{alias}.ref")
+                include(
+                    account_id,
+                    value.get("required_segments"),
+                    f"accounts.{alias}.required_segments",
+                )
+        return {
+            account_id: tuple(dict.fromkeys(segments))
+            for account_id, segments in requirements.items()
+        }
 
     @property
     def strategy_params(self) -> Mapping[str, Any]:
@@ -337,6 +384,7 @@ class LaunchConfig:
             strategy_ref=self.strategy or "",
             strategy_params=dict(self.strategy_params),
             account_refs=self.account_refs,
+            required_account_segments=self.required_account_segments,
             execution=execution,
             mode_config=mode_config,
             market_scope=market_scope,
@@ -412,6 +460,7 @@ class LaunchConfig:
                         issues.append(f"accounts.{alias}.ref is required")
         try:
             account_refs = self.account_refs
+            self.required_account_segments
         except LaunchConfigError as error:
             issues.append(str(error))
             account_refs = ()
@@ -734,8 +783,9 @@ class LaunchEnvironment:
             raise LaunchConfigError("launch instance id is required")
         group = root / "launches" / config.mode / config.launch_id
         instance = group / "instances" / instance_id
-        normalized_path = instance / "normalized-config.json"
-        instance.mkdir(parents=True, exist_ok=True)
+        paths = ResourceScopePaths(instance)
+        normalized_path = paths.config / "normalized.json"
+        normalized_path.parent.mkdir(parents=True, exist_ok=True)
         normalized_path.write_text(
             json.dumps(config.plan().normalized(), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

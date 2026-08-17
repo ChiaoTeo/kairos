@@ -78,6 +78,8 @@ from kairospy.application.market import (
     GreeksEvent,
     MarketApplication,
     MarketEvent,
+    ObservationScope,
+    ObservationScopeKind,
     OptionGreeks,
     Quote,
     QuoteEvent,
@@ -87,11 +89,16 @@ from kairospy.application.market import (
 )
 from kairospy.application.reference import (
     AmbiguousReferenceError,
+    Asset,
+    Entity,
+    Instrument,
     InstrumentRef,
+    Listing,
     Market,
     MarketStatus,
     ReferenceApplication,
     ReferenceNotFoundError,
+    ReferenceStatus,
     TradingRules,
 )
 from kairospy.application.risk import (

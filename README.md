@@ -305,19 +305,30 @@ class QuoteStrategy(Strategy):
 mode 由 launch 配置和 instance identity 决定，查询、日志和停止命令不需要重复传入
 `--mode`；`system list` 和 `system logs` 适合进一步排查单个底层进程。
 
-Rust 业务 server 的运行日志统一输出为 JSONL，并由 system supervisor 写入
-`logs/processes/<component>.log`（实例模式下位于对应 instance 的日志目录）。日志会记录
-进程生命周期、控制请求、业务用例结果、状态变化、持久化和快照发布等关键节点；业务 stdout
-仍只保留 CLI 的机器可读结果。直接运行 server 时日志输出到 stderr。排查时可以用
+Rust 业务 server 的运行日志统一输出为 JSONL，并由 Workspace/System 日志 sink 写入
+`logs/<component>/process.log`（实例模式下使用相同的相对目录）。每次进程启动
+生成独立 `run_id` 并把上一次活动文件滚动为编号备份；单文件默认上限 20 MiB，保留 5 份。
+tracing JSON 会补齐 component、run_id 和 pid，panic、参数解析错误及其他普通 stderr 会包装成
+`process_output` 事件，因此活动文件保持严格 JSONL。成功的 health 请求属于 DEBUG，拒绝、
+超时和服务端错误仍会进入 WARN/ERROR。SQLx 完整 statement 默认只在 ERROR 或显式
+`RUST_LOG` 诊断时输出。直接运行 server 时日志仍输出到 stderr。排查时可以用
 `RUST_LOG=debug` 临时打开更细的 poll、行情和内部事件日志，例如：
 
 ```bash
 RUST_LOG=debug kairos-market-server ...
 ```
 
+可以按当前进程、时间、级别、事件或 provider 查询结构化日志：
+
+```bash
+uv run kairospy system logs --component reference --current-run --since 10m --level warn
+uv run kairospy system logs --component reference --event reference_provider_unavailable --provider massive-equity
+uv run kairospy system logs --component reference --lines 0 --follow
+```
+
 同一个 `launch_id` 同时只允许一个运行中的 instance。`attach` 会自动解析当前
 运行实例，并显示策略状态、实例身份以及最近的策略 stdout/stderr；完整输出保存在
-`.kairos/logs/launches/<mode>/<launch-id>/<instance-id>/strategy.log`。
+`.kairos/launches/<mode>/<launch-id>/instances/<instance-id>/logs/strategy/process.log`。
 
 策略日志为 JSONL。每条记录都会包含 `system_time`；处理行情事件时还会包含
 `event_time`、`event_time_source=market_event` 和 `event_sequence`。策略代码应使用
@@ -395,8 +406,46 @@ uv run kairospy reference refresh --workspace my-project --format json
 uv run kairospy reference events --sequence-from 1 --limit 100 --workspace my-project --format json
 uv run kairospy reference markets --exchange binance --active-only --workspace my-project
 uv run kairospy reference markets --symbol BTCUSDT --workspace my-project --format json
+uv run kairospy reference instruments --symbol AAPL --instrument-type equity --workspace my-project --format json
+uv run kairospy reference listings --instrument-id instrument:equity:US:AAPL:common --workspace my-project
+uv run kairospy reference market-data-accesses --market-id market:exchange:nasdaq:equity:AAPL --active-only --workspace my-project
+uv run kairospy reference option-chain --underlying instrument:equity:US:AAPL:common --option-right call --limit 100 --workspace my-project
 uv run kairospy reference catalog --workspace my-project --format json
 ```
+
+`markets`、`assets`、`entities`、`instruments`、`listings`、`execution-accesses`
+和 `market-data-accesses` 都支持服务端 SQLite 过滤以及 `--limit/--offset` 分页；ID
+选项可以重复传入完成批量查询。查询只通过 contract-owned read-only client 访问投影，不向
+策略或 CLI 暴露表结构和可写 SQL。
+
+策略通过 `ctx.reference` 使用同一查询语义。单次查询读取最新已提交 generation；一个决策
+需要组合多类 Reference 记录时，应使用 snapshot，使所有读取固定在同一 SQLite 只读事务：
+
+```python
+with ctx.reference.snapshot() as ref:
+    market = ref.require_market(market_id)
+    instrument = ref.require_instrument(market.instrument.id)
+    if market.listing_id is None:
+        raise RuntimeError(f"market has no listing: {market.id}")
+    listing = ref.require_listing(market.listing_id)
+    market_data = ref.market_data_accesses(market_id=market.id)
+    execution = ref.execution_accesses(market_id=market.id)
+    ctx.logger.info(
+        "reference_selected",
+        generation=ref.generation,
+        event_sequence=ref.event_sequence,
+        instrument_id=str(instrument.id),
+        listing_id=str(listing.id),
+        market_data_routes=len(market_data),
+        execution_routes=len(execution),
+    )
+```
+
+还可使用 `find_assets`、`find_entities`、`find_instruments`、`find_listings`、
+`find_markets` 和 `option_chain`。单记录查询提供 `asset/require_asset`、
+`instrument/require_instrument`、`listing/require_listing`、`market/require_market` 以及两类
+access 的可空和 require 版本；`require_*` 在缺失或结果不唯一时返回明确异常。
+查询边界、ownership 和一致性约束见 `docs/reference-query-design.md`。
 
 需要同时验收 Massive 时使用 `reference validate --require-massive`；缺失或不健康的
 Massive source 会让命令返回非零。实时 Aeron 推送可在另一个终端用
@@ -423,7 +472,7 @@ CLI 层级约定：
 - `AccountSegment` 表示该账户内的一个具体资金/交易分区，例如 `binance:remote:spot` 或 `binance:remote:usd_m_futures`。
 
 账户管理配置由 workspace 账户应用统一持有：账户目录写入
-账户配置按记录写入 `accounts/*.toml`，凭据元数据写入 `credentials/*.toml`；配置只使用 TOML，JSON 仅用于结构化输出和运行态状态。运行态状态、快照、日志和交易租约分别位于 `state/account/`、`logs/account/` 与 `state/account-locks/`。应用不会创建 Binance 账户：
+账户配置按记录写入 `config/accounts/*.toml`，凭据元数据写入 `config/credentials/*.toml`；配置只使用 TOML，JSON 仅用于结构化输出和运行态状态。运行态状态、快照、日志和交易租约分别位于 `state/account/`、`snapshots/account/`、`logs/account/` 与 `state/account-locks/`。应用不会创建 Binance 账户：
 
 ```toml
 [accounts.main]

@@ -194,5 +194,6 @@ fn order_event(order: &ExecutionOrder, occurred_at: u64, reason: String) -> Exec
         reason,
         fill_id: None,
         filled_quantity: None,
+        attempt: order.attempts.last().cloned(),
     }
 }

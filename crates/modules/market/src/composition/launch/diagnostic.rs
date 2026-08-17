@@ -17,6 +17,12 @@ pub fn attach_binance_spot_source(
         "binance",
         "spot",
         "crypto",
+        [
+            crate::ObservationKind::Quote,
+            crate::ObservationKind::Trade,
+            crate::ObservationKind::Bar,
+            crate::ObservationKind::OrderBook,
+        ],
         binance::spot_websocket_market(endpoint).map_err(|error| error.to_string())?,
     )
 }

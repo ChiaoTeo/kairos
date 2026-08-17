@@ -103,15 +103,16 @@ Update this section whenever upstream source or tests are actually reused:
   - `/api/v3/time` can arrive through a high-latency network path. Signed queries calibrate a
     conservative provider clock, and only semantically safe queries retry once after Binance
     `-1021`; submit/cancel commands are never transparently retried.
-  - although the Binance WebSocket API documentation describes request `id` as arbitrary, the
-    production gateway used in acceptance disconnected signed user-data subscriptions whose IDs
-    contained `.` or `:`. Adapter-generated subscription IDs therefore use a bounded ASCII
-    alphanumeric/hyphen subset. The same credential and payload returned `status=200` and a
-    `subscriptionId` after this normalization.
+  - WebSocket string request IDs are limited to 36 characters. The production gateway used in
+    acceptance also disconnected signed user-data subscriptions whose IDs contained `.` or `:`.
+    Adapter-generated subscription IDs therefore use an ASCII alphanumeric/hyphen subset, retain
+    the channel-epoch suffix, and are truncated to 36 characters. The Account binding
+    `account.binance.spot.account-events` exposed the length bug because its normalized ID was
+    longer than the isolated contract-test ID.
 - The ignored `live_hmac_user_data_subscription_connects` contract test exercises the real HMAC
   user-data subscription only when credentials are supplied explicitly. It performs no order
   command.
-- A `.kairos` diagnostic Account instance reached `ready` with an authenticated, healthy required
-  Binance Spot channel and a completed initial snapshot. A credential binding declared
+- A `.kairos` diagnostic Account instance reached `ready` with authenticated Spot and USD-M
+  channels plus a current Funding snapshot in the same Account Actor. A credential binding declared
   `role=readonly` remains non-trading even if remote credential inspection reports trade
   permission, and such an observer does not require a trade lease.

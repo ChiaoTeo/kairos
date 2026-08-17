@@ -511,7 +511,6 @@ pub(super) fn massive_provider_catalog(
     catalog
         .markets
         .dedup_by(|left, right| left.market_id == right.market_id);
-    populate_market_data_accesses(&mut catalog, "massive")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -522,13 +521,15 @@ fn append_massive_instrument(
 ) -> ReferenceResult<()> {
     let source_symbol = value.source_symbol.as_str().to_ascii_uppercase();
     let exchange_id = massive_exchange_id(value.source_venue.as_deref());
-    catalog.entities.push(Entity {
-        entity_id: exchange_id.clone(),
-        entity_type: "exchange".into(),
-        name: massive_exchange_name(&exchange_id).into(),
-        status: "active".into(),
-        source_id: None,
-    });
+    if let Some(exchange_id) = exchange_id.as_deref() {
+        catalog.entities.push(Entity {
+            entity_id: exchange_id.into(),
+            entity_type: "exchange".into(),
+            name: massive_exchange_name(exchange_id).into(),
+            status: "active".into(),
+            source_id: None,
+        });
+    }
     let quote = value
         .quote_currency
         .as_ref()
@@ -539,7 +540,7 @@ fn append_massive_instrument(
     let (family, instrument_id, symbol, underlying_id) = match value.kind {
         ExternalInstrumentKind::Equity => {
             let ticker = source_symbol.clone();
-            ensure_massive_underlying(catalog, &ticker, &quote, &exchange_id, status)?;
+            ensure_massive_underlying(catalog, &ticker, &quote, status)?;
             (
                 "equity",
                 format!("instrument:equity:US:{ticker}:common"),
@@ -555,7 +556,7 @@ fn append_massive_instrument(
                 .ok_or_else(|| {
                     ReferenceError::Provider("Massive option underlying is missing".into())
                 })?;
-            ensure_massive_underlying(catalog, &underlying, &quote, &exchange_id, status)?;
+            ensure_massive_underlying(catalog, &underlying, &quote, status)?;
             let expiry = canonical_expiry(value.expiry_unix_nanos)?;
             let strike = value.strike.as_deref().ok_or_else(|| {
                 ReferenceError::Provider("Massive option strike is missing".into())
@@ -591,20 +592,9 @@ fn append_massive_instrument(
         }
     };
     let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_primitives::ListingId::new(if family == "equity" {
-        format!("listing:{exchange_id}:equity:{source_symbol}:{quote}")
-    } else {
-        format!("listing:massive:options:{source_symbol}")
-    })?;
-    let market_id = kairos_primitives::MarketId::new(if family == "equity" {
-        format!("market:{exchange_id}:equity:{source_symbol}")
-    } else {
-        format!("market:massive:options:{source_symbol}")
-    })?;
-    let exchange = kairos_primitives::Exchange::new(exchange_id.clone())?;
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_primitives::Symbol::new(symbol)?,
+        symbol: kairos_primitives::Symbol::new(symbol.clone())?,
         instrument_type: canonical_instrument_kind(value.kind)?,
         issuer_id: (family == "equity").then(|| {
             kairos_primitives::IssuerId::new(format!("issuer:US:{source_symbol}"))
@@ -626,47 +616,23 @@ fn append_massive_instrument(
         status,
         ..Instrument::default()
     });
-    catalog.listings.push(Listing {
-        listing_id: listing_id.clone(),
-        instrument_id: instrument_id.clone(),
-        exchange_id: exchange.clone(),
-        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
-        status,
-        effective_from_unix_nanos: 0.into(),
-        effective_to_unix_nanos: value.expiry_unix_nanos,
-        ..Listing::default()
-    });
-    catalog.markets.push(Market {
-        market_id,
-        market_key: format!("massive.{family}.{source_symbol}"),
-        instrument_id,
-        listing_id: Some(listing_id),
-        exchange_id: exchange,
-        market_type: ProviderProductCode::new(family)?,
-        asset_type: Some(AssetClass::Equity),
-        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
-        base_asset_id: value.underlying.as_ref().map(|underlying| {
-            kairos_primitives::AssetId::new(format!(
-                "asset:equity:{}",
-                underlying.as_str().to_ascii_uppercase()
-            ))
-            .expect("validated Massive underlying asset")
-        }),
-        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
-            "asset:fiat:{quote}"
-        ))?),
-        status,
-        price_tick: value.price_tick,
-        quantity_tick: value.quantity_tick,
-        price_precision: value.price_precision.unwrap_or_default() as i32,
-        quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
-        minimum_quantity: value.minimum_quantity,
-        minimum_notional: value.minimum_notional,
-        contract_size: value.contract_value,
-        effective_from_unix_nanos: 0.into(),
-        effective_to_unix_nanos: value.expiry_unix_nanos,
-        ..Market::default()
-    });
+    if let Some(exchange_id) = exchange_id {
+        let listing_id = if family == "equity" {
+            format!("listing:{exchange_id}:equity:{source_symbol}:{quote}")
+        } else {
+            format!("listing:{exchange_id}:option:{symbol}")
+        };
+        catalog.listings.push(Listing {
+            listing_id: kairos_primitives::ListingId::new(listing_id)?,
+            instrument_id,
+            exchange_id: kairos_primitives::Exchange::new(exchange_id)?,
+            exchange_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+            status,
+            effective_from_unix_nanos: 0.into(),
+            effective_to_unix_nanos: value.expiry_unix_nanos,
+            ..Listing::default()
+        });
+    }
     Ok(())
 }
 
@@ -674,7 +640,6 @@ fn ensure_massive_underlying(
     catalog: &mut ProviderCatalog,
     ticker: &str,
     quote: &str,
-    exchange_id: &str,
     status: kairos_primitives::ReferenceStatus,
 ) -> ReferenceResult<()> {
     let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{ticker}"))?;
@@ -702,10 +667,6 @@ fn ensure_massive_underlying(
     {
         return Ok(());
     }
-    let listing_id = kairos_primitives::ListingId::new(format!(
-        "listing:{exchange_id}:equity:{ticker}:{quote}"
-    ))?;
-    let exchange = kairos_primitives::Exchange::new(exchange_id.to_owned())?;
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
@@ -718,52 +679,17 @@ fn ensure_massive_underlying(
         status,
         ..Instrument::default()
     });
-    catalog.listings.push(Listing {
-        listing_id: listing_id.clone(),
-        instrument_id: instrument_id.clone(),
-        exchange_id: exchange.clone(),
-        exchange_symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
-        status,
-        effective_from_unix_nanos: 0.into(),
-        ..Listing::default()
-    });
-    catalog.markets.push(Market {
-        market_id: kairos_primitives::MarketId::new(format!(
-            "market:{exchange_id}:equity:{ticker}"
-        ))?,
-        market_key: format!("massive.equity.{ticker}"),
-        instrument_id,
-        listing_id: Some(listing_id),
-        exchange_id: exchange,
-        market_type: ProviderProductCode::new("equity")?,
-        asset_type: Some(AssetClass::Equity),
-        source_symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
-        base_asset_id: Some(equity_asset),
-        quote_asset_id: Some(fiat_asset),
-        status,
-        price_tick: Some("0.01".into()),
-        quantity_tick: Some("1".into()),
-        price_precision: 2,
-        quantity_precision: 0,
-        contract_size: Some("1".into()),
-        effective_from_unix_nanos: 0.into(),
-        ..Market::default()
-    });
     Ok(())
 }
 
-fn massive_exchange_id(source_venue: Option<&str>) -> String {
-    match source_venue
-        .unwrap_or("unknown")
-        .trim()
-        .to_ascii_uppercase()
-        .as_str()
-    {
-        "XNAS" | "NASDAQ" => "exchange:nasdaq".into(),
-        "XNYS" | "NYSE" => "exchange:nyse".into(),
-        "XASE" | "AMEX" => "exchange:amex".into(),
-        "" | "UNKNOWN" => "exchange:unknown".into(),
-        value => format!("exchange:{}", value.to_ascii_lowercase()),
+fn massive_exchange_id(source_venue: Option<&str>) -> Option<String> {
+    match source_venue?.trim().to_ascii_uppercase().as_str() {
+        "" | "UNKNOWN" | "OPRA" => None,
+        "XNAS" | "NASDAQ" => Some("exchange:nasdaq".into()),
+        "XNYS" | "NYSE" => Some("exchange:nyse".into()),
+        "XASE" | "AMEX" => Some("exchange:amex".into()),
+        "BATO" => Some("exchange:cboe-bzx-options".into()),
+        value => Some(format!("exchange:{}", value.to_ascii_lowercase())),
     }
 }
 
@@ -772,7 +698,7 @@ fn massive_exchange_name(exchange_id: &str) -> &str {
         "exchange:nasdaq" => "Nasdaq",
         "exchange:nyse" => "NYSE",
         "exchange:amex" => "NYSE American",
-        "exchange:unknown" => "Unknown exchange",
+        "exchange:cboe-bzx-options" => "Cboe BZX Options Exchange",
         _ => "Exchange",
     }
 }

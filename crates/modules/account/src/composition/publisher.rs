@@ -12,7 +12,9 @@ use kairos_protocol::InstanceIdentity;
 use kairos_transport::{AeronBytePublisher, ReplacementSnapshotStorage, SnapshotEnvelopeMetadata};
 
 use crate::application::{
-    AccountBusinessChange, AccountBusinessEvent, AccountProjection, AccountsSnapshot,
+    AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentCompleteness,
+    AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode,
+    AccountSegmentView,
 };
 use crate::domain::{AccountModel, AccountStatus, MarginMode, PositionMode};
 
@@ -40,8 +42,8 @@ impl FlatbuffersAccountPublisher {
         }
     }
 
-    pub fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
-        let bytes = encode_account_current_view(&self.owner_actor_id, &self.identity, snapshot)?;
+    pub fn publish(&mut self, view: &AccountCurrentView) -> Result<(), String> {
+        let bytes = encode_account_current_view(&self.owner_actor_id, &self.identity, view)?;
         self.last_payload = Some(bytes);
         Ok(())
     }
@@ -77,7 +79,7 @@ impl MmapAccountPublisher {
         };
         let current_writer = ReplacementSnapshotStorage::create(path, effective_slot_size)
             .map_err(|error| error.to_string())?;
-        let root = path.parent().unwrap_or(path).join("snapshots").join("v2");
+        let root = path.parent().unwrap_or(path).join("views");
         std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
         Ok(Self {
             current_writer,
@@ -90,18 +92,18 @@ impl MmapAccountPublisher {
         })
     }
 
-    pub fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
-        let account = snapshot
-            .accounts
+    pub fn publish(&mut self, view: &AccountCurrentView) -> Result<(), String> {
+        let account = view
+            .segments
             .first()
             .ok_or_else(|| "Account view requires one account".to_owned())?;
         let runtime_id = format!("account:{}", account.account_id);
-        let bytes = encode_account_current_view(&self.owner_actor_id, &self.identity, snapshot)?;
+        let bytes = encode_account_current_view(&self.owner_actor_id, &self.identity, view)?;
         let metadata = SnapshotEnvelopeMetadata {
             resource_epoch: 1,
             producer_incarnation: self.producer_incarnation,
-            generation: snapshot.generation.get(),
-            applied_event_sequence: snapshot.event_sequence.get(),
+            generation: view.generation.get(),
+            applied_event_sequence: view.event_sequence.get(),
             published_at_unix_nanos: now_unix_nanos(),
         };
         self.current_writer
@@ -115,7 +117,7 @@ impl MmapAccountPublisher {
         )
         .map_err(|error| error.to_string())?;
         let orders_bytes =
-            encode_observed_orders_current_view(&self.owner_actor_id, &self.identity, snapshot)?;
+            encode_observed_orders_current_view(&self.owner_actor_id, &self.identity, view)?;
         let orders_resource_key = orders_key.canonical_key();
         let orders_writer = self.writers.entry(orders_resource_key).or_insert_with(|| {
             AccountViewPublisher::create(&self.root, orders_key.clone(), self.slot_size)
@@ -174,12 +176,19 @@ impl AeronAccountEventPublisher {
 fn encode_account_current_view(
     owner_actor_id: &str,
     identity: &InstanceIdentity,
-    snapshot: &AccountsSnapshot,
+    view: &AccountCurrentView,
 ) -> Result<Vec<u8>, String> {
-    let account = snapshot
-        .accounts
+    let account = view
+        .segments
         .first()
         .ok_or_else(|| "Account view requires one account".to_owned())?;
+    if view
+        .segments
+        .iter()
+        .any(|segment| segment.account_id != account.account_id)
+    {
+        return Err("Account view cannot contain multiple account ids".into());
+    }
     let runtime_id = format!("account:{}", account.account_id);
     let key = AccountViewKey::new(
         &runtime_id,
@@ -193,18 +202,26 @@ fn encode_account_current_view(
         owner_actor_id,
         &runtime_id,
         identity.clone(),
-        snapshot.generation.get(),
+        view.generation.get(),
         key.canonical_key(),
     )
-    .with_applied_revision(snapshot.event_sequence.get());
+    .with_applied_revision(view.event_sequence.get());
     let metadata = view_metadata(
         &mut builder,
         &context,
         &key,
-        account.observed_at_unix_nanos.get(),
+        view.segments
+            .iter()
+            .map(|segment| segment.observed_at_unix_nanos.get())
+            .max()
+            .unwrap_or_default(),
     );
-    let segment = encode_segment(&mut builder, account)?;
-    let segments = builder.create_vector(&[segment]);
+    let segment_offsets = view
+        .segments
+        .iter()
+        .map(|segment| encode_segment(&mut builder, segment))
+        .collect::<Result<Vec<_>, _>>()?;
+    let segments = builder.create_vector(&segment_offsets);
     let account_id = builder.create_string(account.account_id.as_str());
     let root = account_fb::AccountCurrentView::create(
         &mut builder,
@@ -221,10 +238,10 @@ fn encode_account_current_view(
 fn encode_observed_orders_current_view(
     owner_actor_id: &str,
     identity: &InstanceIdentity,
-    snapshot: &AccountsSnapshot,
+    view: &AccountCurrentView,
 ) -> Result<Vec<u8>, String> {
-    let account = snapshot
-        .accounts
+    let account = view
+        .segments
         .first()
         .ok_or_else(|| "Account observed-orders view requires one account".to_owned())?;
     let runtime_id = format!("account:{}", account.account_id);
@@ -240,18 +257,18 @@ fn encode_observed_orders_current_view(
         owner_actor_id,
         &runtime_id,
         identity.clone(),
-        snapshot.generation.get(),
+        view.generation.get(),
         key.canonical_key(),
     )
-    .with_applied_revision(snapshot.event_sequence.get());
+    .with_applied_revision(view.event_sequence.get());
     let metadata = view_metadata(
         &mut builder,
         &context,
         &key,
         account.observed_at_unix_nanos.get(),
     );
-    let segment_offsets = snapshot
-        .accounts
+    let segment_offsets = view
+        .segments
         .iter()
         .map(|value| encode_observed_orders_segment(&mut builder, value))
         .collect::<Result<Vec<_>, _>>()?;
@@ -271,7 +288,7 @@ fn encode_observed_orders_current_view(
 
 fn encode_observed_orders_segment<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    account: &AccountProjection,
+    account: &AccountSegmentView,
 ) -> Result<flatbuffers::WIPOffset<account_fb::SegmentObservedOrders<'a>>, String> {
     let source_id = format!("account:{}", account.broker);
     let orders = account
@@ -339,7 +356,7 @@ fn encode_observed_orders_segment<'a>(
 
 fn encode_segment<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    account: &AccountProjection,
+    account: &AccountSegmentView,
 ) -> Result<flatbuffers::WIPOffset<account_fb::AccountSegmentState<'a>>, String> {
     let segment_key = builder.create_string(account.segment_key.as_str());
     let environment = builder.create_string(&account.environment);
@@ -348,6 +365,10 @@ fn encode_segment<'a>(
     let collateral = encode_balances(builder, &account.collateral);
     let positions = encode_positions(builder, &account.positions)?;
     let valuation = encode_valuation(builder, account)?;
+    let last_error = account
+        .last_error
+        .as_deref()
+        .map(|value| builder.create_string(value));
     Ok(account_fb::AccountSegmentState::create(
         builder,
         &account_fb::AccountSegmentStateArgs {
@@ -364,11 +385,17 @@ fn encode_segment<'a>(
                 .map(account_model)
                 .unwrap_or(account_fb::AccountModel::UNSPECIFIED),
             status: account_status(account.status),
-            freshness: if account.stale {
-                account_fb::FreshnessState::STALE
-            } else {
-                account_fb::FreshnessState::FRESH
-            },
+            freshness: segment_freshness(account.freshness),
+            sync_mode: segment_sync_mode(account.sync_mode),
+            sync_lifecycle: segment_sync_lifecycle(account.sync_lifecycle),
+            completeness: segment_completeness(account.completeness),
+            snapshot_watermark: account.snapshot_watermark.unwrap_or_default(),
+            event_watermark: account.event_watermark.unwrap_or_default(),
+            channel_epoch: account.channel_epoch.unwrap_or_default(),
+            last_event_at_unix_nanos: account.last_event_at_unix_nanos.unwrap_or_default(),
+            last_success_at_unix_nanos: account.last_success_at_unix_nanos.unwrap_or_default(),
+            last_error,
+            recovery_buffer_depth: account.recovery_buffer_depth,
             observed_at_unix_nanos: account.observed_at_unix_nanos.get(),
             state_generation: account.generation.get(),
             valuation,
@@ -467,6 +494,7 @@ fn encode_positions<'a>(
                 &account_fb::PositionArgs {
                     instrument_id: Some(instrument_id),
                     market_id: Some(market_id),
+                    position_side: encode_position_side(value.position_side),
                     quantity: Some(&quantity),
                     average_price: average_price.as_ref(),
                     mark_price: mark_price.as_ref(),
@@ -482,7 +510,7 @@ fn encode_positions<'a>(
 
 fn encode_valuation<'a>(
     builder: &mut FlatBufferBuilder<'a>,
-    account: &AccountProjection,
+    account: &AccountSegmentView,
 ) -> Result<Option<flatbuffers::WIPOffset<account_fb::AccountValuation<'a>>>, String> {
     if account.equity.is_none() && account.initial_equity.is_none() && account.net_profit.is_none()
     {
@@ -585,6 +613,7 @@ fn encode_business_change(
             segment_key,
             instrument_id,
             market_id,
+            position_side,
         } => {
             let segment_key = builder.create_string(segment_key.as_str());
             let instrument_id = builder.create_string(instrument_id.as_str());
@@ -601,6 +630,7 @@ fn encode_business_change(
                     segment_key: Some(segment_key),
                     instrument_id: Some(instrument_id),
                     market_id: Some(market_id),
+                    position_side: encode_position_side(*position_side),
                     provenance,
                 },
             );
@@ -747,6 +777,7 @@ fn encode_position<'a>(
         &account_fb::PositionArgs {
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
+            position_side: encode_position_side(value.position_side),
             quantity: Some(&quantity),
             average_price: average_price.as_ref(),
             mark_price: mark_price.as_ref(),
@@ -755,6 +786,14 @@ fn encode_position<'a>(
             observed_at_unix_nanos: value.updated_at_unix_nanos.get(),
         },
     )
+}
+
+fn encode_position_side(value: kairos_primitives::PositionSide) -> account_fb::PositionSide {
+    match value {
+        kairos_primitives::PositionSide::Net => account_fb::PositionSide::NET,
+        kairos_primitives::PositionSide::Long => account_fb::PositionSide::LONG,
+        kairos_primitives::PositionSide::Short => account_fb::PositionSide::SHORT,
+    }
 }
 
 fn encode_observed_order<'a>(
@@ -910,6 +949,51 @@ fn position_mode(value: PositionMode) -> account_fb::PositionMode {
     }
 }
 
+fn segment_freshness(value: AccountSegmentFreshness) -> account_fb::FreshnessState {
+    match value {
+        AccountSegmentFreshness::Fresh => account_fb::FreshnessState::FRESH,
+        AccountSegmentFreshness::Stale => account_fb::FreshnessState::STALE,
+        AccountSegmentFreshness::Resyncing => account_fb::FreshnessState::RESYNCING,
+        AccountSegmentFreshness::Unavailable => account_fb::FreshnessState::UNAVAILABLE,
+        AccountSegmentFreshness::Unknown => account_fb::FreshnessState::UNKNOWN,
+    }
+}
+
+fn segment_sync_mode(value: AccountSegmentSyncMode) -> account_fb::SegmentSyncMode {
+    match value {
+        AccountSegmentSyncMode::Unknown => account_fb::SegmentSyncMode::UNSPECIFIED,
+        AccountSegmentSyncMode::SnapshotThenStream => {
+            account_fb::SegmentSyncMode::SNAPSHOT_THEN_STREAM
+        }
+        AccountSegmentSyncMode::SnapshotOnly => account_fb::SegmentSyncMode::SNAPSHOT_ONLY,
+    }
+}
+
+fn segment_sync_lifecycle(value: AccountSegmentSyncLifecycle) -> account_fb::SegmentSyncLifecycle {
+    match value {
+        AccountSegmentSyncLifecycle::Configured => account_fb::SegmentSyncLifecycle::CONFIGURED,
+        AccountSegmentSyncLifecycle::Bootstrapping => {
+            account_fb::SegmentSyncLifecycle::BOOTSTRAPPING
+        }
+        AccountSegmentSyncLifecycle::Live => account_fb::SegmentSyncLifecycle::LIVE,
+        AccountSegmentSyncLifecycle::SnapshotCurrent => {
+            account_fb::SegmentSyncLifecycle::SNAPSHOT_CURRENT
+        }
+        AccountSegmentSyncLifecycle::Degraded => account_fb::SegmentSyncLifecycle::DEGRADED,
+        AccountSegmentSyncLifecycle::Resyncing => account_fb::SegmentSyncLifecycle::RESYNCING,
+        AccountSegmentSyncLifecycle::Unavailable => account_fb::SegmentSyncLifecycle::UNAVAILABLE,
+        AccountSegmentSyncLifecycle::Stopped => account_fb::SegmentSyncLifecycle::STOPPED,
+    }
+}
+
+fn segment_completeness(value: AccountSegmentCompleteness) -> account_fb::SegmentCompleteness {
+    match value {
+        AccountSegmentCompleteness::Complete => account_fb::SegmentCompleteness::COMPLETE,
+        AccountSegmentCompleteness::Partial => account_fb::SegmentCompleteness::PARTIAL,
+        AccountSegmentCompleteness::Unknown => account_fb::SegmentCompleteness::UNKNOWN,
+    }
+}
+
 impl FileAccountPublisher {
     pub fn new(path: impl Into<PathBuf>, owner_actor_id: impl Into<String>) -> Self {
         Self::new_with_identity(path, owner_actor_id, InstanceIdentity::default())
@@ -924,8 +1008,8 @@ impl FileAccountPublisher {
             inner: FlatbuffersAccountPublisher::new_with_identity(owner_actor_id, identity),
         }
     }
-    pub fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
-        self.inner.publish(snapshot)?;
+    pub fn publish(&mut self, view: &AccountCurrentView) -> Result<(), String> {
+        self.inner.publish(view)?;
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -956,17 +1040,5 @@ pub fn empty_snapshot(segment_key: impl Into<String>) -> crate::domain::AccountS
         margin_mode: None,
         position_mode: None,
         kind: crate::domain::SnapshotKind::Full,
-    }
-}
-
-impl crate::application::AccountSnapshotPublisher for MmapAccountPublisher {
-    fn publish(&mut self, snapshot: &AccountsSnapshot) -> Result<(), String> {
-        MmapAccountPublisher::publish(self, snapshot)
-    }
-}
-
-impl crate::application::AccountEventPublisher for AeronAccountEventPublisher {
-    fn publish(&mut self, event: &AccountBusinessEvent) -> Result<(), String> {
-        AeronAccountEventPublisher::publish(self, event)
     }
 }

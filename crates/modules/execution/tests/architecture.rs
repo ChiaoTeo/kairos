@@ -126,7 +126,8 @@ fn execution_server_uses_only_normalized_multi_route_configuration() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-execution-server.rs"),
     )
     .expect("read Execution server");
-    assert!(server.contains("normalized-config.json"));
+    assert!(server.contains("normalized_config()"));
+    assert!(!server.contains("normalized-config.json"));
     assert!(server.contains("participant_id: String"));
     for forbidden in [
         "routes_json:",
@@ -276,7 +277,7 @@ fn application_public_signatures_do_not_expose_internal_dependencies() {
         .expect("read Execution application facade");
     for method in [
         "assemble",
-        "configure_execution_access",
+        "configure_execution_route",
         "configure_live_trading",
         "recover_risk_reservations",
     ] {
@@ -394,7 +395,7 @@ fn execution_actor_owns_order_lifecycle_state_and_submission_transitions() {
 }
 
 #[test]
-fn execution_rest_exposes_health_as_its_only_get_query() {
+fn execution_rest_keeps_only_bounded_capability_queries_off_mmap() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let process = fs::read_to_string(root.join("src/application/process/mod.rs"))
         .expect("read Execution process");
@@ -403,6 +404,7 @@ fn execution_rest_exposes_health_as_its_only_get_query() {
         .expect("read Execution control transport");
     let wire = fs::read_to_string(control_root.join("wire.rs"))
         .expect("read Execution control wire adapter");
+    assert!(wire.contains("method == \"GET\" && path == \"/v1/routes\""));
     assert!(wire.contains("method == \"GET\" && path != kairos_workspace::runtime::HEALTH_PATH"));
     assert!(wire.contains("path == kairos_workspace::runtime::HEALTH_PATH"));
     assert!(!process.contains("\"/v1/open-orders\" =>"));
@@ -439,8 +441,9 @@ fn execution_rest_exposes_health_as_its_only_get_query() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contract/src/control/client.rs"),
     )
     .expect("read Execution control contract");
-    assert_eq!(contract.matches("\"GET\"").count(), 1);
+    assert_eq!(contract.matches("\"GET\"").count(), 2);
     assert!(contract.contains("\"GET\", \"/v1/health\""));
+    assert!(contract.contains("\"/v1/routes\""));
 }
 
 #[test]
@@ -502,7 +505,7 @@ fn execution_health_does_not_expose_business_state_or_diagnostics() {
 }
 
 #[test]
-fn execution_cli_reads_business_state_only_from_current_mmap() {
+fn execution_cli_reads_durable_business_state_from_mmap_and_routes_from_control() {
     let source = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-execution-cli.rs"),
     )
@@ -511,6 +514,7 @@ fn execution_cli_reads_business_state_only_from_current_mmap() {
     assert!(source.contains("frame.current_execution()?"));
     assert!(source.contains("query command routed to typed mmap"));
     assert!(source.contains("RestControlClient::new"));
+    assert!(source.contains("/v1/routes"));
     assert!(!source.contains("compose_direct_execution_connections"));
     assert!(!source.contains("ExecutionApplication::with_dependencies"));
     assert!(!source.contains("Command::RemoteOpenOrders"));

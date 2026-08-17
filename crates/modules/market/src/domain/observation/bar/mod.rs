@@ -1,9 +1,9 @@
-use kairos_primitives::{InstrumentId, MarketId, Price, Quantity, UnixNanos};
+use kairos_primitives::{InstrumentId, Price, Quantity, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Bar {
-    pub market_id: MarketId,
+    pub scope: super::ObservationScope,
     pub instrument_id: InstrumentId,
     pub timeframe: String,
     pub open: Price,

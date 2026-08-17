@@ -13,11 +13,35 @@ servers:
       socket:
         default: execution.sock
 tags:
+  - name: routes
   - name: intents
   - name: orders
   - name: operations
   - name: health
 paths:
+  /v1/routes:
+    get:
+      tags: [routes]
+      operationId: listExecutionRoutes
+      summary: Query current Execution-owned order-entry route candidates
+      parameters:
+        - {name: account_id, in: query, schema: {type: string}}
+        - {name: segment_key, in: query, schema: {type: string}}
+        - {name: instrument_id, in: query, schema: {type: string}}
+        - {name: market_id, in: query, schema: {type: string}}
+        - {name: order_type, in: query, schema: {type: string, enum: [market, limit]}}
+        - {name: options, in: query, description: Comma-separated required option names, schema: {type: string}}
+      responses:
+        '200':
+          description: Current routes composed from canonical identity, configured connections and readiness.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [routes]
+                properties:
+                  routes: {type: array, items: {$ref: '#/components/schemas/ExecutionRouteCandidate'}}
+
   /v1/intents:
     post:
       tags: [intents]
@@ -163,6 +187,21 @@ components:
     NotFound:
       $ref: '../common/control.openapi.yaml#/components/responses/NotFound'
   schemas:
+    ExecutionRouteCandidate:
+      type: object
+      required: [route_id, participant_id, provider_product, provider_symbol, supported_order_types, supported_options, ready]
+      properties:
+        route_id: {type: string}
+        account_id: {type: [string, 'null']}
+        segment_key: {type: [string, 'null']}
+        instrument_id: {type: [string, 'null']}
+        market_id: {type: [string, 'null']}
+        participant_id: {type: string}
+        provider_product: {type: string}
+        provider_symbol: {type: string}
+        supported_order_types: {type: array, items: {type: string, enum: [Market, Limit]}}
+        supported_options: {type: array, items: {type: string}}
+        ready: {type: boolean}
     CommandEnvelope:
       $ref: '../common/control.openapi.yaml#/components/schemas/CommandEnvelope'
     SubmitIntentRequest:
@@ -194,14 +233,14 @@ components:
           items: {type: object, additionalProperties: true}
     IntentLeg:
       type: object
-      required: [leg_id, account_id, instrument_id, market_id, execution_access_id, side, quantity]
+      required: [leg_id, account_id, instrument_id, market_id, execution_route_id, side, quantity]
       properties:
         leg_id: {type: string, minLength: 1}
         account_id: {type: string, minLength: 1}
         segment_key: {type: string, minLength: 1}
         instrument_id: {type: string, minLength: 1}
         market_id: {type: string, minLength: 1}
-        execution_access_id: {type: string, minLength: 1}
+        execution_route_id: {type: string, minLength: 1}
         side: {type: string, enum: [buy, sell]}
         quantity: {type: string, minLength: 1}
         quantity_semantics: {type: string, minLength: 1}
@@ -209,7 +248,7 @@ components:
         options: {type: object, additionalProperties: true}
     SubmitOrderRequest:
       type: object
-      required: [order_id, account_id, segment_key, instrument_id, execution_access_id, side, order_type, quantity]
+      required: [order_id, account_id, segment_key, instrument_id, execution_route_id, side, order_type, quantity]
       properties:
         order_id: {type: string, minLength: 1}
         intent_id: {type: string, minLength: 1}
@@ -217,7 +256,7 @@ components:
         segment_key: {type: string, minLength: 1}
         instrument_id: {type: string, minLength: 1}
         market_id: {type: string, minLength: 1}
-        execution_access_id: {type: string, minLength: 1}
+        execution_route_id: {type: string, minLength: 1}
         side: {type: string, enum: [Buy, Sell, buy, sell]}
         order_type: {type: string, enum: [Market, Limit, market, limit]}
         quantity: {type: string, minLength: 1}
@@ -241,7 +280,7 @@ components:
         - type: object
           properties:
             account_id: {type: string, minLength: 1}
-            execution_access_id: {type: string, minLength: 1}
+            execution_route_id: {type: string, minLength: 1}
             order_id: {type: string, minLength: 1}
             reason: {type: string}
     CommandAccepted:

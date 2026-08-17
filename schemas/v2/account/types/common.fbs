@@ -1,7 +1,11 @@
 namespace kairos.account.v2;
 
 enum AccountStatus:ubyte { UNSPECIFIED = 0, ACTIVE = 1, RESTRICTED = 2, DISABLED = 3, CLOSED = 4, ERROR = 5, RECONCILING = 6, TYPE_MISMATCH = 7, UNAVAILABLE = 8 }
-enum FreshnessState:ubyte { UNSPECIFIED = 0, FRESH = 1, STALE = 2, UNKNOWN = 3 }
+enum FreshnessState:ubyte { UNSPECIFIED = 0, FRESH = 1, STALE = 2, UNKNOWN = 3, RESYNCING = 4, UNAVAILABLE = 5 }
+enum SegmentSyncMode:ubyte { UNSPECIFIED = 0, SNAPSHOT_THEN_STREAM = 1, SNAPSHOT_ONLY = 2 }
+enum SegmentSyncLifecycle:ubyte { UNSPECIFIED = 0, CONFIGURED = 1, BOOTSTRAPPING = 2, LIVE = 3, SNAPSHOT_CURRENT = 4, DEGRADED = 5, RESYNCING = 6, UNAVAILABLE = 7, STOPPED = 8 }
+enum SegmentCompleteness:ubyte { UNSPECIFIED = 0, COMPLETE = 1, PARTIAL = 2, UNKNOWN = 3 }
 enum AccountModel:ubyte { UNSPECIFIED = 0, CASH = 1, MARGIN = 2, PORTFOLIO_MARGIN = 3 }
 enum MarginMode:ubyte { UNSPECIFIED = 0, CROSS = 1, ISOLATED = 2 }
 enum PositionMode:ubyte { UNSPECIFIED = 0, NET = 1, HEDGED = 2 }
+enum PositionSide:ubyte { UNSPECIFIED = 0, NET = 1, LONG = 2, SHORT = 3 }

@@ -7,7 +7,122 @@ use crate::domain::view::MarketView;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-use super::model::{ExecutionEstimate, MarketObservationResult, MarketQueryResult, OrderBookSide};
+use super::model::{
+    ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery,
+    MarketObservationResult, MarketQueryResult, OrderBookSide,
+};
+use super::MarketApplication;
+
+impl MarketApplication {
+    pub fn available_market_data(
+        &self,
+        query: &MarketDataAvailabilityQuery,
+    ) -> Vec<MarketDataAvailability> {
+        let view = self.actor.current_view();
+        let mut result = Vec::new();
+        for market in self.actor.market_universe() {
+            let Some(market_id) = market.market_id() else {
+                continue;
+            };
+            if query
+                .market_id
+                .as_ref()
+                .is_some_and(|value| value != market_id)
+                || query
+                    .instrument_id
+                    .as_ref()
+                    .is_some_and(|value| value != &market.instrument_id)
+                || query.provider_id.as_deref().is_some_and(|value| {
+                    !value.eq_ignore_ascii_case(market.route.provider_id.as_str())
+                })
+            {
+                continue;
+            }
+            let matching_sources = self
+                .actor
+                .source_states()
+                .filter(|source| crate::application::source_accepts(&source.descriptor, &market))
+                .collect::<Vec<_>>();
+            if matching_sources.is_empty() {
+                if !query.configured_only && !query.ready_only {
+                    let source_id = market
+                        .source_id
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| market.route.provider_id.to_string());
+                    result.push(MarketDataAvailability {
+                        market_id: market_id.clone(),
+                        instrument_id: market.instrument_id.clone(),
+                        source_id,
+                        provider_id: market.route.provider_id.to_string(),
+                        provider_product: market.route.provider_product.to_string(),
+                        provider_symbol: market.route.provider_symbol.to_string(),
+                        observation_capabilities: market
+                            .route
+                            .observation_capabilities
+                            .iter()
+                            .copied()
+                            .collect(),
+                        supported_by_adapter: query.observation_kind.is_none_or(|kind| {
+                            market.route.observation_capabilities.contains(&kind)
+                        }),
+                        configured_in_workspace: false,
+                        runtime_status: None,
+                        freshness: std::collections::BTreeMap::new(),
+                    });
+                }
+                continue;
+            }
+            for source in matching_sources {
+                let supported = query
+                    .observation_kind
+                    .is_none_or(|kind| source.descriptor.observation_capabilities.contains(&kind));
+                let ready = source.status == crate::domain::source::SourceStatus::Ready;
+                if query.ready_only && !ready {
+                    continue;
+                }
+                let freshness = view
+                    .freshness
+                    .values()
+                    .filter(|value| {
+                        value
+                            .source_id
+                            .eq_ignore_ascii_case(source.descriptor.id.as_str())
+                            && value.scope.market_id() == Some(market_id)
+                            && query
+                                .observation_kind
+                                .is_none_or(|kind| kind == value.data_kind)
+                    })
+                    .map(|value| (value.data_kind, value.status))
+                    .collect();
+                result.push(MarketDataAvailability {
+                    market_id: market_id.clone(),
+                    instrument_id: market.instrument_id.clone(),
+                    source_id: source.descriptor.id.to_string(),
+                    provider_id: market.route.provider_id.to_string(),
+                    provider_product: market.route.provider_product.to_string(),
+                    provider_symbol: market.route.provider_symbol.to_string(),
+                    observation_capabilities: source
+                        .descriptor
+                        .observation_capabilities
+                        .iter()
+                        .copied()
+                        .collect(),
+                    supported_by_adapter: supported,
+                    configured_in_workspace: true,
+                    runtime_status: Some(source.status),
+                    freshness,
+                });
+            }
+        }
+        result.sort_by(|left, right| {
+            left.market_id
+                .cmp(&right.market_id)
+                .then_with(|| left.source_id.cmp(&right.source_id))
+        });
+        result
+    }
+}
 
 impl MarketQueryResult {
     pub(crate) fn new(view: MarketView) -> Self {
@@ -279,11 +394,82 @@ impl MarketQueryResult {
         // View keys include source identity. A typed query therefore scans
         // the stable projection rather than guessing the provider source.
         let mut matches = self.view.views.values().filter(|value| {
-            value.market_id() == market_id && value.kind() == kind && value.qualifier() == qualifier
+            value.market_id().map(|value| value.as_str()) == Some(market_id)
+                && value.kind() == kind
+                && value.qualifier() == qualifier
         });
         let first = matches.next()?;
         // A market can have several provider sources. Do not silently pick a
         // source when the caller used the source-agnostic convenience query.
         matches.next().is_none().then_some(first)
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+    use crate::{
+        MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket,
+        SourceDescriptor, SourceId,
+    };
+
+    fn market() -> ResolvedMarket {
+        ResolvedMarket::new(
+            "market:binance:spot:BTCUSDT",
+            "instrument:spot:BTC",
+            kairos_primitives::InstrumentKind::Spot,
+            "binance",
+            MarketDataRoute::new("route:binance:spot:BTCUSDT", "binance", "spot", "BTCUSDT")
+                .unwrap()
+                .with_observation_capabilities([ObservationKind::Quote, ObservationKind::Trade]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn availability_distinguishes_unconfigured_and_runtime_state() {
+        let mut application = MarketApplication::new("market", 8).unwrap();
+        application
+            .reconcile_market_universe(ReconcileMarketUniverse {
+                generation: 1.into(),
+                event_sequence: 1.into(),
+                markets: vec![market()],
+            })
+            .unwrap();
+        let unavailable = application.available_market_data(&Default::default());
+        assert_eq!(unavailable.len(), 1);
+        assert!(!unavailable[0].configured_in_workspace);
+        assert!(unavailable[0].supported_by_adapter);
+        assert_eq!(unavailable[0].runtime_status, None);
+
+        application
+            .actor
+            .register_source(
+                SourceDescriptor::new(
+                    SourceId::new("binance-primary").unwrap(),
+                    kairos_primitives::Exchange::new("binance").unwrap(),
+                    "spot",
+                    None,
+                )
+                .unwrap()
+                .with_observation_capabilities([ObservationKind::Quote]),
+            )
+            .unwrap();
+        let quote = application.available_market_data(&MarketDataAvailabilityQuery {
+            observation_kind: Some(ObservationKind::Quote),
+            configured_only: true,
+            ..Default::default()
+        });
+        assert_eq!(quote.len(), 1);
+        assert!(quote[0].supported_by_adapter);
+        assert_eq!(quote[0].runtime_status, Some(crate::SourceStatus::Starting));
+
+        let trade = application.available_market_data(&MarketDataAvailabilityQuery {
+            observation_kind: Some(ObservationKind::Trade),
+            configured_only: true,
+            ..Default::default()
+        });
+        assert_eq!(trade.len(), 1);
+        assert!(!trade[0].supported_by_adapter);
     }
 }

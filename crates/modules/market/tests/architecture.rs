@@ -239,9 +239,11 @@ fn actor_is_the_single_source_runtime_state_owner() {
 }
 
 #[test]
-fn market_rest_exposes_health_as_its_only_get_query() {
+fn market_rest_keeps_only_bounded_capability_queries_off_mmap() {
     let process = source("src/application/process/ingress.rs");
     assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
+    assert!(process.contains("path != \"/v1/data-sources\""));
+    assert!(process.contains("\"/v1/data-sources\" if method == \"GET\""));
     assert!(process.contains("Market business queries are available only through typed mmap views"));
     assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
     let health = process

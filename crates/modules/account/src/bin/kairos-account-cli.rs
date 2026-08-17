@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_account::application::{ReconcileAccount, RefreshAccount};
+use kairos_account::application::RefreshAccount;
 use kairos_account::composition::account::{
-    compose_binance_async_account_application, compose_blocking_account_application_for_segments,
-    compose_ibkr_async_account_application, compose_okx_async_account_application,
+    compose_binance_async_account_application, compose_ibkr_async_account_application,
+    compose_local_account_application_for_segments, compose_okx_async_account_application,
     default_rest_endpoint, inspect_account_credential, AccountOptions, AccountSegmentBinding,
 };
 use kairos_account::composition::registry::{
@@ -67,8 +67,10 @@ struct Cli {
     launch_id: Option<String>,
     #[arg(long, global = true, default_value = "default")]
     instance_id: String,
-    #[arg(long, global = true, default_value = "account")]
-    socket_name: String,
+    /// Explicit runtime socket/resource name. Normally resolved from the
+    /// launch instance manifest using the Account identity.
+    #[arg(long, global = true)]
+    socket_name: Option<String>,
     #[command(flatten)]
     connection: ConnectionArgs,
     #[command(subcommand)]
@@ -256,8 +258,12 @@ enum Command {
         #[arg(long = "broker")]
         provider: String,
     },
-    Doctor,
+    Doctor {
+        #[arg(long)]
+        account_id: Option<String>,
+    },
     Connect,
+    #[command(name = "current", alias = "snapshot")]
     Snapshot {
         #[arg(long)]
         symbol: Option<String>,
@@ -279,14 +285,21 @@ enum Command {
         #[arg(long)]
         symbol: Option<String>,
     },
+    #[command(name = "observed-orders", alias = "open-orders")]
     OpenOrders {
         #[arg(long)]
         symbol: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
     },
-    Refresh,
-    Reconcile,
+    Refresh {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
+    },
+    Reconcile {
+        #[arg(long = "segment")]
+        segments: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -392,10 +405,18 @@ async fn run_direct(
     workspace: &Workspace,
     command: Command,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let registry_path = workspace.child(&["accounts", "accounts.toml"])?;
-    let mut registry = AccountRegistry::load(&registry_path)?;
-    let credentials_path = workspace.child(&["credentials", "credentials.toml"])?;
-    let mut credential_store = CredentialStore::load(&credentials_path)?;
+    let registry_path = workspace.child(&["config", "accounts", "accounts.toml"])?;
+    let registry_read_path = workspace.existing_path(
+        &["config", "accounts", "accounts.toml"],
+        &["accounts", "accounts.toml"],
+    )?;
+    let mut registry = AccountRegistry::load(&registry_read_path)?;
+    let credentials_path = workspace.child(&["config", "credentials", "credentials.toml"])?;
+    let credentials_read_path = workspace.existing_path(
+        &["config", "credentials", "credentials.toml"],
+        &["credentials", "credentials.toml"],
+    )?;
+    let mut credential_store = CredentialStore::load(&credentials_read_path)?;
     for account in &mut registry.accounts {
         if account.credentials.is_empty() {
             if let Some(credential_id) = account.credential_id.clone() {
@@ -416,7 +437,19 @@ async fn run_direct(
             .account_id
             .as_deref()
             .ok_or("--account-id is required for an Account mmap query")?;
-        let value = read_mmap_query(args, workspace, account_id, &command)?;
+        let account_id = resolve_account_id(&registry, account_id)?;
+        let value = read_mmap_query(args, workspace, &account_id, &command)?;
+        print_json(value);
+        return Ok(());
+    }
+    if is_runtime_control(&command) {
+        let account_id = args
+            .connection
+            .account_id
+            .as_deref()
+            .ok_or("--account-id is required for an Account runtime command")?;
+        let account_id = resolve_account_id(&registry, account_id)?;
+        let value = run_runtime_control(args, workspace, &account_id, &command).await?;
         print_json(value);
         return Ok(());
     }
@@ -867,10 +900,28 @@ async fn run_direct(
             print_json(value);
             return Ok(());
         }
-        Command::Doctor => {
+        Command::Doctor { account_id } => {
+            let selected_account_id = account_id
+                .as_deref()
+                .map(|value| resolve_account_id(&registry, value))
+                .transpose()?;
+            let selected_accounts = registry
+                .accounts
+                .iter()
+                .filter(|account| {
+                    selected_account_id
+                        .as_deref()
+                        .is_none_or(|value| value == account.account_id)
+                })
+                .collect::<Vec<_>>();
             let issues: Vec<_> = registry
                 .accounts
                 .iter()
+                .filter(|account| {
+                    selected_account_id
+                        .as_deref()
+                        .is_none_or(|value| value == account.account_id)
+                })
                 .filter(|account| {
                     account.environment == "live"
                         && !credential_store.credentials.iter().any(|credential| {
@@ -888,7 +939,22 @@ async fn run_direct(
                     )
                 })
                 .collect();
-            print_json(serde_json::json!({"accounts": registry.accounts, "issues": issues}));
+            let runtime = if args.launch_id.is_some() {
+                selected_accounts
+                    .iter()
+                    .map(|account| {
+                        runtime_account_diagnostic(args, workspace, account)
+                            .map(|value| (account.account_id.clone(), value))
+                    })
+                    .collect::<Result<serde_json::Map<_, _>, _>>()?
+            } else {
+                serde_json::Map::new()
+            };
+            print_json(serde_json::json!({
+                "accounts": selected_accounts,
+                "issues": issues,
+                "runtime": runtime,
+            }));
             return Ok(());
         }
         _ => {}
@@ -1006,7 +1072,7 @@ async fn run_direct(
         isolated_margin_symbol: account_record
             .as_ref()
             .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
-        reference_database: Some(workspace.child(&["reference", "reference.sqlite"])?),
+        reference_database: Some(workspace.child(&["state", "reference", "reference.sqlite"])?),
     };
     let state = workspace.child(&["state", "account", "account-state.json"])?;
     let configured_segment_keys = registry
@@ -1100,35 +1166,20 @@ async fn run_direct(
     } else if native_ibkr_account {
         compose_ibkr_async_account_application(&options, &configured_segments, Some(state))?
     } else {
-        compose_blocking_account_application_for_segments(
-            &options,
-            &configured_segments,
-            Some(state),
-        )?
+        compose_local_account_application_for_segments(&options, &configured_segments, Some(state))?
     };
-    let refresh_report = if matches!(&command, Command::Reconcile) {
-        composition.application.reconcile_report(ReconcileAccount {
-            account_id: account_id_type.clone(),
-            segments: Vec::new(),
-        })?
+    let request = RefreshAccount {
+        account_id: account_id_type.clone(),
+        segments: Vec::new(),
+    };
+    let _refresh_report = if native_binance_account || native_okx_account || native_ibkr_account {
+        composition
+            .application
+            .refresh_report_async(request)
+            .await?
     } else {
-        let request = RefreshAccount {
-            account_id: account_id_type.clone(),
-            segments: Vec::new(),
-        };
-        if native_binance_account || native_okx_account {
-            composition
-                .application
-                .refresh_report_async(request)
-                .await?
-        } else {
-            composition.application.refresh_report(request)?
-        }
+        composition.application.refresh_report(request)?
     };
-    if matches!(&command, Command::Refresh | Command::Reconcile) {
-        print_json(serde_json::to_value(refresh_report)?);
-        return Ok(());
-    }
     if let Command::Fill { fill } = &command {
         if !paper {
             return Err("simulated fill is available only for paper/simulated Account".into());
@@ -1296,6 +1347,82 @@ fn is_mmap_query(command: &Command) -> bool {
     )
 }
 
+fn is_runtime_control(command: &Command) -> bool {
+    matches!(command, Command::Refresh { .. } | Command::Reconcile { .. })
+}
+
+async fn run_runtime_control(
+    args: &Cli,
+    workspace: &Workspace,
+    account_id: &str,
+    command: &Command,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let launch_id = args
+        .launch_id
+        .as_deref()
+        .ok_or("--launch-id is required for an Account runtime command")?;
+    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
+    let socket_name =
+        resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
+    let (path, segments) = match command {
+        Command::Refresh { segments } => ("/v1/refresh", segments),
+        Command::Reconcile { segments } => ("/v1/reconcile", segments),
+        _ => return Err("command is not an Account runtime control".into()),
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "account_id": account_id,
+        "segments": segments,
+    }))?;
+    Ok(
+        kairos_workspace::control::RestControlClient::new(instance.socket(&socket_name)?)
+            .request_json("POST", path, Some(&body))
+            .await?,
+    )
+}
+
+fn runtime_account_diagnostic(
+    args: &Cli,
+    workspace: &Workspace,
+    account: &AccountBindingRecord,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let launch_id = args
+        .launch_id
+        .as_deref()
+        .ok_or("--launch-id is required for runtime diagnostics")?;
+    let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(instance.component_manifest()?)?)?;
+    let endpoint = manifest
+        .get("accounts")
+        .and_then(|accounts| accounts.get(&account.account_id));
+    let health: Option<serde_json::Value> = endpoint
+        .and_then(|value| value.get("health"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|payload| serde_json::from_slice(&payload).ok());
+    let (current, current_error) = match read_mmap_query(
+        args,
+        workspace,
+        &account.account_id,
+        &Command::Snapshot { symbol: None },
+    ) {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error.to_string())),
+    };
+    Ok(serde_json::json!({
+        "account_id": account.account_id,
+        "credential_role": account.credential_role,
+        "permissions": account.permissions,
+        "required_segments": endpoint
+            .and_then(|value| value.get("required_segments"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+        "health": health,
+        "current": current,
+        "error": current_error,
+    }))
+}
+
 fn decimal_text(value: &Decimal64) -> String {
     let scale = value.scale() as usize;
     let negative = value.mantissa() < 0;
@@ -1331,7 +1458,9 @@ fn read_mmap_query(
         .as_deref()
         .ok_or("--launch-id is required for an Account mmap query")?;
     let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-    let snapshot_path = instance.service_snapshot(&args.socket_name)?;
+    let socket_name =
+        resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
+    let snapshot_path = instance.service_snapshot(&socket_name)?;
 
     if let Command::OpenOrders { symbol, limit } = command {
         let view_root = snapshot_path
@@ -1473,6 +1602,16 @@ fn read_mmap_query(
             "broker": segment.broker(),
             "status": segment.status().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
             "freshness": segment.freshness().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "sync_mode": segment.sync_mode().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "sync_lifecycle": segment.sync_lifecycle().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "completeness": segment.completeness().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
+            "snapshot_watermark": segment.snapshot_watermark(),
+            "event_watermark": segment.event_watermark(),
+            "channel_epoch": segment.channel_epoch(),
+            "last_event_at_unix_nanos": segment.last_event_at_unix_nanos(),
+            "last_success_at_unix_nanos": segment.last_success_at_unix_nanos(),
+            "last_error": segment.last_error(),
+            "recovery_buffer_depth": segment.recovery_buffer_depth(),
             "observed_at_unix_nanos": segment.observed_at_unix_nanos(),
             "state_generation": segment.state_generation(),
             "balances": balances,
@@ -1483,6 +1622,7 @@ fn read_mmap_query(
         "account_id": account_id,
         "generation": frame.generation,
         "event_sequence": frame.applied_event_sequence,
+        "producer_incarnation": frame.producer_incarnation,
         "segments": segments,
     });
     if let Command::Balances {
@@ -1493,6 +1633,38 @@ fn read_mmap_query(
         result["page_size"] = (*page_size).into();
     }
     Ok(result)
+}
+
+fn resolve_runtime_account_resource(
+    instance: &kairos_workspace::InstanceWorkspace,
+    account_id: &str,
+    explicit: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(value) = explicit {
+        return Ok(value.to_owned());
+    }
+
+    let manifest_path = instance.component_manifest()?;
+    if let Ok(bytes) = std::fs::read(&manifest_path) {
+        let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if let Some(socket_name) = manifest
+            .get("accounts")
+            .and_then(|accounts| accounts.get(account_id))
+            .and_then(|account| account.get("socket_name"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Ok(socket_name.to_owned());
+        }
+    }
+
+    let legacy = instance.service_snapshot("account")?;
+    if legacy.is_file() {
+        return Ok("account".to_owned());
+    }
+    Err(format!(
+        "launch instance manifest has no runtime Account resource for {account_id}; use --socket-name only for legacy/manual processes"
+    )
+    .into())
 }
 
 fn credential_probe_options(

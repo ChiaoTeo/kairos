@@ -4,12 +4,10 @@
 //! query contract without knowing whether the catalog came from SQLite, an
 //! in-memory test store, or a running reference process.
 
-use kairos_primitives::{Exchange, MarketId, Sequence, Symbol, UnixNanos};
+use kairos_primitives::{Exchange, InstrumentKind, MarketId, Sequence, Symbol, UnixNanos};
 use serde::Serialize;
 
-use crate::domain::{
-    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, MarketDataAccess,
-};
+use crate::domain::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReferenceKind {
@@ -18,8 +16,6 @@ pub enum ReferenceKind {
     Instrument,
     Listing,
     Market,
-    ExecutionAccess,
-    MarketDataAccess,
     Event,
     #[default]
     All,
@@ -30,7 +26,7 @@ pub struct ReferenceQuery {
     pub text: Option<String>,
     pub kind: ReferenceKind,
     pub exchange_id: Option<Exchange>,
-    pub market_type: Option<String>,
+    pub instrument_kind: Option<InstrumentKind>,
     pub asset_type: Option<String>,
     pub underlying_instrument_id: Option<String>,
     pub status: Option<String>,
@@ -90,8 +86,6 @@ pub enum ReferenceRecord {
     Instrument(Instrument),
     Listing(Listing),
     Market(Market),
-    ExecutionAccess(ExecutionAccess),
-    MarketDataAccess(MarketDataAccess),
     Event(LifecycleEvent),
 }
 
@@ -117,9 +111,9 @@ impl ReferenceQuery {
 pub struct MarketQuery {
     pub market_id: Option<MarketId>,
     pub exchange_id: Option<Exchange>,
-    pub market_type: Option<String>,
+    pub instrument_kind: Option<InstrumentKind>,
     pub asset_type: Option<String>,
-    pub source_symbol: Option<Symbol>,
+    pub venue_symbol: Option<Symbol>,
     pub active_only: bool,
     pub as_of_unix_nanos: Option<UnixNanos>,
     pub status: Option<String>,
@@ -128,7 +122,7 @@ pub struct MarketQuery {
 impl MarketQuery {
     pub fn by_symbol(symbol: impl Into<String>) -> Self {
         Self {
-            source_symbol: Some(Symbol::new(symbol).expect("market query symbol is required")),
+            venue_symbol: Some(Symbol::new(symbol).expect("market query symbol is required")),
             ..Self::default()
         }
     }
@@ -143,17 +137,17 @@ impl MarketQuery {
                 .as_ref()
                 .is_some_and(|value| value != &market.exchange_id)
             || self
-                .market_type
-                .as_deref()
-                .is_some_and(|value| value != market.market_type.as_str())
+                .instrument_kind
+                .is_some_and(|value| value != market.instrument_kind)
             || self
                 .asset_type
                 .as_deref()
                 .is_some_and(|value| market.asset_type.map(|class| class.as_str()) != Some(value))
-            || self.source_symbol.as_deref().is_some_and(|value| {
-                !value
-                    .to_string()
-                    .eq_ignore_ascii_case(market.source_symbol.as_str())
+            || self.venue_symbol.as_ref().is_some_and(|value| {
+                market
+                    .venue_symbol
+                    .as_ref()
+                    .is_none_or(|symbol| !value.as_str().eq_ignore_ascii_case(symbol.as_str()))
             })
             || self
                 .status

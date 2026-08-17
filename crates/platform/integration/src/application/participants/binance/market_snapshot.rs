@@ -254,6 +254,7 @@ fn quote_event(
         last_sequence: None,
         sequence: payload.get("u").and_then(Value::as_u64).map(Into::into),
         observed_at_unix_nanos: now_unix_nanos(),
+        venue: Default::default(),
     })
 }
 
@@ -299,6 +300,7 @@ fn greeks_event(symbol: &str, payload: &Value) -> Option<MarketEvent> {
         last_sequence: None,
         sequence: None,
         observed_at_unix_nanos: now_unix_nanos(),
+        venue: Default::default(),
     })
 }
 

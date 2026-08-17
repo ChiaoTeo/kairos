@@ -25,7 +25,8 @@ impl<'a> PositionRemoved<'a> {
     pub const VT_SEGMENT_KEY: ::flatbuffers::VOffsetT = 8;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_PROVENANCE: ::flatbuffers::VOffsetT = 14;
+    pub const VT_POSITION_SIDE: ::flatbuffers::VOffsetT = 14;
+    pub const VT_PROVENANCE: ::flatbuffers::VOffsetT = 16;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -60,6 +61,7 @@ impl<'a> PositionRemoved<'a> {
         if let Some(x) = args.metadata {
             builder.add_metadata(x);
         }
+        builder.add_position_side(args.position_side);
         builder.finish()
     }
 
@@ -125,6 +127,17 @@ impl<'a> PositionRemoved<'a> {
         }
     }
     #[inline]
+    pub fn position_side(&self) -> PositionSide {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<PositionSide>(PositionRemoved::VT_POSITION_SIDE, Some(PositionSide::NET))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn provenance(&self) -> Option<AccountFactProvenance<'a>> {
         // Safety:
         // Created from valid Table for this object
@@ -151,6 +164,7 @@ impl ::flatbuffers::Verifiable for PositionRemoved<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("segment_key", Self::VT_SEGMENT_KEY, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("instrument_id", Self::VT_INSTRUMENT_ID, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("market_id", Self::VT_MARKET_ID, true)?
+     .visit_field::<PositionSide>("position_side", Self::VT_POSITION_SIDE, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<AccountFactProvenance>>("provenance", Self::VT_PROVENANCE, false)?
      .finish();
         Ok(())
@@ -162,6 +176,7 @@ pub struct PositionRemovedArgs<'a> {
     pub segment_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub position_side: PositionSide,
     pub provenance: Option<::flatbuffers::WIPOffset<AccountFactProvenance<'a>>>,
 }
 impl<'a> Default for PositionRemovedArgs<'a> {
@@ -173,6 +188,7 @@ impl<'a> Default for PositionRemovedArgs<'a> {
             segment_key: None,   // required field
             instrument_id: None, // required field
             market_id: None,     // required field
+            position_side: PositionSide::NET,
             provenance: None,
         }
     }
@@ -223,6 +239,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> PositionRemovedBuilder<'a, 'b
         );
     }
     #[inline]
+    pub fn add_position_side(&mut self, position_side: PositionSide) {
+        self.fbb_.push_slot::<PositionSide>(
+            PositionRemoved::VT_POSITION_SIDE,
+            position_side,
+            PositionSide::NET,
+        );
+    }
+    #[inline]
     pub fn add_provenance(
         &mut self,
         provenance: ::flatbuffers::WIPOffset<AccountFactProvenance<'b>>,
@@ -268,6 +292,7 @@ impl ::core::fmt::Debug for PositionRemoved<'_> {
         ds.field("segment_key", &self.segment_key());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
+        ds.field("position_side", &self.position_side());
         ds.field("provenance", &self.provenance());
         ds.finish()
     }

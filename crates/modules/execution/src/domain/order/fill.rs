@@ -17,6 +17,14 @@ pub struct ExecutionFill {
     /// distinct from the order's requested/pricing market.
     #[serde(default)]
     pub execution_market_id: Option<MarketId>,
+    #[serde(default)]
+    pub reported_provider_id: Option<String>,
+    #[serde(default)]
+    pub provider_product: Option<kairos_primitives::ProviderProductCode>,
+    #[serde(default)]
+    pub provider_symbol: Option<kairos_primitives::ProviderSymbol>,
+    #[serde(default)]
+    pub remote_order_id: Option<RemoteOrderId>,
     pub side: OrderSide,
     pub quantity: Quantity,
     pub price: Price,

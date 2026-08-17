@@ -1,9 +1,10 @@
 include "../../common/decimal.fbs";
+include "observation_scope.fbs";
 
 namespace kairos.market.v2;
 
 table Ticker24h {
-  market_id:string (required);
+  scope:ObservationScope (required);
   instrument_id:string (required);
   source_id:string (required);
   last_price:kairos.common.v2.Decimal64;

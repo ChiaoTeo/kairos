@@ -75,13 +75,16 @@ impl SqlxExecutionAudit {
         self.run(|pool| async move {
             let mut transaction = pool.begin().await?;
             for event in &events {
-                sqlx::query("INSERT OR IGNORE INTO execution_events(order_id,status,remote_order_id,occurred_at_unix_nanos,reason,event_key) VALUES (?,?,?,?,?,?)")
+                let attempt_payload = event.attempt.as_ref().map(serde_json::to_string).transpose()
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                sqlx::query("INSERT OR IGNORE INTO execution_events(order_id,status,remote_order_id,occurred_at_unix_nanos,reason,event_key,attempt_payload) VALUES (?,?,?,?,?,?,?)")
                     .bind(event.order_id.as_str())
                     .bind(format!("{:?}", event.status).to_ascii_lowercase())
                     .bind(event.remote_order_id.as_ref().map(kairos_primitives::RemoteOrderId::as_str))
                     .bind(event.occurred_at_unix_nanos.get() as i64)
                     .bind(&event.reason)
                     .bind(order_event_key(event))
+                    .bind(attempt_payload)
                     .execute(&mut *transaction)
                     .await?;
             }
@@ -122,7 +125,7 @@ impl SqlxExecutionAudit {
         let until = query.until_unix_nanos.map(|value| value.get() as i64);
         let limit = query.limit.unwrap_or(10_000) as i64;
         self.run(|pool| async move {
-            let rows = sqlx::query("SELECT sequence,order_id,status,remote_order_id,occurred_at_unix_nanos,reason FROM execution_events WHERE (? IS NULL OR order_id = ?) AND (? IS NULL OR remote_order_id = ?) AND (? IS NULL OR lower(status) = lower(?)) AND (? IS NULL OR occurred_at_unix_nanos >= ?) AND (? IS NULL OR occurred_at_unix_nanos <= ?) ORDER BY sequence ASC LIMIT ?")
+            let rows = sqlx::query("SELECT sequence,order_id,status,remote_order_id,occurred_at_unix_nanos,reason,attempt_payload FROM execution_events WHERE (? IS NULL OR order_id = ?) AND (? IS NULL OR remote_order_id = ?) AND (? IS NULL OR lower(status) = lower(?)) AND (? IS NULL OR occurred_at_unix_nanos >= ?) AND (? IS NULL OR occurred_at_unix_nanos <= ?) ORDER BY sequence ASC LIMIT ?")
                 .bind(&order_id).bind(&order_id)
                 .bind(&remote_order_id).bind(&remote_order_id)
                 .bind(&status).bind(&status)
@@ -150,6 +153,11 @@ impl SqlxExecutionAudit {
                             as u64)
                             .into(),
                         reason: row.try_get("reason")?,
+                        attempt: row
+                            .try_get::<Option<String>, _>("attempt_payload")?
+                            .map(|payload| serde_json::from_str(&payload))
+                            .transpose()
+                            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
                     })
                 })
                 .collect()
@@ -231,6 +239,7 @@ mod tests {
             reason: String::new(),
             fill_id: None,
             filled_quantity: None,
+            attempt: None,
         };
         audit.publish(&event).unwrap();
         audit.publish(&event).unwrap();

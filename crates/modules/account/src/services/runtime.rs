@@ -1,11 +1,11 @@
 use crate::application::MarkToMarket;
-use crate::application::{AccountRefreshIssue, AccountRefreshReport, AccountsSnapshot};
+use crate::application::{AccountCurrentView, AccountRefreshIssue, AccountRefreshReport};
 use crate::domain::{
     AccountEvent, AccountFill, AccountSegment, AccountSnapshot, ApplyOutcome, Money, Position,
     SegmentKey, SignedQuantity, SnapshotKind,
 };
 use crate::services::actor::AccountActor;
-use crate::services::persistence::JsonAccountStore;
+use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 use crate::services::persistence_worker::AccountPersistenceWorker;
 use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
 use kairos_primitives::ActorId;
@@ -18,7 +18,7 @@ use tracing::info;
 /// It owns no account facts; all business mutation remains inside `AccountActor`.
 pub(crate) struct AccountRuntime {
     actor: AccountActor,
-    cached_snapshot: Arc<AccountsSnapshot>,
+    cached_current_view: Arc<AccountCurrentView>,
     refresh_worker: Option<AccountRefreshWorker>,
     pending_refresh: Option<(String, Receiver<Vec<RefreshFetch>>)>,
     persistence: Option<AccountPersistenceWorker>,
@@ -40,9 +40,11 @@ impl AccountRuntime {
                 generation: 0.into(),
                 event_sequence: 0.into(),
                 accounts: Vec::new(),
+                pending_business_events: Vec::new(),
             },
         };
         let restored_count = restored.accounts.len();
+        let mut pending_business_events = VecDeque::from(restored.pending_business_events);
         let mut actor = AccountActor::new(
             segments,
             restored.accounts,
@@ -50,16 +52,34 @@ impl AccountRuntime {
             restored.event_sequence,
         )?;
         let journal_events_since_checkpoint = if let Some(store) = store.as_ref() {
-            let events = store.load_events()?;
-            let count = events.len();
-            for event in events {
-                actor.apply_events(event)?;
+            let records = store.load_journal()?;
+            let count = records.len();
+            for record in records {
+                match record {
+                    AccountJournalRecord::Transition {
+                        events,
+                        business_events,
+                    } => {
+                        for event in events {
+                            actor.apply_events(event)?;
+                        }
+                        pending_business_events.extend(business_events);
+                    }
+                    AccountJournalRecord::PublicationAcknowledged {
+                        sequence,
+                        account_id,
+                    } => acknowledge_outbox_event(
+                        &mut pending_business_events,
+                        sequence,
+                        &account_id,
+                    ),
+                }
             }
             count
         } else {
             0
         };
-        let cached_snapshot = actor.snapshot();
+        let cached_current_view = actor.current_view();
         if restored_count > 0 {
             info!(
                 event = "account_state_restored",
@@ -70,12 +90,12 @@ impl AccountRuntime {
         }
         Ok(Self {
             actor,
-            cached_snapshot: Arc::new(cached_snapshot),
+            cached_current_view: Arc::new(cached_current_view),
             refresh_worker: source.map(AccountRefreshWorker::new),
             pending_refresh: None,
             persistence: store.map(AccountPersistenceWorker::new),
             journal_events_since_checkpoint,
-            pending_business_events: VecDeque::new(),
+            pending_business_events,
         })
     }
 
@@ -115,13 +135,14 @@ impl AccountRuntime {
             return Ok(settlement_outcome);
         }
         let events = [fill_event, settlement_event];
-        if let Err(error) = self.persist_events(&events) {
+        let business_events = self.actor.business_events_since(&actor_before);
+        if let Err(error) = self.persist_transition(&events, &business_events) {
             self.actor.restore_undo(undo);
             return Err(error);
         }
-        self.cached_snapshot = Arc::new(self.actor.snapshot());
-        self.pending_business_events
-            .extend(self.actor.business_events_since(&actor_before));
+        self.cached_current_view = Arc::new(self.actor.current_view());
+        self.pending_business_events.extend(business_events);
+        self.maybe_checkpoint()?;
         Ok(ApplyOutcome::Applied)
     }
 
@@ -177,6 +198,14 @@ impl AccountRuntime {
     }
 
     pub(crate) fn apply_event(&mut self, event: AccountEvent) -> Result<usize, String> {
+        self.apply_event_with_provenance(event, None)
+    }
+
+    pub(crate) fn apply_event_with_provenance(
+        &mut self,
+        event: AccountEvent,
+        provenance: Option<crate::application::AccountFactProvenance>,
+    ) -> Result<usize, String> {
         let actor_before = self.actor.clone();
         let events = match event {
             AccountEvent::Batch(events) => events,
@@ -196,14 +225,17 @@ impl AccountRuntime {
         if applied == 0 {
             return Ok(0);
         }
-        let persisted = AccountEvent::Batch(events);
-        if let Err(error) = self.persist_events(std::slice::from_ref(&persisted)) {
+        let mut business_events = self.actor.business_events_since(&actor_before);
+        for event in &mut business_events {
+            event.provenance = provenance.clone();
+        }
+        if let Err(error) = self.persist_transition(&events, &business_events) {
             self.actor.restore_undo(undo);
             return Err(error);
         }
-        self.cached_snapshot = Arc::new(self.actor.snapshot());
-        self.pending_business_events
-            .extend(self.actor.business_events_since(&actor_before));
+        self.cached_current_view = Arc::new(self.actor.current_view());
+        self.pending_business_events.extend(business_events);
+        self.maybe_checkpoint()?;
         Ok(applied)
     }
 
@@ -351,12 +383,12 @@ impl AccountRuntime {
         self.refresh_report(account_id, segments)
     }
 
-    pub(crate) fn snapshot(&self) -> AccountsSnapshot {
-        (*self.cached_snapshot).clone()
+    pub(crate) fn current_view(&self) -> AccountCurrentView {
+        (*self.cached_current_view).clone()
     }
 
-    pub(crate) fn snapshot_shared(&self) -> Arc<AccountsSnapshot> {
-        Arc::clone(&self.cached_snapshot)
+    pub(crate) fn current_view_shared(&self) -> Arc<AccountCurrentView> {
+        Arc::clone(&self.cached_current_view)
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -383,20 +415,26 @@ impl AccountRuntime {
         self.pending_business_events.front()
     }
 
-    pub(crate) fn acknowledge_business_event(&mut self) {
-        self.pending_business_events.pop_front();
-    }
-
-    pub(crate) fn attach_business_event_provenance(
-        &mut self,
-        provenance: crate::application::AccountFactProvenance,
-    ) {
-        if let Some(event) = self.pending_business_events.front_mut() {
-            event.provenance = Some(provenance);
+    pub(crate) fn acknowledge_business_event(&mut self) -> Result<(), String> {
+        let Some(event) = self.pending_business_events.front() else {
+            return Ok(());
+        };
+        if let Some(persistence) = self.persistence.as_ref() {
+            persistence.append_journal(vec![AccountJournalRecord::PublicationAcknowledged {
+                sequence: event.sequence,
+                account_id: event.account_id.clone(),
+            }])?;
+            self.journal_events_since_checkpoint += 1;
         }
+        self.pending_business_events.pop_front();
+        Ok(())
     }
 
-    fn persist_candidate(&self, candidate: &AccountActor) -> Result<(), String> {
+    fn persist_candidate(
+        &self,
+        candidate: &AccountActor,
+        pending_business_events: &VecDeque<crate::application::AccountBusinessEvent>,
+    ) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
             let (actor_id, generation, event_sequence) = candidate.persistence_metadata();
             persistence.checkpoint(
@@ -404,35 +442,63 @@ impl AccountRuntime {
                 generation.get(),
                 event_sequence.get(),
                 candidate.persistent_accounts(),
+                pending_business_events.iter().cloned().collect(),
             )?;
         }
         Ok(())
     }
 
     fn commit_candidate(&mut self, candidate: AccountActor) -> Result<(), String> {
-        self.persist_candidate(&candidate)?;
         let business_events = candidate.business_events_since(&self.actor);
+        let mut pending_business_events = self.pending_business_events.clone();
+        pending_business_events.extend(business_events.iter().cloned());
+        self.persist_candidate(&candidate, &pending_business_events)?;
         self.journal_events_since_checkpoint = 0;
-        self.cached_snapshot = Arc::new(candidate.snapshot());
+        self.cached_current_view = Arc::new(candidate.current_view());
         self.actor = candidate;
         self.pending_business_events.extend(business_events);
         Ok(())
     }
 
-    fn persist_events(&mut self, events: &[AccountEvent]) -> Result<(), String> {
+    fn persist_transition(
+        &mut self,
+        events: &[AccountEvent],
+        business_events: &[crate::application::AccountBusinessEvent],
+    ) -> Result<(), String> {
         if let Some(persistence) = self.persistence.as_ref() {
-            if events.iter().any(event_requires_durability) {
-                persistence.append_events(events.to_vec())?;
+            let record = AccountJournalRecord::Transition {
+                events: events.to_vec(),
+                business_events: business_events.to_vec(),
+            };
+            if !business_events.is_empty() || events.iter().any(event_requires_durability) {
+                persistence.append_journal(vec![record])?;
             } else {
-                persistence.enqueue_events(events.to_vec())?;
+                persistence.enqueue_journal(vec![record])?;
             }
-            self.journal_events_since_checkpoint += events.len();
-            if self.journal_events_since_checkpoint >= 1_024 {
-                self.persist_candidate(&self.actor)?;
-                self.journal_events_since_checkpoint = 0;
-            }
+            self.journal_events_since_checkpoint += 1;
         }
         Ok(())
+    }
+
+    fn maybe_checkpoint(&mut self) -> Result<(), String> {
+        if self.journal_events_since_checkpoint >= 1_024 {
+            self.persist_candidate(&self.actor, &self.pending_business_events)?;
+            self.journal_events_since_checkpoint = 0;
+        }
+        Ok(())
+    }
+}
+
+fn acknowledge_outbox_event(
+    events: &mut VecDeque<crate::application::AccountBusinessEvent>,
+    sequence: kairos_primitives::Sequence,
+    account_id: &kairos_primitives::AccountId,
+) {
+    if let Some(position) = events
+        .iter()
+        .position(|event| event.sequence == sequence && &event.account_id == account_id)
+    {
+        events.remove(position);
     }
 }
 
@@ -450,7 +516,7 @@ fn unrealized_pnl(position: &Position) -> Result<Money, String> {
 }
 
 fn calculate_equity(
-    projection: &crate::application::AccountProjection,
+    projection: &crate::application::AccountSegmentView,
     positions: &[Position],
     quote_asset: &str,
 ) -> Result<Money, String> {

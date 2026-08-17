@@ -1292,7 +1292,7 @@ def system_logs(
     if follow and effective_output(output) is not OutputFormat.TEXT:
         raise typer.BadParameter("--follow currently supports text output only")
     owner = WorkspaceApplication().open(workspace)
-    path = owner.paths.logs / "processes" / f"{component}.log"
+    path = owner.paths.logs / component / "process.log"
     try:
         since_time = parse_since(since)
     except ValueError as error:

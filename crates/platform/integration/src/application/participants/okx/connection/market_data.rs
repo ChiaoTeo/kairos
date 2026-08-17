@@ -178,6 +178,7 @@ impl OkxLiveMarket {
             last_sequence: Some(Sequence::new(sequence)),
             sequence: Some(Sequence::new(sequence)),
             observed_at_unix_nanos: timestamp(row)?,
+            venue: Default::default(),
         })
     }
 }
@@ -263,6 +264,7 @@ fn normalize_trade(symbol: &str, row: &Value) -> Result<MarketEvent, Integration
             .and_then(|v| v.parse().ok())
             .map(Sequence::new),
         observed_at_unix_nanos: timestamp(row)?,
+        venue: Default::default(),
     })
 }
 

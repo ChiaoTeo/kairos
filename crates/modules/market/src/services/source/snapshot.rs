@@ -83,11 +83,14 @@ async fn run<C>(
                         }).await.is_err() { return; }
                     }
                     SourceCommand::ResyncOrderBook { request_id, market } => {
+                        let Some(market_id) = market.market_id().cloned() else {
+                            continue;
+                        };
                         if inputs.send(SourceInput::ResyncRejected {
                             source_id: source_id.clone(),
                             epoch,
                             request_id,
-                            market_id: market.market_id,
+                            market_id,
                             error: "snapshot source does not provide an order-book stream".into(),
                         }).await.is_err() { return; }
                     }

@@ -85,7 +85,7 @@ mod tests {
         let data = directory.path().join("events.jsonl");
         let manifest = directory.path().join("events.manifest.json");
         let event = MarketObservation::Bar(Bar {
-            market_id: kairos_primitives::MarketId::new("market:test").unwrap(),
+            scope: crate::ObservationScope::market("market:test").unwrap(),
             instrument_id: kairos_primitives::InstrumentId::new("instrument:test").unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),

@@ -17,6 +17,14 @@ impl ExecutionActor {
                 && existing.price == request.price
                 && existing.fee == request.fee
                 && existing.fee_currency == request.fee_currency
+                && existing.execution_market_id == request.execution_market_id
+                && existing.reported_provider_id == request.reported_provider_id
+                && existing.provider_product == request.provider_product
+                && existing.provider_symbol == request.provider_symbol
+                && request
+                    .remote_order_id
+                    .as_ref()
+                    .is_none_or(|value| existing.remote_order_id.as_ref() == Some(value))
                 && request
                     .occurred_at_unix_nanos
                     .is_none_or(|value| value == existing.occurred_at_unix_nanos);
@@ -64,10 +72,14 @@ impl ExecutionActor {
             leg_id: order.leg_id.clone(),
             intent_id: order.intent_id.clone(),
             instrument_id: order.instrument_id.clone(),
-            execution_market_id: request
-                .execution_market_id
+            execution_market_id: request.execution_market_id.clone(),
+            reported_provider_id: request.reported_provider_id.clone(),
+            provider_product: request.provider_product.clone(),
+            provider_symbol: request.provider_symbol.clone(),
+            remote_order_id: request
+                .remote_order_id
                 .clone()
-                .or_else(|| order.market_id.clone()),
+                .or_else(|| order.remote_order_id.clone()),
             side: order.side,
             quantity: request.quantity,
             price: request.price,

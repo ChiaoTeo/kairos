@@ -893,7 +893,6 @@ mod tests {
             segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
             market_id: kairos_primitives::MarketId::new("market:okx:BTC-USDT-SWAP").unwrap(),
             source_symbol: kairos_primitives::Symbol::new("BTC-USDT-SWAP").unwrap(),
-            market_data_access_id: None,
         };
         let result = normalize_market_profile(
             &request,

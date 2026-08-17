@@ -9,8 +9,8 @@ pub mod composition;
 pub mod domain;
 mod services;
 
-pub use application::AccountsSnapshot;
+pub use application::AccountCurrentView;
 pub use application::{
     AccountApplication, AccountError, AccountEvent, AccountObservedFill, AccountProcess,
-    AccountSnapshotPublisher, MarkToMarket, ReconcileAccount, RefreshAccount,
+    MarkToMarket, ReconcileAccount, RefreshAccount,
 };

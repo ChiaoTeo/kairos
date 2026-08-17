@@ -21,14 +21,19 @@ impl<'a> ::flatbuffers::Follow<'a> for Trade<'a> {
 
 impl<'a> Trade<'a> {
     pub const VT_TRADE_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_PRICE: ::flatbuffers::VOffsetT = 12;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 14;
     pub const VT_AGGRESSOR_SIDE: ::flatbuffers::VOffsetT = 16;
-    pub const VT_SOURCE_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 18;
-    pub const VT_RECEIVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_VENUE_CODE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_TAPE: ::flatbuffers::VOffsetT = 20;
+    pub const VT_TRF_ID: ::flatbuffers::VOffsetT = 22;
+    pub const VT_PARTICIPANT_TIMESTAMP_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_TRF_TIMESTAMP_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_SOURCE_OBSERVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
+    pub const VT_RECEIVED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 30;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -47,6 +52,13 @@ impl<'a> Trade<'a> {
         let mut builder = TradeBuilder::new(_fbb);
         builder.add_received_at_unix_nanos(args.received_at_unix_nanos);
         builder.add_source_observed_at_unix_nanos(args.source_observed_at_unix_nanos);
+        builder.add_trf_timestamp_unix_nanos(args.trf_timestamp_unix_nanos);
+        builder.add_participant_timestamp_unix_nanos(args.participant_timestamp_unix_nanos);
+        builder.add_trf_id(args.trf_id);
+        builder.add_tape(args.tape);
+        if let Some(x) = args.venue_code {
+            builder.add_venue_code(x);
+        }
         if let Some(x) = args.quantity {
             builder.add_quantity(x);
         }
@@ -59,8 +71,8 @@ impl<'a> Trade<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
-        if let Some(x) = args.market_id {
-            builder.add_market_id(x);
+        if let Some(x) = args.scope {
+            builder.add_scope(x);
         }
         if let Some(x) = args.trade_id {
             builder.add_trade_id(x);
@@ -80,13 +92,13 @@ impl<'a> Trade<'a> {
         }
     }
     #[inline]
-    pub fn market_id(&self) -> &'a str {
+    pub fn scope(&self) -> ObservationScope<'a> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Trade::VT_MARKET_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<ObservationScope>>(Trade::VT_SCOPE, None)
                 .unwrap()
         }
     }
@@ -149,6 +161,52 @@ impl<'a> Trade<'a> {
         }
     }
     #[inline]
+    pub fn venue_code(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Trade::VT_VENUE_CODE, None)
+        }
+    }
+    #[inline]
+    pub fn tape(&self) -> u32 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<u32>(Trade::VT_TAPE, Some(0)).unwrap() }
+    }
+    #[inline]
+    pub fn trf_id(&self) -> u32 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe { self._tab.get::<u32>(Trade::VT_TRF_ID, Some(0)).unwrap() }
+    }
+    #[inline]
+    pub fn participant_timestamp_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Trade::VT_PARTICIPANT_TIMESTAMP_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn trf_timestamp_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Trade::VT_TRF_TIMESTAMP_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn source_observed_at_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -184,9 +242,9 @@ impl ::flatbuffers::Verifiable for Trade<'_> {
                 Self::VT_TRADE_ID,
                 false,
             )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_id",
-                Self::VT_MARKET_ID,
+            .visit_field::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                "scope",
+                Self::VT_SCOPE,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -210,6 +268,23 @@ impl ::flatbuffers::Verifiable for Trade<'_> {
                 Self::VT_AGGRESSOR_SIDE,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "venue_code",
+                Self::VT_VENUE_CODE,
+                false,
+            )?
+            .visit_field::<u32>("tape", Self::VT_TAPE, false)?
+            .visit_field::<u32>("trf_id", Self::VT_TRF_ID, false)?
+            .visit_field::<u64>(
+                "participant_timestamp_unix_nanos",
+                Self::VT_PARTICIPANT_TIMESTAMP_UNIX_NANOS,
+                false,
+            )?
+            .visit_field::<u64>(
+                "trf_timestamp_unix_nanos",
+                Self::VT_TRF_TIMESTAMP_UNIX_NANOS,
+                false,
+            )?
             .visit_field::<u64>(
                 "source_observed_at_unix_nanos",
                 Self::VT_SOURCE_OBSERVED_AT_UNIX_NANOS,
@@ -226,12 +301,17 @@ impl ::flatbuffers::Verifiable for Trade<'_> {
 }
 pub struct TradeArgs<'a> {
     pub trade_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub price: Option<&'a super::super::common::v_2::Decimal64>,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub aggressor_side: super::super::common::v_2::Side,
+    pub venue_code: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub tape: u32,
+    pub trf_id: u32,
+    pub participant_timestamp_unix_nanos: u64,
+    pub trf_timestamp_unix_nanos: u64,
     pub source_observed_at_unix_nanos: u64,
     pub received_at_unix_nanos: u64,
 }
@@ -240,12 +320,17 @@ impl<'a> Default for TradeArgs<'a> {
     fn default() -> Self {
         TradeArgs {
             trade_id: None,
-            market_id: None,     // required field
+            scope: None,         // required field
             instrument_id: None, // required field
             source_id: None,     // required field
             price: None,         // required field
             quantity: None,      // required field
             aggressor_side: super::super::common::v_2::Side::UNSPECIFIED,
+            venue_code: None,
+            tape: 0,
+            trf_id: 0,
+            participant_timestamp_unix_nanos: 0,
+            trf_timestamp_unix_nanos: 0,
             source_observed_at_unix_nanos: 0,
             received_at_unix_nanos: 0,
         }
@@ -263,9 +348,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Trade::VT_TRADE_ID, trade_id);
     }
     #[inline]
-    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_scope(&mut self, scope: ::flatbuffers::WIPOffset<ObservationScope<'b>>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Trade::VT_MARKET_ID, market_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<ObservationScope>>(Trade::VT_SCOPE, scope);
     }
     #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -301,6 +386,35 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
         );
     }
     #[inline]
+    pub fn add_venue_code(&mut self, venue_code: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Trade::VT_VENUE_CODE, venue_code);
+    }
+    #[inline]
+    pub fn add_tape(&mut self, tape: u32) {
+        self.fbb_.push_slot::<u32>(Trade::VT_TAPE, tape, 0);
+    }
+    #[inline]
+    pub fn add_trf_id(&mut self, trf_id: u32) {
+        self.fbb_.push_slot::<u32>(Trade::VT_TRF_ID, trf_id, 0);
+    }
+    #[inline]
+    pub fn add_participant_timestamp_unix_nanos(&mut self, participant_timestamp_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            Trade::VT_PARTICIPANT_TIMESTAMP_UNIX_NANOS,
+            participant_timestamp_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_trf_timestamp_unix_nanos(&mut self, trf_timestamp_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            Trade::VT_TRF_TIMESTAMP_UNIX_NANOS,
+            trf_timestamp_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
     pub fn add_source_observed_at_unix_nanos(&mut self, source_observed_at_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             Trade::VT_SOURCE_OBSERVED_AT_UNIX_NANOS,
@@ -324,7 +438,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> TradeBuilder<'a, 'b, A> {
     #[inline]
     pub fn finish(self) -> ::flatbuffers::WIPOffset<Trade<'a>> {
         let o = self.fbb_.end_table(self.start_);
-        self.fbb_.required(o, Trade::VT_MARKET_ID, "market_id");
+        self.fbb_.required(o, Trade::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Trade::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, Trade::VT_SOURCE_ID, "source_id");
@@ -338,12 +452,20 @@ impl ::core::fmt::Debug for Trade<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("Trade");
         ds.field("trade_id", &self.trade_id());
-        ds.field("market_id", &self.market_id());
+        ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("source_id", &self.source_id());
         ds.field("price", &self.price());
         ds.field("quantity", &self.quantity());
         ds.field("aggressor_side", &self.aggressor_side());
+        ds.field("venue_code", &self.venue_code());
+        ds.field("tape", &self.tape());
+        ds.field("trf_id", &self.trf_id());
+        ds.field(
+            "participant_timestamp_unix_nanos",
+            &self.participant_timestamp_unix_nanos(),
+        );
+        ds.field("trf_timestamp_unix_nanos", &self.trf_timestamp_unix_nanos());
         ds.field(
             "source_observed_at_unix_nanos",
             &self.source_observed_at_unix_nanos(),

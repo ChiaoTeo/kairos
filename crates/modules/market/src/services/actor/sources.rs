@@ -47,6 +47,10 @@ impl PendingSourceRequest {
 }
 
 impl MarketActor {
+    pub(crate) fn source_states(&self) -> impl Iterator<Item = &SourceState> {
+        self.sources.values()
+    }
+
     pub(crate) fn register_source(&mut self, descriptor: SourceDescriptor) -> Result<(), String> {
         if self.sources.contains_key(&descriptor.id) {
             return Err(format!("market source already exists: {}", descriptor.id));

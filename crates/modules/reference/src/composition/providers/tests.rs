@@ -4,7 +4,7 @@ use super::{
     BinanceSpotSource, CompositeSource, HyperliquidSource, MassiveEquitySource,
     MassiveOptionsCoverageSource, OkxSource, ReferenceSource,
 };
-use crate::domain::{Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
+use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
 use crate::services::actor::ReferenceActor;
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use kairos_integration::application::capabilities::reference::{
@@ -401,7 +401,7 @@ fn okx_provider_facts_receive_canonical_identity_only_in_reference() {
     assert!(catalog
         .markets
         .iter()
-        .any(|value| value.market_id == "market:okx:swap:BTC-USDT-SWAP"));
+        .any(|value| value.market_id == "market:okx:perpetual:BTC-USDT-SWAP"));
     assert!(catalog
         .markets
         .iter()
@@ -568,7 +568,7 @@ fn binance_derivative_facts_keep_product_selection_but_not_canonical_identity() 
     );
     assert_eq!(
         catalog.markets[0].market_id,
-        "market:binance:usd-m-futures:BTCUSDT_260626"
+        "market:binance:future:BTCUSDT_260626"
     );
     assert_eq!(catalog.markets[0].effective_to_unix_nanos, Some(expiry));
 }
@@ -603,7 +603,7 @@ fn binance_equity_perpetual_has_no_expiry_and_links_canonical_equity() {
     )
     .unwrap();
     let market = &catalog.markets[0];
-    assert_eq!(market.market_id, "market:binance:usd-m-futures:AAPLUSDT");
+    assert_eq!(market.market_id, "market:binance:perpetual:AAPLUSDT");
     assert_eq!(market.asset_type, Some(AssetClass::Equity));
     assert_eq!(
         market.underlying_instrument_id.as_deref(),
@@ -627,7 +627,7 @@ fn binance_equity_perpetual_has_no_expiry_and_links_canonical_equity() {
 }
 
 #[test]
-fn binance_equity_catalog_builds_broker_execution_access() {
+fn binance_equity_broker_catalog_does_not_invent_exchange_listing_or_market() {
     let catalog = binance_equity_provider_catalog(ExternalInstrumentCatalog {
         participant: ParticipantRef::new(ParticipantKind::Broker, "binance").unwrap(),
         instruments: vec![ExternalInstrument {
@@ -656,10 +656,9 @@ fn binance_equity_catalog_builds_broker_execution_access() {
         catalog.instruments[0].instrument_id,
         "instrument:equity:US:AAPL:common"
     );
-    assert_eq!(catalog.markets[0].market_id, "market:binance:equity:AAPL");
-    assert_eq!(catalog.markets[0].asset_type, Some(AssetClass::Equity));
-    assert_eq!(catalog.execution_accesses[0].provider_id, "binance");
-    assert_eq!(catalog.execution_accesses[0].provider_symbol, "AAPL");
+    assert!(catalog.entities.is_empty());
+    assert!(catalog.listings.is_empty());
+    assert!(catalog.markets.is_empty());
 }
 
 #[test]
@@ -669,7 +668,7 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
         participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
         instruments: vec![ExternalInstrument {
             source_symbol: ProviderSymbol::new("O:SPY260821C00500000").unwrap(),
-            source_venue: Some("XNAS".into()),
+            source_venue: Some("BATO".into()),
             kind: ExternalInstrumentKind::Option,
             base_currency: None,
             quote_currency: Some(Currency::new("USD").unwrap()),
@@ -689,10 +688,9 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
         }],
     })
     .unwrap();
-    assert!(catalog
-        .entities
-        .iter()
-        .any(|value| { value.entity_id == "exchange:nasdaq" && value.name == "Nasdaq" }));
+    assert!(catalog.entities.iter().any(|value| {
+        value.entity_id == "exchange:cboe-bzx-options" && value.name == "Cboe BZX Options Exchange"
+    }));
     assert!(catalog
         .instruments
         .iter()
@@ -701,19 +699,15 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
         value.instrument_id == "instrument:option:SPY:20270115:500:C"
             && value.underlying_instrument_id.as_deref() == Some("instrument:equity:US:SPY:common")
     }));
-    assert!(catalog.markets.iter().any(|value| {
-        value.market_id == "market:massive:options:O:SPY260821C00500000"
-            && value
-                .contract_size
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref()
-                == Some("100")
+    assert!(catalog.listings.iter().any(|value| {
+        value.listing_id == "listing:exchange:cboe-bzx-options:option:SPY-20270115-500-C"
+            && value.exchange_id == "exchange:cboe-bzx-options"
     }));
+    assert!(catalog.markets.is_empty());
 }
 
 #[test]
-fn massive_same_ticker_on_distinct_venues_has_distinct_market_data_accesses() {
+fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
     let equity = |venue: &str| ExternalInstrument {
         source_symbol: ProviderSymbol::new("BCPC").unwrap(),
         source_venue: Some(venue.into()),
@@ -740,16 +734,16 @@ fn massive_same_ticker_on_distinct_venues_has_distinct_market_data_accesses() {
     })
     .unwrap();
 
-    assert_eq!(catalog.markets.len(), 2);
-    assert_eq!(catalog.market_data_accesses.len(), 2);
+    assert_eq!(catalog.listings.len(), 2);
     let ids = catalog
-        .market_data_accesses
+        .listings
         .iter()
-        .map(|access| access.access_id.as_str())
+        .map(|listing| listing.listing_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(ids.len(), 2);
-    assert!(ids.contains("market-data-access:massive:market:exchange:nasdaq:equity:BCPC"));
-    assert!(ids.contains("market-data-access:massive:market:exchange:nyse:equity:BCPC"));
+    assert!(ids.contains("listing:exchange:nasdaq:equity:BCPC:USD"));
+    assert!(ids.contains("listing:exchange:nyse:equity:BCPC:USD"));
+    assert!(catalog.markets.is_empty());
 }
 
 #[test]
@@ -825,9 +819,11 @@ fn hyperliquid_spot_and_perpetual_have_distinct_provider_products() {
     )
     .unwrap();
     assert_eq!(catalog.instruments[0].instrument_id, "instrument:spot:PURR");
-    assert_eq!(catalog.markets[0].market_type, "spot");
-    assert_eq!(catalog.market_data_accesses[0].provider_product, "spot");
-    assert_eq!(catalog.market_data_accesses[0].provider_symbol, "PURR/USDC");
+    assert_eq!(catalog.markets[0].instrument_kind, InstrumentKind::Spot);
+    assert_eq!(
+        catalog.markets[0].venue_symbol.as_deref(),
+        Some("PURR/USDC")
+    );
 }
 
 #[tokio::test]
@@ -841,7 +837,6 @@ async fn provider_failure_keeps_last_known_good_snapshot() {
     let first = source.fetch_catalog().await.unwrap();
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(first.markets, second.markets);
-    assert_eq!(first.markets[0].source_id.as_deref(), Some("test-flaky"));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(source.provider_health()[0].status, "stale");
     assert!(source.provider_health()[0].stale);
@@ -1063,6 +1058,79 @@ async fn shared_canonical_instrument_aggregates_listing_availability() {
     assert_eq!(catalog.instruments[0].source_id, None);
 }
 
+#[tokio::test]
+async fn shared_canonical_instrument_is_enriched_by_an_authoritative_optional_fact() {
+    let instrument = || Instrument {
+        instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
+        symbol: Symbol::new("BTC").unwrap(),
+        instrument_type: InstrumentKind::Spot,
+        primary_currency_asset_id: Some(
+            kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
+        ),
+        status: "active".into(),
+        ..Instrument::default()
+    };
+    let mut without_currency = instrument();
+    without_currency.primary_currency_asset_id = None;
+    let with_currency = instrument();
+    let mut source = CompositeSource::new(vec![
+        TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog {
+                instruments: vec![without_currency],
+                ..ProviderCatalog::default()
+            },
+        }),
+        TestProviderSource::from(FixedSource {
+            id: "provider-b",
+            catalog: ProviderCatalog {
+                instruments: vec![with_currency],
+                ..ProviderCatalog::default()
+            },
+        }),
+    ])
+    .await
+    .unwrap();
+
+    let catalog = source.fetch_catalog().await.unwrap();
+    assert_eq!(
+        catalog.instruments[0].primary_currency_asset_id.as_deref(),
+        Some("asset:crypto:BTC")
+    );
+}
+
+#[tokio::test]
+async fn shared_canonical_asset_is_active_when_any_provider_observes_it_active() {
+    let asset = |status| Asset {
+        asset_id: kairos_primitives::AssetId::new("asset:equity:AVB").unwrap(),
+        code: "AVB".into(),
+        asset_class: AssetClass::Equity,
+        status,
+        ..Asset::default()
+    };
+    let mut source = CompositeSource::new(vec![
+        TestProviderSource::from(FixedSource {
+            id: "provider-a",
+            catalog: ProviderCatalog {
+                assets: vec![asset("inactive".into())],
+                ..ProviderCatalog::default()
+            },
+        }),
+        TestProviderSource::from(FixedSource {
+            id: "provider-b",
+            catalog: ProviderCatalog {
+                assets: vec![asset("active".into())],
+                ..ProviderCatalog::default()
+            },
+        }),
+    ])
+    .await
+    .unwrap();
+
+    let catalog = source.fetch_catalog().await.unwrap();
+    assert_eq!(catalog.assets[0].status, "active".into());
+}
+
 #[test]
 fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
     let canonical = Instrument {
@@ -1219,7 +1287,7 @@ async fn okx_async_capability_maps_through_reference_end_to_end() {
     assert_eq!(catalog.markets.len(), 1);
     assert_eq!(
         catalog.markets[0].market_id,
-        "market:okx:swap:BTC-USDT-SWAP"
+        "market:okx:perpetual:BTC-USDT-SWAP"
     );
     assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.1"));
     assert_eq!(catalog.markets[0].contract_size.as_deref(), Some("0.01"));
@@ -1255,9 +1323,7 @@ async fn okx_margin_is_spot_identity_with_explicit_margin_access() {
 
     assert_eq!(catalog.instruments[0].instrument_id, "instrument:spot:BTC");
     assert_eq!(catalog.instruments[0].instrument_type, InstrumentKind::Spot);
-    assert_eq!(catalog.markets[0].market_type, "margin");
-    assert_eq!(catalog.execution_accesses[0].provider_product, "margin");
-    assert_eq!(catalog.market_data_accesses[0].provider_product, "margin");
+    assert_eq!(catalog.markets[0].instrument_kind, InstrumentKind::Spot);
 }
 
 #[tokio::test]
@@ -1311,8 +1377,8 @@ async fn massive_persists_each_successful_page_before_a_later_page_fails() {
         .await
         .unwrap()
         .into_iter()
-        .flat_map(|catalog| catalog.markets)
-        .any(|market| market.source_symbol == "AAPL"));
+        .flat_map(|catalog| catalog.instruments)
+        .any(|instrument| instrument.symbol == "AAPL"));
 }
 
 #[tokio::test]
@@ -1350,18 +1416,21 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
     assert!(completed.complete);
     assert!(completed
         .catalog
-        .markets
+        .instruments
         .iter()
-        .any(|market| market.source_symbol == "O:SPY260821C00500000"));
+        .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:500:C"));
     assert!(!completed
         .catalog
-        .markets
+        .instruments
         .iter()
-        .any(|market| market.source_symbol == "O:SPY260821P00400000"));
+        .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:400:P"));
+    assert!(completed.catalog.listings.is_empty());
+    assert!(completed.catalog.markets.is_empty());
 
     source.set_option_underlying("SPY", false).await.unwrap();
     let removed = source.fetch_catalog_step().await.unwrap();
     assert!(removed.complete);
+    assert!(removed.catalog.instruments.is_empty());
     assert!(removed.catalog.markets.is_empty());
 }
 
@@ -1427,17 +1496,25 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
 
     assert!(complete.complete);
     assert_eq!(complete.page_count, 1);
-    assert_eq!(complete.catalog.markets.len(), 9);
+    assert_eq!(
+        complete
+            .catalog
+            .instruments
+            .iter()
+            .filter(|instrument| instrument.instrument_type == InstrumentKind::Equity)
+            .count(),
+        9
+    );
     assert!(complete
         .catalog
-        .markets
+        .instruments
         .iter()
-        .any(|market| market.source_symbol == "TEST0"));
+        .any(|instrument| instrument.symbol == "TEST0"));
     assert!(complete
         .catalog
-        .markets
+        .instruments
         .iter()
-        .any(|market| market.source_symbol == "TEST8"));
+        .any(|instrument| instrument.symbol == "TEST8"));
 }
 
 #[tokio::test]

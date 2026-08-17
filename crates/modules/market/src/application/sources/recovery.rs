@@ -669,7 +669,7 @@ mod tests {
                 update: crate::services::source::messages::SourceOrderBookUpdate {
                     market: Box::new(market.clone()),
                     source_id: "binance-spot".into(),
-                    market_id: market.market_id.clone(),
+                    market_id: market.market_id().unwrap().clone(),
                     instrument_id: market.instrument_id.clone(),
                     first_sequence: 12.into(),
                     last_sequence: 12.into(),
@@ -684,13 +684,13 @@ mod tests {
         match command_receiver.recv().await.unwrap() {
             SourceCommand::ResyncOrderBook {
                 market: requested, ..
-            } => assert_eq!(requested.market_id, market.market_id),
+            } => assert_eq!(requested.market_id(), market.market_id()),
             _ => panic!("expected order-book resync command"),
         }
         let snapshot = application.current_view();
         assert_eq!(
             snapshot.sources[&SourceId::new("binance-spot").unwrap()].resyncing_markets,
-            vec![market.market_id]
+            vec![market.market_id().unwrap().clone()]
         );
     }
 
@@ -796,12 +796,15 @@ mod tests {
             .subscribe_static(SubscriptionId::new("btc").unwrap(), "test", market.clone())
             .unwrap();
         let observation = MarketObservation::Quote(Quote {
-            market_id: market.market_id,
+            scope: crate::ObservationScope::from(market.market_id().unwrap().clone()),
             instrument_id: market.instrument_id,
             bid_price: Some("100".parse().unwrap()),
             bid_quantity: Some("1".parse().unwrap()),
             ask_price: Some("101".parse().unwrap()),
             ask_quantity: Some("1".parse().unwrap()),
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: None,
             observed_at_unix_nanos: UnixNanos::new(1),
             source_id: source_id.to_string(),
         });

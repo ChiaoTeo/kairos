@@ -38,7 +38,10 @@ pub(crate) fn resolve_market(
     let matches: Vec<_> = markets
         .iter()
         .filter(|market| {
-            exchange_matches(market.exchange_id.as_str(), exchange_id)
+            market
+                .exchange_id
+                .as_ref()
+                .is_some_and(|value| exchange_matches(value.as_str(), exchange_id))
                 && market.route.provider_product == market_type
                 && asset_type.is_none_or(|value| {
                     market.asset_type.map(|class| class.as_str()) == Some(value)
@@ -97,7 +100,10 @@ pub(crate) fn resolve_option_markets(
         .iter()
         .filter(|market| {
             market.instrument_kind == InstrumentKind::Option
-                && exchange_matches(market.exchange_id.as_str(), exchange_id)
+                && market
+                    .exchange_id
+                    .as_ref()
+                    .is_some_and(|value| exchange_matches(value.as_str(), exchange_id))
                 && asset_type.is_none_or(|value| {
                     market.asset_type.map(|class| class.as_str()) == Some(value)
                 })
@@ -132,6 +138,9 @@ mod tests {
         .unwrap();
 
         let resolved = resolve_market(&[market], "binance", "spot", None, "btcusdt").unwrap();
-        assert_eq!(resolved.exchange_id.as_str(), "exchange:binance");
+        assert_eq!(
+            resolved.exchange_id.as_ref().unwrap().as_str(),
+            "exchange:binance"
+        );
     }
 }

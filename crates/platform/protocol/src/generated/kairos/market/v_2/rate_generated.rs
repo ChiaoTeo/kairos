@@ -21,7 +21,7 @@ impl<'a> ::flatbuffers::Follow<'a> for Rate<'a> {
 
 impl<'a> Rate<'a> {
     pub const VT_RATE_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_SCOPE: ::flatbuffers::VOffsetT = 6;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 8;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_BASIS: ::flatbuffers::VOffsetT = 12;
@@ -62,8 +62,8 @@ impl<'a> Rate<'a> {
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
         }
-        if let Some(x) = args.market_id {
-            builder.add_market_id(x);
+        if let Some(x) = args.scope {
+            builder.add_scope(x);
         }
         if let Some(x) = args.rate_id {
             builder.add_rate_id(x);
@@ -83,13 +83,13 @@ impl<'a> Rate<'a> {
         }
     }
     #[inline]
-    pub fn market_id(&self) -> &'a str {
+    pub fn scope(&self) -> ObservationScope<'a> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Rate::VT_MARKET_ID, None)
+                .get::<::flatbuffers::ForwardsUOffset<ObservationScope>>(Rate::VT_SCOPE, None)
                 .unwrap()
         }
     }
@@ -179,9 +179,9 @@ impl ::flatbuffers::Verifiable for Rate<'_> {
     ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
         v.visit_table(pos)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("rate_id", Self::VT_RATE_ID, true)?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "market_id",
-                Self::VT_MARKET_ID,
+            .visit_field::<::flatbuffers::ForwardsUOffset<ObservationScope>>(
+                "scope",
+                Self::VT_SCOPE,
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
@@ -217,7 +217,7 @@ impl ::flatbuffers::Verifiable for Rate<'_> {
 }
 pub struct RateArgs<'a> {
     pub rate_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub scope: Option<::flatbuffers::WIPOffset<ObservationScope<'a>>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub basis: Option<::flatbuffers::WIPOffset<&'a str>>,
@@ -231,7 +231,7 @@ impl<'a> Default for RateArgs<'a> {
     fn default() -> Self {
         RateArgs {
             rate_id: None,       // required field
-            market_id: None,     // required field
+            scope: None,         // required field
             instrument_id: None, // required field
             source_id: None,     // required field
             basis: None,         // required field
@@ -254,9 +254,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RateBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Rate::VT_RATE_ID, rate_id);
     }
     #[inline]
-    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_scope(&mut self, scope: ::flatbuffers::WIPOffset<ObservationScope<'b>>) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Rate::VT_MARKET_ID, market_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<ObservationScope>>(Rate::VT_SCOPE, scope);
     }
     #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
@@ -311,7 +311,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RateBuilder<'a, 'b, A> {
     pub fn finish(self) -> ::flatbuffers::WIPOffset<Rate<'a>> {
         let o = self.fbb_.end_table(self.start_);
         self.fbb_.required(o, Rate::VT_RATE_ID, "rate_id");
-        self.fbb_.required(o, Rate::VT_MARKET_ID, "market_id");
+        self.fbb_.required(o, Rate::VT_SCOPE, "scope");
         self.fbb_
             .required(o, Rate::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, Rate::VT_SOURCE_ID, "source_id");
@@ -325,7 +325,7 @@ impl ::core::fmt::Debug for Rate<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("Rate");
         ds.field("rate_id", &self.rate_id());
-        ds.field("market_id", &self.market_id());
+        ds.field("scope", &self.scope());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("source_id", &self.source_id());
         ds.field("basis", &self.basis());

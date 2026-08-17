@@ -17,7 +17,6 @@ use crate::domain::{
 use kairos_integration::application::{
     AsyncAccountEventSource, AsyncAccountReadConnection, IntegrationError,
 };
-use kairos_integration::blocking::AccountReadConnection;
 
 use futures_util::{stream::FuturesUnordered, StreamExt};
 
@@ -64,7 +63,7 @@ impl AccountInstrumentResolver {
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let key = format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}",
             provider.participant.id.to_ascii_lowercase(),
             provider
                 .instrument_type
@@ -73,10 +72,6 @@ impl AccountInstrumentResolver {
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
             provider.source_symbol.as_str().to_ascii_uppercase(),
-            provider
-                .market_data_access_id
-                .as_deref()
-                .unwrap_or_default()
         );
         if let Some(client) = &self.client {
             let generation = client
@@ -119,126 +114,83 @@ impl AccountInstrumentResolver {
         &self,
         provider: &kairos_integration::application::ProviderInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
-        if let Some(access_id) = provider.market_data_access_id.as_deref() {
-            let client = self
-                .client
-                .as_ref()
-                .ok_or_else(|| "Reference database client is not configured".to_string())?;
+        let symbol = provider.source_symbol.as_str();
+        let (markets, instruments) = self.identity_snapshot()?;
+        if provider.participant.id.eq_ignore_ascii_case("ibkr") {
+            let matches = instruments
+                .iter()
+                .filter(|value| {
+                    value.symbol.eq_ignore_ascii_case(symbol)
+                        && value.instrument_type == kairos_primitives::InstrumentKind::Equity
+                        && matches!(value.status.as_str(), "active" | "trading")
+                })
+                .collect::<Vec<_>>();
+            let [instrument] = matches.as_slice() else {
+                return Err(identity_resolution_error(provider, matches.len()));
+            };
+            return Ok((
+                InstrumentId::new(instrument.instrument_id.clone())
+                    .map_err(|error| error.to_string())?,
+                None,
+            ));
+        }
+
+        let domain = provider
+            .instrument_type
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let matches = markets
+            .iter()
+            .filter(|value| {
+                provider_id_from_exchange(&value.exchange_id)
+                    .is_some_and(|source| source.eq_ignore_ascii_case(&provider.participant.id))
+                    && value
+                        .venue_symbol
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(symbol))
+                    && matches!(value.status.as_str(), "active" | "trading")
+                    && provider_domain_matches_market(domain, &value.instrument_kind)
+            })
+            .collect::<Vec<_>>();
+        let [market] = matches.as_slice() else {
+            return Err(identity_resolution_error(provider, matches.len()));
+        };
+        Ok((
+            InstrumentId::new(market.instrument_id.clone()).map_err(|error| error.to_string())?,
+            Some(kairos_primitives::MarketId::new(market.market_id.clone())?),
+        ))
+    }
+
+    fn identity_snapshot(
+        &self,
+    ) -> Result<
+        (
+            Vec<kairos_reference_contract::ReferenceMarket>,
+            Vec<kairos_reference_contract::Instrument>,
+        ),
+        String,
+    > {
+        if let Some(client) = &self.client {
             let snapshot = client
                 .account_snapshot()
                 .map_err(|error| error.to_string())?;
-            let accesses = snapshot
-                .market_data_accesses
-                .iter()
-                .filter(|value| {
-                    value.access_id == access_id
-                        && matches!(value.status.as_str(), "active" | "trading")
-                })
-                .collect::<Vec<_>>();
-            let [access] = accesses.as_slice() else {
-                return Err(format!(
-                    "Reference has no unique MarketDataAccess {access_id}"
-                ));
-            };
-            let markets = snapshot
-                .markets
-                .iter()
-                .filter(|value| {
-                    value.market_id == access.market_id
-                        && matches!(value.status.as_str(), "active" | "trading")
-                })
-                .collect::<Vec<_>>();
-            let [market] = markets.as_slice() else {
-                return Err(format!("MarketDataAccess {access_id} has no unique Market"));
-            };
             return Ok((
-                InstrumentId::new(market.instrument_id.clone())
-                    .map_err(|error| error.to_string())?,
-                Some(kairos_primitives::MarketId::new(market.market_id.clone())?),
+                snapshot.markets.into_iter().map(reference_market).collect(),
+                snapshot.instruments,
+            ));
+        }
+        #[cfg(test)]
+        {
+            return Ok((
+                self.fixture_markets.as_ref().clone(),
+                self.fixture_instruments.as_ref().clone(),
             ));
         }
         #[cfg(not(test))]
-        return Err(
-            "provider instrument must carry market_data_access_id; symbol-based identity resolution is disabled"
-                .into(),
-        );
-
-        #[cfg(test)]
         {
-            let symbol = provider.source_symbol.as_str();
-            if provider.participant.id.eq_ignore_ascii_case("ibkr") {
-                let instruments = self.instruments(symbol, "equity")?;
-                let matches = instruments
-                    .iter()
-                    .filter(|value| {
-                        value.symbol.eq_ignore_ascii_case(symbol)
-                            && value.instrument_type == kairos_primitives::InstrumentKind::Equity
-                            && matches!(value.status.as_str(), "active" | "trading")
-                    })
-                    .collect::<Vec<_>>();
-                let [instrument] = matches.as_slice() else {
-                    return Err(identity_resolution_error(provider, matches.len()));
-                };
-                return Ok((
-                    InstrumentId::new(instrument.instrument_id.clone())
-                        .map_err(|error| error.to_string())?,
-                    None,
-                ));
-            }
-
-            let domain = provider
-                .instrument_type
-                .as_ref()
-                .map(|value| value.as_str())
-                .unwrap_or_default();
-            let exchange = format!("exchange:{}", provider.participant.id.to_ascii_lowercase());
-            let markets = self.markets(symbol, &exchange)?;
-            let matches = markets
-                .iter()
-                .filter(|value| {
-                    value.exchange_id.eq_ignore_ascii_case(&exchange)
-                        && value.source_symbol.eq_ignore_ascii_case(symbol)
-                        && matches!(value.status.as_str(), "active" | "trading")
-                        && provider_domain_matches_market(domain, &value.market_type)
-                })
-                .collect::<Vec<_>>();
-            let [market] = matches.as_slice() else {
-                return Err(identity_resolution_error(provider, matches.len()));
-            };
-            Ok((
-                InstrumentId::new(market.instrument_id.clone())
-                    .map_err(|error| error.to_string())?,
-                Some(kairos_primitives::MarketId::new(market.market_id.clone())?),
-            ))
+            Err("Reference identity client is not configured".into())
         }
-    }
-
-    #[cfg(test)]
-    fn markets(
-        &self,
-        source_symbol: &str,
-        exchange_id: &str,
-    ) -> Result<Vec<kairos_reference_contract::ReferenceMarket>, String> {
-        #[cfg(test)]
-        if self.client.is_none() {
-            return Ok(self.fixture_markets.as_ref().clone());
-        }
-        let _ = (source_symbol, exchange_id);
-        Ok(self.fixture_markets.as_ref().clone())
-    }
-
-    #[cfg(test)]
-    fn instruments(
-        &self,
-        symbol: &str,
-        instrument_type: &str,
-    ) -> Result<Vec<kairos_reference_contract::Instrument>, String> {
-        #[cfg(test)]
-        if self.client.is_none() {
-            return Ok(self.fixture_instruments.as_ref().clone());
-        }
-        let _ = (symbol, instrument_type);
-        Ok(self.fixture_instruments.as_ref().clone())
     }
 
     #[cfg(test)]
@@ -254,7 +206,6 @@ impl AccountInstrumentResolver {
     }
 }
 
-#[cfg(test)]
 fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
     let domain = domain.to_ascii_lowercase();
     let market_type = market_type.to_ascii_lowercase();
@@ -273,7 +224,6 @@ fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
     true
 }
 
-#[cfg(test)]
 fn identity_resolution_error(
     provider: &kairos_integration::application::ProviderInstrumentRef,
     matches: usize,
@@ -290,32 +240,79 @@ fn identity_resolution_error(
     )
 }
 
+fn provider_id_from_exchange(exchange_id: &str) -> Option<&str> {
+    ["binance", "okx", "hyperliquid", "ibkr"]
+        .into_iter()
+        .find(|provider| {
+            exchange_id.eq_ignore_ascii_case(provider)
+                || exchange_id
+                    .strip_prefix(provider)
+                    .is_some_and(|suffix| suffix.starts_with('-') || suffix.starts_with(':'))
+                || exchange_id
+                    .strip_prefix("exchange:")
+                    .is_some_and(|value| value.eq_ignore_ascii_case(provider))
+        })
+}
+
+fn reference_market(
+    value: kairos_reference_contract::Market,
+) -> kairos_reference_contract::ReferenceMarket {
+    kairos_reference_contract::ReferenceMarket {
+        market_id: value.market_id,
+        instrument_id: value.instrument_id,
+        listing_id: value.listing_id,
+        exchange_id: value.exchange_id,
+        instrument_kind: value.instrument_kind.to_string(),
+        asset_type: value.asset_type.map(|value| value.to_string()),
+        venue_symbol: value.venue_symbol,
+        base_asset_id: value.base_asset_id,
+        quote_asset_id: value.quote_asset_id,
+        underlying_instrument_id: value.underlying_instrument_id,
+        status: value.status,
+        price_tick: value.price_tick,
+        quantity_tick: value.quantity_tick,
+        minimum_quantity: value.minimum_quantity,
+        minimum_notional: value.minimum_notional,
+        price_precision: value.price_precision,
+        quantity_precision: value.quantity_precision,
+        contract_size: value.contract_size,
+        effective_from_unix_nanos: value.effective_from_unix_nanos,
+        effective_to_unix_nanos: value.effective_to_unix_nanos,
+    }
+}
+
 /// Account-owned heterogeneous holder for concrete Integration event sources.
 /// It is a dispatch container, not another implementation of Integration's
 /// provider capability trait.
 pub(crate) enum AccountAsyncEventSource {
     BinanceSpot {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::binance::BinanceSpotAccountEvents,
     },
     BinanceFutures {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::binance::BinanceFuturesAccountEvents,
     },
     BinanceOptions {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::binance::BinanceOptionsAccountEvents,
     },
     BinanceMargin {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::binance::BinanceMarginAccountEvents,
     },
     Ibkr {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::ibkr::IbkrAccountEvents,
     },
     OkxTrading {
         binding_id: String,
+        segment_key: SegmentKey,
         source: kairos_integration::participants::okx::OkxTradingAccountEvents,
     },
 }
@@ -395,6 +392,22 @@ impl AccountAsyncSnapshotGateway {
     }
 
     pub(crate) async fn fetch(&mut self, segments: Vec<AccountSegment>) -> Vec<RefreshFetch> {
+        self.fetch_results(segments, None).await
+    }
+
+    pub(crate) async fn fetch_incremental(
+        &mut self,
+        segments: Vec<AccountSegment>,
+        sender: tokio::sync::mpsc::Sender<RefreshFetch>,
+    ) {
+        let _ = self.fetch_results(segments, Some(sender)).await;
+    }
+
+    async fn fetch_results(
+        &mut self,
+        segments: Vec<AccountSegment>,
+        sender: Option<tokio::sync::mpsc::Sender<RefreshFetch>>,
+    ) -> Vec<RefreshFetch> {
         let mut selected = segments
             .into_iter()
             .map(|segment| (segment.segment_key.to_string(), segment))
@@ -454,16 +467,25 @@ impl AccountAsyncSnapshotGateway {
 
         let mut fetches = Vec::new();
         while let Some(fetch) = futures.next().await {
+            if let Some(sender) = &sender {
+                let _ = sender.send(fetch.clone()).await;
+            }
             fetches.push(fetch);
         }
-        fetches.extend(selected.into_values().map(|segment| RefreshFetch {
-            result: Err(format!(
-                "account segment is not configured: {}",
-                segment.segment_key
-            )),
-            segment,
-            elapsed_ms: 0,
-        }));
+        for segment in selected.into_values() {
+            let fetch = RefreshFetch {
+                result: Err(format!(
+                    "account segment is not configured: {}",
+                    segment.segment_key
+                )),
+                segment,
+                elapsed_ms: 0,
+            };
+            if let Some(sender) = &sender {
+                let _ = sender.send(fetch.clone()).await;
+            }
+            fetches.push(fetch);
+        }
         fetches
     }
 }
@@ -477,6 +499,17 @@ impl AccountAsyncEventSource {
             | Self::BinanceMargin { binding_id, .. }
             | Self::Ibkr { binding_id, .. }
             | Self::OkxTrading { binding_id, .. } => binding_id,
+        }
+    }
+
+    pub(crate) fn segment_key(&self) -> &SegmentKey {
+        match self {
+            Self::BinanceSpot { segment_key, .. }
+            | Self::BinanceFutures { segment_key, .. }
+            | Self::BinanceOptions { segment_key, .. }
+            | Self::BinanceMargin { segment_key, .. }
+            | Self::Ibkr { segment_key, .. }
+            | Self::OkxTrading { segment_key, .. } => segment_key,
         }
     }
 
@@ -546,25 +579,11 @@ use kairos_integration::application::{
 
 pub(crate) enum AccountSnapshotGateway {
     Memory(BTreeMap<String, AccountSnapshot>),
-    Integration {
-        connections: BTreeMap<String, Box<dyn AccountReadConnection + Send>>,
-        resolver: AccountInstrumentResolver,
-    },
 }
 
 impl AccountSnapshotGateway {
     pub(crate) fn memory(snapshots: BTreeMap<String, AccountSnapshot>) -> Self {
         Self::Memory(snapshots)
-    }
-
-    pub(crate) fn integration(
-        connections: BTreeMap<String, Box<dyn AccountReadConnection + Send>>,
-        resolver: AccountInstrumentResolver,
-    ) -> Self {
-        Self::Integration {
-            connections,
-            resolver,
-        }
     }
 
     pub(crate) fn split(self) -> BTreeMap<String, Self> {
@@ -573,21 +592,6 @@ impl AccountSnapshotGateway {
                 .into_iter()
                 .map(|(key, snapshot)| {
                     (key.clone(), Self::Memory(BTreeMap::from([(key, snapshot)])))
-                })
-                .collect(),
-            Self::Integration {
-                connections,
-                resolver,
-            } => connections
-                .into_iter()
-                .map(|(key, connection)| {
-                    (
-                        key.clone(),
-                        Self::Integration {
-                            connections: BTreeMap::from([(key, connection)]),
-                            resolver: resolver.clone(),
-                        },
-                    )
                 })
                 .collect(),
         }
@@ -599,20 +603,6 @@ impl AccountSnapshotGateway {
                 .get(segment.segment_key.as_str())
                 .cloned()
                 .ok_or_else(|| format!("missing snapshot for segment: {}", segment.segment_key)),
-            Self::Integration {
-                connections,
-                resolver,
-            } => {
-                let connection = connections
-                    .get_mut(segment.segment_key.as_str())
-                    .ok_or_else(|| {
-                        format!("account segment is not configured: {}", segment.segment_key)
-                    })?;
-                connection
-                    .fetch_account(&external_segment(segment))
-                    .map_err(|error| error.to_string())
-                    .and_then(|value| map_snapshot(value, resolver))
-            }
         }
     }
 }
@@ -667,6 +657,7 @@ fn map_position(
     Ok(Position {
         instrument_id,
         market_id,
+        position_side: value.position_side,
         quantity: signed_quantity(value.quantity)?,
         average_price: value.average_price.map(price).transpose()?,
         mark_price: value.mark_price.map(price).transpose()?,
@@ -850,16 +841,12 @@ mod identity_tests {
     fn resolves_exchange_symbol_only_through_reference_market() {
         let resolver = AccountInstrumentResolver::fixture(
             vec![kairos_reference_contract::ReferenceMarket {
-                source_id: Some("binance-spot".into()),
                 market_id: "market:binance:spot:BTCUSDT".into(),
-                market_key: "BTCUSDT".into(),
                 instrument_id: "instrument:spot:BTC".into(),
                 listing_id: Some("listing:binance:spot:BTCUSDT".into()),
                 exchange_id: "exchange:binance".into(),
-                market_type: "spot".into(),
-                source_symbol: "BTCUSDT".into(),
-                market_data_access_id: None,
-                provider_symbol: None,
+                instrument_kind: "spot".into(),
+                venue_symbol: Some("BTCUSDT".into()),
                 status: "active".into(),
                 asset_type: None,
                 base_asset_id: None,

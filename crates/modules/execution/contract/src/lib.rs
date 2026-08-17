@@ -7,7 +7,10 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use control::{ExecutionControlClient, ExecutionControlResponse};
+pub use control::{
+    ExecutionControlClient, ExecutionControlResponse, ExecutionRouteCandidateResponse,
+    ExecutionRoutesResponse,
+};
 pub use encode::{event_metadata, view_metadata, EncodeContext};
 pub use error::{ContractError, ContractResult};
 pub use event::{ExecutionEvent, ExecutionEventFrame, ExecutionEventStream};

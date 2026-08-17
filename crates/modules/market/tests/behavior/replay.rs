@@ -15,12 +15,17 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
     let events = (1..=2)
         .map(|time| {
             MarketObservation::Quote(Quote {
-                market_id: descriptor.market_id.clone(),
+                scope: kairos_market::ObservationScope::from(
+                    descriptor.market_id().unwrap().clone(),
+                ),
                 instrument_id: descriptor.instrument_id.clone(),
                 bid_price: Some(kairos_primitives::Price::new(time as i64, 0).unwrap()),
                 bid_quantity: None,
                 ask_price: None,
                 ask_quantity: None,
+                bid_venue_code: None,
+                ask_venue_code: None,
+                tape: None,
                 observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
                 source_id: "recorded".into(),
             })

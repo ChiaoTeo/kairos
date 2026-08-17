@@ -1,4 +1,4 @@
-use super::types::ExecutionControlResponse;
+use super::types::{ExecutionControlResponse, ExecutionRoutesResponse};
 use crate::{ContractError, ContractResult};
 use kairos_workspace::RestControlClient;
 use std::path::PathBuf;
@@ -13,6 +13,19 @@ impl ExecutionControlClient {
     }
     pub async fn health(&self) -> ContractResult<ExecutionControlResponse> {
         self.request("GET", "/v1/health", None).await
+    }
+    pub async fn routes(&self, query: &str) -> ContractResult<ExecutionRoutesResponse> {
+        let path = if query.is_empty() {
+            "/v1/routes".to_owned()
+        } else {
+            format!("/v1/routes?{query}")
+        };
+        let value = self
+            .client
+            .request_json("GET", &path, None)
+            .await
+            .map_err(|error| ContractError::Transport(error.to_string()))?;
+        serde_json::from_value(value).map_err(|error| ContractError::Invalid(error.to_string()))
     }
     pub async fn submit_intent(&self, body: &[u8]) -> ContractResult<ExecutionControlResponse> {
         self.request("POST", "/v1/intents", Some(body)).await

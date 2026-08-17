@@ -7,3 +7,5 @@ class FreshnessState(object):
     FRESH = 1
     STALE = 2
     UNKNOWN = 3
+    RESYNCING = 4
+    UNAVAILABLE = 5

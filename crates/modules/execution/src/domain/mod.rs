@@ -6,7 +6,8 @@ pub use intent::{
     IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy,
 };
 pub use order::{
-    CommitmentBasis, CommitmentResource, CommitmentStatus, ExecutionFill, ExecutionOrder,
-    ExecutionOrderStatus, LegId, Money, OrderCommitment, OrderId, OrderSide, OrderType, PlanId,
-    Quantity, RemoteOrderId, RiskReservationEvidence, RiskReservationSagaStatus, UnixNanos,
+    CommitmentBasis, CommitmentResource, CommitmentStatus, DeliveryCertainty, ExecutionAttempt,
+    ExecutionFill, ExecutionOrder, ExecutionOrderStatus, LegId, Money, OrderCommitment, OrderId,
+    OrderSide, OrderType, PlanId, Quantity, RemoteOrderId, RiskReservationEvidence,
+    RiskReservationSagaStatus, RouteSelectionKind, SelectedExecutionRoute, UnixNanos,
 };

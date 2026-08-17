@@ -36,6 +36,35 @@ class DataFreshness(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SegmentSyncMode(StrEnum):
+    UNKNOWN = "unknown"
+    SNAPSHOT_THEN_STREAM = "snapshot_then_stream"
+    SNAPSHOT_ONLY = "snapshot_only"
+
+
+class SegmentSyncLifecycle(StrEnum):
+    CONFIGURED = "configured"
+    BOOTSTRAPPING = "bootstrapping"
+    LIVE = "live"
+    SNAPSHOT_CURRENT = "snapshot_current"
+    DEGRADED = "degraded"
+    RESYNCING = "resyncing"
+    UNAVAILABLE = "unavailable"
+    STOPPED = "stopped"
+
+
+class SegmentCompleteness(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+
+
+class PositionSide(StrEnum):
+    NET = "net"
+    LONG = "long"
+    SHORT = "short"
+
+
 @dataclass(frozen=True, slots=True)
 class Balance:
     account_id: AccountId
@@ -52,6 +81,7 @@ class Position:
     segment_key: SegmentKey
     instrument: InstrumentRef
     quantity: Decimal
+    position_side: PositionSide = PositionSide.NET
     average_price: Decimal | None = None
     market_value: Decimal | None = None
     unrealized_pnl: Decimal | None = None
@@ -100,6 +130,16 @@ class AccountSegmentSnapshot:
     positions: tuple[Position, ...]
     freshness: DataFreshness
     generation: int
+    sync_mode: SegmentSyncMode = SegmentSyncMode.UNKNOWN
+    sync_lifecycle: SegmentSyncLifecycle = SegmentSyncLifecycle.CONFIGURED
+    completeness: SegmentCompleteness = SegmentCompleteness.UNKNOWN
+    snapshot_watermark: int | None = None
+    event_watermark: int | None = None
+    channel_epoch: int | None = None
+    last_event_at_unix_nanos: int | None = None
+    last_success_at_unix_nanos: int | None = None
+    last_error: str | None = None
+    recovery_buffer_depth: int = 0
 
     @property
     def is_fresh(self) -> bool:

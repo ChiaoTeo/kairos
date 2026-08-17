@@ -12,7 +12,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         request: ControlRequest,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let operation_started = std::time::Instant::now();
-        let is_command = !matches!(request.operation, ControlOperation::Health);
+        let is_command = !matches!(
+            request.operation,
+            ControlOperation::Health | ControlOperation::AvailableRoutes(_)
+        );
         let response = self.handle_operation(request.operation);
         let _ = request
             .response
@@ -42,6 +45,9 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     "degraded"
                 };
                 ControlResponse::health(status, writer_recovery_ready, &routes)?
+            }
+            ControlOperation::AvailableRoutes(query) => {
+                ControlResponse::routes(&self.application.available_execution_routes(&query))?
             }
             ControlOperation::AdvanceTime(event_time) => {
                 if let Some(current) = self
@@ -111,7 +117,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                             segment_key: original.segment_key,
                             instrument_id: original.instrument_id,
                             market_id: original.market_id,
-                            execution_access_id: original.execution_access_id,
+                            execution_route_id: original.execution_route_id,
                             side: original.side,
                             order_type: original.order_type,
                             quantity: patch.quantity.unwrap_or(original.quantity),

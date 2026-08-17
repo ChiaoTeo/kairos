@@ -149,6 +149,7 @@ pub(super) fn normalize_market_snapshot(
         last_sequence: None,
         sequence: None,
         observed_at_unix_nanos: now_unix_nanos().into(),
+        venue: Default::default(),
     })
 }
 

@@ -19,9 +19,8 @@ from kairospy.infrastructure.transport.generated.kairos.reference.v2.Market impo
     MarketAddInstrumentId,
     MarketAddListingId,
     MarketAddMarketId,
-    MarketAddMarketKey,
-    MarketAddMarketType,
-    MarketAddSourceSymbol,
+    MarketAddInstrumentKind,
+    MarketAddVenueSymbol,
     MarketEnd,
     MarketStart,
 )
@@ -50,20 +49,18 @@ def _market_upserted_payload() -> bytes:
     metadata = EventMetadataEnd(builder)
 
     market_id = builder.CreateString("market:binance:spot:BTCUSDT")
-    market_key = builder.CreateString("BTCUSDT")
     instrument_id = builder.CreateString("instrument:spot:BTC")
     listing_id = builder.CreateString("listing:binance:spot:BTCUSDT")
     exchange_id = builder.CreateString("exchange:binance")
-    market_type = builder.CreateString("spot")
-    source_symbol = builder.CreateString("BTCUSDT")
+    instrument_kind = builder.CreateString("spot")
+    venue_symbol = builder.CreateString("BTCUSDT")
     MarketStart(builder)
     MarketAddMarketId(builder, market_id)
-    MarketAddMarketKey(builder, market_key)
     MarketAddInstrumentId(builder, instrument_id)
     MarketAddListingId(builder, listing_id)
     MarketAddExchangeId(builder, exchange_id)
-    MarketAddMarketType(builder, market_type)
-    MarketAddSourceSymbol(builder, source_symbol)
+    MarketAddInstrumentKind(builder, instrument_kind)
+    MarketAddVenueSymbol(builder, venue_symbol)
     market = MarketEnd(builder)
 
     MarketUpsertedStart(builder)

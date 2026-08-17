@@ -143,16 +143,29 @@ impl ExecutionApplication {
         if self.actor.contains_order(request.order_id.as_str()) {
             return Err(ExecutionError::Invalid("order_id already exists".into()));
         }
-        let execution_access_id = request.execution_access_id.as_ref().ok_or_else(|| {
+        let execution_route_id = request.execution_route_id.as_ref().ok_or_else(|| {
             ExecutionError::Invalid(
-                "execution_access_id is required; provider identity is not inferred".into(),
+                "execution_route_id is required; provider identity is not inferred".into(),
             )
         })?;
-        if !self.execution_accesses.contains_key(execution_access_id) {
-            return Err(ExecutionError::Invalid(format!(
-                "execution access is not configured: {execution_access_id}"
-            )));
-        }
+        let route = self
+            .execution_routes
+            .get(execution_route_id)
+            .ok_or_else(|| {
+                ExecutionError::Invalid(format!(
+                    "execution route is not configured: {execution_route_id}"
+                ))
+            })?;
+        validate_execution_route(&request, &route.candidate).map_err(ExecutionError::Invalid)?;
+        let selected_route = crate::domain::SelectedExecutionRoute {
+            route_id: route.candidate.route_id.clone(),
+            participant_id: route.candidate.participant_id.clone(),
+            provider_product: route.candidate.provider_product.clone(),
+            provider_symbol: route.candidate.provider_symbol.clone(),
+            destination_market_id: route.candidate.market_id.clone(),
+            selected_at_unix_nanos: now.into(),
+            selection_kind: crate::domain::RouteSelectionKind::Explicit,
+        };
         request
             .options
             .time_in_force
@@ -186,7 +199,13 @@ impl ExecutionApplication {
         let options = request.options.clone();
         let (_, pending_event) = self
             .actor
-            .prepare_submission(&request, commitment, planned_reservation, now)
+            .prepare_submission(
+                &request,
+                selected_route,
+                commitment,
+                planned_reservation,
+                now,
+            )
             .map_err(ExecutionError::Invalid)?;
         // Persist the stable reservation identity and commitment before the
         // Risk command can possibly be sent. Recovery can therefore reconcile
@@ -230,7 +249,7 @@ impl ExecutionApplication {
             &order,
             &request.segment_key,
             &options,
-            &self.execution_accesses,
+            &self.execution_routes,
         )
         .map_err(ExecutionError::Invalid)?;
         Ok((order, connection_request))
@@ -455,12 +474,23 @@ impl ExecutionApplication {
 
     pub fn submit(&mut self, request: SubmitOrder) -> Result<ExecutionOrder, ExecutionError> {
         let (order, connection_request) = self.prepare_submission(request)?;
-        let Some(connection) = self.order_entry.as_mut() else {
+        if self.order_entry.is_none() {
             self.mark_not_sent(&order.order_id, "order entry connection is not configured")?;
             return Err(ExecutionError::Gateway(
                 "order entry connection is not configured".into(),
             ));
-        };
+        }
+        self.actor
+            .mark_attempt_dispatched(order.order_id.as_str(), now_nanos())
+            .ok_or_else(|| ExecutionError::Invalid("execution attempt is missing".into()))?;
+        // Persist indeterminate delivery before the provider command can
+        // possibly leave the process. A crash after this point reconciles the
+        // attempt instead of retrying it transparently.
+        self.persist_snapshot()?;
+        let connection = self
+            .order_entry
+            .as_mut()
+            .expect("order-entry presence checked above");
         let event = match connection.submit_order(&connection_request) {
             Ok(CommandOutcome::Confirmed(event)) => event,
             Ok(CommandOutcome::Rejected(rejection)) => OrderEntryEvent {
@@ -525,7 +555,7 @@ impl ExecutionApplication {
             &order,
             &order.segment_key,
             &ExecutionOrderOptions::default(),
-            &self.execution_accesses,
+            &self.execution_routes,
         )
         .map_err(ExecutionError::Invalid)?;
         let outcome = self
@@ -744,7 +774,7 @@ impl ExecutionApplication {
                 segment_key: template.segment_key.clone(),
                 instrument_id: template.instrument_id.clone(),
                 market_id: template.market_id.clone(),
-                execution_access_id: template.execution_access_id.clone(),
+                execution_route_id: template.execution_route_id.clone(),
                 side: template.side,
                 order_type: OrderType::Limit,
                 quantity: Quantity::new(
@@ -991,4 +1021,103 @@ impl ExecutionApplication {
             .map_err(ExecutionError::Invalid)?;
         self.persist_snapshot()
     }
+}
+
+fn validate_execution_route(
+    request: &SubmitOrder,
+    route: &ExecutionRouteCandidate,
+) -> Result<(), String> {
+    if route
+        .account_id
+        .as_ref()
+        .is_some_and(|account_id| &request.account_id != account_id)
+    {
+        return Err(format!(
+            "execution route {} is configured for account {}, not {}",
+            route.route_id,
+            route.account_id.as_ref().expect("constraint checked"),
+            request.account_id
+        ));
+    }
+    if route
+        .segment_key
+        .as_ref()
+        .is_some_and(|segment_key| &request.segment_key != segment_key)
+    {
+        return Err(format!(
+            "execution route {} is configured for segment {}, not {}",
+            route.route_id,
+            route.segment_key.as_ref().expect("constraint checked"),
+            request.segment_key
+        ));
+    }
+    if route
+        .instrument_id
+        .as_ref()
+        .is_some_and(|instrument_id| &request.instrument_id != instrument_id)
+    {
+        return Err(format!(
+            "execution route {} is configured for instrument {}, not {}",
+            route.route_id,
+            route.instrument_id.as_ref().expect("constraint checked"),
+            request.instrument_id
+        ));
+    }
+    if let (Some(request_market), Some(route_market)) =
+        (request.market_id.as_ref(), route.market_id.as_ref())
+    {
+        if route_market != request_market {
+            return Err(format!(
+                "execution route {} does not target market {}",
+                route.route_id, request_market
+            ));
+        }
+    }
+    if !route.supported_order_types.contains(&request.order_type) {
+        return Err(format!(
+            "execution route {} does not support {:?} orders",
+            route.route_id, request.order_type
+        ));
+    }
+    for option in used_order_options(&request.options) {
+        if !route.supported_options.iter().any(|value| value == option) {
+            return Err(format!(
+                "execution route {} does not support order option {}",
+                route.route_id, option
+            ));
+        }
+    }
+    if !route.ready {
+        return Err(format!("execution route {} is not ready", route.route_id));
+    }
+    Ok(())
+}
+
+fn used_order_options(options: &ExecutionOrderOptions) -> Vec<&'static str> {
+    let mut used = Vec::new();
+    if options.time_in_force.is_some() {
+        used.push("time_in_force");
+    }
+    if options.reduce_only.is_some() {
+        used.push("reduce_only");
+    }
+    if options.post_only.is_some() {
+        used.push("post_only");
+    }
+    if options.position_side.is_some() {
+        used.push("position_side");
+    }
+    if options.quote_asset.is_some() {
+        used.push("quote_asset");
+    }
+    if options.wallet_type.is_some() {
+        used.push("wallet_type");
+    }
+    if options.trading_session.is_some() {
+        used.push("trading_session");
+    }
+    if options.tokenize.is_some() {
+        used.push("tokenize");
+    }
+    used
 }

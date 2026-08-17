@@ -1,9 +1,11 @@
 include "../../common/decimal.fbs";
+include "common.fbs";
 namespace kairos.account.v2;
 
 table Position {
   instrument_id:string (required);
   market_id:string (required);
+  position_side:PositionSide = NET;
   quantity:kairos.common.v2.Decimal64 (required);
   average_price:kairos.common.v2.Decimal64;
   mark_price:kairos.common.v2.Decimal64;

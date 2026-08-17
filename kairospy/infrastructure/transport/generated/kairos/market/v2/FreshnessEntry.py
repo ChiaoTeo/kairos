@@ -36,10 +36,14 @@ class FreshnessEntry(object):
         return None
 
     # FreshnessEntry
-    def MarketId(self):
+    def Scope(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
-            return self._tab.String(o + self._tab.Pos)
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.market.v2.ObservationScope import ObservationScope
+            obj = ObservationScope()
+            obj.Init(self._tab.Bytes, x)
+            return obj
         return None
 
     # FreshnessEntry
@@ -96,11 +100,11 @@ def FreshnessEntryAddSourceId(builder, sourceId):
 def AddSourceId(builder, sourceId):
     FreshnessEntryAddSourceId(builder, sourceId)
 
-def FreshnessEntryAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+def FreshnessEntryAddScope(builder, scope):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(scope), 0)
 
-def AddMarketId(builder, marketId):
-    FreshnessEntryAddMarketId(builder, marketId)
+def AddScope(builder, scope):
+    FreshnessEntryAddScope(builder, scope)
 
 def FreshnessEntryAddDataKind(builder, dataKind):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(dataKind), 0)

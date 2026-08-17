@@ -131,6 +131,8 @@ impl Default for ExternalBalance {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExternalPosition {
     pub provider_instrument: ProviderInstrumentRef,
+    #[serde(default)]
+    pub position_side: kairos_primitives::PositionSide,
     pub quantity: ExternalDecimal,
     pub average_price: Option<ExternalDecimal>,
     pub mark_price: Option<ExternalDecimal>,
@@ -149,6 +151,7 @@ impl Default for ExternalPosition {
                 "UNKNOWN",
             )
             .expect("static provider instrument"),
+            position_side: kairos_primitives::PositionSide::Net,
             quantity: ExternalDecimal::default(),
             average_price: None,
             mark_price: None,

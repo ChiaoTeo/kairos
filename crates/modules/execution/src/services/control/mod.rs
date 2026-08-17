@@ -19,8 +19,8 @@ pub(crate) use wire::{request_class, v2_submit_intent};
 
 use crate::application::{
     BacktestRequest, CancelIntent, CancelOrder, ExecuteStrategyIntent, ExecutionFillReport,
-    ExecutionOrderOptions, ExpireIntent, MarketObservation, RefreshQuoteIntent, RemoteOrderQuery,
-    SubmitOrder,
+    ExecutionOrderOptions, ExecutionRouteQuery, ExpireIntent, MarketObservation,
+    RefreshQuoteIntent, RemoteOrderQuery, SubmitOrder,
 };
 use kairos_primitives::{OrderId, Price, Quantity};
 
@@ -32,6 +32,7 @@ pub(crate) struct ReplaceOrderPatch {
 
 pub(crate) enum ControlOperation {
     Health,
+    AvailableRoutes(ExecutionRouteQuery),
     AdvanceTime(u64),
     SubmitIntent {
         intent: ExecuteStrategyIntent,
@@ -62,7 +63,7 @@ pub(crate) enum ControlOperation {
 impl ControlOperation {
     fn class(&self) -> RequestClass {
         match self {
-            Self::Health => RequestClass::Query,
+            Self::Health | Self::AvailableRoutes(_) => RequestClass::Query,
             _ => RequestClass::Command,
         }
     }

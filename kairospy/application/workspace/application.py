@@ -164,10 +164,6 @@ class WorkspaceApplication:
         paths = WorkspacePaths(
             root=root_path,
             manifest=manifest,
-            config=root_path / "config",
-            state=root_path / "state",
-            run=root_path / "run",
-            logs=root_path / "logs",
             launches=root_path / "launches",
         )
         return Workspace(identity, paths, cli_format=cli_format)
@@ -193,6 +189,12 @@ class WorkspaceApplication:
                 return dict(configured)
 
         profile = workspace.paths.market_connections_root() / f"{connection_id}.toml"
+        if not profile.is_file():
+            legacy = workspace.paths.child(
+                "market", "connections", f"{connection_id}.toml"
+            )
+            if legacy.is_file():
+                profile = legacy
         if profile.is_file():
             value = tomllib.loads(profile.read_text(encoding="utf-8"))
             configured = value.get("connection", value)

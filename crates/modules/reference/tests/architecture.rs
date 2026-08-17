@@ -78,8 +78,7 @@ fn reference_domain_classification_is_not_unconstrained_text() {
     }
     assert!(entities.contains("asset_class: AssetClass"));
     assert!(entities.contains("instrument_type: InstrumentKind"));
-    assert!(entities.contains("market_type: ProviderProductCode"));
-    assert!(entities.contains("provider_product: ProviderProductCode"));
+    assert!(entities.contains("instrument_kind: InstrumentKind"));
 }
 
 #[test]
@@ -155,4 +154,38 @@ fn administrative_writes_enter_through_application_commands() {
             "transport must not deserialize a domain entity: {domain_payload}"
         );
     }
+}
+
+#[test]
+fn broker_and_data_provider_products_do_not_invent_canonical_venues() {
+    let binance = source("src/composition/providers/binance.rs");
+    let equity_mapping = binance
+        .split("pub(super) fn binance_equity_provider_catalog")
+        .nth(1)
+        .expect("Binance Equity mapping")
+        .split("pub(super) fn binance_provider_catalog")
+        .next()
+        .expect("Binance Equity mapping body");
+    for forbidden in [
+        "exchange:binance",
+        "listing:binance:equity",
+        "market:binance:equity",
+        "catalog.listings.push",
+        "catalog.markets.push",
+    ] {
+        assert!(
+            !equity_mapping.contains(forbidden),
+            "Binance Equity broker facts must not create canonical venue facts: {forbidden}"
+        );
+    }
+
+    let massive = source("src/composition/providers/massive.rs");
+    for forbidden in ["listing:massive", "market:massive"] {
+        assert!(
+            !massive.contains(forbidden),
+            "Massive data-provider identity must not become canonical identity: {forbidden}"
+        );
+    }
+    assert!(massive.contains("\"OPRA\" => None"));
+    assert!(massive.contains("\"BATO\" => Some(\"exchange:cboe-bzx-options\".into())"));
 }

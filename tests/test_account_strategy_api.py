@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -16,6 +17,8 @@ from kairospy.application.account import (
     DataFreshness,
     Position,
     PositionNotFoundError,
+    PositionSide,
+    SegmentSyncLifecycle,
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.account.mapping import map_accounts_snapshot
@@ -109,6 +112,32 @@ def test_accounts_chain_reads_each_account_mmap_once_and_preserves_order() -> No
     assert accounts[1].generation == 12
 
 
+def test_required_segment_readiness_is_checked_from_account_current_view() -> None:
+    account_id = AccountId("main")
+
+    class Projection:
+        lifecycle = SegmentSyncLifecycle.BOOTSTRAPPING
+
+        def snapshot(self, requested: AccountId) -> AccountSnapshot:
+            assert requested == account_id
+            segment = replace(
+                _segment("main", SPOT, generation=1, available="90"),
+                sync_lifecycle=self.lifecycle,
+            )
+            return AccountSnapshot(account_id, (segment,), 1)
+
+    projection = Projection()
+    application = AccountApplication(
+        {account_id: projection}, required_segments={account_id: ("spot",)}
+    )
+
+    with pytest.raises(RuntimeError, match="required segment spot is not ready"):
+        application._check_event_source_ready()
+
+    projection.lifecycle = SegmentSyncLifecycle.LIVE
+    application._check_event_source_ready()
+
+
 def test_account_reads_only_selected_account_and_segments_share_generation() -> None:
     main = _Projection(AccountId("main"), 7, (SPOT, CROSS_MARGIN))
     secondary = _Projection(AccountId("secondary"), 12, (SPOT,))
@@ -185,7 +214,18 @@ def test_projection_mapper_groups_every_segment_without_cross_account_leakage() 
                     "balances": [
                         {"asset_code": "USDT", "total": "250", "available": "220"}
                     ],
-                    "positions": [],
+                    "positions": [
+                        {
+                            "instrument_id": "instrument:binance:BTCUSDT",
+                            "position_side": "long",
+                            "quantity": "2",
+                        },
+                        {
+                            "instrument_id": "instrument:binance:BTCUSDT",
+                            "position_side": "short",
+                            "quantity": "-1",
+                        },
+                    ],
                 },
                 {
                     "account_id": "outside",
@@ -210,6 +250,11 @@ def test_projection_mapper_groups_every_segment_without_cross_account_leakage() 
     assert account.segment("usd_m_futures").require_balance("USDT").total == Decimal(
         "250"
     )
+    futures_positions = account.segment("usd_m_futures").positions
+    assert [value.position_side for value in futures_positions] == [
+        PositionSide.LONG,
+        PositionSide.SHORT,
+    ]
     assert snapshot.find_account("outside") is None
 
 

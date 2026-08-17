@@ -64,7 +64,12 @@ pub struct ExecutionOrder {
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
     #[serde(default)]
-    pub execution_access_id: Option<ExecutionAccessId>,
+    pub execution_route_id: Option<ExecutionRouteId>,
+    /// Complete route facts durably selected before provider submission.
+    #[serde(default)]
+    pub selected_route: Option<SelectedExecutionRoute>,
+    #[serde(default)]
+    pub attempts: Vec<ExecutionAttempt>,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Quantity,
@@ -100,7 +105,9 @@ impl ExecutionOrder {
             instrument_id: InstrumentId::new(instrument_id.into())
                 .map_err(|error| error.to_string())?,
             market_id: None,
-            execution_access_id: None,
+            execution_route_id: None,
+            selected_route: None,
+            attempts: Vec::new(),
             side,
             order_type,
             quantity,

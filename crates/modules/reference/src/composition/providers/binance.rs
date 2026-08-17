@@ -222,17 +222,7 @@ pub(super) fn binance_equity_provider_catalog(
             "Binance Equity source requires the Binance broker participant".into(),
         ));
     }
-    let exchange_id = kairos_primitives::Exchange::new("exchange:binance")?;
-    let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: exchange_id.to_string(),
-            entity_type: "exchange".into(),
-            name: "Binance".into(),
-            status: "active".into(),
-            source_id: None,
-        }],
-        ..Default::default()
-    };
+    let mut catalog = ProviderCatalog::default();
     for value in facts.instruments {
         if value.kind != ExternalInstrumentKind::Equity {
             return Err(ReferenceError::Provider(format!(
@@ -246,12 +236,8 @@ pub(super) fn binance_equity_provider_catalog(
         let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{symbol}"))?;
         let instrument_id =
             kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{symbol}:common"))?;
-        let listing_id =
-            kairos_primitives::ListingId::new(format!("listing:binance:equity:{symbol}"))?;
-        let market_id =
-            kairos_primitives::MarketId::new(format!("market:binance:equity:{symbol}"))?;
         catalog.assets.push(Asset {
-            asset_id: equity_asset.clone(),
+            asset_id: equity_asset,
             code: symbol.clone(),
             asset_class: AssetClass::Equity,
             status,
@@ -268,51 +254,7 @@ pub(super) fn binance_equity_provider_catalog(
             status,
             ..Instrument::default()
         });
-        catalog.listings.push(Listing {
-            listing_id: listing_id.clone(),
-            instrument_id: instrument_id.clone(),
-            exchange_id: exchange_id.clone(),
-            exchange_symbol: kairos_primitives::Symbol::new(symbol.clone())?,
-            status,
-            effective_from_unix_nanos: 0.into(),
-            ..Listing::default()
-        });
-        catalog.markets.push(Market {
-            market_id: market_id.clone(),
-            market_key: format!("binance.equity.{symbol}"),
-            instrument_id: instrument_id.clone(),
-            listing_id: Some(listing_id.clone()),
-            exchange_id: exchange_id.clone(),
-            market_type: ProviderProductCode::new("equity")?,
-            asset_type: Some(AssetClass::Equity),
-            source_symbol: kairos_primitives::Symbol::new(symbol.clone())?,
-            base_asset_id: Some(equity_asset),
-            status,
-            quantity_tick: value.quantity_tick,
-            quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
-            minimum_quantity: value.minimum_quantity,
-            minimum_notional: value.minimum_notional,
-            effective_from_unix_nanos: 0.into(),
-            ..Market::default()
-        });
-        catalog.execution_accesses.push(ExecutionAccess {
-            access_id: kairos_primitives::ExecutionAccessId::new(format!(
-                "execution-access:binance:equity:{symbol}"
-            ))?,
-            instrument_id: Some(instrument_id),
-            listing_id: Some(listing_id),
-            market_id: Some(market_id),
-            provider_id: ProviderId::new("binance")?,
-            provider_product: ProviderProductCode::new("equity")?,
-            provider_symbol: value.source_symbol,
-            settlement_asset_id: None,
-            status,
-            effective_from_unix_nanos: 0.into(),
-            effective_to_unix_nanos: None,
-            source_id: None,
-        });
     }
-    populate_market_data_accesses(&mut catalog, "binance")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -347,8 +289,6 @@ pub(super) fn binance_provider_catalog(
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
     crate::domain::reconcile_instruments(&mut catalog.instruments)?;
-    populate_execution_accesses(&mut catalog, "binance")?;
-    populate_market_data_accesses(&mut catalog, "binance")?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -388,156 +328,163 @@ fn append_binance_instrument(
             ..Asset::default()
         });
     }
-    let (family, canonical_family, instrument_id, canonical_symbol, underlying_instrument_id) =
-        match value.kind {
-            ExternalInstrumentKind::Spot if instrument_type == BinanceInstrumentType::Spot => (
-                "spot",
-                "spot",
-                format!("instrument:spot:{base}"),
-                base.clone(),
+    let (
+        _provider_family,
+        canonical_family,
+        instrument_id,
+        canonical_symbol,
+        underlying_instrument_id,
+    ) = match value.kind {
+        ExternalInstrumentKind::Spot if instrument_type == BinanceInstrumentType::Spot => (
+            "spot",
+            "spot",
+            format!("instrument:spot:{base}"),
+            base.clone(),
+            None,
+        ),
+        ExternalInstrumentKind::Perpetual
+            if matches!(
+                instrument_type,
+                BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
+            ) =>
+        {
+            (
+                match instrument_type {
+                    BinanceInstrumentType::UsdMFutures => "usd-m-futures",
+                    BinanceInstrumentType::CoinMFutures => "coin-m-futures",
+                    _ => unreachable!("guarded futures type"),
+                },
+                "perpetual",
+                format!("instrument:perpetual:{base}-{quote}"),
+                format!("{base}-{quote}"),
                 None,
-            ),
-            ExternalInstrumentKind::Perpetual
-                if matches!(
-                    instrument_type,
-                    BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
-                ) =>
+            )
+        }
+        ExternalInstrumentKind::EquityPerpetual
+            if instrument_type == BinanceInstrumentType::UsdMFutures =>
+        {
+            let underlying = kairos_primitives::InstrumentId::new(format!(
+                "instrument:equity:US:{base}:common"
+            ))?;
+            if !catalog
+                .instruments
+                .iter()
+                .any(|value| value.instrument_id == underlying)
             {
-                (
-                    match instrument_type {
-                        BinanceInstrumentType::UsdMFutures => "usd-m-futures",
-                        BinanceInstrumentType::CoinMFutures => "coin-m-futures",
-                        _ => unreachable!("guarded futures type"),
-                    },
-                    "perpetual",
-                    format!("instrument:perpetual:{base}-{quote}"),
-                    format!("{base}-{quote}"),
-                    None,
-                )
+                catalog.instruments.push(Instrument {
+                    instrument_id: underlying.clone(),
+                    symbol: kairos_primitives::Symbol::new(base.clone())?,
+                    instrument_type: InstrumentKind::Equity,
+                    issuer_id: Some(kairos_primitives::IssuerId::new(format!(
+                        "issuer:US:{base}"
+                    ))?),
+                    share_class: Some("common".into()),
+                    status: "active".into(),
+                    ..Instrument::default()
+                });
             }
-            ExternalInstrumentKind::EquityPerpetual
-                if instrument_type == BinanceInstrumentType::UsdMFutures =>
+            (
+                "usd-m-futures",
+                "perpetual",
+                format!("instrument:perpetual:equity:US:{base}:{quote}"),
+                format!("{base}-{quote}"),
+                Some(underlying),
+            )
+        }
+        ExternalInstrumentKind::Future
+            if matches!(
+                instrument_type,
+                BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
+            ) =>
+        {
+            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+            (
+                match instrument_type {
+                    BinanceInstrumentType::UsdMFutures => "usd-m-futures",
+                    BinanceInstrumentType::CoinMFutures => "coin-m-futures",
+                    _ => unreachable!("guarded futures type"),
+                },
+                "future",
+                format!("instrument:future:{base}-{quote}:{expiry}"),
+                format!("{base}-{quote}-{expiry}"),
+                None,
+            )
+        }
+        ExternalInstrumentKind::Option if instrument_type == BinanceInstrumentType::Option => {
+            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+            let strike = value.strike.as_deref().ok_or_else(|| {
+                ReferenceError::Provider("Binance option strike is missing".into())
+            })?;
+            let right = value.option_right.as_deref().ok_or_else(|| {
+                ReferenceError::Provider("Binance option right is missing".into())
+            })?;
+            let underlying =
+                kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
+            if !catalog
+                .instruments
+                .iter()
+                .any(|value| value.instrument_id == underlying)
             {
-                let underlying = kairos_primitives::InstrumentId::new(format!(
-                    "instrument:equity:US:{base}:common"
-                ))?;
-                if !catalog
-                    .instruments
-                    .iter()
-                    .any(|value| value.instrument_id == underlying)
-                {
-                    catalog.instruments.push(Instrument {
-                        instrument_id: underlying.clone(),
-                        symbol: kairos_primitives::Symbol::new(base.clone())?,
-                        instrument_type: InstrumentKind::Equity,
-                        issuer_id: Some(kairos_primitives::IssuerId::new(format!(
-                            "issuer:US:{base}"
-                        ))?),
-                        share_class: Some("common".into()),
-                        status: "active".into(),
-                        ..Instrument::default()
-                    });
-                }
-                (
-                    "usd-m-futures",
-                    "perpetual",
-                    format!("instrument:perpetual:equity:US:{base}:{quote}"),
-                    format!("{base}-{quote}"),
-                    Some(underlying),
-                )
+                catalog.instruments.push(Instrument {
+                    instrument_id: underlying.clone(),
+                    symbol: kairos_primitives::Symbol::new(base.clone())?,
+                    instrument_type: InstrumentKind::Spot,
+                    primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+                        "asset:crypto:{base}"
+                    ))?),
+                    status: "active".into(),
+                    ..Instrument::default()
+                });
             }
-            ExternalInstrumentKind::Future
-                if matches!(
-                    instrument_type,
-                    BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
-                ) =>
-            {
-                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-                (
-                    match instrument_type {
-                        BinanceInstrumentType::UsdMFutures => "usd-m-futures",
-                        BinanceInstrumentType::CoinMFutures => "coin-m-futures",
-                        _ => unreachable!("guarded futures type"),
-                    },
-                    "future",
-                    format!("instrument:future:{base}-{quote}:{expiry}"),
-                    format!("{base}-{quote}-{expiry}"),
-                    None,
-                )
-            }
-            ExternalInstrumentKind::Option if instrument_type == BinanceInstrumentType::Option => {
-                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-                let strike = value.strike.as_deref().ok_or_else(|| {
-                    ReferenceError::Provider("Binance option strike is missing".into())
-                })?;
-                let right = value.option_right.as_deref().ok_or_else(|| {
-                    ReferenceError::Provider("Binance option right is missing".into())
-                })?;
-                let underlying =
-                    kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
-                if !catalog
-                    .instruments
-                    .iter()
-                    .any(|value| value.instrument_id == underlying)
-                {
-                    catalog.instruments.push(Instrument {
-                        instrument_id: underlying.clone(),
-                        symbol: kairos_primitives::Symbol::new(base.clone())?,
-                        instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
-                            "asset:crypto:{base}"
-                        ))?),
-                        status: "active".into(),
-                        ..Instrument::default()
-                    });
-                }
-                (
-                    "options",
-                    "option",
-                    format!(
-                        "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
-                        match right.to_ascii_lowercase().as_str() {
-                            "call" | "c" => "C",
-                            "put" | "p" => "P",
-                            _ => {
-                                return Err(ReferenceError::Provider(format!(
-                                    "unsupported Binance option right: {right}"
-                                )));
-                            }
+            (
+                "options",
+                "option",
+                format!(
+                    "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
+                    match right.to_ascii_lowercase().as_str() {
+                        "call" | "c" => "C",
+                        "put" | "p" => "P",
+                        _ => {
+                            return Err(ReferenceError::Provider(format!(
+                                "unsupported Binance option right: {right}"
+                            )));
                         }
-                    ),
-                    format!(
-                        "{base}-{quote}-{expiry}-{strike}-{}",
-                        match right.to_ascii_lowercase().as_str() {
-                            "call" | "c" => "C",
-                            "put" | "p" => "P",
-                            _ => unreachable!("option right validated above"),
-                        }
-                    ),
-                    Some(underlying),
-                )
-            }
-            other => {
-                return Err(ReferenceError::Provider(format!(
+                    }
+                ),
+                format!(
+                    "{base}-{quote}-{expiry}-{strike}-{}",
+                    match right.to_ascii_lowercase().as_str() {
+                        "call" | "c" => "C",
+                        "put" | "p" => "P",
+                        _ => unreachable!("option right validated above"),
+                    }
+                ),
+                Some(underlying),
+            )
+        }
+        other => {
+            return Err(ReferenceError::Provider(format!(
             "Binance {instrument_type:?} catalog contained incompatible instrument kind: {other:?}"
         )))
-            }
-        };
+        }
+    };
     let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_primitives::ListingId::new(if family == "spot" {
+    let listing_id = kairos_primitives::ListingId::new(if canonical_family == "spot" {
         format!("listing:binance:spot:{base}:{quote}")
     } else {
-        format!("listing:binance:{family}:{source_symbol}")
+        format!("listing:binance:{canonical_family}:{source_symbol}")
     })?;
     let exchange_id = kairos_primitives::Exchange::new("exchange:binance")?;
-    let market_id =
-        kairos_primitives::MarketId::new(format!("market:binance:{family}:{source_symbol}"))?;
+    let market_id = kairos_primitives::MarketId::new(format!(
+        "market:binance:{canonical_family}:{source_symbol}"
+    ))?;
+    let instrument_kind = canonical_instrument_kind(value.kind)?;
     let status: kairos_primitives::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
-        instrument_type: canonical_instrument_kind(value.kind)?,
+        instrument_type: instrument_kind,
         primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
@@ -570,17 +517,16 @@ fn append_binance_instrument(
     });
     catalog.markets.push(Market {
         market_id,
-        market_key: format!("binance.{family}.{source_symbol}"),
         instrument_id,
         listing_id: Some(listing_id),
         exchange_id,
-        market_type: ProviderProductCode::new(family)?,
+        instrument_kind,
         asset_type: Some(if value.kind == ExternalInstrumentKind::EquityPerpetual {
             AssetClass::Equity
         } else {
             AssetClass::Crypto
         }),
-        source_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+        venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
         base_asset_id: Some(kairos_primitives::AssetId::new(format!(
             "asset:{}:{base}",
             if value.kind == ExternalInstrumentKind::EquityPerpetual {

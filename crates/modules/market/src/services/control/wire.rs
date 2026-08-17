@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 pub(crate) struct SubscribePayload {
     pub(crate) subject: String,
     pub(crate) selectors: Vec<String>,
+    #[serde(default)]
+    pub(crate) source_id: Option<String>,
     pub(crate) exchange: Option<String>,
     pub(crate) market_type: Option<String>,
     #[serde(default)]
@@ -67,6 +69,7 @@ pub(crate) fn parse_subscribe_command(
         "payload": {
             "subject": raw.get("subject").and_then(Value::as_str).unwrap_or_default(),
             "selectors": raw.get("selectors").cloned().unwrap_or_else(|| json!([])),
+            "source_id": raw.get("source_id").cloned().unwrap_or(Value::Null),
             "exchange": raw.get("exchange").cloned().unwrap_or(Value::Null),
             "market_type": raw.get("market_type").cloned().unwrap_or(Value::Null),
             "asset_type": raw.get("asset_type").cloned().unwrap_or(Value::Null),

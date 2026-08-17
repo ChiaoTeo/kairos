@@ -1,4 +1,4 @@
-# Binance Margin execution adapter reference
+# Binance Margin execution and Account adapter reference
 
 ## Sources inspected
 
@@ -40,6 +40,14 @@ cache, execution engine, event bus, and runtime are not used.
   `ProviderInstrumentRef`; Integration does not parse canonical market IDs.
 - Production and direct CLI paths are async-only for both margin products;
   the old public blocking margin order-entry path was removed.
+- Account composition projects Cross and Isolated Margin through native async
+  snapshot and private-event capabilities. The old blocking Account snapshot
+  synchronization path has been removed.
+- Account owns the snapshot/stream barrier, per-segment recovery buffer,
+  continuity checks, resync, freshness, current view, and business events.
+- Cross and Isolated segments keep independent Account segment identities;
+  Isolated Margin requires the Account-owned provider symbol instead of trying
+  to recover it from a canonical instrument ID.
 
 ## Remaining exit criteria
 
@@ -48,3 +56,7 @@ cache, execution engine, event bus, and runtime are not used.
   against a Binance test account with Margin enabled.
 - Verify isolated-symbol permissions and account activation failures are
   classified as proven provider rejection rather than ambiguous delivery.
+
+The remaining items above concern live-provider fault/smoke coverage; the
+Account production composition migration itself is complete and has focused
+async-capability tests.

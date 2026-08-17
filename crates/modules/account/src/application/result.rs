@@ -6,8 +6,47 @@ use kairos_primitives::{
     ActorId, BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSegmentSyncMode {
+    Unknown,
+    SnapshotThenStream,
+    SnapshotOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSegmentSyncLifecycle {
+    Configured,
+    Bootstrapping,
+    Live,
+    SnapshotCurrent,
+    Degraded,
+    Resyncing,
+    Unavailable,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSegmentFreshness {
+    Fresh,
+    Stale,
+    Resyncing,
+    Unavailable,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSegmentCompleteness {
+    Complete,
+    Partial,
+    Unknown,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct AccountProjection {
+pub struct AccountSegmentView {
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub environment: String,
@@ -15,7 +54,17 @@ pub struct AccountProjection {
     pub configured_account_model: Option<String>,
     pub observed_account_model: Option<AccountModel>,
     pub status: AccountStatus,
-    pub stale: bool,
+    pub freshness: AccountSegmentFreshness,
+    pub sync_mode: AccountSegmentSyncMode,
+    pub sync_lifecycle: AccountSegmentSyncLifecycle,
+    pub completeness: AccountSegmentCompleteness,
+    pub snapshot_watermark: Option<u64>,
+    pub event_watermark: Option<u64>,
+    pub channel_epoch: Option<u64>,
+    pub last_event_at_unix_nanos: Option<u64>,
+    pub last_success_at_unix_nanos: Option<u64>,
+    pub last_error: Option<String>,
+    pub recovery_buffer_depth: u64,
     pub observed_at_unix_nanos: UnixNanos,
     pub generation: Generation,
     pub equity: Option<Money>,
@@ -29,7 +78,7 @@ pub struct AccountProjection {
     pub open_orders: Vec<OpenOrder>,
 }
 
-impl AccountProjection {
+impl AccountSegmentView {
     pub(crate) fn from_account(account: &Account) -> Self {
         let segment = account.segment();
         let state = account.state();
@@ -41,7 +90,21 @@ impl AccountProjection {
             configured_account_model: segment.account_model.clone(),
             observed_account_model: state.observed_account_model(),
             status: state.status(),
-            stale: state.stale(),
+            freshness: if state.stale() {
+                AccountSegmentFreshness::Stale
+            } else {
+                AccountSegmentFreshness::Fresh
+            },
+            sync_mode: AccountSegmentSyncMode::Unknown,
+            sync_lifecycle: AccountSegmentSyncLifecycle::Configured,
+            completeness: AccountSegmentCompleteness::Unknown,
+            snapshot_watermark: None,
+            event_watermark: None,
+            channel_epoch: None,
+            last_event_at_unix_nanos: None,
+            last_success_at_unix_nanos: None,
+            last_error: None,
+            recovery_buffer_depth: 0,
             observed_at_unix_nanos: state.observed_at_unix_nanos(),
             generation: state.generation(),
             equity: state.equity(),
@@ -83,14 +146,14 @@ pub struct AccountRefreshReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct AccountsSnapshot {
+pub struct AccountCurrentView {
     pub actor_id: ActorId,
     pub generation: Generation,
     pub event_sequence: Sequence,
-    pub accounts: Vec<AccountProjection>,
+    pub segments: Vec<AccountSegmentView>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AccountFactProvenance {
     pub source_id: String,
     pub provider_event_id: Option<String>,
@@ -102,7 +165,7 @@ pub struct AccountFactProvenance {
 /// A Strategy-visible Account fact emitted by the Account Actor at the same
 /// transition that changed its owned state. This is not a snapshot and is
 /// never reconstructed by a snapshot publisher.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AccountBusinessEvent {
     pub sequence: Sequence,
     pub account_id: AccountId,
@@ -111,7 +174,7 @@ pub struct AccountBusinessEvent {
     pub provenance: Option<AccountFactProvenance>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum AccountBusinessChange {
     Balance {
         segment_key: SegmentKey,
@@ -129,6 +192,7 @@ pub enum AccountBusinessChange {
         segment_key: SegmentKey,
         instrument_id: InstrumentId,
         market_id: Option<MarketId>,
+        position_side: kairos_primitives::PositionSide,
     },
     ObservedOrder {
         segment_key: SegmentKey,

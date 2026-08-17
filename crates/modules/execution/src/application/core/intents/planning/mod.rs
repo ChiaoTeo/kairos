@@ -23,10 +23,10 @@ pub(super) fn plan_simulated_intent(
                     segment_key: leg.segment_key.clone(),
                     instrument_id: leg.instrument_id.clone(),
                     market_id: leg.market_id.clone(),
-                    execution_access_id: leg
-                        .execution_access_id
+                    execution_route_id: leg
+                        .execution_route_id
                         .clone()
-                        .or_else(|| intent.execution_access_id.clone()),
+                        .or_else(|| intent.execution_route_id.clone()),
                     side: leg.side,
                     order_type: if leg.limit_price.is_some() {
                         OrderType::Limit
@@ -55,7 +55,7 @@ pub(super) fn plan_simulated_intent(
                 segment_key: intent.segment_key.clone(),
                 instrument_id: intent.instrument_id.clone(),
                 market_id: intent.market_id.clone(),
-                execution_access_id: intent.execution_access_id.clone(),
+                execution_route_id: intent.execution_route_id.clone(),
                 side: OrderSide::Buy,
                 order_type: if intent.limit_price.is_some() {
                     OrderType::Limit

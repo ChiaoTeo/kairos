@@ -8,7 +8,12 @@ from kairospy.domain_types import AccountId
 from .errors import AccountNotEnabledError
 from .events import AccountEvent
 from .mapping import map_account_event
-from .models import AccountSnapshot, AccountsSnapshot
+from .models import (
+    AccountSnapshot,
+    AccountsSnapshot,
+    DataFreshness,
+    SegmentSyncLifecycle,
+)
 
 
 class AccountApplication:
@@ -25,11 +30,13 @@ class AccountApplication:
         *,
         launch_id: str | None = None,
         instance_id: str | None = None,
+        required_segments: Mapping[AccountId, tuple[str, ...]] | None = None,
     ) -> None:
         self._projections = dict(projections)
         self._event_source = event_source
         self._launch_id = launch_id
         self._instance_id = instance_id
+        self._required_segments = dict(required_segments or {})
         self._event_cursors: dict[str, int] = {}
         self._event_source_ready = event_source is None
 
@@ -70,12 +77,28 @@ class AccountApplication:
         return projection.snapshot(account_id)
 
     def _check_event_source_ready(self) -> None:
-        if self._event_source_ready:
-            return
-        check_ready = getattr(self._event_source, "check_ready", None)
-        if callable(check_ready):
-            check_ready()
-        self._event_source_ready = True
+        if not self._event_source_ready:
+            check_ready = getattr(self._event_source, "check_ready", None)
+            if callable(check_ready):
+                check_ready()
+            self._event_source_ready = True
+        for account_id, required_segments in self._required_segments.items():
+            account = self.account(account_id)
+            for segment_key in required_segments:
+                segment = account.segment(segment_key)
+                if (
+                    segment.sync_lifecycle
+                    not in {
+                        SegmentSyncLifecycle.LIVE,
+                        SegmentSyncLifecycle.SNAPSHOT_CURRENT,
+                    }
+                    or segment.freshness is not DataFreshness.FRESH
+                ):
+                    raise RuntimeError(
+                        f"Account {account_id} required segment {segment_key} "
+                        f"is not ready: lifecycle={segment.sync_lifecycle.value}, "
+                        f"freshness={segment.freshness.value}"
+                    )
 
     async def _events(self) -> AsyncIterator[AccountEvent]:
         if self._event_source is None:

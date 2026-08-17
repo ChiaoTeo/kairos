@@ -25,10 +25,14 @@ class Ticker24h(object):
         self._tab = flatbuffers.table.Table(buf, pos)
 
     # Ticker24h
-    def MarketId(self):
+    def Scope(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(4))
         if o != 0:
-            return self._tab.String(o + self._tab.Pos)
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.market.v2.ObservationScope import ObservationScope
+            obj = ObservationScope()
+            obj.Init(self._tab.Bytes, x)
+            return obj
         return None
 
     # Ticker24h
@@ -219,11 +223,11 @@ def Ticker24hStart(builder):
 def Start(builder):
     Ticker24hStart(builder)
 
-def Ticker24hAddMarketId(builder, marketId):
-    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+def Ticker24hAddScope(builder, scope):
+    builder.PrependUOffsetTRelativeSlot(0, flatbuffers.number_types.UOffsetTFlags.py_type(scope), 0)
 
-def AddMarketId(builder, marketId):
-    Ticker24hAddMarketId(builder, marketId)
+def AddScope(builder, scope):
+    Ticker24hAddScope(builder, scope)
 
 def Ticker24hAddInstrumentId(builder, instrumentId):
     builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)

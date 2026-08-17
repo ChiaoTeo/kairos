@@ -138,8 +138,8 @@ def reference_stream(
 async def _observe_reference_stream(
     source: Any,
     *,
-    timeout_seconds: int,
-    idle_timeout_seconds: int,
+    timeout_seconds: float,
+    idle_timeout_seconds: float,
 ) -> dict[str, object]:
     deadline = time.monotonic() + timeout_seconds
     idle_deadline: float | None = None
@@ -286,95 +286,196 @@ def reference_options_remove(
 
 @reference_app.command("markets")
 def reference_markets(
+    market_id: list[str] | None = typer.Option(None, "--market-id"),
     symbol: str | None = typer.Option(None, "--symbol"),
     exchange_id: str | None = typer.Option(None, "--exchange-id", "--exchange"),
-    market_type: str | None = typer.Option(None, "--market-type"),
+    instrument_kind: str | None = typer.Option(None, "--instrument-kind"),
     asset_type: str | None = typer.Option(None, "--asset-type"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    listing_id: str | None = typer.Option(None, "--listing-id"),
+    underlying_instrument_id: str | None = typer.Option(
+        None, "--underlying-instrument-id", "--underlying"
+    ),
     active_only: bool = typer.Option(False, "--active-only"),
     status: str | None = typer.Option(None, "--status"),
-    limit: int | None = typer.Option(None, "--limit"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("text", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
 
     value = _client(workspace).markets(
+        market_ids=market_id,
         symbol=symbol,
         exchange_id=exchange_id,
-        market_type=market_type,
+        instrument_kind=instrument_kind,
         asset_type=asset_type,
+        instrument_id=instrument_id,
+        listing_id=listing_id,
+        underlying_instrument_id=underlying_instrument_id,
         active_only=active_only,
         status=status,
         limit=limit,
+        offset=offset,
     )
     typer.echo(render(value, OutputFormat(output)))
 
 
-def _reference_collection_command(
-    view: str, workspace: Path | None, output: str
-) -> None:
+def _render_reference_rows(value: object, output: str) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
 
-    typer.echo(render(_client(workspace).collection(view), OutputFormat(output)))
+    typer.echo(render(value, OutputFormat(output)))
 
 
 @reference_app.command("assets")
 def reference_assets(
+    asset_id: list[str] | None = typer.Option(None, "--asset-id"),
+    code: str | None = typer.Option(None, "--code"),
+    asset_class: str | None = typer.Option(None, "--asset-class"),
+    active_only: bool = typer.Option(False, "--active-only"),
+    status: str | None = typer.Option(None, "--status"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
-    _reference_collection_command("assets", workspace, output)
+    _render_reference_rows(
+        _client(workspace).assets(
+            asset_ids=asset_id,
+            code=code,
+            asset_class=asset_class,
+            active_only=active_only,
+            status=status,
+            limit=limit,
+            offset=offset,
+        ),
+        output,
+    )
 
 
 @reference_app.command("entities")
 def reference_entities(
+    entity_id: list[str] | None = typer.Option(None, "--entity-id"),
+    entity_type: str | None = typer.Option(None, "--entity-type"),
+    active_only: bool = typer.Option(False, "--active-only"),
+    status: str | None = typer.Option(None, "--status"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
-    _reference_collection_command("entities", workspace, output)
+    _render_reference_rows(
+        _client(workspace).entities(
+            entity_ids=entity_id,
+            entity_type=entity_type,
+            active_only=active_only,
+            status=status,
+            limit=limit,
+            offset=offset,
+        ),
+        output,
+    )
 
 
 @reference_app.command("instruments")
 def reference_instruments(
+    instrument_id: list[str] | None = typer.Option(None, "--instrument-id"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    instrument_type: str | None = typer.Option(None, "--instrument-type"),
+    product_family: str | None = typer.Option(
+        None, "--provider-product", "--product-family"
+    ),
+    underlying_instrument_id: str | None = typer.Option(
+        None, "--underlying-instrument-id", "--underlying"
+    ),
+    expiry_unix_nanos: int | None = typer.Option(None, "--expiry-unix-nanos"),
+    expiry_from_unix_nanos: int | None = typer.Option(None, "--expiry-from-unix-nanos"),
+    expiry_to_unix_nanos: int | None = typer.Option(None, "--expiry-to-unix-nanos"),
+    option_right: str | None = typer.Option(None, "--option-right"),
+    active_only: bool = typer.Option(False, "--active-only"),
+    status: str | None = typer.Option(None, "--status"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
-    _reference_collection_command("instruments", workspace, output)
+    _render_reference_rows(
+        _client(workspace).instruments(
+            instrument_ids=instrument_id,
+            symbol=symbol,
+            instrument_type=instrument_type,
+            product_family=product_family,
+            underlying_instrument_id=underlying_instrument_id,
+            expiry_unix_nanos=expiry_unix_nanos,
+            expiry_from_unix_nanos=expiry_from_unix_nanos,
+            expiry_to_unix_nanos=expiry_to_unix_nanos,
+            option_right=option_right,
+            active_only=active_only,
+            status=status,
+            limit=limit,
+            offset=offset,
+        ),
+        output,
+    )
 
 
 @reference_app.command("listings")
 def reference_listings(
-    workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("table", "--output", "--format"),
-) -> None:
-    _reference_collection_command("listings", workspace, output)
-
-
-@reference_app.command("execution-accesses")
-def reference_execution_accesses(
-    provider_id: str | None = typer.Option(None, "--provider-id", "--provider"),
-    product_family: str | None = typer.Option(None, "--product-family"),
-    provider_symbol: str | None = typer.Option(None, "--provider-symbol", "--symbol"),
+    listing_id: list[str] | None = typer.Option(None, "--listing-id"),
+    instrument_id: str | None = typer.Option(None, "--instrument-id"),
+    exchange_id: str | None = typer.Option(None, "--exchange-id", "--exchange"),
+    exchange_symbol: str | None = typer.Option(None, "--exchange-symbol", "--symbol"),
     active_only: bool = typer.Option(False, "--active-only"),
     status: str | None = typer.Option(None, "--status"),
-    limit: int | None = typer.Option(None, "--limit", min=1),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
     output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
-    from kairospy.surface.cli.options import OutputFormat, render
+    _render_reference_rows(
+        _client(workspace).listings(
+            listing_ids=listing_id,
+            instrument_id=instrument_id,
+            exchange_id=exchange_id,
+            exchange_symbol=exchange_symbol,
+            active_only=active_only,
+            status=status,
+            limit=limit,
+            offset=offset,
+        ),
+        output,
+    )
 
-    typer.echo(
-        render(
-            _client(workspace).execution_accesses(
-                provider_id=provider_id,
-                product_family=product_family,
-                provider_symbol=provider_symbol,
-                active_only=active_only,
-                status=status,
-                limit=limit,
-            ),
-            OutputFormat(output),
-        )
+
+@reference_app.command("option-chain")
+def reference_option_chain(
+    underlying_instrument_id: str = typer.Option(
+        ..., "--underlying-instrument-id", "--underlying"
+    ),
+    expiry_unix_nanos: int | None = typer.Option(None, "--expiry-unix-nanos"),
+    expiry_from_unix_nanos: int | None = typer.Option(None, "--expiry-from-unix-nanos"),
+    expiry_to_unix_nanos: int | None = typer.Option(None, "--expiry-to-unix-nanos"),
+    option_right: str | None = typer.Option(None, "--option-right"),
+    active_only: bool = typer.Option(True, "--active-only/--include-inactive"),
+    limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
+    offset: int = typer.Option(0, "--offset", min=0),
+    workspace: Path | None = typer.Option(None, "--workspace"),
+    output: str = typer.Option("table", "--output", "--format"),
+) -> None:
+    _render_reference_rows(
+        _client(workspace).instruments(
+            instrument_type="option",
+            underlying_instrument_id=underlying_instrument_id,
+            expiry_unix_nanos=expiry_unix_nanos,
+            expiry_from_unix_nanos=expiry_from_unix_nanos,
+            expiry_to_unix_nanos=expiry_to_unix_nanos,
+            option_right=option_right,
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        ),
+        output,
     )
 
 

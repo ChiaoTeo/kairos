@@ -29,22 +29,20 @@ fn decodes_a_typed_reference_v2_event() {
         },
     );
     let market_id = builder.create_string("market:binance:spot:BTCUSDT");
-    let market_key = builder.create_string("BTCUSDT");
     let instrument_id = builder.create_string("instrument:spot:BTC");
     let listing_id = builder.create_string("listing:binance:spot:BTCUSDT");
     let exchange_id = builder.create_string("exchange:binance");
-    let market_type = builder.create_string("spot");
-    let source_symbol = builder.create_string("BTCUSDT");
+    let instrument_kind = builder.create_string("spot");
+    let venue_symbol = builder.create_string("BTCUSDT");
     let market = FbMarket::create(
         &mut builder,
         &MarketArgs {
             market_id: Some(market_id),
-            market_key: Some(market_key),
             instrument_id: Some(instrument_id),
             listing_id: Some(listing_id),
             exchange_id: Some(exchange_id),
-            market_type: Some(market_type),
-            source_symbol: Some(source_symbol),
+            instrument_kind: Some(instrument_kind),
+            venue_symbol: Some(venue_symbol),
             ..Default::default()
         },
     );
@@ -77,12 +75,11 @@ fn rejects_non_reference_v2_payloads() {
 fn encoder_emits_typed_market_upsert_without_json_adapter() {
     let market = kairos_reference_contract::Market {
         market_id: "market:binance:spot:BTCUSDT".into(),
-        market_key: "BTCUSDT".into(),
         instrument_id: "instrument:spot:BTC".into(),
         listing_id: Some("listing:binance:spot:BTCUSDT".into()),
         exchange_id: "exchange:binance".into(),
-        market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-        source_symbol: "BTCUSDT".into(),
+        instrument_kind: kairos_primitives::InstrumentKind::Spot,
+        venue_symbol: Some("BTCUSDT".into()),
         status: "active".into(),
         price_tick: Some("0.01".into()),
         quantity_tick: Some("0.00001".into()),
@@ -140,18 +137,6 @@ fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
             },
         ],
         markets: vec![active_market, inactive_market],
-        execution_accesses: vec![kairos_reference_contract::ExecutionAccess {
-            access_id: "execution:active".into(),
-            market_id: Some("market:active".into()),
-            status: "active".into(),
-            ..Default::default()
-        }],
-        market_data_accesses: vec![kairos_reference_contract::MarketDataAccess {
-            access_id: "market-data:active".into(),
-            market_id: "market:active".into(),
-            status: "active".into(),
-            ..Default::default()
-        }],
         provider_health: vec![kairos_reference_contract::ProviderHealthState::default()],
         option_underlyings: vec!["SPY".into()],
         lifecycle_events: vec![kairos_reference_contract::LifecycleEntry::default()],
@@ -162,20 +147,14 @@ fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
     assert_eq!((market.generation, market.event_sequence), (9, 14));
     assert_eq!(market.markets.len(), 1);
     assert_eq!(market.instruments.len(), 1);
-    assert_eq!(market.market_data_accesses.len(), 1);
-    assert!(market.execution_accesses.is_empty());
     assert!(market.provider_health.is_empty());
     assert!(market.option_underlyings.is_empty());
     assert!(market.lifecycle_events.is_empty());
 
     let execution = snapshot.execution_projection();
     assert_eq!(execution.markets.len(), 1);
-    assert_eq!(execution.execution_accesses.len(), 1);
-    assert!(execution.market_data_accesses.is_empty());
 
     let account = snapshot.account_projection();
     assert_eq!(account.markets.len(), 1);
     assert_eq!(account.instruments.len(), 1);
-    assert_eq!(account.market_data_accesses.len(), 1);
-    assert!(account.execution_accesses.is_empty());
 }

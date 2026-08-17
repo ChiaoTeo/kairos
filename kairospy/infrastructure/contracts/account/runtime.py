@@ -13,6 +13,10 @@ from kairospy.application.account import (
     Balance,
     DataFreshness,
     Position,
+    PositionSide,
+    SegmentCompleteness,
+    SegmentSyncLifecycle,
+    SegmentSyncMode,
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.domain_types import AccountId, InstrumentId, SegmentKey
@@ -72,7 +76,7 @@ def _response(status: int, value: Mapping[str, Any]) -> Mapping[str, Any]:
     return value
 
 
-class AccountProjection:
+class AccountCurrentViewReader:
     """Synchronous Account application projection over one v2 current view."""
 
     def __init__(self, path: str | Path, *, account_id: AccountId) -> None:
@@ -134,6 +138,7 @@ def _segment_snapshot(
             segment_key=segment_key,
             instrument=_instrument(_text(value.InstrumentId()) or ""),
             quantity=_decimal64(value.Quantity()) or Decimal("0"),
+            position_side=_position_side(int(value.PositionSide())),
             average_price=_decimal64(value.AveragePrice()),
             market_value=_market_value(value),
             unrealized_pnl=_decimal64(value.UnrealizedPnl()),
@@ -142,17 +147,12 @@ def _segment_snapshot(
     )
     raw_status = account.Status()
     status = _account_status(int(raw_status))
-    freshness = (
-        DataFreshness.STALE
-        if int(account.Freshness()) == 2
-        else DataFreshness.RESYNCING
-        if status == "reconciling"
-        else DataFreshness.UNAVAILABLE
-        if status in {"unavailable", "suspended"}
-        else DataFreshness.FRESH
-        if status in {"active", "ready"}
-        else DataFreshness.UNKNOWN
-    )
+    freshness = {
+        1: DataFreshness.FRESH,
+        2: DataFreshness.STALE,
+        4: DataFreshness.RESYNCING,
+        5: DataFreshness.UNAVAILABLE,
+    }.get(int(account.Freshness()), DataFreshness.UNKNOWN)
     return AccountSegmentSnapshot(
         account_id=account_id,
         segment_key=segment_key,
@@ -166,11 +166,40 @@ def _segment_snapshot(
         positions=positions,
         freshness=freshness,
         generation=generation,
+        sync_mode={
+            1: SegmentSyncMode.SNAPSHOT_THEN_STREAM,
+            2: SegmentSyncMode.SNAPSHOT_ONLY,
+        }.get(int(account.SyncMode()), SegmentSyncMode.UNKNOWN),
+        sync_lifecycle={
+            1: SegmentSyncLifecycle.CONFIGURED,
+            2: SegmentSyncLifecycle.BOOTSTRAPPING,
+            3: SegmentSyncLifecycle.LIVE,
+            4: SegmentSyncLifecycle.SNAPSHOT_CURRENT,
+            5: SegmentSyncLifecycle.DEGRADED,
+            6: SegmentSyncLifecycle.RESYNCING,
+            7: SegmentSyncLifecycle.UNAVAILABLE,
+            8: SegmentSyncLifecycle.STOPPED,
+        }.get(int(account.SyncLifecycle()), SegmentSyncLifecycle.CONFIGURED),
+        completeness={
+            1: SegmentCompleteness.COMPLETE,
+            2: SegmentCompleteness.PARTIAL,
+        }.get(int(account.Completeness()), SegmentCompleteness.UNKNOWN),
+        snapshot_watermark=_optional_watermark(account.SnapshotWatermark()),
+        event_watermark=_optional_watermark(account.EventWatermark()),
+        channel_epoch=_optional_watermark(account.ChannelEpoch()),
+        last_event_at_unix_nanos=_optional_watermark(account.LastEventAtUnixNanos()),
+        last_success_at_unix_nanos=_optional_watermark(account.LastSuccessAtUnixNanos()),
+        last_error=_text(account.LastError()),
+        recovery_buffer_depth=int(account.RecoveryBufferDepth()),
     )
 
 
 def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode("utf-8")
+
+
+def _optional_watermark(value: int) -> int | None:
+    return None if int(value) == 0 else int(value)
 
 
 def _account_status(value: int) -> str:
@@ -201,6 +230,15 @@ def _decimal64(value: object | None) -> Decimal | None:
 def _instrument(value: str) -> InstrumentRef:
     identifier = InstrumentId(value)
     return InstrumentRef(identifier, value.rsplit(":", 1)[-1])
+
+
+def _position_side(value: int) -> PositionSide:
+    return {
+        0: PositionSide.NET,
+        1: PositionSide.NET,
+        2: PositionSide.LONG,
+        3: PositionSide.SHORT,
+    }.get(value, PositionSide.NET)
 
 
 def _market_value(value: object) -> Decimal | None:
@@ -262,7 +300,7 @@ def _decimal_wire(value) -> str:
 
 __all__ = [
     "AccountContractClient",
-    "AccountProjection",
+    "AccountCurrentViewReader",
     "CommandEnvelope",
     "QueryEnvelope",
     "backtest_mark_to_market",

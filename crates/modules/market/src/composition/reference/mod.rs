@@ -5,4 +5,4 @@ mod events;
 mod projection;
 
 pub(crate) use client::spawn_market_universe_watcher;
-pub(crate) use projection::project_market_universe;
+pub(crate) use projection::{adapter_observation_capabilities, project_market_universe};

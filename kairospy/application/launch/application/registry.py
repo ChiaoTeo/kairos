@@ -95,22 +95,27 @@ class LaunchRegistryApplication:
             }
         )
         launch_root = self.workspace.paths.launch_root(mode, launch_id)
-        instance_root = self.workspace.paths.launch_instance_root(
-            mode, launch_id, instance_id
-        )
-        instance_root.mkdir(parents=True, exist_ok=True)
+        instance = self.workspace.instance(mode, launch_id, instance_id)
+        instance.prepare()
         (launch_root / "current.json").write_text(
             json.dumps(entry, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        for name, value in (
-            ("state.json", {"state": "created"}),
-            ("command.json", {"command": ""}),
-        ):
-            (instance_root / name).write_text(
-                json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        instance.component_manifest().write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "launch_id": launch_id,
+                    "instance_id": instance_id,
+                    "mode": mode,
+                    "accounts": {},
+                    "components": {},
+                },
+                indent=2,
+                sort_keys=True,
             )
-        (instance_root / "run.sqlite").touch()
-        (instance_root / "launch.log").touch()
+            + "\n",
+            encoding="utf-8",
+        )
         OperationJournal(self.workspace).append(
             "launch.register", subject=f"{mode}/{launch_id}/{instance_id}"
         )

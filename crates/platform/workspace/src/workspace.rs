@@ -38,6 +38,106 @@ pub struct WorkspaceManifest {
     pub cli: WorkspaceCliConfig,
 }
 
+/// Common filesystem categories for a Workspace or launch-instance scope.
+#[derive(Debug, Clone)]
+pub struct ResourceScope {
+    root: PathBuf,
+}
+
+impl ResourceScope {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn child(&self, parts: &[&str]) -> io::Result<PathBuf> {
+        if parts.is_empty()
+            || parts.iter().any(|part| {
+                part.is_empty()
+                    || *part == "."
+                    || *part == ".."
+                    || part.contains('/')
+                    || part.contains('\\')
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid scope resource path",
+            ));
+        }
+        Ok(self.root.join(parts.iter().collect::<PathBuf>()))
+    }
+
+    pub fn config_root(&self) -> PathBuf {
+        self.root.join("config")
+    }
+
+    pub fn data_root(&self) -> PathBuf {
+        self.root.join("data")
+    }
+
+    pub fn state_root(&self) -> PathBuf {
+        self.root.join("state")
+    }
+
+    pub fn snapshots_root(&self) -> PathBuf {
+        self.root.join("snapshots")
+    }
+
+    pub fn run_root(&self) -> PathBuf {
+        self.root.join("run")
+    }
+
+    pub fn logs_root(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
+    pub fn process_dir(&self, component: &str) -> io::Result<PathBuf> {
+        self.child(&["run", component])
+    }
+
+    pub fn process_socket(&self, component: &str) -> io::Result<PathBuf> {
+        let candidate = self.process_dir(component)?.join("control.sock");
+        if candidate.to_string_lossy().len() <= 100 {
+            return Ok(candidate);
+        }
+        let input = format!("{}:{}", self.root.display(), component);
+        let digest = Sha256::digest(input.as_bytes());
+        let short = digest[..10]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(PathBuf::from(format!(
+            "/tmp/kairos-process-{short}-{component}.sock"
+        )))
+    }
+
+    pub fn process_lock_path(&self, component: &str) -> io::Result<PathBuf> {
+        Ok(self.process_dir(component)?.join("process.lock"))
+    }
+
+    pub fn health_file(&self, component: &str) -> io::Result<PathBuf> {
+        Ok(self.process_dir(component)?.join("health.json"))
+    }
+
+    pub fn state(&self, parts: &[&str]) -> io::Result<PathBuf> {
+        let mut scoped = Vec::with_capacity(parts.len() + 1);
+        scoped.push("state");
+        scoped.extend_from_slice(parts);
+        self.child(&scoped)
+    }
+
+    pub fn snapshot(&self, parts: &[&str]) -> io::Result<PathBuf> {
+        let mut scoped = Vec::with_capacity(parts.len() + 1);
+        scoped.push("snapshots");
+        scoped.extend_from_slice(parts);
+        self.child(&scoped)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
@@ -111,7 +211,7 @@ impl Drop for WorkspaceProcessLock {
 
 #[derive(Debug, Clone)]
 pub struct InstanceWorkspace {
-    workspace: Workspace,
+    resources: ResourceScope,
     mode: String,
     launch_id: String,
     instance_id: String,
@@ -166,8 +266,15 @@ impl InstanceWorkspace {
                 ));
             }
         }
+        let root = workspace
+            .root
+            .join("launches")
+            .join(&mode)
+            .join(&launch_id)
+            .join("instances")
+            .join(&instance_id);
         Ok(Self {
-            workspace: workspace.clone(),
+            resources: ResourceScope::new(root),
             mode,
             launch_id,
             instance_id,
@@ -175,80 +282,28 @@ impl InstanceWorkspace {
     }
 
     pub fn root(&self) -> PathBuf {
-        self.workspace
-            .root
-            .join("launches")
-            .join(&self.mode)
-            .join(&self.launch_id)
-            .join("instances")
-            .join(&self.instance_id)
+        self.resources.root().to_path_buf()
+    }
+
+    pub fn paths(&self) -> &ResourceScope {
+        &self.resources
     }
 
     pub fn socket(&self, name: &str) -> io::Result<PathBuf> {
-        let name = Self::component(name)?;
-        let candidate = self.root().join("sockets").join(format!("{name}.sock"));
-        if candidate.to_string_lossy().len() <= 100 {
-            return Ok(candidate);
-        }
-        let input = format!(
-            "{}:{}:{}:{}:{}",
-            self.workspace.root.display(),
-            self.mode,
-            self.launch_id,
-            self.instance_id,
-            name
-        );
-        let digest = Sha256::digest(input.as_bytes());
-        let short = digest[..10]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        Ok(PathBuf::from(format!(
-            "/tmp/kairos-instance-{short}-{name}.sock"
-        )))
+        self.resources.process_socket(Self::component(name)?)
     }
 
     pub fn health(&self, name: &str) -> io::Result<PathBuf> {
-        Ok(self
-            .root()
-            .join("health")
-            .join(format!("{}.json", Self::component(name)?)))
+        self.resources.health_file(Self::component(name)?)
     }
 
     pub fn process_lock(&self, name: &str) -> io::Result<WorkspaceProcessLock> {
         let name = Self::component(name)?;
-        let path = self.root().join("locks").join(format!("{}.lock", name));
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)?;
-        #[cfg(unix)]
-        {
-            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-            if result != 0 {
-                let error = io::Error::last_os_error();
-                if matches!(error.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("process lock is already held: {}", path.display()),
-                    ));
-                }
-                return Err(error);
-            }
-        }
-        file.set_len(0)?;
-        file.write_all(std::process::id().to_string().as_bytes())?;
-        Ok(WorkspaceProcessLock { _file: file, path })
+        acquire_process_lock(self.resources.process_lock_path(name)?)
     }
 
     pub fn component_manifest(&self) -> io::Result<PathBuf> {
-        self.state(&["component-endpoints.json"])
+        Ok(self.root().join("manifest.json"))
     }
 
     pub fn service_health(&self, service: &str) -> io::Result<PathBuf> {
@@ -256,22 +311,32 @@ impl InstanceWorkspace {
     }
 
     pub fn state(&self, parts: &[&str]) -> io::Result<PathBuf> {
-        Ok(self
-            .root()
-            .join("state")
-            .join(Self::components(parts)?.iter().collect::<PathBuf>()))
+        self.resources.state(Self::components(parts)?)
     }
 
     pub fn snapshot(&self, parts: &[&str]) -> io::Result<PathBuf> {
-        Ok(self
-            .root()
-            .join("snapshots")
-            .join(Self::components(parts)?.iter().collect::<PathBuf>()))
+        self.resources.snapshot(Self::components(parts)?)
     }
 
     pub fn service_snapshot(&self, service: &str) -> io::Result<PathBuf> {
         let service = Self::component(service)?;
         self.snapshot(&[service, &format!("{service}.snapshot")])
+    }
+
+    pub fn normalized_config(&self) -> io::Result<PathBuf> {
+        self.resources.child(&["config", "normalized.json"])
+    }
+
+    pub fn lifecycle_journal(&self) -> io::Result<PathBuf> {
+        self.state(&["launch", "lifecycle.jsonl"])
+    }
+
+    pub fn checkpoint(&self, component: &str, name: &str) -> io::Result<PathBuf> {
+        self.state(&[
+            Self::component(component)?,
+            "checkpoints",
+            Self::component(name)?,
+        ])
     }
 
     pub fn mode(&self) -> &str {
@@ -285,19 +350,7 @@ impl InstanceWorkspace {
     }
 
     pub fn prepare(&self) -> io::Result<()> {
-        for directory in [
-            self.root(),
-            self.root().join("sockets"),
-            self.root().join("health"),
-            self.root().join("state"),
-            self.root().join("snapshots"),
-            self.root().join("logs"),
-            self.root().join("checkpoints"),
-            self.root().join("locks"),
-        ] {
-            fs::create_dir_all(directory)?;
-        }
-        Ok(())
+        fs::create_dir_all(self.root())
     }
 }
 
@@ -482,6 +535,10 @@ impl Workspace {
         &self.root
     }
 
+    pub fn paths(&self) -> ResourceScope {
+        ResourceScope::new(self.root.clone())
+    }
+
     pub fn cli_format(&self) -> &str {
         &self.manifest.cli.format
     }
@@ -500,19 +557,19 @@ impl Workspace {
     }
 
     pub fn config_root(&self) -> PathBuf {
-        self.root.join("config")
+        self.paths().config_root()
     }
     pub fn state_root(&self) -> PathBuf {
-        self.root.join("state")
+        self.paths().state_root()
     }
     pub fn run_root(&self) -> PathBuf {
-        self.root.join("run")
+        self.paths().run_root()
     }
     pub fn logs_root(&self) -> PathBuf {
-        self.root.join("logs")
+        self.paths().logs_root()
     }
     pub fn data_root(&self) -> PathBuf {
-        self.root.join("data")
+        self.paths().data_root()
     }
     pub fn instance(
         &self,
@@ -524,7 +581,7 @@ impl Workspace {
     }
 
     pub fn process_dir(&self, name: &str) -> io::Result<PathBuf> {
-        self.child(&["run", name])
+        self.paths().process_dir(name)
     }
 
     pub fn launch_dir(&self, id: &str) -> io::Result<PathBuf> {
@@ -532,24 +589,22 @@ impl Workspace {
     }
 
     pub fn child(&self, parts: &[&str]) -> io::Result<PathBuf> {
-        if parts.is_empty()
-            || parts
-                .iter()
-                .any(|part| part.is_empty() || *part == "." || *part == "..")
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid workspace child path",
-            ));
+        self.paths().child(parts)
+    }
+
+    /// Resolve a canonical resource for writing, or an existing legacy path
+    /// for a bounded read-only migration.
+    pub fn existing_path(
+        &self,
+        canonical_parts: &[&str],
+        legacy_parts: &[&str],
+    ) -> io::Result<PathBuf> {
+        let canonical = self.child(canonical_parts)?;
+        if canonical.exists() {
+            return Ok(canonical);
         }
-        let candidate = self.root.join(parts.iter().collect::<PathBuf>());
-        if !candidate.starts_with(&self.root) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "workspace path escapes root",
-            ));
-        }
-        Ok(candidate)
+        let legacy = self.child(legacy_parts)?;
+        Ok(if legacy.exists() { legacy } else { canonical })
     }
 
     pub fn process_socket(&self, process: &str) -> io::Result<PathBuf> {
@@ -557,76 +612,15 @@ impl Workspace {
     }
 
     pub fn process_lock(&self, process: &str) -> io::Result<WorkspaceProcessLock> {
-        let path = self.child(&["run", process, &format!("{process}.lock")])?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)?;
-
-        #[cfg(unix)]
-        {
-            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-            if result != 0 {
-                let error = io::Error::last_os_error();
-                if matches!(error.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
-                {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("process lock is already held: {}", path.display()),
-                    ));
-                }
-                return Err(error);
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = file;
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "workspace process locks are only implemented on Unix",
-            ));
-        }
-
-        file.set_len(0)?;
-        file.write_all(std::process::id().to_string().as_bytes())?;
-        Ok(WorkspaceProcessLock { _file: file, path })
+        acquire_process_lock(self.paths().process_lock_path(process)?)
     }
 
     pub fn control_socket(&self, name: &str) -> io::Result<PathBuf> {
-        if name.trim().is_empty()
-            || name == "."
-            || name == ".."
-            || name.contains('/')
-            || name.contains('\\')
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid process socket name",
-            ));
-        }
-        let candidate = self.child(&["run", name, &format!("{name}.sock")])?;
-        if candidate.to_string_lossy().len() <= 100 {
-            return Ok(candidate);
-        }
-        let input = format!("{}:{}", self.root.display(), name);
-        let digest = Sha256::digest(input.as_bytes());
-        let short = digest[..10]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        Ok(PathBuf::from(format!(
-            "/tmp/kairos-process-{short}-{name}.sock"
-        )))
+        self.paths().process_socket(name)
     }
 
     pub fn health_file(&self, name: &str) -> io::Result<PathBuf> {
-        self.child(&["run", name, "health.json"])
+        self.paths().health_file(name)
     }
 
     pub fn service_health(&self, service: &str) -> io::Result<PathBuf> {
@@ -645,8 +639,50 @@ impl Workspace {
                 "invalid service name",
             ));
         }
-        self.child(&["snapshots", service, &format!("{service}.snapshot")])
+        self.paths()
+            .snapshot(&[service, &format!("{service}.snapshot")])
     }
+}
+
+fn acquire_process_lock(path: PathBuf) -> io::Result<WorkspaceProcessLock> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)?;
+
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("process lock is already held: {}", path.display()),
+                ));
+            }
+            return Err(error);
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "workspace process locks are only implemented on Unix",
+        ));
+    }
+
+    file.set_len(0)?;
+    file.write_all(std::process::id().to_string().as_bytes())?;
+    Ok(WorkspaceProcessLock { _file: file, path })
 }
 
 fn read_fencing_token(path: &Path) -> io::Result<u64> {
@@ -702,7 +738,7 @@ mod tests {
         assert!(workspace
             .process_socket("risk")
             .unwrap()
-            .ends_with("run/risk/risk.sock"));
+            .ends_with("run/risk/control.sock"));
         assert!(workspace.state_root().ends_with("state"));
         assert!(workspace
             .health_file("risk")
@@ -760,7 +796,7 @@ source_id = "binance-spot"
         let root = tempfile::tempdir().unwrap();
         let workspace = Workspace::init(root.path().join("workspace"), "demo").unwrap();
         let first = workspace.process_lock("reference").unwrap();
-        assert!(first.path().ends_with("run/reference/reference.lock"));
+        assert!(first.path().ends_with("run/reference/process.lock"));
         assert_eq!(
             workspace.process_lock("reference").unwrap_err().kind(),
             std::io::ErrorKind::AlreadyExists
@@ -930,11 +966,49 @@ source_id = "binance-spot"
         assert!(instance
             .service_health("market")
             .unwrap()
-            .ends_with("health/market.json"));
+            .ends_with("run/market/health.json"));
         assert!(instance.service_snapshot("../market").is_err());
         assert!(workspace
             .service_snapshot("risk")
             .unwrap()
             .ends_with("snapshots/risk/risk.snapshot"));
+    }
+
+    #[test]
+    fn workspace_and_instance_scopes_share_the_runtime_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path(), "demo").unwrap();
+        let instance = workspace.instance("paper", "launch", "run").unwrap();
+        instance.prepare().unwrap();
+
+        assert!(workspace
+            .paths()
+            .process_dir("market")
+            .unwrap()
+            .ends_with("run/market"));
+        assert!(instance
+            .paths()
+            .process_dir("market")
+            .unwrap()
+            .ends_with("run/market"));
+        assert!(instance
+            .health("market")
+            .unwrap()
+            .ends_with("run/market/health.json"));
+        assert!(instance
+            .normalized_config()
+            .unwrap()
+            .ends_with("config/normalized.json"));
+        assert!(instance
+            .checkpoint("market", "replay.json")
+            .unwrap()
+            .ends_with("state/market/checkpoints/replay.json"));
+        assert!(instance
+            .component_manifest()
+            .unwrap()
+            .ends_with("manifest.json"));
+        for legacy in ["sockets", "health", "locks", "checkpoints"] {
+            assert!(!instance.root().join(legacy).exists());
+        }
     }
 }

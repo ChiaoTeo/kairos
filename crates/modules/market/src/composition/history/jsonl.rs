@@ -26,7 +26,7 @@ pub(crate) fn spawn_jsonl_history(
 #[derive(Clone, Debug)]
 pub(crate) struct HistoryCollectionSpec {
     pub name: String,
-    pub market_id: String,
+    pub scope_key: String,
     pub selectors: Vec<String>,
     pub root: PathBuf,
     pub queue_capacity: usize,
@@ -52,8 +52,8 @@ impl JsonlMarketHistoryRecorder {
     pub(crate) fn spawn(specs: Vec<HistoryCollectionSpec>) -> Result<Self, String> {
         let mut workers = Vec::with_capacity(specs.len());
         for spec in specs {
-            if spec.name.trim().is_empty() || spec.market_id.trim().is_empty() {
-                return Err("history collection name and market_id are required".into());
+            if spec.name.trim().is_empty() || spec.scope_key.trim().is_empty() {
+                return Err("history collection name and scope_key are required".into());
             }
             if spec.queue_capacity == 0 {
                 return Err(format!(
@@ -87,7 +87,7 @@ impl JsonlMarketHistoryRecorder {
                 continue;
             };
             for worker in &self.workers {
-                if observation.market_id() != worker.spec.market_id
+                if observation.scope().key() != worker.spec.scope_key
                     || !selector_matches(&worker.spec.selectors, observation)
                 {
                     continue;
@@ -152,7 +152,7 @@ struct CollectionManifest<'a> {
     name: &'a str,
     format: &'static str,
     path: String,
-    market_id: &'a str,
+    scope_key: &'a str,
     selectors: &'a [String],
     event_count: u64,
     first_event_time_unix_nanos: Option<u64>,
@@ -255,11 +255,11 @@ async fn write_manifest(
     last_sequence: Option<u64>,
 ) -> Result<(), String> {
     let manifest = CollectionManifest {
-        schema_version: 1,
+        schema_version: 2,
         name: &spec.name,
         format: "jsonl",
         path: data_path.display().to_string(),
-        market_id: &spec.market_id,
+        scope_key: &spec.scope_key,
         selectors: &spec.selectors,
         event_count,
         first_event_time_unix_nanos: first_time,
@@ -291,12 +291,15 @@ mod tests {
 
     fn quote(time: u64) -> MarketObservation {
         MarketObservation::Quote(Quote {
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            scope: crate::ObservationScope::market("market:btc").unwrap(),
             instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
             bid_price: Some("100".parse().unwrap()),
             bid_quantity: None,
             ask_price: None,
             ask_quantity: None,
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: None,
             observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
             source_id: "binance".into(),
         })
@@ -307,7 +310,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let spec = HistoryCollectionSpec {
             name: "btc-quotes".into(),
-            market_id: "market:btc".into(),
+            scope_key: "market:btc".into(),
             selectors: vec!["quote".into()],
             root: root.path().join("btc-quotes"),
             queue_capacity: 2,
@@ -346,7 +349,7 @@ mod tests {
         std::fs::write(collection_root.join("events.jsonl"), b"not-json\n").unwrap();
         let mut recorder = JsonlMarketHistoryRecorder::spawn(vec![HistoryCollectionSpec {
             name: "corrupt".into(),
-            market_id: "market:btc".into(),
+            scope_key: "market:btc".into(),
             selectors: vec![],
             root: collection_root,
             queue_capacity: 2,

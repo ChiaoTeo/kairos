@@ -50,7 +50,7 @@ def build_strategy_access(
         commands,
         projection,
         AeronExecutionEventSource(
-            aeron_dir=instance.paths.aeron_dir(),
+            aeron_dir=instance.workspace.paths.aeron_dir(),
         ),
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

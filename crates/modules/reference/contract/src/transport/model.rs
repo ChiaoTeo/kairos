@@ -1,6 +1,6 @@
 //! Public Reference models used by SQLite payloads and change events.
 
-use kairos_primitives::{AssetClass, InstrumentKind, ProviderProductCode};
+use kairos_primitives::{AssetClass, InstrumentKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -54,14 +54,13 @@ pub struct Listing {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Market {
     pub market_id: String,
-    pub market_key: String,
     pub instrument_id: String,
     pub listing_id: Option<String>,
     pub exchange_id: String,
-    pub market_type: ProviderProductCode,
+    pub instrument_kind: InstrumentKind,
     pub asset_type: Option<AssetClass>,
     pub underlying_instrument_id: Option<String>,
-    pub source_symbol: String,
+    pub venue_symbol: Option<String>,
     pub base_asset_id: Option<String>,
     pub quote_asset_id: Option<String>,
     pub status: String,
@@ -72,38 +71,6 @@ pub struct Market {
     pub minimum_quantity: Option<String>,
     pub minimum_notional: Option<String>,
     pub contract_size: Option<String>,
-    pub effective_from_unix_nanos: u64,
-    pub effective_to_unix_nanos: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExecutionAccess {
-    pub access_id: String,
-    #[serde(default)]
-    pub instrument_id: Option<String>,
-    #[serde(default)]
-    pub listing_id: Option<String>,
-    #[serde(default)]
-    pub market_id: Option<String>,
-    pub provider_id: String,
-    #[serde(rename = "product_family")]
-    pub provider_product: String,
-    pub provider_symbol: String,
-    pub settlement_asset_id: Option<String>,
-    pub status: String,
-    pub effective_from_unix_nanos: u64,
-    pub effective_to_unix_nanos: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MarketDataAccess {
-    pub access_id: String,
-    pub market_id: String,
-    pub provider_id: String,
-    #[serde(rename = "product_family")]
-    pub provider_product: String,
-    pub provider_symbol: String,
-    pub status: String,
     pub effective_from_unix_nanos: u64,
     pub effective_to_unix_nanos: Option<u64>,
 }
@@ -138,8 +105,6 @@ pub struct ReferenceProjectionSnapshot {
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
-    pub execution_accesses: Vec<ExecutionAccess>,
-    pub market_data_accesses: Vec<MarketDataAccess>,
     pub provider_health: Vec<ProviderHealthState>,
     pub option_underlyings: Vec<String>,
     pub lifecycle_events: Vec<LifecycleEntry>,
@@ -155,10 +120,6 @@ impl ReferenceProjectionSnapshot {
             .filter(|value| active(&value.status))
             .cloned()
             .collect::<Vec<_>>();
-        let market_ids = markets
-            .iter()
-            .map(|value| value.market_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
         let instrument_ids = markets
             .iter()
             .map(|value| value.instrument_id.clone())
@@ -170,14 +131,6 @@ impl ReferenceProjectionSnapshot {
                 .cloned()
                 .collect(),
             markets,
-            Vec::new(),
-            self.market_data_accesses
-                .iter()
-                .filter(|value| {
-                    active(&value.status) && market_ids.contains(value.market_id.as_str())
-                })
-                .cloned()
-                .collect(),
         )
     }
 
@@ -190,35 +143,22 @@ impl ReferenceProjectionSnapshot {
             .filter(|value| active(&value.status))
             .cloned()
             .collect::<Vec<_>>();
-        self.projection_base(
-            Vec::new(),
-            markets,
-            self.execution_accesses
-                .iter()
-                .filter(|value| active(&value.status))
-                .cloned()
-                .collect(),
-            Vec::new(),
-        )
+        let instruments = self
+            .instruments
+            .iter()
+            .filter(|value| active(&value.status))
+            .cloned()
+            .collect();
+        self.projection_base(instruments, markets)
     }
 
     /// Projection consumed by Account to map provider observations to
     /// canonical instrument and market identity.
     pub fn account_projection(&self) -> Self {
-        let accesses = self
-            .market_data_accesses
-            .iter()
-            .filter(|value| active(&value.status))
-            .cloned()
-            .collect::<Vec<_>>();
-        let market_ids = accesses
-            .iter()
-            .map(|value| value.market_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
         let markets = self
             .markets
             .iter()
-            .filter(|value| active(&value.status) && market_ids.contains(value.market_id.as_str()))
+            .filter(|value| active(&value.status))
             .cloned()
             .collect::<Vec<_>>();
         let instrument_ids = markets
@@ -232,18 +172,10 @@ impl ReferenceProjectionSnapshot {
                 .cloned()
                 .collect(),
             markets,
-            Vec::new(),
-            accesses,
         )
     }
 
-    fn projection_base(
-        &self,
-        instruments: Vec<Instrument>,
-        markets: Vec<Market>,
-        execution_accesses: Vec<ExecutionAccess>,
-        market_data_accesses: Vec<MarketDataAccess>,
-    ) -> Self {
+    fn projection_base(&self, instruments: Vec<Instrument>, markets: Vec<Market>) -> Self {
         Self {
             actor_id: self.actor_id.clone(),
             workspace_id: self.workspace_id.clone(),
@@ -253,8 +185,6 @@ impl ReferenceProjectionSnapshot {
             event_sequence: self.event_sequence,
             instruments,
             markets,
-            execution_accesses,
-            market_data_accesses,
             ..Default::default()
         }
     }

@@ -3,13 +3,16 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use kairos_primitives::{InstrumentId, MarketId};
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde_json::{json, Value};
 use tracing::info;
 
 use super::actor_task::{log_event, CachedCommandResult, MarketActorTask};
 use super::lifecycle::now_unix_nanos;
-use crate::application::{resolve_market, resolve_option_markets, MarketApplication};
+use crate::application::{
+    resolve_market, resolve_option_markets, MarketApplication, MarketDataAvailabilityQuery,
+};
 use crate::services::control::wire::{
     command_id, idempotency_key, parse_release_owner_command, parse_subscribe_command,
     parse_unsubscribe_command, strategy_subscription_owner, CommandEnvelope, ReleaseOwnerPayload,
@@ -27,6 +30,7 @@ struct SubscribeRequest {
     instance_id: String,
     subject: String,
     selectors: Vec<crate::ObservationSelector>,
+    source_id: Option<String>,
     exchange: Option<String>,
     market_type: Option<String>,
     asset_type: Option<String>,
@@ -65,12 +69,13 @@ impl MarketActorTask {
         body: &str,
     ) -> MarketHttpResponse {
         let started = Instant::now();
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
         log_event(
             "info",
             "market control request",
             json!({"method": method, "path": path}),
         );
-        if method == "GET" && path != HEALTH_PATH {
+        if method == "GET" && path != HEALTH_PATH && path != "/v1/data-sources" {
             return MarketHttpResponse {
                 status: 405,
                 payload: json!({"error":"Market business queries are available only through typed mmap views"}),
@@ -115,6 +120,15 @@ impl MarketActorTask {
         }
         let (status, payload) = match path {
             HEALTH_PATH => (200, self.health()),
+            "/v1/data-sources" if method == "GET" => match market_data_availability_query(query) {
+                Ok(query) => {
+                    match serde_json::to_value(self.application.available_market_data(&query)) {
+                        Ok(value) => (200, json!({"data_sources": value})),
+                        Err(error) => (500, json!({"error": error.to_string()})),
+                    }
+                }
+                Err(error) => (422, json!({"error": error})),
+            },
             "/v1/subscribe" => self.subscribe(body),
             "/v1/subscriptions" => {
                 let (status, payload) = self.subscribe(body);
@@ -286,6 +300,7 @@ impl MarketActorTask {
             instance_id: value.instance_id,
             subject: value.payload.subject,
             selectors,
+            source_id: value.payload.source_id,
             exchange: value.payload.exchange,
             market_type: value.payload.market_type,
             asset_type: value.payload.asset_type,
@@ -374,6 +389,13 @@ impl MarketActorTask {
                 ),
                 asset_type,
                 underlying_instrument_id: markets[0].underlying_instrument_id.clone(),
+                source_id: match request.source_id.as_deref() {
+                    Some(value) => match crate::domain::source::SourceId::new(value) {
+                        Ok(value) => Some(value),
+                        Err(error) => return (422, json!({"error": error})),
+                    },
+                    None => None,
+                },
                 active_only: true,
                 ..Default::default()
             };
@@ -493,10 +515,16 @@ impl MarketActorTask {
                 Err("market universe is not ready; explicit market-data access is required".into())
             }
         };
-        let descriptor = match descriptor_result {
+        let mut descriptor = match descriptor_result {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
+        if let Some(source_id) = request.source_id.as_deref() {
+            descriptor = match descriptor.with_source(source_id) {
+                Ok(value) => value,
+                Err(error) => return (422, json!({"error": error})),
+            };
+        }
         let owner_id = strategy_subscription_owner(
             request.launch_id.as_deref(),
             &request.instance_id,
@@ -623,6 +651,35 @@ impl MarketActorTask {
             }),
         )
     }
+}
+
+fn market_data_availability_query(query: &str) -> Result<MarketDataAvailabilityQuery, String> {
+    let value = |key: &str| {
+        query
+            .split('&')
+            .find_map(|part| part.split_once('=').filter(|(name, _)| *name == key))
+            .map(|(_, value)| value.to_owned())
+    };
+    let observation_kind = value("observation_kind")
+        .map(|value| {
+            serde_json::from_value(serde_json::Value::String(value))
+                .map_err(|error| format!("invalid observation_kind: {error}"))
+        })
+        .transpose()?;
+    Ok(MarketDataAvailabilityQuery {
+        market_id: value("market_id")
+            .map(MarketId::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        instrument_id: value("instrument_id")
+            .map(InstrumentId::new)
+            .transpose()
+            .map_err(|error| error.to_string())?,
+        observation_kind,
+        provider_id: value("provider_id"),
+        configured_only: value("configured_only").as_deref() == Some("true"),
+        ready_only: value("ready_only").as_deref() == Some("true"),
+    })
 }
 
 pub(super) fn rollback_subscribe_intent(application: &mut MarketApplication, body: &str) {

@@ -76,6 +76,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     fee_currency: fill.fee_currency.clone(),
                     occurred_at_unix_nanos: Some(fill.occurred_at_unix_nanos),
                     execution_market_id: fill.execution_market_id.clone(),
+                    reported_provider_id: Some("simulation".into()),
+                    provider_product: None,
+                    provider_symbol: None,
+                    remote_order_id: None,
                 })
                 .map_err(|error| error.to_string())?;
         }

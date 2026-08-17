@@ -19,7 +19,7 @@ class LaunchInstanceTimelineApplication:
 
     @property
     def path(self) -> Path:
-        return self.instance.root / "lifecycle.jsonl"
+        return self.instance.lifecycle_journal()
 
     def list(self, *, limit: int | None = None) -> list[dict[str, Any]]:
         records = list(self._records())

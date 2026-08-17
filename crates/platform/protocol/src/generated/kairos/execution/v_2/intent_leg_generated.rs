@@ -25,7 +25,7 @@ impl<'a> IntentLeg<'a> {
     pub const VT_SEGMENT_KEY: ::flatbuffers::VOffsetT = 8;
     pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 10;
     pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 12;
-    pub const VT_EXECUTION_ACCESS_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_EXECUTION_ROUTE_ID: ::flatbuffers::VOffsetT = 14;
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 16;
     pub const VT_QUANTITY: ::flatbuffers::VOffsetT = 18;
     pub const VT_QUANTITY_SEMANTICS: ::flatbuffers::VOffsetT = 20;
@@ -56,8 +56,8 @@ impl<'a> IntentLeg<'a> {
         if let Some(x) = args.quantity {
             builder.add_quantity(x);
         }
-        if let Some(x) = args.execution_access_id {
-            builder.add_execution_access_id(x);
+        if let Some(x) = args.execution_route_id {
+            builder.add_execution_route_id(x);
         }
         if let Some(x) = args.market_id {
             builder.add_market_id(x);
@@ -135,16 +135,13 @@ impl<'a> IntentLeg<'a> {
         }
     }
     #[inline]
-    pub fn execution_access_id(&self) -> &'a str {
+    pub fn execution_route_id(&self) -> &'a str {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
             self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(
-                    IntentLeg::VT_EXECUTION_ACCESS_ID,
-                    None,
-                )
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(IntentLeg::VT_EXECUTION_ROUTE_ID, None)
                 .unwrap()
         }
     }
@@ -242,8 +239,8 @@ impl ::flatbuffers::Verifiable for IntentLeg<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "execution_access_id",
-                Self::VT_EXECUTION_ACCESS_ID,
+                "execution_route_id",
+                Self::VT_EXECUTION_ROUTE_ID,
                 true,
             )?
             .visit_field::<super::super::common::v_2::Side>("side", Self::VT_SIDE, false)?
@@ -277,7 +274,7 @@ pub struct IntentLegArgs<'a> {
     pub segment_key: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub execution_access_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub execution_route_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub side: super::super::common::v_2::Side,
     pub quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub quantity_semantics: QuantitySemantics,
@@ -288,12 +285,12 @@ impl<'a> Default for IntentLegArgs<'a> {
     #[inline]
     fn default() -> Self {
         IntentLegArgs {
-            leg_id: None,              // required field
-            account_id: None,          // required field
-            segment_key: None,         // required field
-            instrument_id: None,       // required field
-            market_id: None,           // required field
-            execution_access_id: None, // required field
+            leg_id: None,             // required field
+            account_id: None,         // required field
+            segment_key: None,        // required field
+            instrument_id: None,      // required field
+            market_id: None,          // required field
+            execution_route_id: None, // required field
             side: super::super::common::v_2::Side::UNSPECIFIED,
             quantity: None, // required field
             quantity_semantics: QuantitySemantics::UNSPECIFIED,
@@ -338,13 +335,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentLegBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(IntentLeg::VT_MARKET_ID, market_id);
     }
     #[inline]
-    pub fn add_execution_access_id(
+    pub fn add_execution_route_id(
         &mut self,
-        execution_access_id: ::flatbuffers::WIPOffset<&'b str>,
+        execution_route_id: ::flatbuffers::WIPOffset<&'b str>,
     ) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
-            IntentLeg::VT_EXECUTION_ACCESS_ID,
-            execution_access_id,
+            IntentLeg::VT_EXECUTION_ROUTE_ID,
+            execution_route_id,
         );
     }
     #[inline]
@@ -409,7 +406,7 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentLegBuilder<'a, 'b, A> {
             .required(o, IntentLeg::VT_INSTRUMENT_ID, "instrument_id");
         self.fbb_.required(o, IntentLeg::VT_MARKET_ID, "market_id");
         self.fbb_
-            .required(o, IntentLeg::VT_EXECUTION_ACCESS_ID, "execution_access_id");
+            .required(o, IntentLeg::VT_EXECUTION_ROUTE_ID, "execution_route_id");
         self.fbb_.required(o, IntentLeg::VT_QUANTITY, "quantity");
         self.fbb_.required(o, IntentLeg::VT_OPTIONS, "options");
         ::flatbuffers::WIPOffset::new(o.value())
@@ -424,7 +421,7 @@ impl ::core::fmt::Debug for IntentLeg<'_> {
         ds.field("segment_key", &self.segment_key());
         ds.field("instrument_id", &self.instrument_id());
         ds.field("market_id", &self.market_id());
-        ds.field("execution_access_id", &self.execution_access_id());
+        ds.field("execution_route_id", &self.execution_route_id());
         ds.field("side", &self.side());
         ds.field("quantity", &self.quantity());
         ds.field("quantity_semantics", &self.quantity_semantics());

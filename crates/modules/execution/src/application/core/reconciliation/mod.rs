@@ -160,7 +160,23 @@ impl ExecutionApplication {
                             fee: Money::ZERO,
                             fee_currency: None,
                             occurred_at_unix_nanos: remote_order.occurred_at_unix_nanos,
-                            execution_market_id: local.market_id.clone(),
+                            execution_market_id: None,
+                            reported_provider_id: local
+                                .selected_route
+                                .as_ref()
+                                .map(|route| route.participant_id.clone()),
+                            provider_product: local
+                                .selected_route
+                                .as_ref()
+                                .map(|route| route.provider_product.clone()),
+                            provider_symbol: local
+                                .selected_route
+                                .as_ref()
+                                .map(|route| route.provider_symbol.clone()),
+                            remote_order_id: Some(
+                                RemoteOrderId::new(remote_order.order_id.to_string())
+                                    .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                            ),
                         });
                         match fill_result {
                             Ok(_) => changed += 1,
@@ -354,7 +370,23 @@ impl ExecutionApplication {
                 fee,
                 fee_currency: event.fee_currency.clone(),
                 occurred_at_unix_nanos: Some(event.occurred_at_unix_nanos),
-                execution_market_id: local.market_id.clone(),
+                execution_market_id: None,
+                reported_provider_id: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.participant_id.clone()),
+                provider_product: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.provider_product.clone()),
+                provider_symbol: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.provider_symbol.clone()),
+                remote_order_id: Some(
+                    RemoteOrderId::new(event.order_id.to_string())
+                        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+                ),
             })?;
             return Ok(fill);
         }
@@ -441,7 +473,20 @@ impl ExecutionApplication {
                 fee: unknown.fee_amount.unwrap_or(Money::ZERO),
                 fee_currency: unknown.fee_currency,
                 occurred_at_unix_nanos: Some(unknown.last_seen_at_unix_nanos),
-                execution_market_id: local.market_id.clone(),
+                execution_market_id: None,
+                reported_provider_id: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.participant_id.clone()),
+                provider_product: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.provider_product.clone()),
+                provider_symbol: local
+                    .selected_route
+                    .as_ref()
+                    .map(|route| route.provider_symbol.clone()),
+                remote_order_id: Some(unknown.remote_order_id.clone()),
             });
         }
         self.persist_snapshot()?;

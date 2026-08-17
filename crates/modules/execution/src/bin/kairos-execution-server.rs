@@ -60,7 +60,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = intent_snapshot.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let reference_database = workspace.child(&["reference", "reference.sqlite"])?;
+    let reference_database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;
     compose_execution_process(ExecutionProcessConfig {
@@ -203,6 +203,8 @@ struct ExecutionRouteConfig {
     #[serde(default)]
     isolated_symbol: Option<String>,
     #[serde(default)]
+    instruments: Vec<ExecutionInstrumentRouteConfig>,
+    #[serde(default)]
     request_weight_per_minute: Option<u32>,
     #[serde(default)]
     cancel_reserve_weight: Option<u32>,
@@ -222,6 +224,15 @@ struct ExecutionRouteConfig {
     port: Option<u16>,
     #[serde(default)]
     client_id: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutionInstrumentRouteConfig {
+    instrument_id: String,
+    provider_symbol: String,
+    #[serde(default)]
+    destination_market_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,7 +259,7 @@ impl Args {
         workspace: &Workspace,
     ) -> Result<Vec<ExecutionConnectionOptions>, Box<dyn std::error::Error>> {
         let instance = workspace.instance(&self.launch_mode, &self.launch_id, &self.instance_id)?;
-        let config_path = instance.root().join("normalized-config.json");
+        let config_path = instance.normalized_config()?;
         let config: NormalizedLaunchConfig = serde_json::from_slice(&std::fs::read(&config_path)?)
             .map_err(|error| {
                 format!(
@@ -296,7 +307,8 @@ impl Args {
                     .into(),
             );
         }
-        let credentials_root = workspace.child(&["credentials"])?;
+        let credentials_root =
+            workspace.existing_path(&["config", "credentials"], &["credentials"])?;
         let stored = load_workspace_credential(
             &credentials_root,
             &route.participant_id,
@@ -332,6 +344,17 @@ impl Args {
                 .websocket_url
                 .unwrap_or_else(|| default_websocket_url.into()),
             isolated_symbol: route.isolated_symbol,
+            instruments: route
+                .instruments
+                .into_iter()
+                .map(
+                    |value| kairos_execution::composition::ExecutionInstrumentRoute {
+                        instrument_id: value.instrument_id,
+                        provider_symbol: value.provider_symbol,
+                        destination_market_id: value.destination_market_id,
+                    },
+                )
+                .collect(),
             request_weight_per_minute: route.request_weight_per_minute.unwrap_or(1_000),
             cancel_reserve_weight: route.cancel_reserve_weight.unwrap_or(50),
             order_event_queue_capacity: route.order_event_queue_capacity.unwrap_or(1_024),
@@ -411,8 +434,9 @@ mod tests {
         let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
         let instance = workspace.instance("paper", "launch", "instance").unwrap();
         instance.prepare().unwrap();
+        std::fs::create_dir_all(instance.paths().config_root()).unwrap();
         std::fs::write(
-            instance.root().join("normalized-config.json"),
+            instance.normalized_config().unwrap(),
             r#"{"accounts":["secondary"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
         )
         .unwrap();
@@ -433,7 +457,7 @@ mod tests {
         assert_eq!(routes[0].participant_id, "simulated");
 
         std::fs::write(
-            instance.root().join("normalized-config.json"),
+            instance.normalized_config().unwrap(),
             r#"{"accounts":["main"],"execution":{"enabled":true,"routes":[{"route_id":"secondary-okx","account_id":"secondary","segment_key":"swap","participant_id":"simulated","product":"swap"}]}}"#,
         )
         .unwrap();
@@ -462,6 +486,7 @@ mod tests {
             base_url: String::new(),
             websocket_url: String::new(),
             isolated_symbol: None,
+            instruments: Vec::new(),
             request_weight_per_minute: 1,
             cancel_reserve_weight: 0,
             order_event_queue_capacity: 16,

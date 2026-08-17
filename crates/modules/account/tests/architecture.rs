@@ -196,7 +196,7 @@ fn account_segment_identity_is_independent_from_provider_product() {
         .expect("read account registry");
 
     assert!(composition.contains("pub struct AccountSegmentBinding"));
-    assert!(composition.contains("segment.provider_product.clone()"));
+    assert!(composition.contains("normalized_segment(&configured_segment.provider_product)"));
     assert!(composition.contains("pub trading_mode: Option<String>"));
     assert!(!composition.contains("segment_options.product = segment_key"));
     assert!(registry.contains("pub segment_products: BTreeMap<String, String>"));
@@ -303,13 +303,16 @@ fn native_account_refresh_does_not_bridge_async_io_through_blocking_threads() {
 
 #[test]
 fn account_process_gates_readiness_and_tracks_external_stream_continuity() {
-    let process = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/process.rs"),
-    )
-    .expect("read account process");
-    assert!(process.contains("initial_refresh_complete"));
-    assert!(process.contains("async_stream_health"));
-    assert!(process.contains("external_event_watermarks"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let process =
+        fs::read_to_string(root.join("src/application/process.rs")).expect("read account process");
+    let synchronization = fs::read_to_string(root.join("src/services/synchronization.rs"))
+        .expect("read account segment synchronization");
+    assert!(process.contains("segment_sync"));
+    assert!(synchronization.contains("initial_snapshot_complete"));
+    assert!(synchronization.contains("channel_health"));
+    assert!(synchronization.contains("event_watermarks"));
+    assert!(synchronization.contains("recovery_events"));
     assert!(process.contains("account stream sequence gap"));
     assert!(process.contains("provider_event_id"));
 }
@@ -339,7 +342,8 @@ fn production_account_server_never_falls_back_to_blocking_provider_io() {
     assert!(!composition.contains("compose_blocking_account_stream"));
     assert!(!composition.contains("attach_account_stream"));
     assert!(!composition.contains("pub fn compose_account_application_for_segments"));
-    assert!(composition.contains("pub fn compose_blocking_account_application_for_segments"));
+    assert!(!composition.contains("compose_blocking_account_application"));
+    assert!(composition.contains("pub fn compose_local_account_application_for_segments"));
 
     let runtime =
         fs::read_to_string(root.join("services/runtime.rs")).expect("read account runtime");
@@ -429,7 +433,7 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
 
     let server = fs::read_to_string(account_root.join("src/bin/kairos-account-server.rs"))
         .expect("read Account server");
-    assert!(server.contains("workspace.child(&[\"reference\", \"reference.sqlite\"])"));
+    assert!(server.contains("workspace.child(&[\"state\", \"reference\", \"reference.sqlite\"])",));
 }
 
 #[test]
@@ -490,7 +494,7 @@ fn account_control_plane_does_not_duplicate_balance_or_position_views() {
         .expect("read Account mmap publisher");
     assert!(publisher.contains("encode_balances"));
     assert!(publisher.contains("encode_positions"));
-    assert!(publisher.contains("with_applied_revision(snapshot.event_sequence.get())"));
+    assert!(publisher.contains("with_applied_revision(view.event_sequence.get())"));
 }
 
 #[test]
@@ -574,11 +578,11 @@ fn account_rest_exposes_health_as_its_only_get_query() {
         "business_time_unix_nanos",
         "stream_queue_depth",
         "persistence_queue_depth",
-        "last_refresh",
     ] {
         assert!(
             !health.contains(forbidden),
             "Account health leaks {forbidden}"
         );
     }
+    assert!(health.contains("last_refresh_duration_ms"));
 }

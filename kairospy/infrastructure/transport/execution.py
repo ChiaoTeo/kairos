@@ -113,6 +113,7 @@ def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object
 
 
 def _v2_order(value: Any) -> dict[str, object]:
+    selected_route = value.SelectedRoute()
     return {
         "order_id": _required_text(value.OrderId(), "order_id"),
         "intent_id": _required_text(value.IntentId(), "intent_id"),
@@ -122,12 +123,42 @@ def _v2_order(value: Any) -> dict[str, object]:
         "account_id": _required_text(value.AccountId(), "account_id"),
         "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
         "market_id": _required_text(value.MarketId(), "market_id"),
-        "execution_access_id": _required_text(value.ExecutionAccessId(), "execution_access_id"),
+        "execution_route_id": _required_text(value.ExecutionRouteId(), "execution_route_id"),
+        "selected_route": _v2_selected_route(selected_route) if selected_route else None,
+        "attempts": [
+            _v2_attempt(value.Attempts(index)) for index in range(value.AttemptsLength())
+        ],
         "side": _side(value.Side()),
         "quantity": _decimal(value.Quantity()),
         "filled_quantity": _decimal(value.FilledQuantity()),
         "lifecycle": int(value.Lifecycle()),
         "reason": _text(value.Reason()) or "",
+    }
+
+
+def _v2_selected_route(value: Any) -> dict[str, object]:
+    return {
+        "route_id": _required_text(value.RouteId(), "route_id"),
+        "selection_kind": int(value.SelectionKind()),
+        "participant_id": _required_text(value.ParticipantId(), "participant_id"),
+        "destination_market_id": _text(value.DestinationMarketId()),
+        "provider_product": _required_text(value.ProviderProduct(), "provider_product"),
+        "provider_symbol": _required_text(value.ProviderSymbol(), "provider_symbol"),
+        "selected_at_unix_nanos": int(value.SelectedAtUnixNanos()),
+    }
+
+
+def _v2_attempt(value: Any) -> dict[str, object]:
+    selected_route = value.SelectedRoute()
+    return {
+        "attempt_id": _required_text(value.AttemptId(), "attempt_id"),
+        "selected_route": _v2_selected_route(selected_route),
+        "provider_connection_id": _required_text(
+            value.ProviderConnectionId(), "provider_connection_id"
+        ),
+        "command_started_at_unix_nanos": int(value.CommandStartedAtUnixNanos()),
+        "delivery_certainty": int(value.DeliveryCertainty()),
+        "remote_order_id": _text(value.RemoteOrderId()),
     }
 
 
@@ -157,6 +188,12 @@ def _v2_fill(value: Any) -> dict[str, object]:
         "strategy_id": _required_text(value.StrategyId(), "strategy_id"),
         "account_id": _required_text(value.AccountId(), "account_id"),
         "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
+        "market_id": _text(value.MarketId()),
+        "execution_route_id": _required_text(value.ExecutionRouteId(), "execution_route_id"),
+        "remote_order_id": _text(value.RemoteOrderId()),
+        "reported_provider_id": _text(value.ReportedProviderId()),
+        "provider_product": _text(value.ProviderProduct()),
+        "provider_symbol": _text(value.ProviderSymbol()),
         "quantity": _decimal(value.Quantity()),
         "price": _decimal(value.Price()),
     }

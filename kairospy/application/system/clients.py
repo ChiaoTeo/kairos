@@ -34,9 +34,9 @@ class SystemRestClient:
         path: str,
         body: Mapping[str, Any] | bytes | None = None,
     ) -> dict[str, Any]:
-        if method == "GET" and path != "/v1/health":
+        if method == "GET" and not self._supports_get_path(path):
             raise ValueError(
-                "GET /v1/health is the only REST query; read state from typed mmap views"
+                "GET /v1/health is the only REST query for this component; read durable business state from typed mmap views"
             )
         if isinstance(body, Mapping):
             payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
@@ -49,6 +49,9 @@ class SystemRestClient:
                 method, path, payload
             )
         )
+
+    def _supports_get_path(self, path: str) -> bool:
+        return path == "/v1/health"
 
     def status(self) -> dict[str, Any]:
         return self.request("GET", "/v1/health")
@@ -78,6 +81,13 @@ class AccountSystemClient(SystemRestClient):
 
 
 class ExecutionSystemClient(SystemRestClient):
+    def _supports_get_path(self, path: str) -> bool:
+        return super()._supports_get_path(path) or path.startswith("/v1/routes")
+
+    def routes(self, query: str = "") -> dict[str, Any]:
+        suffix = f"?{query}" if query else ""
+        return self.request("GET", f"/v1/routes{suffix}")
+
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/intents", intent)
 
@@ -106,6 +116,13 @@ class ExecutionSystemClient(SystemRestClient):
 
 
 class MarketSystemClient(SystemRestClient):
+    def _supports_get_path(self, path: str) -> bool:
+        return super()._supports_get_path(path) or path.startswith("/v1/data-sources")
+
+    def data_sources(self, query: str = "") -> dict[str, Any]:
+        suffix = f"?{query}" if query else ""
+        return self.request("GET", f"/v1/data-sources{suffix}")
+
     def subscribe(self, request: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/subscribe", request)
 

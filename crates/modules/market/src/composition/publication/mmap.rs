@@ -23,6 +23,40 @@ fn now_unix_nanos() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+fn observation_scope<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    value: &crate::ObservationScope,
+) -> flatbuffers::WIPOffset<market_fb::ObservationScope<'a>> {
+    let (kind, market_id, instrument_id, network_id) = match value {
+        crate::ObservationScope::Market { market_id } => (
+            market_fb::ObservationScopeKind::MARKET,
+            Some(builder.create_string(market_id.as_str())),
+            None,
+            None,
+        ),
+        crate::ObservationScope::Consolidated {
+            instrument_id,
+            network_id,
+        } => (
+            market_fb::ObservationScopeKind::CONSOLIDATED,
+            None,
+            Some(builder.create_string(instrument_id.as_str())),
+            network_id
+                .as_deref()
+                .map(|value| builder.create_string(value)),
+        ),
+    };
+    market_fb::ObservationScope::create(
+        builder,
+        &market_fb::ObservationScopeArgs {
+            kind,
+            market_id,
+            instrument_id,
+            network_id,
+        },
+    )
+}
+
 /// Publishes one v2 resource per domain change. It never receives the
 /// aggregate `MarketView`, so an update cannot accidentally rewrite
 /// unrelated markets or data kinds.
@@ -51,13 +85,7 @@ impl MmapMarketChangePublisher {
         identity: InstanceIdentity,
     ) -> Result<Self, String> {
         let path = path.as_ref();
-        let root = path
-            .parent()
-            .unwrap_or(path)
-            .join("snapshots")
-            .join("v2")
-            .join("market")
-            .join("market-shared");
+        let root = path.parent().unwrap_or(path).join("market-shared");
         std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
         Ok(Self {
             root,
@@ -116,7 +144,7 @@ impl MmapMarketChangePublisher {
             }
             if let MarketViewUpdate::Freshness(freshness) = view {
                 let key = MarketViewKey::new(
-                    freshness.market_id.to_string(),
+                    freshness.scope.key(),
                     freshness.source_id.clone(),
                     MarketViewKind::Freshness,
                     Some(freshness.data_kind.as_str()),
@@ -133,7 +161,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_quote(&mut self, sequence: u64, quote: &crate::Quote) -> Result<(), String> {
         let key = MarketViewKey::new(
-            quote.market_id.to_string(),
+            quote.scope.key(),
             quote.source_id.clone(),
             MarketViewKind::Quote,
             None::<String>,
@@ -173,7 +201,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_rate(&mut self, sequence: u64, value: &crate::Rate) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::Rate,
             Some(value.rate_id.clone()),
@@ -186,7 +214,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_ticker(&mut self, sequence: u64, value: &crate::Ticker24h) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::Ticker24h,
             None::<String>,
@@ -203,7 +231,7 @@ impl MmapMarketChangePublisher {
         value: &crate::MarkPrice,
     ) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::MarkPrice,
             None::<String>,
@@ -217,7 +245,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_funding(&mut self, sequence: u64, value: &crate::FundingRate) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::FundingRate,
             None::<String>,
@@ -234,7 +262,7 @@ impl MmapMarketChangePublisher {
         value: &crate::OpenInterest,
     ) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::OpenInterest,
             None::<String>,
@@ -261,7 +289,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_bar(&mut self, sequence: u64, value: &crate::Bar, kind: &str) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::BarWindow,
             Some(value.timeframe.clone()),
@@ -281,7 +309,7 @@ impl MmapMarketChangePublisher {
 
     fn publish_greeks(&mut self, sequence: u64, value: &crate::OptionGreeks) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::Greeks,
             None::<String>,
@@ -298,7 +326,7 @@ impl MmapMarketChangePublisher {
         value: &crate::IndexPrice,
     ) -> Result<(), String> {
         let key = MarketViewKey::new(
-            value.market_id.to_string(),
+            value.scope.key(),
             value.source_id.clone(),
             MarketViewKind::IndexPrice,
             None::<String>,
@@ -332,7 +360,7 @@ fn encode_quote(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let market_id = builder.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut builder, &value.scope);
     let instrument_id = builder.create_string(value.instrument_id.as_str());
     let source_id = builder.create_string(&value.source_id);
     let bid_price = value
@@ -347,17 +375,28 @@ fn encode_quote(
     let ask_quantity = value
         .ask_quantity
         .map(|v| Decimal64::new(v.mantissa(), v.scale()));
+    let bid_venue_code = value
+        .bid_venue_code
+        .as_deref()
+        .map(|value| builder.create_string(value));
+    let ask_venue_code = value
+        .ask_venue_code
+        .as_deref()
+        .map(|value| builder.create_string(value));
     let quote = market_fb::Quote::create(
         &mut builder,
         &market_fb::QuoteArgs {
             quote_id: None,
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             bid_price: bid_price.as_ref(),
             bid_quantity: bid_quantity.as_ref(),
             ask_price: ask_price.as_ref(),
             ask_quantity: ask_quantity.as_ref(),
+            bid_venue_code,
+            ask_venue_code,
+            tape: value.tape.unwrap_or_default(),
             source_observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
             received_at_unix_nanos: 0,
         },
@@ -423,7 +462,7 @@ fn encode_rate_view(
         value.observed_at_unix_nanos.get(),
     );
     let rate_id = b.create_string(&value.rate_id);
-    let market_id = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let instrument_id = b.create_string(value.instrument_id.as_str());
     let source_id = b.create_string(&value.source_id);
     let basis = b.create_string(&value.basis);
@@ -435,7 +474,7 @@ fn encode_rate_view(
         &mut b,
         &market_fb::RateArgs {
             rate_id: Some(rate_id),
-            market_id: Some(market_id),
+            scope: Some(scope),
             instrument_id: Some(instrument_id),
             source_id: Some(source_id),
             basis: Some(basis),
@@ -480,7 +519,7 @@ fn encode_ticker_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let lp = value
@@ -526,7 +565,7 @@ fn encode_ticker_view(
     let v = market_fb::Ticker24h::create(
         &mut b,
         &market_fb::Ticker24hArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             last_price: lp.as_ref(),
@@ -582,7 +621,7 @@ fn encode_mark_price_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let mp = Decimal64::new(value.mark_price.mantissa(), value.mark_price.scale());
@@ -598,7 +637,7 @@ fn encode_mark_price_view(
     let v = market_fb::MarkPrice::create(
         &mut b,
         &market_fb::MarkPriceArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             mark_price: Some(&mp),
@@ -645,14 +684,14 @@ fn encode_funding_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let fr = Decimal64::new(value.funding_rate.mantissa(), value.funding_rate.scale());
     let v = market_fb::FundingRate::create(
         &mut b,
         &market_fb::FundingRateArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             funding_rate: Some(&fr),
@@ -697,7 +736,7 @@ fn encode_open_interest_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let c = Decimal64::new(value.contracts.mantissa(), value.contracts.scale());
@@ -713,7 +752,7 @@ fn encode_open_interest_view(
     let v = market_fb::OpenInterest::create(
         &mut b,
         &market_fb::OpenInterestArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             contracts: Some(&c),
@@ -760,7 +799,7 @@ fn encode_bar_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let spec = b.create_string(&value.timeframe);
@@ -774,7 +813,7 @@ fn encode_bar_view(
     let bar = market_fb::Bar::create(
         &mut b,
         &market_fb::BarArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             bar_spec_id: Some(spec),
@@ -834,7 +873,7 @@ fn encode_greeks_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let strike = value
@@ -851,7 +890,7 @@ fn encode_greeks_view(
     let greeks = market_fb::Greeks::create(
         &mut b,
         &market_fb::GreeksArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             expiry_unix_nanos: value.expiry_unix_nanos.map(|x| x.get()),
@@ -901,7 +940,7 @@ fn encode_index_price_view(
         key,
         value.observed_at_unix_nanos.get(),
     );
-    let m = b.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut b, &value.scope);
     let i = b.create_string(value.instrument_id.as_str());
     let s = b.create_string(&value.source_id);
     let spot = value
@@ -919,7 +958,7 @@ fn encode_index_price_view(
     let v = market_fb::IndexPrice::create(
         &mut b,
         &market_fb::IndexPriceArgs {
-            market_id: Some(m),
+            scope: Some(scope),
             instrument_id: Some(i),
             source_id: Some(s),
             spot_index_price: spot.as_ref(),
@@ -1063,13 +1102,13 @@ fn encode_freshness(
         value.last_received_time_unix_nanos.get(),
     );
     let source_id = builder.create_string(&value.source_id);
-    let market_id = builder.create_string(value.market_id.as_str());
+    let scope = observation_scope(&mut builder, &value.scope);
     let data_kind = builder.create_string(value.data_kind.as_str());
     let entry = market_fb::FreshnessEntry::create(
         &mut builder,
         &market_fb::FreshnessEntryArgs {
             source_id: Some(source_id),
-            market_id: Some(market_id),
+            scope: Some(scope),
             data_kind: Some(data_kind),
             last_event_time_unix_nanos: value.last_event_time_unix_nanos.get(),
             last_received_time_unix_nanos: value.last_received_time_unix_nanos.get(),
@@ -1104,26 +1143,29 @@ mod tests {
     use super::MmapMarketChangePublisher;
     use crate::domain::events::{MarketChange, MarketEvent, MarketViewUpdate};
     use crate::domain::observation::{MarketObservation, Quote};
-    use kairos_primitives::{InstrumentId, MarketId, Price, Quantity, Sequence, UnixNanos};
+    use kairos_primitives::{InstrumentId, Price, Quantity, Sequence, UnixNanos};
     use kairos_protocol::InstanceIdentity;
 
     #[test]
     fn quote_change_writes_one_resource_without_json_manifest() {
         let root = tempfile::tempdir().unwrap();
         let mut publisher = MmapMarketChangePublisher::create_with_identity(
-            root.path().join("service.snapshot"),
+            root.path().join("snapshots/market/market.snapshot"),
             64 * 1024,
             "market",
             InstanceIdentity::new("workspace", "launch", "instance"),
         )
         .unwrap();
         let quote = MarketObservation::Quote(Quote {
-            market_id: MarketId::new("market:btc").unwrap(),
+            scope: crate::ObservationScope::market("market:btc").unwrap(),
             instrument_id: InstrumentId::new("instrument:btc").unwrap(),
             bid_price: Some("1".parse::<Price>().unwrap()),
             bid_quantity: Some("2".parse::<Quantity>().unwrap()),
             ask_price: None,
             ask_quantity: None,
+            bid_venue_code: None,
+            ask_venue_code: None,
+            tape: None,
             observed_at_unix_nanos: UnixNanos::new(1),
             source_id: "source".into(),
         });
@@ -1134,7 +1176,7 @@ mod tests {
                 view: Some(MarketViewUpdate::Observation(quote)),
             })
             .unwrap();
-        let snapshot_root = root.path().join("snapshots/v2/market/market-shared");
+        let snapshot_root = root.path().join("snapshots/market/market-shared");
         assert!(!snapshot_root.join("manifest.json").exists());
         let resources = std::fs::read_dir(snapshot_root)
             .unwrap()

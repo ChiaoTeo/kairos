@@ -42,7 +42,7 @@ def install_project_template(
 
     project = workspace.paths.project_root
     strategy_package = project / "kairos_demo"
-    account = workspace.paths.root / "accounts" / "demo-paper.toml"
+    account = workspace.paths.account_config().parent / "demo-paper.toml"
     events = workspace.paths.data_root() / "examples" / "demo-market.jsonl"
     launch = workspace.paths.launch_config("demo-backtest")
     guide = project / "KAIROS_QUICKSTART.md"

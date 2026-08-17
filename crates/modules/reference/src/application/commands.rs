@@ -81,7 +81,6 @@ impl From<UpsertInstrumentCommand> for crate::domain::Instrument {
 impl From<UpsertListingCommand> for crate::domain::Listing {
     fn from(value: UpsertListingCommand) -> Self {
         Self {
-            source_id: None,
             listing_id: value.listing_id,
             instrument_id: value.instrument_id,
             exchange_id: value.exchange_id,

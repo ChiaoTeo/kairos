@@ -11,17 +11,19 @@ pub const ENUM_MIN_FRESHNESS_STATE: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_FRESHNESS_STATE: u8 = 3;
+pub const ENUM_MAX_FRESHNESS_STATE: u8 = 5;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_FRESHNESS_STATE: [FreshnessState; 4] = [
+pub const ENUM_VALUES_FRESHNESS_STATE: [FreshnessState; 6] = [
     FreshnessState::UNSPECIFIED,
     FreshnessState::FRESH,
     FreshnessState::STALE,
     FreshnessState::UNKNOWN,
+    FreshnessState::RESYNCING,
+    FreshnessState::UNAVAILABLE,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -33,11 +35,19 @@ impl FreshnessState {
     pub const FRESH: Self = Self(1);
     pub const STALE: Self = Self(2);
     pub const UNKNOWN: Self = Self(3);
+    pub const RESYNCING: Self = Self(4);
+    pub const UNAVAILABLE: Self = Self(5);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 3;
-    pub const ENUM_VALUES: &'static [Self] =
-        &[Self::UNSPECIFIED, Self::FRESH, Self::STALE, Self::UNKNOWN];
+    pub const ENUM_MAX: u8 = 5;
+    pub const ENUM_VALUES: &'static [Self] = &[
+        Self::UNSPECIFIED,
+        Self::FRESH,
+        Self::STALE,
+        Self::UNKNOWN,
+        Self::RESYNCING,
+        Self::UNAVAILABLE,
+    ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
         match self {
@@ -45,6 +55,8 @@ impl FreshnessState {
             Self::FRESH => Some("FRESH"),
             Self::STALE => Some("STALE"),
             Self::UNKNOWN => Some("UNKNOWN"),
+            Self::RESYNCING => Some("RESYNCING"),
+            Self::UNAVAILABLE => Some("UNAVAILABLE"),
             _ => None,
         }
     }

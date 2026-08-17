@@ -10,12 +10,12 @@ use sqlx::{
 
 use super::publication::StoredPublication;
 use crate::domain::{
-    Asset, Entity, ExecutionAccess, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog,
-    ReferenceCatalog, ReferenceError, ReferenceResult,
+    Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
+    ReferenceError, ReferenceResult,
 };
 
 const LIFECYCLE_LIMIT: i64 = 4096;
-pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 2;
+pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 4;
 
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(test, allow(dead_code))]
@@ -50,8 +50,7 @@ fn provider_records(
             + catalog.assets.len()
             + catalog.instruments.len()
             + catalog.listings.len()
-            + catalog.markets.len()
-            + catalog.execution_accesses.len(),
+            + catalog.markets.len(),
     );
     macro_rules! push_records {
         ($kind:literal, $values:expr, $id:expr) => {
@@ -79,16 +78,6 @@ fn provider_records(
     push_records!("market", &catalog.markets, |value: &Market| value
         .market_id
         .to_string());
-    push_records!(
-        "execution_access",
-        &catalog.execution_accesses,
-        |value: &ExecutionAccess| value.access_id.to_string()
-    );
-    push_records!(
-        "market_data_access",
-        &catalog.market_data_accesses,
-        |value: &crate::domain::MarketDataAccess| value.access_id.clone()
-    );
     Ok(records)
 }
 
@@ -103,8 +92,6 @@ fn push_provider_record(
         "instrument" => catalog.instruments.push(decode(payload)?),
         "listing" => catalog.listings.push(decode(payload)?),
         "market" => catalog.markets.push(decode(payload)?),
-        "execution_access" => catalog.execution_accesses.push(decode(payload)?),
-        "market_data_access" => catalog.market_data_accesses.push(decode(payload)?),
         other => return Err(persistence(format!("unknown provider record kind {other}"))),
     }
     Ok(())
@@ -133,6 +120,41 @@ async fn open_pool(path: &Path) -> sqlx::Result<SqlitePool> {
     sqlx::query("PRAGMA busy_timeout = 5000")
         .execute(&pool)
         .await?;
+    let has_meta = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reference_meta'",
+    )
+    .fetch_one(&pool)
+    .await?
+        != 0;
+    if has_meta {
+        let version =
+            sqlx::query_scalar::<_, i64>("SELECT schema_version FROM reference_meta WHERE id = 1")
+                .fetch_optional(&pool)
+                .await?
+                .unwrap_or_default();
+        if version < i64::from(kairos_reference_contract::REFERENCE_SQLITE_SCHEMA_VERSION) {
+            // v4 changes canonical market identity. Old provider payloads and
+            // projections cannot be renamed safely because provider markets
+            // may now collapse into one venue market or no market at all.
+            // Invalidate derived state and let configured providers rebuild it.
+            sqlx::raw_sql(
+                "DROP TABLE IF EXISTS reference_entities_current;
+                 DROP TABLE IF EXISTS reference_assets_current;
+                 DROP TABLE IF EXISTS reference_instruments_current;
+                 DROP TABLE IF EXISTS reference_listings_current;
+                 DROP TABLE IF EXISTS reference_markets_current;
+                 DELETE FROM reference_provider_records;
+                 DELETE FROM reference_provider_staging;
+                 DELETE FROM reference_provider_pending_promotion;
+                 DELETE FROM reference_lifecycle;
+                 DELETE FROM reference_publication_outbox;
+                 UPDATE reference_publication_state SET published_sequence=0 WHERE id=1;
+                 UPDATE reference_meta SET schema_version=4,generation=0,event_sequence=0,committed_at_unix_nanos=0 WHERE id=1;",
+            )
+            .execute(&pool)
+            .await?;
+        }
+    }
     sqlx::raw_sql(include_str!("../../schema.sql"))
         .execute(&pool)
         .await?;
@@ -256,6 +278,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v4_open_invalidates_legacy_market_identity_and_access_tables() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let initialized = SqlxCatalogStore::open(&path).await.unwrap();
+        initialized.pool.close().await;
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let legacy = sqlx::SqlitePool::connect(&url).await.unwrap();
+        sqlx::raw_sql(
+            "DROP TABLE reference_markets_current;\
+             CREATE TABLE reference_markets_current(\
+               market_id TEXT PRIMARY KEY,source_id TEXT,market_key TEXT,\
+               instrument_id TEXT,listing_id TEXT,exchange_id TEXT,market_type TEXT,\
+               source_symbol TEXT,status TEXT,payload TEXT);\
+             CREATE TABLE reference_market_data_accesses_current(id TEXT PRIMARY KEY);\
+             CREATE TABLE reference_execution_accesses_current(id TEXT PRIMARY KEY);\
+             INSERT INTO reference_markets_current(\
+               market_id,source_id,market_key,instrument_id,listing_id,exchange_id,\
+               market_type,source_symbol,status,payload\
+             ) VALUES (\
+               'market:kept','provider','kept','instrument:kept','','exchange:kept',\
+               'spot','KEPT','active','{}'\
+             );\
+             UPDATE reference_meta SET schema_version=1 WHERE id=1",
+        )
+        .execute(&legacy)
+        .await
+        .unwrap();
+        legacy.close().await;
+
+        let store = SqlxCatalogStore::open(&path).await.unwrap();
+        for removed in [
+            "reference_market_data_accesses_current",
+            "reference_execution_accesses_current",
+        ] {
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .bind(removed)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 0, "obsolete table remains: {removed}");
+        }
+        let canonical_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM reference_markets_current")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(canonical_count, 0);
+    }
+
+    #[tokio::test]
     async fn publication_outbox_preserves_each_committed_revision() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
@@ -326,14 +400,12 @@ mod tests {
             ..Default::default()
         };
         let market = Market {
-            source_id: Some("binance-spot".into()),
             market_id: market_id.clone(),
-            market_key: "btc-usdt".into(),
             instrument_id: instrument_id.clone(),
             listing_id: Some(ListingId::new("listing:binance:btc-usdt").unwrap()),
             exchange_id: Exchange::new("binance").unwrap(),
-            market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            source_symbol: Symbol::new("BTCUSDT").unwrap(),
+            instrument_kind: kairos_primitives::InstrumentKind::Spot,
+            venue_symbol: Some(Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
         };
@@ -378,7 +450,7 @@ mod tests {
         assert!(reader.record("market:binance:btc-usdt").unwrap().is_some());
         let projection = reader
             .projection(&kairos_reference_contract::SqliteMarketQuery {
-                source_id: Some("binance-spot".into()),
+                venue_symbol: Some("BTCUSDT".into()),
                 limit: 100,
                 ..Default::default()
             })
@@ -635,12 +707,11 @@ mod tests {
             }],
             markets: vec![Market {
                 market_id,
-                market_key: "test.TEST".into(),
                 instrument_id,
                 listing_id: Some(listing_id),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                market_type: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-                source_symbol: Symbol::new("TEST").unwrap(),
+                instrument_kind: kairos_primitives::InstrumentKind::Spot,
+                venue_symbol: Some(Symbol::new("TEST").unwrap()),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
                 ..Default::default()
@@ -1331,16 +1402,6 @@ impl SqlxCatalogStore {
                 instruments: records!("reference_instruments_current", instrument_id, Instrument),
                 listings: records!("reference_listings_current", listing_id, Listing),
                 markets: records!("reference_markets_current", market_id, Market),
-                execution_accesses: records!(
-                    "reference_execution_accesses_current",
-                    access_id,
-                    ExecutionAccess
-                ),
-                market_data_accesses: records!(
-                    "reference_market_data_accesses_current",
-                    access_id,
-                    crate::domain::MarketDataAccess
-                ),
                 generation: (meta.try_get::<i64, _>("generation")? as u64).into(),
                 event_sequence: (meta.try_get::<i64, _>("event_sequence")? as u64).into(),
                 lifecycle_events: Vec::new(),
@@ -1655,48 +1716,18 @@ async fn replace_current_state(
     }
     for market in catalog.markets.values() {
         track!("market", market.market_id.as_str());
-        sqlx::query("INSERT INTO reference_markets_current(market_id,source_id,market_key,instrument_id,listing_id,exchange_id,market_type,asset_type,underlying_instrument_id,source_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(market_id) DO UPDATE SET source_id=excluded.source_id,market_key=excluded.market_key,instrument_id=excluded.instrument_id,listing_id=excluded.listing_id,exchange_id=excluded.exchange_id,market_type=excluded.market_type,asset_type=excluded.asset_type,underlying_instrument_id=excluded.underlying_instrument_id,source_symbol=excluded.source_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_markets_current.payload<>excluded.payload")
+        sqlx::query("INSERT INTO reference_markets_current(market_id,instrument_id,listing_id,exchange_id,instrument_kind,asset_type,underlying_instrument_id,venue_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(market_id) DO UPDATE SET instrument_id=excluded.instrument_id,listing_id=excluded.listing_id,exchange_id=excluded.exchange_id,instrument_kind=excluded.instrument_kind,asset_type=excluded.asset_type,underlying_instrument_id=excluded.underlying_instrument_id,venue_symbol=excluded.venue_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_markets_current.payload<>excluded.payload")
             .bind(market.market_id.as_str())
-            .bind(&market.source_id)
-            .bind(&market.market_key)
             .bind(market.instrument_id.as_str())
             .bind(market.listing_id.as_ref().map(|value| value.as_str()))
             .bind(market.exchange_id.as_str())
-            .bind(market.market_type.as_str())
+            .bind(market.instrument_kind.as_str())
             .bind(market.asset_type.map(|value| value.as_str()))
             .bind(market.underlying_instrument_id.as_ref().map(|value| value.as_str()))
-            .bind(market.source_symbol.as_str())
+            .bind(market.venue_symbol.as_ref().map(|value| value.as_str()))
             .bind(market.status.as_str())
             .bind(market.effective_to_unix_nanos.map(|value| value.get() as i64))
             .bind(serde_json::to_string(market).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
-            .execute(&mut **tx)
-            .await?;
-    }
-    for access in catalog.execution_accesses.values() {
-        track!("execution_access", access.access_id.as_str());
-        sqlx::query("INSERT INTO reference_execution_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_execution_accesses_current.payload<>excluded.payload")
-            .bind(access.access_id.as_str())
-            .bind(access.market_id.as_ref().map(|value| value.as_str()))
-            .bind(access.provider_id.as_str())
-            .bind(access.provider_product.as_str())
-            .bind(access.provider_symbol.as_str())
-            .bind(access.status.as_str())
-            .bind(access.effective_to_unix_nanos.map(|value| value.get() as i64))
-            .bind(serde_json::to_string(access).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
-            .execute(&mut **tx)
-            .await?;
-    }
-    for access in catalog.market_data_accesses.values() {
-        track!("market_data_access", access.access_id.as_str());
-        sqlx::query("INSERT INTO reference_market_data_accesses_current(access_id,market_id,provider_id,product_family,provider_symbol,status,effective_to_unix_nanos,payload) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(access_id) DO UPDATE SET market_id=excluded.market_id,provider_id=excluded.provider_id,product_family=excluded.product_family,provider_symbol=excluded.provider_symbol,status=excluded.status,effective_to_unix_nanos=excluded.effective_to_unix_nanos,payload=excluded.payload WHERE reference_market_data_accesses_current.payload<>excluded.payload")
-            .bind(access.access_id.as_str())
-            .bind(access.market_id.as_str())
-            .bind(access.provider_id.as_str())
-            .bind(access.provider_product.as_str())
-            .bind(access.provider_symbol.as_str())
-            .bind(access.status.as_str())
-            .bind(access.effective_to_unix_nanos.map(|value| value.get() as i64))
-            .bind(serde_json::to_string(access).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)
             .execute(&mut **tx)
             .await?;
     }
@@ -1706,8 +1737,6 @@ async fn replace_current_state(
         "DELETE FROM reference_instruments_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='instrument' AND k.record_id=reference_instruments_current.instrument_id)",
         "DELETE FROM reference_listings_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='listing' AND k.record_id=reference_listings_current.listing_id)",
         "DELETE FROM reference_markets_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market' AND k.record_id=reference_markets_current.market_id)",
-        "DELETE FROM reference_execution_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='execution_access' AND k.record_id=reference_execution_accesses_current.access_id)",
-        "DELETE FROM reference_market_data_accesses_current WHERE NOT EXISTS (SELECT 1 FROM reference_reconcile_keys k WHERE k.record_kind='market_data_access' AND k.record_id=reference_market_data_accesses_current.access_id)",
     ] {
         sqlx::query(statement).execute(&mut **tx).await?;
     }

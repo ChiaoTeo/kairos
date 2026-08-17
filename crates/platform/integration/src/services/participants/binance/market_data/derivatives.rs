@@ -46,6 +46,7 @@ pub(crate) fn normalize_derivatives_market_message(
         last_sequence: None,
         sequence: value.get("u").and_then(Value::as_u64).map(Sequence::new),
         observed_at_unix_nanos: observed_at_unix_nanos.into(),
+        venue: Default::default(),
     }))
 }
 

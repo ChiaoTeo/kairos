@@ -27,6 +27,7 @@ from kairospy.strategy import (
     InstrumentId,
     InstrumentRef,
     MarketId,
+    ObservationScope,
     OptionGreeks,
     Quote,
     QuoteEvent,
@@ -191,7 +192,7 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
     metadata = EventMetadata("market.events", 1)
     quote = QuoteEvent(
         Quote(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             instrument,
             Decimal("1"),
             None,
@@ -204,7 +205,7 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
     )
     bar = BarEvent(
         Bar(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             instrument,
             "1h",
             Decimal("1"),
@@ -219,7 +220,7 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
     )
     trade = TradeEvent(
         Trade(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             instrument,
             Decimal("1.5"),
             Decimal("10"),
@@ -231,7 +232,7 @@ def test_strategy_default_market_dispatch_selects_one_typed_hook() -> None:
     )
     greeks = GreeksEvent(
         OptionGreeks(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             instrument,
             1_710_000_000_000_000_000,
             Decimal("450"),
@@ -275,7 +276,7 @@ def test_overriding_on_market_takes_control_of_typed_dispatch() -> None:
     occurred_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
     quote = QuoteEvent(
         Quote(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             InstrumentRef(InstrumentId("instrument:test:SPY"), "SPY"),
             Decimal("1"),
             None,
@@ -307,7 +308,7 @@ def test_overriding_on_market_can_delegate_to_typed_dispatch() -> None:
     occurred_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
     quote = QuoteEvent(
         Quote(
-            MarketId("market:test:SPY"),
+            ObservationScope.market("market:test:SPY"),
             InstrumentRef(InstrumentId("instrument:test:SPY"), "SPY"),
             Decimal("1"),
             None,
@@ -349,7 +350,7 @@ def test_repository_strategies_do_not_use_the_removed_data_lifecycle() -> None:
 def test_bar_event_has_typed_data_and_delivery_metadata() -> None:
     occurred_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
     bar = Bar(
-        MarketId("market:test:SPY"),
+        ObservationScope.market("market:test:SPY"),
         InstrumentRef(InstrumentId("instrument:test:SPY"), "SPY"),
         "1h",
         Decimal("1"),

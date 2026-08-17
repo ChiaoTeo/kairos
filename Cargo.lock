@@ -1600,6 +1600,7 @@ dependencies = [
  "kairos-reference-contract",
  "kairos-transport",
  "kairos-workspace",
+ "rusteron-media-driver",
  "secrecy",
  "serde",
  "serde_json",
@@ -1624,6 +1625,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "kairos-conflux"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]

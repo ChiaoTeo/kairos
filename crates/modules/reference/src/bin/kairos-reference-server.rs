@@ -68,7 +68,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             format!("acquire reference workspace lock: {error}")
         }
     })?;
-    let database = workspace.child(&["reference", "reference.sqlite"])?;
+    let database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     if args.reference_changes_stream <= 0 {
         return Err("reference event stream id must be positive".into());
     }

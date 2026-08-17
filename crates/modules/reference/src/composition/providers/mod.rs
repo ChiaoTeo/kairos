@@ -23,7 +23,7 @@ use kairos_integration::participants::massive::{
 use kairos_integration::participants::okx::{
     InstrumentType as OkxInstrumentType, OkxConnection, OkxConnectionConfig,
 };
-use kairos_primitives::{AssetClass, InstrumentKind, ProviderId, ProviderProductCode};
+use kairos_primitives::{AssetClass, InstrumentKind};
 
 mod binance;
 mod fan_in;
@@ -53,8 +53,8 @@ use okx::okx_provider_catalog;
 pub use okx::OkxSource;
 
 use crate::domain::{
-    Asset, Entity, ExecutionAccess, Instrument, Listing, Market, ProviderCatalog, ProviderHealth,
-    ReferenceError, ReferenceResult,
+    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ProviderHealth, ReferenceError,
+    ReferenceResult,
 };
 use crate::services::source::{ProviderUpdate, ReferenceSource};
 use crate::services::sqlx_storage::SqlxProviderSyncStore;
@@ -99,62 +99,6 @@ fn canonical_instrument_kind(kind: ExternalInstrumentKind) -> ReferenceResult<In
     }
 }
 
-fn populate_market_data_accesses(
-    catalog: &mut ProviderCatalog,
-    provider: &str,
-) -> ReferenceResult<()> {
-    let provider_id = ProviderId::new(provider)?;
-    for market in &catalog.markets {
-        catalog
-            .market_data_accesses
-            .push(crate::domain::MarketDataAccess {
-                source_id: None,
-                // A provider symbol is not a market identity. Massive may
-                // expose the same ticker on more than one venue, so bind the
-                // provider access to the canonical Market it observes.
-                access_id: format!("market-data-access:{provider}:{}", market.market_id),
-                market_id: market.market_id.clone(),
-                provider_id: provider_id.clone(),
-                provider_product: market.market_type.clone(),
-                provider_symbol: kairos_primitives::ProviderSymbol::new(
-                    market.source_symbol.as_str(),
-                )?,
-                status: market.status,
-                effective_from_unix_nanos: market.effective_from_unix_nanos,
-                effective_to_unix_nanos: market.effective_to_unix_nanos,
-            });
-    }
-    Ok(())
-}
-
-fn populate_execution_accesses(
-    catalog: &mut ProviderCatalog,
-    provider: &str,
-) -> ReferenceResult<()> {
-    let provider_id = ProviderId::new(provider)?;
-    for market in &catalog.markets {
-        catalog.execution_accesses.push(ExecutionAccess {
-            source_id: None,
-            access_id: kairos_primitives::ExecutionAccessId::new(format!(
-                "execution-access:{provider}:{}:{}",
-                market.market_type,
-                market.source_symbol.as_str().to_ascii_lowercase()
-            ))?,
-            instrument_id: Some(market.instrument_id.clone()),
-            listing_id: market.listing_id.clone(),
-            market_id: Some(market.market_id.clone()),
-            provider_id: provider_id.clone(),
-            provider_product: market.market_type.clone(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new(market.source_symbol.as_str())?,
-            settlement_asset_id: None,
-            status: market.status,
-            effective_from_unix_nanos: market.effective_from_unix_nanos,
-            effective_to_unix_nanos: market.effective_to_unix_nanos,
-        });
-    }
-    Ok(())
-}
-
 fn merge_provider_catalog(
     previous: Option<ProviderCatalog>,
     incoming: ProviderCatalog,
@@ -176,16 +120,6 @@ fn merge_provider_catalog(
         markets: merge_records(previous.markets, incoming.markets, |value| {
             value.market_id.clone()
         }),
-        execution_accesses: merge_records(
-            previous.execution_accesses,
-            incoming.execution_accesses,
-            |value| value.access_id.clone(),
-        ),
-        market_data_accesses: merge_records(
-            previous.market_data_accesses,
-            incoming.market_data_accesses,
-            |value| value.access_id.clone(),
-        ),
     }
 }
 

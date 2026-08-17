@@ -245,7 +245,9 @@ class StrategyApplication:
         domain = self.ingress.route(event).domain
         metadata = getattr(event, "metadata")
         if domain in {"market", "clock"} and metadata.occurred_at is not None:
-            self.advance_time(metadata.occurred_at)
+            event_time = ensure_utc(metadata.occurred_at)
+            if self._clock.now is None or event_time >= self._clock.now:
+                self.advance_time(event_time)
         self._dispatch_event(event)
 
     def _dispatch_replay_event(self, event: MarketEvent) -> None:

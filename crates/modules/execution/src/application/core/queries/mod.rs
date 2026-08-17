@@ -72,6 +72,7 @@ impl ExecutionApplication {
                 remote_order_id: event.remote_order_id.as_ref().cloned(),
                 occurred_at_unix_nanos: event.occurred_at_unix_nanos,
                 reason: event.reason.clone(),
+                attempt: event.attempt.clone(),
             })
             .filter(|event| audit_matches(event, &query))
             .collect::<Vec<_>>();

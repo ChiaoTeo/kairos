@@ -216,14 +216,27 @@ pub(super) fn encode_current_fill<'a>(
             .map(ToString::to_string)
             .unwrap_or_default(),
     );
-    let execution_access_id = builder.create_string(
+    let execution_route_id = builder.create_string(
         &order
-            .and_then(|value| value.execution_access_id.as_ref())
+            .and_then(|value| value.execution_route_id.as_ref())
             .map(ToString::to_string)
             .unwrap_or_default(),
     );
-    let remote_order_id = order
-        .and_then(|value| value.remote_order_id.as_ref())
+    let remote_order_id = fill
+        .remote_order_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let reported_provider_id = fill
+        .reported_provider_id
+        .as_ref()
+        .map(|value| builder.create_string(value));
+    let provider_product = fill
+        .provider_product
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let provider_symbol = fill
+        .provider_symbol
+        .as_ref()
         .map(|value| builder.create_string(value.as_str()));
     let fee_asset_id = fill
         .fee_currency
@@ -246,8 +259,11 @@ pub(super) fn encode_current_fill<'a>(
             segment_key: Some(segment_key),
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
-            execution_access_id: Some(execution_access_id),
+            execution_route_id: Some(execution_route_id),
             remote_order_id,
+            reported_provider_id,
+            provider_product,
+            provider_symbol,
             side: match fill.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
                 OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,
@@ -501,6 +517,68 @@ pub(super) fn encode_risk_reservation_state<'a>(
     ))
 }
 
+fn encode_selected_route<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    route: &crate::domain::SelectedExecutionRoute,
+) -> flatbuffers::WIPOffset<fb::SelectedExecutionRoute<'a>> {
+    let route_id = builder.create_string(route.route_id.as_str());
+    let participant_id = builder.create_string(&route.participant_id);
+    let destination_market_id = route
+        .destination_market_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let provider_product = builder.create_string(route.provider_product.as_str());
+    let provider_symbol = builder.create_string(route.provider_symbol.as_str());
+    fb::SelectedExecutionRoute::create(
+        builder,
+        &fb::SelectedExecutionRouteArgs {
+            route_id: Some(route_id),
+            selection_kind: match route.selection_kind {
+                crate::domain::RouteSelectionKind::Explicit => fb::RouteSelectionKind::EXPLICIT,
+                crate::domain::RouteSelectionKind::UniqueCandidate => {
+                    fb::RouteSelectionKind::UNIQUE_CANDIDATE
+                }
+            },
+            participant_id: Some(participant_id),
+            destination_market_id,
+            provider_product: Some(provider_product),
+            provider_symbol: Some(provider_symbol),
+            selected_at_unix_nanos: route.selected_at_unix_nanos.get(),
+        },
+    )
+}
+
+fn encode_attempt<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    attempt: &crate::domain::ExecutionAttempt,
+) -> flatbuffers::WIPOffset<fb::ExecutionAttempt<'a>> {
+    let attempt_id = builder.create_string(&attempt.attempt_id);
+    let selected_route = encode_selected_route(builder, &attempt.selected_route);
+    let provider_connection_id = builder.create_string(&attempt.provider_connection_id);
+    let remote_order_id = attempt
+        .remote_order_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    fb::ExecutionAttempt::create(
+        builder,
+        &fb::ExecutionAttemptArgs {
+            attempt_id: Some(attempt_id),
+            selected_route: Some(selected_route),
+            provider_connection_id: Some(provider_connection_id),
+            command_started_at_unix_nanos: attempt.command_started_at_unix_nanos.get(),
+            delivery_certainty: match attempt.delivery_certainty {
+                crate::domain::DeliveryCertainty::NotSent => fb::DeliveryCertainty::NOT_SENT,
+                crate::domain::DeliveryCertainty::Indeterminate => {
+                    fb::DeliveryCertainty::INDETERMINATE
+                }
+                crate::domain::DeliveryCertainty::Confirmed => fb::DeliveryCertainty::CONFIRMED,
+                crate::domain::DeliveryCertainty::Rejected => fb::DeliveryCertainty::REJECTED,
+            },
+            remote_order_id,
+        },
+    )
+}
+
 pub(super) fn encode_order_state<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     order: &ExecutionOrder,
@@ -544,9 +622,9 @@ pub(super) fn encode_order_state<'a>(
             .map(ToString::to_string)
             .unwrap_or_default(),
     );
-    let execution_access_id = builder.create_string(
+    let execution_route_id = builder.create_string(
         &order
-            .execution_access_id
+            .execution_route_id
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_default(),
@@ -555,6 +633,16 @@ pub(super) fn encode_order_state<'a>(
         .remote_order_id
         .as_ref()
         .map(|value| builder.create_string(&value.to_string()));
+    let selected_route = order
+        .selected_route
+        .as_ref()
+        .map(|route| encode_selected_route(builder, route));
+    let attempt_offsets = order
+        .attempts
+        .iter()
+        .map(|attempt| encode_attempt(builder, attempt))
+        .collect::<Vec<_>>();
+    let attempts = (!attempt_offsets.is_empty()).then(|| builder.create_vector(&attempt_offsets));
     let quantity = decimal(order.quantity);
     let filled_quantity = decimal(order.filled_quantity);
     let limit_price = order.limit_price.map(decimal);
@@ -571,7 +659,9 @@ pub(super) fn encode_order_state<'a>(
             segment_key: Some(segment_key),
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
-            execution_access_id: Some(execution_access_id),
+            execution_route_id: Some(execution_route_id),
+            selected_route,
+            attempts,
             remote_order_id,
             side: match order.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
@@ -784,10 +874,10 @@ pub(super) fn encode_intent_leg<'a>(
             .map(ToString::to_string)
             .unwrap_or_default(),
     );
-    let execution_access_id = builder.create_string(
-        &leg.execution_access_id
+    let execution_route_id = builder.create_string(
+        &leg.execution_route_id
             .as_ref()
-            .ok_or_else(|| "execution intent leg execution_access_id is required".to_owned())?
+            .ok_or_else(|| "execution intent leg execution_route_id is required".to_owned())?
             .to_string(),
     );
     let quantity = decimal(leg.quantity);
@@ -802,7 +892,7 @@ pub(super) fn encode_intent_leg<'a>(
             segment_key: Some(segment_key),
             instrument_id: Some(instrument_id),
             market_id: Some(market_id),
-            execution_access_id: Some(execution_access_id),
+            execution_route_id: Some(execution_route_id),
             side: match leg.side {
                 OrderSide::Buy => kairos_protocol::generated::kairos::common::v_2::Side::BUY,
                 OrderSide::Sell => kairos_protocol::generated::kairos::common::v_2::Side::SELL,

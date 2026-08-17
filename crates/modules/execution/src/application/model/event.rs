@@ -19,6 +19,8 @@ pub struct ExecutionEvent {
     pub fill_id: Option<FillId>,
     #[serde(default)]
     pub filled_quantity: Option<Quantity>,
+    #[serde(default)]
+    pub attempt: Option<ExecutionAttempt>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

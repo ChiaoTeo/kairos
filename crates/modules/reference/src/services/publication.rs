@@ -101,30 +101,6 @@ fn encode_publication(
                 ReferenceEncoder::market_upserted(&record, &context, occurred_at)
             }
         }
-        "execution_access" => {
-            let record = catalog
-                .execution_accesses
-                .get(id)
-                .ok_or_else(|| missing(kind, id))?;
-            let record = contract_execution_access(record);
-            if updated {
-                ReferenceEncoder::execution_access_updated(&record, &context, occurred_at)
-            } else {
-                ReferenceEncoder::execution_access_upserted(&record, &context, occurred_at)
-            }
-        }
-        "market_data_access" => {
-            let record = catalog
-                .market_data_accesses
-                .get(id)
-                .ok_or_else(|| missing(kind, id))?;
-            let record = contract_market_data_access(record);
-            if updated {
-                ReferenceEncoder::market_data_access_updated(&record, &context, occurred_at)
-            } else {
-                ReferenceEncoder::market_data_access_upserted(&record, &context, occurred_at)
-            }
-        }
         other => {
             return Err(ReferenceError::Publication(format!(
                 "Reference v2 event schema is not defined for record kind {other}"
@@ -205,17 +181,16 @@ pub(crate) fn contract_listing(
 pub(crate) fn contract_market(value: &crate::domain::Market) -> kairos_reference_contract::Market {
     kairos_reference_contract::Market {
         market_id: value.market_id.to_string(),
-        market_key: value.market_key.clone(),
         instrument_id: value.instrument_id.to_string(),
         listing_id: value.listing_id.as_ref().map(ToString::to_string),
         exchange_id: value.exchange_id.to_string(),
-        market_type: value.market_type.clone(),
+        instrument_kind: value.instrument_kind,
         asset_type: value.asset_type,
         underlying_instrument_id: value
             .underlying_instrument_id
             .as_ref()
             .map(ToString::to_string),
-        source_symbol: value.source_symbol.to_string(),
+        venue_symbol: value.venue_symbol.as_ref().map(ToString::to_string),
         base_asset_id: value.base_asset_id.as_ref().map(ToString::to_string),
         quote_asset_id: value.quote_asset_id.as_ref().map(ToString::to_string),
         status: value.status.as_str().into(),
@@ -226,39 +201,6 @@ pub(crate) fn contract_market(value: &crate::domain::Market) -> kairos_reference
         minimum_quantity: value.minimum_quantity.clone(),
         minimum_notional: value.minimum_notional.clone(),
         contract_size: value.contract_size.clone(),
-        effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
-        effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
-    }
-}
-
-pub(crate) fn contract_execution_access(
-    value: &crate::domain::ExecutionAccess,
-) -> kairos_reference_contract::ExecutionAccess {
-    kairos_reference_contract::ExecutionAccess {
-        access_id: value.access_id.to_string(),
-        instrument_id: value.instrument_id.as_ref().map(ToString::to_string),
-        listing_id: value.listing_id.as_ref().map(ToString::to_string),
-        market_id: value.market_id.as_ref().map(ToString::to_string),
-        provider_id: value.provider_id.to_string(),
-        provider_product: value.provider_product.to_string(),
-        provider_symbol: value.provider_symbol.to_string(),
-        settlement_asset_id: value.settlement_asset_id.as_ref().map(ToString::to_string),
-        status: value.status.as_str().into(),
-        effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
-        effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
-    }
-}
-
-pub(crate) fn contract_market_data_access(
-    value: &crate::domain::MarketDataAccess,
-) -> kairos_reference_contract::MarketDataAccess {
-    kairos_reference_contract::MarketDataAccess {
-        access_id: value.access_id.clone(),
-        market_id: value.market_id.to_string(),
-        provider_id: value.provider_id.to_string(),
-        provider_product: value.provider_product.to_string(),
-        provider_symbol: value.provider_symbol.to_string(),
-        status: value.status.as_str().into(),
         effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
         effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
     }

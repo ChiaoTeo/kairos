@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::application::{AccountApplication, AccountProcess, AccountSnapshotPublisher};
+use crate::application::{AccountApplication, AccountCurrentView, AccountProcess};
 use crate::composition::empty_snapshot;
 use crate::domain::{
     AccountSegment, AccountSnapshot, AssetId, Balance, ExternalAccountIdentity, SegmentKey,
@@ -14,7 +14,6 @@ use crate::services::persistence::JsonAccountStore;
 use kairos_integration::application::{
     AsyncAccountCredentialInspectionConnection, ExternalAccountCredentialProfile,
 };
-use kairos_integration::blocking::AccountReadConnection;
 use kairos_integration::participants::binance::ConnectionDomain as BinanceConnectionDomain;
 use kairos_integration::participants::binance::{
     BinanceCoinMConnection, BinanceFuturesChannelConfig, BinanceFuturesConnectionConfig,
@@ -91,7 +90,7 @@ impl AccountComposition {
         socket_path: impl Into<PathBuf>,
         refresh_interval: std::time::Duration,
         health_file: Option<PathBuf>,
-        publisher: Option<Box<dyn AccountSnapshotPublisher>>,
+        publisher: Option<Box<dyn FnMut(&AccountCurrentView) -> Result<(), String> + Send>>,
     ) -> Result<AccountProcess, String> {
         let simulation_account = matches!(
             self.provider.trim().to_ascii_lowercase().as_str(),
@@ -154,9 +153,14 @@ fn connect_binance_futures_principal(
     binding_id: impl Into<String>,
     coin_m: bool,
 ) -> Result<kairos_integration::participants::binance::BinanceFuturesPrincipalConnection, String> {
+    let family = if coin_m {
+        "coin-m-futures"
+    } else {
+        "usd-m-futures"
+    };
     let config = BinanceFuturesConnectionConfig {
         environment: options.environment.clone(),
-        rest_base_url: options.base_url.clone(),
+        rest_base_url: binance_rest_base_url(options, family),
         quota: BinanceQuotaAllocation {
             request_weight_per_minute: 1_000,
             cancel_reserve_weight: 50,
@@ -195,7 +199,7 @@ fn connect_binance_options_principal(
 ) -> Result<kairos_integration::participants::binance::BinanceOptionsPrincipalConnection, String> {
     BinanceOptionsConnection::connect(BinanceOptionsConnectionConfig {
         environment: options.environment.clone(),
-        rest_base_url: options.base_url.clone(),
+        rest_base_url: binance_rest_base_url(options, "options"),
         quota: BinanceQuotaAllocation {
             request_weight_per_minute: 1_000,
             cancel_reserve_weight: 50,
@@ -334,30 +338,21 @@ pub fn compose_binance_async_account_application(
     if segments.is_empty() {
         return Err("Binance async composition requires at least one segment".into());
     }
-    let families = segments
-        .iter()
-        .map(|segment| binance_endpoint_family(&segment.provider_product))
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    if families.len() != 1 {
-        return Err(format!(
-            "Binance async Account segments must share one REST endpoint family; got {}",
-            families.into_iter().collect::<Vec<_>>().join(",")
-        ));
-    }
-    let family = binance_endpoint_family(&segments[0].provider_product)?;
-    let futures_stream_endpoint = match family {
-        "usd-m-futures" => "wss://fstream.binance.com",
-        "coin-m-futures" => "wss://dstream.binance.com",
-        _ => websocket_api_url,
+    let needs_spot_principal = segments.iter().try_fold(false, |needed, segment| {
+        binance_endpoint_family(&segment.provider_product).map(|family| needed || family == "spot")
+    })?;
+    let private = if needs_spot_principal {
+        let mut connection_options = options.clone();
+        connection_options.base_url = binance_rest_base_url(options, "spot");
+        Some(connect_binance_principal(
+            &connection_options,
+            "account.binance.spot",
+            shared_quota_ledger_path,
+            egress_scope_id,
+        )?)
+    } else {
+        None
     };
-    let mut connection_options = options.clone();
-    connection_options.base_url = binance_rest_base_url(options, family);
-    let private = connect_binance_principal(
-        &connection_options,
-        "account.binance",
-        shared_quota_ledger_path,
-        egress_scope_id,
-    )?;
     let identity = ExternalAccountIdentity::new("binance", options.account_id.clone())
         .map_err(|error| error.to_string())?;
     let mut account_segments = Vec::with_capacity(segments.len());
@@ -384,6 +379,7 @@ pub fn compose_binance_async_account_application(
         });
         let read = match provider_product.as_str() {
             "spot" => {
+                let private = private.as_ref().expect("spot principal was selected");
                 let stream = private
                     .spot_account_events(
                         segment_key.clone(),
@@ -394,6 +390,8 @@ pub fn compose_binance_async_account_application(
                     )
                     .map(|source| AccountAsyncEventSource::BinanceSpot {
                         binding_id: format!("account.binance.spot.{segment_key}"),
+                        segment_key: SegmentKey::new(segment_key.clone())
+                            .expect("validated Account segment key"),
                         source,
                     })
                     .map_err(|error| error.to_string())?;
@@ -401,12 +399,16 @@ pub fn compose_binance_async_account_application(
                 AccountAsyncSnapshotConnection::BinanceSpot(private.spot_account_read())
             }
             "funding" => {
+                let private = private.as_ref().expect("spot principal was selected");
                 AccountAsyncSnapshotConnection::BinanceFunding(private.funding_account_read())
             }
             "cross-margin" => {
+                let private = private.as_ref().expect("spot principal was selected");
                 let connection = private.cross_margin_connection();
                 streams.push(AccountAsyncEventSource::BinanceMargin {
                     binding_id: format!("account.binance.cross-margin.{segment_key}"),
+                    segment_key: SegmentKey::new(segment_key.clone())
+                        .expect("validated Account segment key"),
                     source: connection
                         .account_events(
                             segment_key.clone(),
@@ -421,6 +423,7 @@ pub fn compose_binance_async_account_application(
                 AccountAsyncSnapshotConnection::BinanceMargin(connection.account_read())
             }
             "isolated-margin" => {
+                let private = private.as_ref().expect("spot principal was selected");
                 let provider_symbol =
                     options.isolated_margin_symbol.as_deref().ok_or_else(|| {
                         "Binance isolated-margin Account requires values.isolated_margin_symbol"
@@ -431,6 +434,8 @@ pub fn compose_binance_async_account_application(
                     .map_err(|error| error.to_string())?;
                 streams.push(AccountAsyncEventSource::BinanceMargin {
                     binding_id: format!("account.binance.isolated-margin.{segment_key}"),
+                    segment_key: SegmentKey::new(segment_key.clone())
+                        .expect("validated Account segment key"),
                     source: connection
                         .account_events(
                             segment_key.clone(),
@@ -452,11 +457,13 @@ pub fn compose_binance_async_account_application(
                 )?;
                 streams.push(AccountAsyncEventSource::BinanceFutures {
                     binding_id: format!("account.binance.usd-m-futures.{segment_key}"),
+                    segment_key: SegmentKey::new(segment_key.clone())
+                        .expect("validated Account segment key"),
                     source: connection
                         .account_events(
                             segment_key.clone(),
                             &BinanceFuturesChannelConfig {
-                                websocket_stream_url: futures_stream_endpoint.to_owned(),
+                                websocket_stream_url: "wss://fstream.binance.com".into(),
                                 event_queue_capacity: 256,
                             },
                         )
@@ -472,11 +479,13 @@ pub fn compose_binance_async_account_application(
                 )?;
                 streams.push(AccountAsyncEventSource::BinanceFutures {
                     binding_id: format!("account.binance.coin-m-futures.{segment_key}"),
+                    segment_key: SegmentKey::new(segment_key.clone())
+                        .expect("validated Account segment key"),
                     source: connection
                         .account_events(
                             segment_key.clone(),
                             &BinanceFuturesChannelConfig {
-                                websocket_stream_url: futures_stream_endpoint.to_owned(),
+                                websocket_stream_url: "wss://dstream.binance.com".into(),
                                 event_queue_capacity: 256,
                             },
                         )
@@ -491,6 +500,8 @@ pub fn compose_binance_async_account_application(
                 )?;
                 streams.push(AccountAsyncEventSource::BinanceOptions {
                     binding_id: format!("account.binance.options.{segment_key}"),
+                    segment_key: SegmentKey::new(segment_key.clone())
+                        .expect("validated Account segment key"),
                     source: connection
                         .account_events(
                             segment_key.clone(),
@@ -590,6 +601,8 @@ pub fn compose_okx_async_account_application(
         if let Some(websocket_url) = private_websocket_url {
             streams.push(AccountAsyncEventSource::OkxTrading {
                 binding_id: format!("account.okx.trading.{segment_key}"),
+                segment_key: SegmentKey::new(segment_key.clone())
+                    .expect("validated Account segment key"),
                 source: principal
                     .trading_account_events(
                         instrument_type,
@@ -689,6 +702,8 @@ pub fn compose_ibkr_async_account_application(
         provider: "ibkr".into(),
         async_account_streams: vec![AccountAsyncEventSource::Ibkr {
             binding_id: format!("account.ibkr.equity.{segment_key}"),
+            segment_key: SegmentKey::new(segment_key.clone())
+                .expect("validated Account segment key"),
             source,
         }],
         instrument_resolver,
@@ -792,20 +807,6 @@ fn inspect_legacy_account_credential(
     connection.inspect_credential()
 }
 
-pub fn compose_blocking_account_application(
-    options: &AccountOptions,
-    state: Option<PathBuf>,
-) -> Result<AccountComposition, String> {
-    compose_blocking_account_application_for_segments(
-        options,
-        &[AccountSegmentBinding::new(
-            &options.segment,
-            &options.product,
-        )],
-        state,
-    )
-}
-
 pub fn compose_local_account_application_for_segments(
     options: &AccountOptions,
     segments: &[AccountSegmentBinding],
@@ -817,109 +818,42 @@ pub fn compose_local_account_application_for_segments(
     ) {
         return Err("local Account composition requires provider=paper or simulated".into());
     }
-    compose_blocking_account_application_for_segments(options, segments, state)
-}
-
-/// Compose an explicit blocking/CLI account actor with every configured
-/// segment for the account.
-///
-/// A provider connection remains the integration-owned source, while the
-/// account actor owns the complete set of segment state.  Keeping this
-/// This compatibility boundary is for administration, offline use, and
-/// deterministic local sources. Production server composition selects only
-/// provider-native async sources.
-pub fn compose_blocking_account_application_for_segments(
-    options: &AccountOptions,
-    segments: &[AccountSegmentBinding],
-    state: Option<PathBuf>,
-) -> Result<AccountComposition, String> {
     if segments.is_empty() {
         return Err("at least one account segment is required".into());
     }
     let provider = normalized_provider(&options.provider);
-    if provider == "paper" || provider == "simulated" {
-        let identity = ExternalAccountIdentity::new(&provider, options.account_id.clone())
-            .map_err(|error| error.to_string())?;
-        let account_segments: Vec<_> = segments
-            .iter()
-            .map(|segment| AccountSegment {
-                identity: identity.clone(),
-                segment_key: SegmentKey::new(segment.segment_key.clone())
-                    .expect("configured segment is required"),
-                environment: options.environment.clone(),
-                account_model: Some(
-                    options
-                        .account_model
-                        .clone()
-                        .or_else(|| {
-                            options
-                                .product
-                                .eq_ignore_ascii_case("margin")
-                                .then_some("margin".into())
-                        })
-                        .unwrap_or_else(|| "no_margin".into()),
-                ),
-            })
-            .collect();
-        let snapshots = segments
-            .iter()
-            .map(|segment| {
-                let mut snapshot = empty_snapshot(segment.segment_key.clone());
-                snapshot.balances = options
-                    .initial_balances
-                    .iter()
-                    .map(|value| parse_initial_balance(value))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((segment.segment_key.clone(), snapshot))
-            })
-            .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
-        let application = AccountApplication::with_dependencies(
-            account_segments,
-            AccountSnapshotGateway::memory(snapshots),
-            state.map(JsonAccountStore::new),
-        )
-        .map_err(|error| error.to_string())?;
-        return Ok(AccountComposition {
-            application,
-            provider,
-            async_account_streams: Vec::new(),
-            instrument_resolver: AccountInstrumentResolver::default(),
-        });
-    }
     let identity = ExternalAccountIdentity::new(&provider, options.account_id.clone())
         .map_err(|error| error.to_string())?;
-    let mut account_segments = Vec::with_capacity(segments.len());
-    let mut sources = std::collections::BTreeMap::new();
-    for segment in segments {
-        let segment_key = &segment.segment_key;
-        let mut segment_options = options.clone();
-        segment_options.product = segment.provider_product.clone();
-        let product = account_product(&segment_options)?;
-        let account_model = options.account_model.clone().unwrap_or_else(|| {
-            if product == AccountProduct::Spot {
-                "no_margin".into()
-            } else if matches!(
-                product,
-                AccountProduct::CrossMargin | AccountProduct::IsolatedMargin
-            ) {
-                "margin".into()
-            } else {
-                "contract".into()
-            }
-        });
-        account_segments.push(AccountSegment {
+    let account_segments: Vec<_> = segments
+        .iter()
+        .map(|segment| AccountSegment {
             identity: identity.clone(),
-            segment_key: SegmentKey::new(segment_key.clone()).map_err(|error| error.to_string())?,
+            segment_key: SegmentKey::new(segment.segment_key.clone())
+                .expect("configured segment is required"),
             environment: options.environment.clone(),
-            account_model: Some(account_model),
-        });
-        let connection = compose_blocking_account(&segment_options)?;
-        sources.insert(segment_key.clone(), connection);
-    }
-    let instrument_resolver = load_instrument_resolver(options)?;
+            account_model: Some(
+                options
+                    .account_model
+                    .clone()
+                    .unwrap_or_else(|| "no_margin".into()),
+            ),
+        })
+        .collect();
+    let snapshots = segments
+        .iter()
+        .map(|segment| {
+            let mut snapshot = empty_snapshot(segment.segment_key.clone());
+            snapshot.balances = options
+                .initial_balances
+                .iter()
+                .map(|value| parse_initial_balance(value))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((segment.segment_key.clone(), snapshot))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
     let application = AccountApplication::with_dependencies(
         account_segments,
-        AccountSnapshotGateway::integration(sources, instrument_resolver.clone()),
+        AccountSnapshotGateway::memory(snapshots),
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
@@ -927,7 +861,7 @@ pub fn compose_blocking_account_application_for_segments(
         application,
         provider,
         async_account_streams: Vec::new(),
-        instrument_resolver,
+        instrument_resolver: AccountInstrumentResolver::default(),
     })
 }
 
@@ -1042,50 +976,6 @@ fn binance_product(product: AccountProduct) -> Result<BinanceConnectionDomain, S
         AccountProduct::CoinMFutures => Ok(BinanceConnectionDomain::CoinMFutures),
         AccountProduct::Options => Ok(BinanceConnectionDomain::Options),
         AccountProduct::Equity => Err("Binance account equity is not supported".into()),
-    }
-}
-
-pub fn compose_blocking_account(
-    options: &AccountOptions,
-) -> Result<Box<dyn AccountReadConnection + Send>, String> {
-    let provider = normalized_provider(&options.provider);
-    let product = account_product(options)?;
-    let key = options.api_key.expose_secret().to_owned();
-    let secret = options.secret.expose_secret().to_owned();
-    match provider.as_str() {
-        "binance" => match product {
-            AccountProduct::Spot => {
-                binance::blocking::spot_account(key, secret, options.base_url.clone())
-            }
-            AccountProduct::CrossMargin | AccountProduct::IsolatedMargin => {
-                binance::blocking::margin_account(
-                    binance_product(product)?,
-                    key,
-                    secret,
-                    options.base_url.clone(),
-                )
-            }
-            AccountProduct::UsdMFutures | AccountProduct::CoinMFutures => {
-                binance::blocking::futures_account(
-                    binance_product(product)?,
-                    key,
-                    secret,
-                    options.base_url.clone(),
-                )
-            }
-            AccountProduct::Options => {
-                binance::blocking::options_account(key, secret, options.base_url.clone())
-            }
-            AccountProduct::Equity => unreachable!(),
-        }
-        .map_err(|error| error.to_string()),
-        "ibkr" => ibkr::blocking::account(&ibkr::IbkrConnectionConfig {
-            host: options.host.clone(),
-            port: options.port,
-            client_id: options.client_id,
-        })
-        .map_err(|error| error.to_string()),
-        _ => Err(format!("unsupported account provider: {provider}")),
     }
 }
 
@@ -1277,18 +1167,22 @@ mod secret_tests {
     }
 
     #[test]
-    fn binance_account_rejects_segments_from_different_endpoint_families() {
-        let error = compose_binance_async_account_application(
+    fn binance_account_supports_segments_from_different_endpoint_families() {
+        let composition = compose_binance_async_account_application(
             &options(),
-            &[binding("spot"), binding("usd_m_futures")],
+            &[
+                binding("spot"),
+                binding("usd_m_futures"),
+                binding("funding"),
+            ],
             None,
             "ws://127.0.0.1:1/ws-api/v3",
             None,
             "test-egress",
         )
-        .err()
-        .expect("mixed endpoint families must fail");
-        assert!(error.contains("one REST endpoint family"));
+        .expect("one Account must compose all configured Binance segments");
+        assert_eq!(composition.application.async_source_count(), 3);
+        assert_eq!(composition.async_account_streams.len(), 2);
     }
 
     #[test]

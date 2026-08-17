@@ -5,7 +5,7 @@ use kairos_execution::application::{
 };
 use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewReader};
 use kairos_primitives::{
-    AccountId, ExecutionAccessId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
+    AccountId, ExecutionRouteId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
 };
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::workspace::Workspace;
@@ -195,7 +195,7 @@ fn read_current_execution_view(
             "segment_key": value.segment_key(),
             "instrument_id": value.instrument_id(),
             "market_id": value.market_id(),
-            "execution_access_id": value.execution_access_id(),
+            "execution_route_id": value.execution_route_id(),
             "remote_order_id": value.remote_order_id(),
             "side": value.side().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
             "order_type": value.order_type().variant_name().unwrap_or("UNSPECIFIED").to_ascii_lowercase(),
@@ -337,6 +337,36 @@ async fn execute_control_command(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let client = kairos_workspace::RestControlClient::new(socket);
     let (method, path, body) = match command {
+        Command::Routes {
+            account_id,
+            segment_key,
+            instrument_id,
+            market_id,
+            order_type,
+            option,
+        } => {
+            let query = [
+                ("account_id", account_id),
+                ("segment_key", segment_key),
+                ("instrument_id", instrument_id),
+                ("market_id", market_id),
+                ("order_type", order_type),
+                ("options", (!option.is_empty()).then(|| option.join(","))),
+            ]
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|value| format!("{key}={value}")))
+            .collect::<Vec<_>>()
+            .join("&");
+            (
+                "GET",
+                if query.is_empty() {
+                    "/v1/routes".into()
+                } else {
+                    format!("/v1/routes?{query}")
+                },
+                None,
+            )
+        }
         Command::Reconcile { order_id } => (
             "POST",
             "/v1/reconciliation".into(),
@@ -369,6 +399,10 @@ async fn execute_control_command(
                     .transpose()?,
                 occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
                 execution_market_id: None,
+                reported_provider_id: None,
+                provider_product: None,
+                provider_symbol: None,
+                remote_order_id: None,
             };
             ("POST", "/v1/fill".into(), Some(serde_json::to_vec(&request)?))
         }
@@ -408,6 +442,21 @@ async fn execute_control_command(
 #[derive(Clone, Debug, Subcommand)]
 enum Command {
     Snapshot,
+    /// List current Execution-owned order submission route candidates.
+    Routes {
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long)]
+        segment_key: Option<String>,
+        #[arg(long)]
+        instrument_id: Option<String>,
+        #[arg(long)]
+        market_id: Option<String>,
+        #[arg(long)]
+        order_type: Option<String>,
+        #[arg(long = "option")]
+        option: Vec<String>,
+    },
     #[command(alias = "list")]
     Orders {
         #[arg(long)]
@@ -514,7 +563,7 @@ struct SubmitArgs {
     #[arg(long)]
     market_id: Option<String>,
     #[arg(long)]
-    execution_access_id: String,
+    execution_route_id: String,
     #[arg(long)]
     dry_run: bool,
     #[arg(long)]
@@ -562,7 +611,7 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
         segment_key: SegmentKey::new(args.segment_key)?,
         instrument_id: InstrumentId::new(args.instrument_id)?,
         market_id: args.market_id.map(MarketId::new).transpose()?,
-        execution_access_id: Some(ExecutionAccessId::new(args.execution_access_id)?),
+        execution_route_id: Some(ExecutionRouteId::new(args.execution_route_id)?),
         side: parse_side(&args.side)?,
         order_type: parse_order_type(&args.order_type)?,
         quantity: args.quantity.parse()?,

@@ -11,6 +11,7 @@ class SubscriptionRequest:
 
     subject: str
     selectors: tuple[str, ...] = ()
+    source_id: str | None = None
     exchange: str | None = None
     market_type: str | None = None
     asset_type: str | None = None
@@ -23,5 +24,7 @@ class SubscriptionRequest:
             raise ValueError("subscription subject is required")
         if any(not selector.strip() for selector in self.selectors):
             raise ValueError("subscription selectors must be non-empty strings")
+        if self.source_id is not None and not self.source_id.strip():
+            raise ValueError("subscription source_id must be a non-empty string")
         object.__setattr__(self, "selectors", tuple(self.selectors))
         object.__setattr__(self, "params", MappingProxyType(dict(self.params)))

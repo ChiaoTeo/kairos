@@ -40,7 +40,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let health = instance.health("risk")?;
     let state = instance.state(&["risk", "risk-state.json"])?;
     let snapshot = instance.service_snapshot("risk")?;
-    let normalized_path = instance.root().join("normalized-config.json");
+    let normalized_path = instance.normalized_config()?;
     let policies = load_risk_policies(&workspace, &normalized_path, &args.launch_mode)?;
     let application =
         compose_risk_application(format!("risk:{}", args.instance_id), policies, Some(state))?;

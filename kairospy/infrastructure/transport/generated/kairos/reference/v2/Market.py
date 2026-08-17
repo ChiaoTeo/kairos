@@ -32,71 +32,64 @@ class Market(object):
         return None
 
     # Market
-    def MarketKey(self):
+    def InstrumentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def InstrumentId(self):
+    def ListingId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def ListingId(self):
+    def ExchangeId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def ExchangeId(self):
+    def InstrumentKind(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def MarketType(self):
+    def VenueSymbol(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def SourceSymbol(self):
+    def BaseAssetId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def BaseAssetId(self):
+    def QuoteAssetId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
-    def QuoteAssetId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
-        if o != 0:
-            return self._tab.String(o + self._tab.Pos)
-        return None
-
-    # Market
     def Status(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 0
 
     # Market
     def PriceTick(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -107,7 +100,7 @@ class Market(object):
 
     # Market
     def QuantityTick(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -118,21 +111,21 @@ class Market(object):
 
     # Market
     def PricePrecision(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Int32Flags, o + self._tab.Pos)
         return 0
 
     # Market
     def QuantityPrecision(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Int32Flags, o + self._tab.Pos)
         return 0
 
     # Market
     def MinimumQuantity(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -143,7 +136,7 @@ class Market(object):
 
     # Market
     def MinimumNotional(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -154,7 +147,7 @@ class Market(object):
 
     # Market
     def ContractSize(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -165,34 +158,34 @@ class Market(object):
 
     # Market
     def EffectiveFromUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Market
     def EffectiveToUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(38))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # Market
     def AssetType(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(40))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Market
     def UnderlyingInstrumentId(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(44))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(42))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def MarketStart(builder):
-    builder.StartObject(21)
+    builder.StartObject(20)
 
 def Start(builder):
     MarketStart(builder)
@@ -203,122 +196,116 @@ def MarketAddMarketId(builder, marketId):
 def AddMarketId(builder, marketId):
     MarketAddMarketId(builder, marketId)
 
-def MarketAddMarketKey(builder, marketKey):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(marketKey), 0)
-
-def AddMarketKey(builder, marketKey):
-    MarketAddMarketKey(builder, marketKey)
-
 def MarketAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
 
 def AddInstrumentId(builder, instrumentId):
     MarketAddInstrumentId(builder, instrumentId)
 
 def MarketAddListingId(builder, listingId):
-    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(listingId), 0)
 
 def AddListingId(builder, listingId):
     MarketAddListingId(builder, listingId)
 
 def MarketAddExchangeId(builder, exchangeId):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeId), 0)
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(exchangeId), 0)
 
 def AddExchangeId(builder, exchangeId):
     MarketAddExchangeId(builder, exchangeId)
 
-def MarketAddMarketType(builder, marketType):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(marketType), 0)
+def MarketAddInstrumentKind(builder, instrumentKind):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentKind), 0)
 
-def AddMarketType(builder, marketType):
-    MarketAddMarketType(builder, marketType)
+def AddInstrumentKind(builder, instrumentKind):
+    MarketAddInstrumentKind(builder, instrumentKind)
 
-def MarketAddSourceSymbol(builder, sourceSymbol):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(sourceSymbol), 0)
+def MarketAddVenueSymbol(builder, venueSymbol):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(venueSymbol), 0)
 
-def AddSourceSymbol(builder, sourceSymbol):
-    MarketAddSourceSymbol(builder, sourceSymbol)
+def AddVenueSymbol(builder, venueSymbol):
+    MarketAddVenueSymbol(builder, venueSymbol)
 
 def MarketAddBaseAssetId(builder, baseAssetId):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(baseAssetId), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(baseAssetId), 0)
 
 def AddBaseAssetId(builder, baseAssetId):
     MarketAddBaseAssetId(builder, baseAssetId)
 
 def MarketAddQuoteAssetId(builder, quoteAssetId):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(quoteAssetId), 0)
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(quoteAssetId), 0)
 
 def AddQuoteAssetId(builder, quoteAssetId):
     MarketAddQuoteAssetId(builder, quoteAssetId)
 
 def MarketAddStatus(builder, status):
-    builder.PrependUint8Slot(9, status, 0)
+    builder.PrependUint8Slot(8, status, 0)
 
 def AddStatus(builder, status):
     MarketAddStatus(builder, status)
 
 def MarketAddPriceTick(builder, priceTick):
-    builder.PrependStructSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(priceTick), 0)
+    builder.PrependStructSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(priceTick), 0)
 
 def AddPriceTick(builder, priceTick):
     MarketAddPriceTick(builder, priceTick)
 
 def MarketAddQuantityTick(builder, quantityTick):
-    builder.PrependStructSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(quantityTick), 0)
+    builder.PrependStructSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(quantityTick), 0)
 
 def AddQuantityTick(builder, quantityTick):
     MarketAddQuantityTick(builder, quantityTick)
 
 def MarketAddPricePrecision(builder, pricePrecision):
-    builder.PrependInt32Slot(12, pricePrecision, 0)
+    builder.PrependInt32Slot(11, pricePrecision, 0)
 
 def AddPricePrecision(builder, pricePrecision):
     MarketAddPricePrecision(builder, pricePrecision)
 
 def MarketAddQuantityPrecision(builder, quantityPrecision):
-    builder.PrependInt32Slot(13, quantityPrecision, 0)
+    builder.PrependInt32Slot(12, quantityPrecision, 0)
 
 def AddQuantityPrecision(builder, quantityPrecision):
     MarketAddQuantityPrecision(builder, quantityPrecision)
 
 def MarketAddMinimumQuantity(builder, minimumQuantity):
-    builder.PrependStructSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(minimumQuantity), 0)
+    builder.PrependStructSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(minimumQuantity), 0)
 
 def AddMinimumQuantity(builder, minimumQuantity):
     MarketAddMinimumQuantity(builder, minimumQuantity)
 
 def MarketAddMinimumNotional(builder, minimumNotional):
-    builder.PrependStructSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(minimumNotional), 0)
+    builder.PrependStructSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(minimumNotional), 0)
 
 def AddMinimumNotional(builder, minimumNotional):
     MarketAddMinimumNotional(builder, minimumNotional)
 
 def MarketAddContractSize(builder, contractSize):
-    builder.PrependStructSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(contractSize), 0)
+    builder.PrependStructSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(contractSize), 0)
 
 def AddContractSize(builder, contractSize):
     MarketAddContractSize(builder, contractSize)
 
 def MarketAddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos):
-    builder.PrependUint64Slot(17, effectiveFromUnixNanos, 0)
+    builder.PrependUint64Slot(16, effectiveFromUnixNanos, 0)
 
 def AddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos):
     MarketAddEffectiveFromUnixNanos(builder, effectiveFromUnixNanos)
 
 def MarketAddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
-    builder.PrependUint64Slot(18, effectiveToUnixNanos, 0)
+    builder.PrependUint64Slot(17, effectiveToUnixNanos, 0)
 
 def AddEffectiveToUnixNanos(builder, effectiveToUnixNanos):
     MarketAddEffectiveToUnixNanos(builder, effectiveToUnixNanos)
 
 def MarketAddAssetType(builder, assetType):
-    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(assetType), 0)
+    builder.PrependUOffsetTRelativeSlot(18, flatbuffers.number_types.UOffsetTFlags.py_type(assetType), 0)
 
 def AddAssetType(builder, assetType):
     MarketAddAssetType(builder, assetType)
 
 def MarketAddUnderlyingInstrumentId(builder, underlyingInstrumentId):
-    builder.PrependUOffsetTRelativeSlot(20, flatbuffers.number_types.UOffsetTFlags.py_type(underlyingInstrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(19, flatbuffers.number_types.UOffsetTFlags.py_type(underlyingInstrumentId), 0)
 
 def AddUnderlyingInstrumentId(builder, underlyingInstrumentId):
     MarketAddUnderlyingInstrumentId(builder, underlyingInstrumentId)

@@ -1,9 +1,8 @@
 # Kairos Reference
 
 Reference is Kairos's authority for canonical tradable identity, effective
-reference relationships, provider access addresses, and their lifecycle. It
-maps Integration-owned provider facts into stable assets, instruments,
-listings, markets, market-data accesses, and execution accesses.
+reference relationships, and their lifecycle. It maps Integration-owned
+provider facts into stable assets, instruments, listings, and markets.
 
 Reference does not own provider networking, market observations, execution
 routing policy, account facts, workspace resources, or research datasets.
@@ -98,14 +97,12 @@ uv run kairospy reference markets --exchange binance --symbol AAPLUSDT --workspa
 
 # Real US equity exposed through Binance Stocks Trading
 uv run kairospy reference markets --exchange binance --symbol AAPL --workspace . --format json
-uv run kairospy reference execution-accesses --provider binance --product-family equity \
-  --provider-symbol AAPL --active-only --workspace . --format json
 ```
 
 The Stocks Trading endpoint does not return the primary listing venue. Reference
-therefore identifies the canonical instrument as a US equity and records Binance
-as the execution provider without asserting that every returned symbol is listed
-on Nasdaq.
+therefore identifies the canonical instrument as a US equity without asserting
+that every returned symbol is listed on Nasdaq. Whether Kairos can observe or
+execute it is queried from the running Market or Execution module, respectively.
 
 If no Aeron consumer is running, refresh remains committed in SQLite. Every
 lifecycle publication is encoded as typed FlatBuffers and stored in the same
@@ -113,11 +110,10 @@ transaction as its exact catalog revision. The publisher retries those bytes
 until acknowledgement; it never reconstructs an old event from a newer current
 row.
 
-Current business state is read through the contract-owned, read-only SQLite
-client as three bounded typed projections with one transaction-consistent
-generation/event-sequence watermark: Market receives active markets,
-instruments, and market-data accesses; Execution receives active markets and
-execution accesses; Account receives only the identity facts needed to map
+Current canonical state is read through the contract-owned, read-only SQLite
+client with one transaction-consistent generation/event-sequence watermark.
+Market and Execution combine those identities with their configured Integration
+capabilities at runtime; Account receives only the identity facts needed to map
 provider observations. Business modules never issue Reference SQL or depend on
 its table names and persistence records.
 

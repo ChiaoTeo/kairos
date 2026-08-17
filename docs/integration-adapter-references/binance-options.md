@@ -1,4 +1,4 @@
-# Binance Options execution adapter reference
+# Binance Options execution and Account adapter reference
 
 ## Sources inspected
 
@@ -43,6 +43,11 @@ transport runtime, reconnect machinery, and public API shape were not adopted.
 - Stop and stop-limit requests are explicitly unsupported because the current
   business request has no trigger-price field; they are not silently changed
   to market or limit orders.
+- Account production composition uses the native async Options account snapshot
+  and private-event stream. Its former blocking snapshot synchronization path
+  has been removed.
+- Account, rather than Integration, owns bootstrap barriers, per-segment
+  recovery/resync, freshness, current-view replacement, and business events.
 
 ## Remaining exit criteria
 
@@ -50,3 +55,6 @@ transport runtime, reconnect machinery, and public API shape were not adopted.
 - Validate permissions, listen-key lifecycle, order acknowledgement/fills,
   reconciliation, and delivery uncertainty against a real Binance Options
   account or supported test environment.
+
+Those open items are opt-in provider smoke/fault coverage. Focused tests cover
+the Account async snapshot/stream wiring and isolation from other segments.

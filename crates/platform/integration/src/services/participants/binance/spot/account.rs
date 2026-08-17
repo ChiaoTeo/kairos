@@ -1008,7 +1008,6 @@ mod tests {
             segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
             market_id: kairos_primitives::MarketId::new("market:binance:BTCUSDT").unwrap(),
             source_symbol: kairos_primitives::Symbol::new("BTCUSDT").unwrap(),
-            market_data_access_id: None,
         };
         let result = normalize_market_profile(
             &request,

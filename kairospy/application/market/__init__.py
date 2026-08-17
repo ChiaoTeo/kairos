@@ -23,7 +23,16 @@ from .events import (
     QuoteEvent,
     TradeEvent,
 )
-from .models import AggressorSide, Bar, MarketSnapshot, OptionGreeks, Quote, Trade
+from .models import (
+    AggressorSide,
+    Bar,
+    MarketSnapshot,
+    ObservationScope,
+    ObservationScopeKind,
+    OptionGreeks,
+    Quote,
+    Trade,
+)
 from .requests import SubscriptionRequest
 
 

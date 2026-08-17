@@ -16,6 +16,7 @@ class ComponentEndpoint:
     component: str
     socket: Path
     snapshot: Path | None = None
+    required_segments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,10 +86,17 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
     snapshot = value.get("snapshot")
     if snapshot is not None and (not isinstance(snapshot, str) or not snapshot.strip()):
         raise RuntimeError(f"{component} endpoint has an invalid snapshot")
+    required_segments = value.get("required_segments", [])
+    if not isinstance(required_segments, list) or any(
+        not isinstance(segment, str) or not segment.strip()
+        for segment in required_segments
+    ):
+        raise RuntimeError(f"{component} endpoint has invalid required_segments")
     return ComponentEndpoint(
         component,
         Path(socket),
         None if snapshot is None else Path(snapshot),
+        tuple(dict.fromkeys(segment.strip() for segment in required_segments)),
     )
 
 
