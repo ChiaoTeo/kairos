@@ -1,3 +1,4 @@
+from .admission import IntentAdmissionEvidence
 from .application import AccountExecution, ExecutionApplication
 from .config import ExecutionPolicy
 from .errors import (
@@ -54,6 +55,7 @@ __all__ = [
     "ArbitrageLegRequest",
     "DeliveryCertainty",
     "ExecutionApplication",
+    "IntentAdmissionEvidence",
     "ExecutionAccountNotEnabledError",
     "ExecutionBacktestResult",
     "ExecutionPolicy",

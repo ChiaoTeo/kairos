@@ -140,14 +140,15 @@ fn collection_market_descriptor(
 
 fn reference_endpoint(
     workspace: &Workspace,
+    aeron_dir: Option<&std::path::Path>,
 ) -> Result<kairos_reference_contract::ReferenceEndpoint, MarketStartupError> {
     Ok(kairos_reference_contract::ReferenceEndpoint {
         database: workspace
             .child(&["state", "reference", "reference.sqlite"])
             .map_err(MarketStartupError::new)?,
         actor_id: "reference-actor".into(),
-        events: kairos_transport::AeronEndpoint::from_parts(
-            std::env::var("AERON_DIR").ok().as_deref(),
+        events: kairos_transport::AeronEndpoint::new(
+            aeron_dir.map(std::path::Path::to_path_buf),
             kairos_transport::DEFAULT_CHANNEL,
             kairos_transport::stream_ids::REFERENCE_CHANGES,
         )
@@ -213,16 +214,12 @@ pub async fn build_market_host(
         .as_ref()
         .map(|value| InstanceIdentity::new(workspace.id(), value.launch_id(), value.instance_id()))
         .unwrap_or_default();
-    let snapshot_path = instance
+    let view_root = instance
         .as_ref()
-        .map(|value| value.service_snapshot("market"))
+        .map(|value| value.snapshot(&[]))
         .transpose()
         .map_err(MarketStartupError::new)?
-        .unwrap_or(
-            workspace
-                .service_snapshot("market")
-                .map_err(MarketStartupError::new)?,
-        );
+        .unwrap_or_else(|| workspace.paths().snapshots_root());
     let socket_path = instance
         .as_ref()
         .map(|value| value.socket("market"))
@@ -256,7 +253,8 @@ pub async fn build_market_host(
     };
     let reference_client = (profile.scope != MarketRuntimeScope::Replay)
         .then(|| {
-            reference_endpoint(&workspace).map(kairos_reference_contract::ReferenceClient::connect)
+            reference_endpoint(&workspace, request.aeron_dir.as_deref())
+                .map(kairos_reference_contract::ReferenceClient::connect)
         })
         .transpose()?;
     let initial_reference_snapshot = reference_client
@@ -264,9 +262,7 @@ pub async fn build_market_host(
         .map(read_reference_snapshot)
         .transpose()?;
 
-    if let Some(parent) = snapshot_path.parent() {
-        std::fs::create_dir_all(parent).map_err(MarketStartupError::new)?;
-    }
+    std::fs::create_dir_all(&view_root).map_err(MarketStartupError::new)?;
     let replay_checkpoint_path = if profile.scope == MarketRuntimeScope::Replay {
         instance
             .as_ref()
@@ -436,10 +432,7 @@ pub async fn build_market_host(
             profile.freshness_check_interval,
             profile.freshness_max_age,
             profile.shutdown_timeout,
-            snapshot_path
-                .parent()
-                .unwrap_or(&snapshot_path)
-                .join("market-shared"),
+            view_root,
             VIEW_SLOT_SIZE,
             identity,
             source_plans,
@@ -447,14 +440,16 @@ pub async fn build_market_host(
             reference_projection,
         )
         .map_err(MarketStartupError::new)?;
-    let publisher = kairos_transport::AeronBytePublisher::connect(
-        std::env::var("AERON_DIR").ok().as_deref(),
+    let event_endpoint = kairos_market_contract::AeronEndpoint::new(
+        request.aeron_dir,
         kairos_transport::DEFAULT_CHANNEL,
         kairos_transport::stream_ids::MARKET_EVENTS,
     )
     .map_err(MarketStartupError::new)?;
+    let publisher = kairos_market_contract::MarketEventPublisher::connect(&event_endpoint)
+        .map_err(MarketStartupError::new)?;
     system
-        .aeron_publishers
+        .market_event_publishers
         .ensure_with("market-events".to_owned(), 1, || publisher)
         .map_err(MarketStartupError::new)?;
     let _ = event_socket_path;

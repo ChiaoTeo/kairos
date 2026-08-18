@@ -149,9 +149,7 @@ def test_instance_endpoints_validate_identity_and_accounts(tmp_path: Path) -> No
                 "accounts": {
                     "main": {
                         "socket": str(instance.socket("account-main")),
-                        "snapshot": str(
-                            instance.snapshot("account-main", "account-main.snapshot")
-                        ),
+                        "view_root": str(instance.snapshot()),
                     }
                 },
             }
@@ -164,9 +162,7 @@ def test_instance_endpoints_validate_identity_and_accounts(tmp_path: Path) -> No
     assert endpoints.accounts[AccountId("main")].socket == instance.socket(
         "account-main"
     )
-    assert endpoints.accounts[AccountId("main")].snapshot == instance.snapshot(
-        "account-main", "account-main.snapshot"
-    )
+    assert endpoints.accounts[AccountId("main")].view_root == instance.snapshot()
     assert endpoints.risk is not None
     assert endpoints.execution is not None
 

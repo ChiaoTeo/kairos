@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use kairos_conflux::{
     ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, ExternalParticipantEvent,
-    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, RestContract, SystemEvent,
+    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, ResourceOperationError,
+    RestContract, SystemEvent,
 };
 use kairos_market_contract::{
     MarketCommandStatus, MarketControlError, MarketDataSource, MarketDataSourcesResponse,
@@ -354,6 +355,7 @@ impl ConfluxActor for MarketApplication {
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 if let Some(source_id) = managed_source_id_from_system_event(&source) {
                     self.mark_managed_source_ready(source_id)?;
+                    self.sync_all_source_subscriptions(context).await?;
                 }
                 None
             }
@@ -689,14 +691,18 @@ impl MarketApplication {
         }
         let actor_id = self.current_view().actor_id.to_string();
         let event_key = "market-events".to_owned();
-        if let Some(publisher) = context.system().aeron_publishers.get_mut(&event_key) {
-            for (sequence, event) in &events {
-                let bytes = encode_event(&actor_id, &self.conflux.identity, *sequence, event)
-                    .map_err(MarketError::Recovery)?;
-                publisher
-                    .resource_mut()
-                    .publish(&bytes)
-                    .map_err(|error| MarketError::Recovery(error.to_string()))?;
+        for (sequence, event) in &events {
+            let bytes = encode_event(&actor_id, &self.conflux.identity, *sequence, event)
+                .map_err(MarketError::Recovery)?;
+            match context
+                .system()
+                .market_event_publishers
+                .try_with(&event_key, |publisher| publisher.publish(&bytes))
+            {
+                Ok(()) | Err(ResourceOperationError::NotFound) => {}
+                Err(ResourceOperationError::Operation(error)) => {
+                    return Err(MarketError::Recovery(error.to_string()))
+                }
             }
         }
         for change in &changes {
@@ -727,20 +733,26 @@ impl MarketApplication {
             context
                 .system()
                 .market_view_publishers
-                .get_mut(&resource_key)
-                .expect("Market view publisher was inserted")
-                .resource_mut()
-                .publish(
-                    SnapshotEnvelopeMetadata {
-                        resource_epoch: 1,
-                        producer_incarnation: self.conflux.producer_incarnation,
-                        generation: change.sequence.get(),
-                        applied_event_sequence: change.sequence.get(),
-                        published_at_unix_nanos: now_unix_nanos(),
-                    },
-                    &encoded.bytes,
-                )
-                .map_err(|error| MarketError::Recovery(error.to_string()))?;
+                .try_with(&resource_key, |publisher| {
+                    publisher.publish(
+                        SnapshotEnvelopeMetadata {
+                            resource_epoch: 1,
+                            producer_incarnation: self.conflux.producer_incarnation,
+                            generation: change.sequence.get(),
+                            applied_event_sequence: change.sequence.get(),
+                            published_at_unix_nanos: now_unix_nanos(),
+                        },
+                        &encoded.bytes,
+                    )
+                })
+                .map_err(|error| match error {
+                    ResourceOperationError::NotFound => {
+                        MarketError::Recovery("Market view publisher disappeared".into())
+                    }
+                    ResourceOperationError::Operation(error) => {
+                        MarketError::Recovery(error.to_string())
+                    }
+                })?;
         }
         Ok(())
     }
@@ -898,13 +910,19 @@ impl MarketApplication {
                 } else {
                     let request = subscription_request(&market)
                         .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
-                    let id = managed_subscribe(
+                    let id = match managed_subscribe(
                         context,
                         &ConnectionKey::new(source_id.to_string()).expect("valid source id"),
                         request,
                     )
                     .await
-                    .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+                    {
+                        Ok(id) => id,
+                        Err(IntegrationError::NotReady) => continue,
+                        Err(error) => {
+                            return Err(MarketError::SourceUnavailable(error.to_string()))
+                        }
+                    };
                     ProviderSubscriptionId::new(id.0.to_string()).map_err(MarketError::Invalid)?
                 };
                 self.actor
@@ -1026,7 +1044,11 @@ async fn managed_subscribe(
     macro_rules! try_family {
         ($field:ident) => {{
             let mut connections = context.connections();
-            if let Ok(connection) = connections.$field.get(key) {
+            if connections.$field.keys().contains(key) {
+                let connection = connections
+                    .$field
+                    .get(key)
+                    .map_err(|_| IntegrationError::NotReady)?;
                 return confirmed_subscription(connection.subscribe(request).await?);
             }
         }};
@@ -1058,7 +1080,11 @@ async fn managed_unsubscribe(
     macro_rules! try_family {
         ($field:ident) => {{
             let mut connections = context.connections();
-            if let Ok(connection) = connections.$field.get(key) {
+            if connections.$field.keys().contains(key) {
+                let connection = connections
+                    .$field
+                    .get(key)
+                    .map_err(|_| IntegrationError::NotReady)?;
                 return confirmed_unsubscription(connection.unsubscribe(subscription).await?);
             }
         }};

@@ -18,29 +18,27 @@ TYPED_FIELDS = {
     ROOT / "crates" / "modules" / "reference" / "src" / "domain" / "entities.rs": [
         r"pub asset_id: AssetId",
         r"pub symbol: Symbol",
-        r"pub source_symbol: Symbol",
         r"pub exchange_symbol: Symbol",
         r"pub issuer_id: Option<IssuerId>",
-        r"pub provider_symbol: ProviderSymbol",
         r"pub effective_from_unix_nanos: UnixNanos",
         r"pub event_time_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "platform" / "integration" / "src" / "application" / "capabilities" / "execution.rs": [
+    ROOT / "crates" / "platform" / "integration" / "src" / "domain" / "execution.rs": [
         r"pub symbol: Option<Symbol>",
         r"pub order_id: Option<OrderId>",
-        r"pub since_unix_millis: Option<UnixNanos>",
-        r"pub occurred_at_unix_millis: Option<UnixNanos>",
+        r"pub since_unix_nanos: Option<UnixNanos>",
+        r"pub occurred_at_unix_nanos: Option<UnixNanos>",
         r"pub order_id: OrderId",
         r"pub symbol: Symbol",
         r"pub execution_id: Option<FillId>",
         r"pub occurred_at_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "platform" / "integration" / "src" / "application" / "capabilities" / "market.rs": [
-        r"pub symbol: Symbol",
+    ROOT / "crates" / "platform" / "integration" / "src" / "domain" / "market.rs": [
+        r"pub symbol: ParticipantSymbol",
         r"pub start_time_unix_nanos: UnixNanos",
         r"pub end_time_unix_nanos: UnixNanos",
     ],
-    ROOT / "crates" / "platform" / "integration" / "src" / "application" / "capabilities" / "account.rs": [
+    ROOT / "crates" / "platform" / "integration" / "src" / "domain" / "account.rs": [
         r"pub account_id: AccountId",
         r"pub segment_key: SegmentKey",
         r"pub market_id: MarketId",
@@ -53,7 +51,7 @@ TYPED_FIELDS = {
         r"pub sequence_from: Option<Sequence>",
         r"pub event_time_from_unix_nanos: Option<UnixNanos>",
         r"pub market_id: Option<MarketId>",
-        r"pub source_symbol: Option<Symbol>",
+        r"pub venue_symbol: Option<Symbol>",
     ],
     ROOT / "crates" / "modules" / "market" / "src" / "domain" / "view" / "mod.rs": [
         r"pub generation: Generation",
@@ -176,6 +174,18 @@ FORBIDDEN_DOMAIN_PRIMITIVES = re.compile(
     r"(?:Option<|Vec<)?(?:String|u64|i64)"
 )
 
+FORBIDDEN_MODULE_CONTRACT_RESOURCE_BYPASSES = {
+    "SharedSnapshotWriter::create": "module bypasses its Contract mmap publisher",
+    "SharedSnapshotReader::open": "module bypasses its Contract mmap reader",
+    "AeronBytePublisher::connect": "module bypasses its Contract Aeron publisher",
+    '.join("execution-views")': "module derives an ad-hoc Execution view directory",
+    '.join("views")': "module derives an ad-hoc view directory",
+    ".aeron_publishers": "module accesses Conflux raw Aeron publishers",
+    ".mmap_writers": "module accesses Conflux raw mmap writers",
+    ".mmap_readers": "module accesses Conflux raw mmap readers",
+    'std::env::var("AERON_DIR")': "module resolves an Aeron endpoint outside composition input",
+}
+
 
 def rust_sources() -> list[Path]:
     paths = list(MODULES.glob("*/src/**/*.rs"))
@@ -203,6 +213,10 @@ def main() -> int:
         is_test = path.name.endswith("_tests.rs") or path.name == "tests.rs" or "tests" in path.parts
         if re.search(r"use\s+kairos_[a-z0-9_]+::services", text) and not is_test:
             failures.append(f"cross-module private services import in production file: {path}")
+        if not is_test:
+            for pattern, reason in FORBIDDEN_MODULE_CONTRACT_RESOURCE_BYPASSES.items():
+                if pattern in text:
+                    failures.append(f"{reason}: {path} / {pattern}")
         if "domain" in path.parts:
             for match in FORBIDDEN_DOMAIN_PRIMITIVES.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1

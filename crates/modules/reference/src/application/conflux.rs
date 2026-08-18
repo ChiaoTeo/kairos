@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 
 use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, ResourceState, RestContract, SystemEvent,
+    ConfluxActor, ConfluxEvent, Context, Contract, ResourceOperationError, RestContract,
+    SystemEvent,
 };
 use kairos_reference_contract::{
     ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
@@ -289,22 +290,32 @@ impl ReferenceApplication {
         }
 
         let event_ids = {
-            let publishers = &mut context.system().aeron_publishers;
-            if publishers.is_empty() {
+            let publisher_keys = context
+                .system()
+                .reference_event_publishers
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            if publisher_keys.is_empty() {
                 return Err(control_error(ReferenceError::Publication(
                     "reference Aeron publisher is not configured".into(),
                 )));
             }
-            for (_, publisher) in publishers.iter_mut() {
+            for key in publisher_keys {
                 for publication in &publications {
-                    if let Err(error) = publisher.resource().publish(publication.payload()) {
-                        publisher.set_state(ResourceState::Degraded);
-                        return Err(control_error(ReferenceError::Publication(
-                            error.to_string(),
-                        )));
-                    }
+                    context
+                        .system()
+                        .reference_event_publishers
+                        .try_with(&key, |publisher| publisher.publish(publication.payload()))
+                        .map_err(|error| {
+                            control_error(ReferenceError::Publication(match error {
+                                ResourceOperationError::NotFound => {
+                                    "reference Aeron publisher disappeared".into()
+                                }
+                                ResourceOperationError::Operation(error) => error.to_string(),
+                            }))
+                        })?;
                 }
-                publisher.set_state(ResourceState::Ready);
             }
             publications
                 .iter()

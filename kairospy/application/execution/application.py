@@ -937,10 +937,11 @@ def _submission_status(value: Any) -> SubmissionStatus:
 
 
 def _certainty(value: Any) -> DeliveryCertainty:
+    status = _submission_status(value)
     return (
-        DeliveryCertainty.NOT_SENT
-        if _submission_status(value) is SubmissionStatus.REJECTED
-        else DeliveryCertainty.SENT
+        DeliveryCertainty.SENT
+        if status in {SubmissionStatus.ACCEPTED, SubmissionStatus.DUPLICATE}
+        else DeliveryCertainty.NOT_SENT
     )
 
 

@@ -20,7 +20,8 @@ impl RiskViewKey {
         if self.actor_id.trim().is_empty() {
             return Err(ContractError::Invalid("Risk view actor id is empty".into()));
         }
-        Ok(root.as_ref()
+        Ok(root
+            .as_ref()
             .join("risk")
             .join(component(&self.actor_id))
             .join("latest/current.snapshot"))

@@ -10,7 +10,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use kairos_account_contract::{
-    decode_account_current, AccountContractClient, DecimalValue as AccountDecimal, Health,
+    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader,
+    DecimalValue as AccountDecimal, Health,
 };
 use kairos_protocol::generated::kairos::{
     account::v_2::{AccountStatus, FreshnessState},
@@ -18,7 +19,6 @@ use kairos_protocol::generated::kairos::{
 };
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
 use kairos_risk_contract::{Health as RiskHealth, RiskControlClient};
-use kairos_transport::SharedSnapshotReader;
 
 #[derive(Clone)]
 pub(super) struct AccountProjection {
@@ -88,7 +88,7 @@ impl DependencyProjectionRuntime {
         let stop = Arc::new(AtomicBool::new(false));
         let mut workers = Vec::new();
         for (account_id, socket) in accounts {
-            let Some(snapshot) = account_snapshots.get(account_id).cloned() else {
+            let Some(view_root) = account_snapshots.get(account_id).cloned() else {
                 continue;
             };
             let account_id = account_id.clone();
@@ -106,7 +106,12 @@ impl DependencyProjectionRuntime {
                     }
                 };
                 let reader = loop {
-                    match SharedSnapshotReader::open(&snapshot) {
+                    let key = AccountViewKey::new(
+                        format!("account:{account_id}"),
+                        &account_id,
+                        AccountViewKind::Current,
+                    );
+                    match key.and_then(|key| AccountViewReader::open(&view_root, key)) {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
@@ -242,10 +247,17 @@ impl DependencyProjectionRuntime {
             let health = AccountContractClient::connect(socket)
                 .and_then(|client| client.health())
                 .map_err(|error| error.to_string())?;
-            let snapshot = snapshots
+            let view_root = snapshots
                 .get(account_id)
-                .ok_or_else(|| format!("account snapshot is not bound: {account_id}"))?;
-            let reader = SharedSnapshotReader::open(snapshot).map_err(|error| error.to_string())?;
+                .ok_or_else(|| format!("account view root is not bound: {account_id}"))?;
+            let key = AccountViewKey::new(
+                format!("account:{account_id}"),
+                account_id,
+                AccountViewKind::Current,
+            )
+            .map_err(|error| error.to_string())?;
+            let reader =
+                AccountViewReader::open(view_root, key).map_err(|error| error.to_string())?;
             let value = read_account_projection(&reader, account_id, health)?;
             self.state
                 .write()
@@ -366,14 +378,14 @@ pub(super) fn read_reference_projection(
 }
 
 pub(super) fn read_account_projection(
-    reader: &SharedSnapshotReader,
+    reader: &AccountViewReader,
     account_id: &str,
     health: Health,
 ) -> Result<AccountProjection, String> {
-    let frame = reader.read_payload().map_err(|error| error.to_string())?;
-    let view = decode_account_current(&frame.payload).map_err(|error| error.to_string())?;
+    let frame = reader.read().map_err(|error| error.to_string())?;
+    let view = frame.account_current().map_err(|error| error.to_string())?;
     let metadata = view.metadata();
-    if frame.generation != metadata.generation()
+    if frame.generation() != metadata.generation()
         || metadata.generation() != health.generation
         || metadata.applied_revision() != Some(health.event_sequence)
     {

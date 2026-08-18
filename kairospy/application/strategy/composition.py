@@ -7,6 +7,10 @@ from typing import Mapping
 from kairospy.application.account.composition import (
     build_strategy_access as build_account_access,
 )
+from kairospy.application.agent.composition import (
+    AgentProcessComposition,
+    compose_agent,
+)
 from kairospy.application.execution import ExecutionPolicy
 from kairospy.application.execution.composition import (
     build_strategy_access as build_execution_access,
@@ -48,6 +52,7 @@ class StrategyProcessComposition:
     application: StrategyApplication
     control: StrategyControlServer
     notifications: NotificationProcessComposition
+    agent: AgentProcessComposition
 
 
 def compose_strategy_process(
@@ -96,12 +101,12 @@ def compose_strategy_process(
     )
     reference = build_reference_access(workspace)
     account_snapshots = {
-        account_id: endpoint.snapshot
+        account_id: endpoint.view_root
         for account_id, endpoint in endpoints.accounts.items()
-        if endpoint.snapshot is not None
+        if endpoint.view_root is not None
     }
     if len(account_snapshots) != len(endpoints.accounts):
-        raise RuntimeError("Account endpoint manifest is missing a snapshot path")
+        raise RuntimeError("Account endpoint manifest is missing a view_root path")
     account = build_account_access(
         instance=instance,
         account_snapshots=account_snapshots,
@@ -110,6 +115,11 @@ def compose_strategy_process(
             for account_id, endpoint in endpoints.accounts.items()
             if endpoint.required_segments
         },
+    )
+    agent = compose_agent(
+        workspace=workspace,
+        instance=instance,
+        config=config.agent,
     )
     risk = build_risk_access(
         instance=instance,
@@ -130,6 +140,12 @@ def compose_strategy_process(
             allow_trading=config.allow_trading,
             max_order_notional=config.max_order_notional,
             require_limit_orders=config.require_limit_orders,
+        ),
+        decorate_commands=lambda commands, record_admission: agent.decorate_commands(
+            commands,
+            launch_id=launch_id,
+            account=account,
+            record_admission=record_admission,
         ),
     )
 
@@ -154,6 +170,9 @@ def compose_strategy_process(
     )
     if config.replay_start is not None:
         notifications.application.bind_event(config.replay_start)
+    lifecycle_routes = config.notifications.get("lifecycle_routes", ())
+    if not isinstance(lifecycle_routes, (list, tuple)):
+        raise ValueError("notifications.lifecycle_routes must be an array")
 
     application = StrategyApplication(
         entrypoint.strategy,
@@ -164,14 +183,12 @@ def compose_strategy_process(
         account=account,
         risk=risk,
         execution=execution,
+        agent=agent.application,
         notifications=notifications.application,
         decision_journal=StrategyDecisionJournal(
             instance.artifact("strategy-decisions.jsonl")
         ),
-        decision_notification_routes=tuple(
-            str(route)
-            for route in config.notifications.get("lifecycle_routes", ())
-        ),
+        decision_notification_routes=tuple(str(route) for route in lifecycle_routes),
         journal=StrategyLifecycleJournal(instance.lifecycle_journal()),
         state_path=instance.state("strategy", "state.json"),
         backtest=build_backtest_driver(
@@ -191,4 +208,5 @@ def compose_strategy_process(
             workspace.paths.launch_socket(mode, launch_id, instance_id),
         ),
         notifications,
+        agent,
     )

@@ -22,39 +22,6 @@ impl HyperliquidSource {
             connection: ConnectionRef::managed(key),
         }
     }
-
-    #[cfg(test)]
-    pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
-        Self::for_product(endpoint, HyperliquidProduct::Perpetual)
-    }
-
-    #[cfg(test)]
-    fn for_product(
-        endpoint: impl Into<String>,
-        product: HyperliquidProduct,
-    ) -> ReferenceResult<Self> {
-        let connection_key = match product {
-            HyperliquidProduct::Perpetual => "reference-hyperliquid-perpetual",
-            HyperliquidProduct::Spot => "reference-hyperliquid-spot",
-        };
-        let connection = HyperliquidInfoRestConnection::new(
-            kairos_conflux::ConnectionKey::new(connection_key).map_err(ReferenceError::Provider)?,
-            HyperliquidRestConfig {
-                environment: "public".into(),
-                endpoint: endpoint.into(),
-            },
-        )
-        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        let id = match product {
-            HyperliquidProduct::Perpetual => "hyperliquid-perpetual",
-            HyperliquidProduct::Spot => "hyperliquid-spot",
-        };
-        Ok(Self {
-            id: id.into(),
-            product,
-            connection: ConnectionRef::Owned(connection),
-        })
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -89,14 +56,6 @@ impl ReferenceSource for HyperliquidSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_spot_instruments()
                     .await
-            }
-            #[cfg(test)]
-            (ConnectionRef::Owned(connection), HyperliquidProduct::Perpetual) => {
-                connection.fetch_perpetual_instruments().await
-            }
-            #[cfg(test)]
-            (ConnectionRef::Owned(connection), HyperliquidProduct::Spot) => {
-                connection.fetch_spot_instruments().await
             }
         };
         let facts = facts.map_err(|error| ReferenceError::Provider(error.to_string()))?;

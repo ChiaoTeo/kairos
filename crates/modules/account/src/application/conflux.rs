@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use kairos_conflux::{
     AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, ExternalAccountEvent,
-    ExternalAccountEventEnvelope, ExternalParticipantEvent, RestContract, SystemEvent,
-    ResourceOperationError, TypedConnectionCollection,
+    ExternalAccountEventEnvelope, ExternalParticipantEvent, ResourceOperationError, RestContract,
+    SystemEvent, TypedConnectionCollection,
 };
 use kairos_primitives::SegmentKey;
 use kairos_protocol::InstanceIdentity;
@@ -610,8 +610,9 @@ impl AccountApplication {
         match context
             .system()
             .account_view_publishers
-            .try_with(&current_key, |publisher| publisher.publish(metadata, &bytes))
-        {
+            .try_with(&current_key, |publisher| {
+                publisher.publish(metadata, &bytes)
+            }) {
             Ok(()) | Err(ResourceOperationError::NotFound) => {}
             Err(ResourceOperationError::Operation(error)) => {
                 return Err(AccountError::Publication(error.to_string()))

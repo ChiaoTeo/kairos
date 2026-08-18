@@ -20,8 +20,7 @@ pub struct ExecutionHostConfig {
     pub reference_database: PathBuf,
     pub manifest_path: PathBuf,
     pub socket_path: PathBuf,
-    pub execution_snapshot_path: PathBuf,
-    pub intent_snapshot_path: PathBuf,
+    pub view_root: PathBuf,
     pub transport_identity: kairos_protocol::InstanceIdentity,
     pub source_id: String,
     pub simulated: bool,
@@ -90,11 +89,6 @@ pub fn build_execution_host(
     application.configure_live_trading(!config.simulated, config.confirm_live);
     application.recover_risk_reservations()?;
 
-    let view_root = config
-        .execution_snapshot_path
-        .parent()
-        .unwrap_or(&config.execution_snapshot_path)
-        .join("execution-views");
     let settlement = config
         .simulated
         .then(|| SimulatedAccountSettlement::from_manifest(&config.manifest_path))
@@ -103,7 +97,7 @@ pub fn build_execution_host(
         plans,
         config.writer_fences,
         config.transport_identity,
-        view_root,
+        config.view_root,
         4 * 1024 * 1024,
         ExecutionAudit::from(audit),
         settlement,
@@ -113,14 +107,11 @@ pub fn build_execution_host(
         config.aeron_channel.clone(),
         config.execution_events_stream_id,
     )?;
-    let publisher =
-        kairos_execution_contract::ExecutionEventPublisher::connect(&event_endpoint)?;
+    let publisher = kairos_execution_contract::ExecutionEventPublisher::connect(&event_endpoint)?;
     system
         .execution_event_publishers
         .ensure_with("execution-events".to_owned(), 1, || publisher)?;
 
-    // The typed Conflux views replace both legacy snapshot files. Keep these
-    // values consumed until every deployment manifest stops carrying them.
-    let _ = (config.intent_snapshot_path, config.source_id);
+    let _ = config.source_id;
     Ok(ExecutionHost::new(application, system, config.socket_path))
 }

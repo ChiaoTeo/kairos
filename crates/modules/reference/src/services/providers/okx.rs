@@ -19,29 +19,6 @@ impl OkxSource {
             connection: ConnectionRef::managed(key),
         }
     }
-
-    #[cfg(test)]
-    pub fn new(
-        id: impl Into<String>,
-        product: OkxProduct,
-        endpoint: impl Into<String>,
-    ) -> ReferenceResult<Self> {
-        let id = id.into();
-        let connection = OkxPublicRestConnection::new(
-            kairos_conflux::ConnectionKey::new(format!("reference-{id}"))
-                .map_err(ReferenceError::Provider)?,
-            OkxRestConfig {
-                environment: "public".into(),
-                endpoint: endpoint.into(),
-            },
-        )
-        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        Ok(Self {
-            id,
-            product,
-            connection: ConnectionRef::Owned(connection),
-        })
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -75,10 +52,6 @@ impl ReferenceSource for OkxSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments_by_type(instrument_type)
                     .await
-            }
-            #[cfg(test)]
-            ConnectionRef::Owned(connection) => {
-                connection.fetch_instruments_by_type(instrument_type).await
             }
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;

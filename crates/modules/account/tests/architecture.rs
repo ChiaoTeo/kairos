@@ -327,7 +327,7 @@ fn production_account_server_never_falls_back_to_blocking_provider_io() {
     assert!(server.contains("production Account requires a provider-native async source"));
     assert!(server.contains("process_lock(socket_name)"));
     assert!(server.contains("service_health(socket_name)"));
-    assert!(server.contains("service_snapshot(socket_name)"));
+    assert!(server.contains("instance.snapshot(&[])"));
 
     let composition =
         fs::read_to_string(root.join("composition/account.rs")).expect("read account composition");
@@ -360,10 +360,17 @@ fn binance_derivatives_account_streams_are_native_async_in_production_compositio
     assert!(native_binance.contains("AccountAsyncEventSource::BinanceCoinM"));
     assert!(native_binance.contains("AccountAsyncEventSource::BinanceOptions"));
     assert!(native_binance.contains("AccountAsyncEventSource::BinanceMargin"));
-    assert!(native_binance.contains("BinanceUsdMUserWebSocketConnection"));
-    assert!(native_binance.contains("BinanceCoinMUserWebSocketConnection"));
-    assert!(native_binance.contains("BinanceOptionsUserWebSocketConnection"));
-    assert!(native_binance.contains("BinanceMarginUserWebSocketConnection"));
+    let integration =
+        fs::read_to_string(root.join("services/integration.rs")).expect("read Account integration");
+    for collection in [
+        "binance_usdm_user_websocket",
+        "binance_coinm_user_websocket",
+        "binance_options_user_websocket",
+        "binance_margin_user_websocket",
+    ] {
+        assert!(integration.contains(collection), "missing {collection}");
+    }
+    assert!(!native_binance.contains("UserWebSocketConnection::new"));
     assert!(native_binance.contains("values.isolated_margin_symbol"));
     assert!(!native_binance.contains("market_id.split"));
     assert!(!native_binance.contains("blocking_futures_account_stream"));
@@ -392,8 +399,14 @@ fn ibkr_account_uses_explicit_virtual_query_and_stream_connections() {
         .nth(1)
         .and_then(|source| source.split("/// Inspect an account credential").next())
         .expect("IBKR native composition");
-    assert!(native.contains("IbkrAccountQueryConnection::new"));
-    assert!(native.contains("IbkrAccountStreamConnection::new"));
+    assert!(native.contains("AccountAsyncSnapshotConnection::Ibkr"));
+    assert!(native.contains("AccountAsyncEventSource::Ibkr"));
+    let integration =
+        fs::read_to_string(root.join("services/integration.rs")).expect("read Account integration");
+    assert!(integration.contains("connections.ibkr_account_query.create"));
+    assert!(integration.contains("connections.ibkr_account_stream.create"));
+    assert!(!native.contains("IbkrAccountQueryConnection::new"));
+    assert!(!native.contains("IbkrAccountStreamConnection::new"));
     assert!(native.contains("client_id: options.client_id.saturating_add(1)"));
     assert!(!native.contains("blocking::account"));
     assert!(!native.contains("spawn_blocking"));
@@ -499,7 +512,7 @@ fn account_cli_business_state_queries_read_typed_mmap_without_composing_an_appli
     .expect("read account cli");
 
     assert!(cli.contains("fn read_mmap_query("));
-    assert!(cli.contains("SharedSnapshotReader::open(snapshot_path)"));
+    assert!(cli.contains("AccountViewReader::open(view_root, key)"));
     assert!(cli.contains("AccountViewKind::ObservedOrders"));
     assert!(cli.contains("if is_mmap_query(&command)"));
     for forbidden in [

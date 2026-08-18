@@ -62,7 +62,7 @@ use kairos_risk_contract::{
     MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskClient, RiskEventStream, RiskViewReader,
 };
 use kairos_transport::{AeronBytePublisher, SharedSnapshotReader, SharedSnapshotWriter};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -70,8 +70,8 @@ use thiserror::Error;
 use tokio::time::Instant;
 
 use crate::{
-    IntegrationEvent, ManagedClients, ManagedConnectionIdentity, ManagedConnections,
-    NamedResources, ResourceState, SystemEvent,
+    resource::ManagedLifecycleOperation, IntegrationEvent, ManagedClients,
+    ManagedConnectionIdentity, ManagedConnections, NamedResources, ResourceState, SystemEvent,
 };
 
 pub(crate) enum ConnectionDriverOutput {
@@ -97,6 +97,11 @@ pub(crate) enum ConnectionDriverOutput {
         client: String,
         frame: kairos_risk_contract::RiskEventFrame,
     },
+    LifecycleStopped {
+        collection: &'static str,
+        key: String,
+        result: Result<(), String>,
+    },
 }
 
 pub(crate) struct ConnectionDriverState {
@@ -105,6 +110,8 @@ pub(crate) struct ConnectionDriverState {
     ready: VecDeque<(String, ConnectionDriverOutput)>,
     occupied: HashSet<String>,
     maintenance_in_progress: HashSet<String>,
+    lifecycle_retry_at: HashMap<String, Instant>,
+    lifecycle_attempts: HashMap<String, u32>,
 }
 
 struct SystemTimer {
@@ -120,6 +127,8 @@ impl ConnectionDriverState {
             ready: VecDeque::new(),
             occupied: HashSet::new(),
             maintenance_in_progress: HashSet::new(),
+            lifecycle_retry_at: HashMap::new(),
+            lifecycle_attempts: HashMap::new(),
         }
     }
 
@@ -134,9 +143,136 @@ impl ConnectionDriverState {
         self.occupied.remove(&source);
         Some(output)
     }
+
+    fn retry_due(&self, source: &str, now: Instant) -> bool {
+        self.lifecycle_retry_at
+            .get(source)
+            .is_some_and(|deadline| *deadline <= now)
+    }
+
+    fn schedule_retry(
+        &mut self,
+        source: &str,
+        now: Instant,
+        policy: crate::RecoveryPolicy,
+    ) -> bool {
+        let attempt = self
+            .lifecycle_attempts
+            .get(source)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1);
+        if policy
+            .maximum_attempts
+            .is_some_and(|maximum| attempt > maximum)
+        {
+            self.lifecycle_retry_at.remove(source);
+            return false;
+        }
+        self.lifecycle_attempts.insert(source.to_owned(), attempt);
+        let multiplier = 1_u32 << attempt.saturating_sub(1).min(31);
+        let delay = policy
+            .initial_backoff
+            .saturating_mul(multiplier)
+            .min(policy.maximum_backoff);
+        self.lifecycle_retry_at
+            .insert(source.to_owned(), now + delay);
+        true
+    }
+
+    fn clear_retry(&mut self, source: &str) {
+        self.lifecycle_retry_at.remove(source);
+        self.lifecycle_attempts.remove(source);
+    }
+
+    pub(crate) fn purge_integration_identity(&mut self, identity: &ManagedConnectionIdentity) {
+        self.ready.retain(|(_, output)| {
+            !matches!(
+                output,
+                ConnectionDriverOutput::Integration(event) if event.identity == *identity
+            ) && !matches!(
+                output,
+                ConnectionDriverOutput::System(SystemEvent::ConnectionStateChanged {
+                    connection,
+                    ..
+                }) if connection == identity
+            )
+        });
+        self.occupied = self
+            .ready
+            .iter()
+            .map(|(source, _)| source.clone())
+            .collect();
+    }
+
+    pub(crate) fn clear_removed_connection(&mut self, collection: &str, key: &str) {
+        self.clear_retry(&format!("lifecycle:{collection}:{key}"));
+        let family = match collection {
+            "binance_spot_websocket_connections" => "binance.spot.market",
+            "binance_spot_user_websocket_connections" => "binance.spot.user",
+            "binance_margin_websocket_connections" => "binance.margin.market",
+            "binance_margin_user_websocket_connections" => "binance.margin.user",
+            "binance_usdm_websocket_connections" => "binance.usdm.market",
+            "binance_usdm_user_websocket_connections" => "binance.usdm.user",
+            "binance_coinm_websocket_connections" => "binance.coinm.market",
+            "binance_coinm_user_websocket_connections" => "binance.coinm.user",
+            "binance_options_websocket_connections" => "binance.options.market",
+            "binance_options_user_websocket_connections" => "binance.options.user",
+            "binance_stocks_websocket_connections" => "binance.stocks.market",
+            "binance_stocks_user_websocket_connections" => "binance.stocks.user",
+            "okx_public_websocket_connections" => "okx.public.market",
+            "okx_private_websocket_connections" => "okx.private",
+            "hyperliquid_websocket_connections" => "hyperliquid.websocket",
+            "ibkr_account_query_connections" => "ibkr.account.query",
+            "ibkr_account_stream_connections" => "ibkr.account",
+            "ibkr_order_connections" => "ibkr.order",
+            "ibkr_execution_stream_connections" => "ibkr.execution",
+            "ibkr_market_data_connections" => "ibkr.market",
+            "massive_stocks_websocket_connections" => "massive.stocks",
+            "massive_options_websocket_connections" => "massive.options",
+            _ => return,
+        };
+        self.maintenance_in_progress
+            .remove(&format!("maintenance:{family}:{key}"));
+    }
 }
 
 const CONNECTION_EVENT_FAMILIES: usize = 19;
+
+fn is_permanent_connection_error(error: &kairos_integration::IntegrationError) -> bool {
+    matches!(
+        error,
+        kairos_integration::IntegrationError::InvalidRequest(_)
+            | kairos_integration::IntegrationError::Authentication(_)
+            | kairos_integration::IntegrationError::Authorization(_)
+            | kairos_integration::IntegrationError::Entitlement(_)
+            | kairos_integration::IntegrationError::UnsupportedOperation
+    )
+}
+
+fn is_recoverable_connection_error(error: &kairos_integration::IntegrationError) -> bool {
+    matches!(
+        error,
+        kairos_integration::IntegrationError::NotReady
+            | kairos_integration::IntegrationError::RateLimited(_)
+            | kairos_integration::IntegrationError::Transport(_)
+            | kairos_integration::IntegrationError::Unavailable(_)
+    )
+}
+
+fn participant_event_identity(
+    event: &kairos_integration::ExternalParticipantEvent,
+) -> Option<(&kairos_integration::ParticipantRef, &ConnectionKey)> {
+    match event {
+        kairos_integration::ExternalParticipantEvent::Account(event) => {
+            Some((&event.participant, &event.connection_key))
+        }
+        kairos_integration::ExternalParticipantEvent::Execution(event) => {
+            Some((&event.participant, &event.connection_key))
+        }
+        kairos_integration::ExternalParticipantEvent::Market(_) => None,
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ConnectionAccessError {
@@ -144,12 +280,16 @@ pub enum ConnectionAccessError {
     NotFound(ConnectionKey),
     #[error("connection `{0}` is retiring")]
     Retiring(ConnectionKey),
+    #[error("connection `{0}` is not ready")]
+    NotReady(ConnectionKey),
 }
 
 #[derive(Debug, Error)]
 pub enum ConnectionCreateError {
     #[error("connection `{0}` already exists")]
     AlreadyExists(ConnectionKey),
+    #[error("invalid connection create options: {0}")]
+    InvalidOptions(String),
     #[error(transparent)]
     Integration(#[from] kairos_integration::IntegrationError),
     #[error(transparent)]
@@ -179,11 +319,31 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
         key: ConnectionKey,
         parameters: P,
     ) -> Result<(), ConnectionCreateError> {
+        self.create_with_options(key, parameters, crate::ConnectionCreateOptions::default())
+    }
+
+    pub fn create_with_options(
+        &mut self,
+        key: ConnectionKey,
+        parameters: P,
+        options: crate::ConnectionCreateOptions,
+    ) -> Result<(), ConnectionCreateError> {
+        if options.recovery.initial_backoff.is_zero()
+            || options.recovery.maximum_backoff < options.recovery.initial_backoff
+        {
+            return Err(ConnectionCreateError::InvalidOptions(
+                "recovery backoff must be positive and maximum_backoff must not be smaller than initial_backoff"
+                    .into(),
+            ));
+        }
         if self.connections.get(&key.to_string()).is_some() {
             return Err(ConnectionCreateError::AlreadyExists(key));
         }
         let connection = (self.constructor)(key.clone(), parameters)?;
-        if !self.connections.insert_new(key.to_string(), connection)? {
+        if !self
+            .connections
+            .insert_new_with_options(key.to_string(), connection, options)?
+        {
             return Err(ConnectionCreateError::AlreadyExists(key));
         }
         Ok(())
@@ -196,6 +356,15 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
             .ok_or_else(|| ConnectionAccessError::NotFound(key.clone()))?;
         if managed.state() == ResourceState::Retiring {
             return Err(ConnectionAccessError::Retiring(key.clone()));
+        }
+        if matches!(
+            managed.state(),
+            ResourceState::Starting
+                | ResourceState::Failed
+                | ResourceState::Stopping
+                | ResourceState::Stopped
+        ) {
+            return Err(ConnectionAccessError::NotReady(key.clone()));
         }
         Ok(managed.connection_mut())
     }
@@ -668,133 +837,146 @@ impl ConfluxSystem {
         );
     }
 
-    /// Starts every pre-installed streaming connection while it remains owned
-    /// by this System. Provider lifecycle details stay in Integration; Conflux
-    /// only advances managed state and publishes readiness evidence.
-    pub(crate) async fn start_installed_connections(&mut self) {
-        macro_rules! start_family {
-            ($field:ident) => {{
-                let mut keys = self
-                    .$field
-                    .iter()
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>();
-                keys.sort();
-                for key in keys {
-                    let Some(managed) = self.$field.get_mut(&key) else {
-                        continue;
-                    };
-                    if managed.state() != ResourceState::Created {
-                        continue;
-                    }
-                    managed.set_state(ResourceState::Starting);
-                    let source = format!("integration:{key}");
-                    match kairos_integration::ConnectionLifecycleCommand::connect(
-                        managed.connection_mut(),
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            managed.set_state(ResourceState::Ready);
-                            self.pending_system_events
-                                .push_back((source.clone(), SystemEvent::SourceReady { source }));
+    pub(crate) fn startup_status(&self, state: &ConnectionDriverState) -> Result<bool, String> {
+        let mut pending = false;
+        macro_rules! inspect {
+            ($field:ident) => {
+                for (key, managed) in self.$field.iter() {
+                    let source = format!("lifecycle:{}:{key}", stringify!($field));
+                    match managed.state() {
+                        ResourceState::Ready => {}
+                        ResourceState::Created | ResourceState::Starting => pending = true,
+                        ResourceState::Degraded => {
+                            if managed.policy().required {
+                                if state.lifecycle_retry_at.contains_key(&source) {
+                                    pending = true;
+                                } else {
+                                    return Err(format!(
+                                        "required connection `{key}` is degraded without a recovery attempt"
+                                    ));
+                                }
+                            }
                         }
-                        Err(error) => {
-                            managed.set_state(ResourceState::Failed);
-                            self.pending_system_events.push_back((
-                                source.clone(),
-                                SystemEvent::SourceFailed {
-                                    source,
-                                    error: error.to_string(),
-                                },
-                            ));
+                        ResourceState::Failed
+                        | ResourceState::Stopping
+                        | ResourceState::Retiring
+                        | ResourceState::Stopped => {
+                            if managed.policy().required {
+                                return Err(format!(
+                                    "required connection `{key}` failed during startup"
+                                ));
+                            }
                         }
                     }
                 }
-            }};
+            };
         }
 
-        start_family!(binance_spot_websocket_connections);
-        start_family!(binance_spot_user_websocket_connections);
-        start_family!(binance_margin_websocket_connections);
-        start_family!(binance_margin_user_websocket_connections);
-        start_family!(binance_usdm_websocket_connections);
-        start_family!(binance_usdm_user_websocket_connections);
-        start_family!(binance_coinm_websocket_connections);
-        start_family!(binance_coinm_user_websocket_connections);
-        start_family!(binance_options_websocket_connections);
-        start_family!(binance_options_user_websocket_connections);
-        start_family!(binance_stocks_websocket_connections);
-        start_family!(binance_stocks_user_websocket_connections);
-        start_family!(okx_public_websocket_connections);
-        start_family!(okx_private_websocket_connections);
-        start_family!(hyperliquid_websocket_connections);
-        start_family!(ibkr_account_query_connections);
-        start_family!(ibkr_account_stream_connections);
-        start_family!(ibkr_order_connections);
-        start_family!(ibkr_execution_stream_connections);
-        start_family!(ibkr_market_data_connections);
-        start_family!(massive_stocks_websocket_connections);
-        start_family!(massive_options_websocket_connections);
+        inspect!(binance_spot_websocket_connections);
+        inspect!(binance_spot_user_websocket_connections);
+        inspect!(binance_margin_websocket_connections);
+        inspect!(binance_margin_user_websocket_connections);
+        inspect!(binance_usdm_websocket_connections);
+        inspect!(binance_usdm_user_websocket_connections);
+        inspect!(binance_coinm_websocket_connections);
+        inspect!(binance_coinm_user_websocket_connections);
+        inspect!(binance_options_websocket_connections);
+        inspect!(binance_options_user_websocket_connections);
+        inspect!(binance_stocks_websocket_connections);
+        inspect!(binance_stocks_user_websocket_connections);
+        inspect!(okx_public_websocket_connections);
+        inspect!(okx_private_websocket_connections);
+        inspect!(hyperliquid_websocket_connections);
+        inspect!(ibkr_account_query_connections);
+        inspect!(ibkr_account_stream_connections);
+        inspect!(ibkr_order_connections);
+        inspect!(ibkr_execution_stream_connections);
+        inspect!(ibkr_market_data_connections);
+        inspect!(massive_stocks_websocket_connections);
+        inspect!(massive_options_websocket_connections);
+        Ok(!pending)
     }
 
     /// Disconnects every long-lived connection before the System is dropped.
     /// Entries remain in their managed collections so shutdown never transfers
     /// ownership to a task or business module.
-    pub(crate) async fn stop_connections(&mut self) {
-        macro_rules! stop_family {
+    pub(crate) async fn stop_connections(&mut self, state: &mut ConnectionDriverState) {
+        macro_rules! request_stop {
             ($field:ident) => {{
-                let mut keys = self
-                    .$field
-                    .iter()
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>();
-                keys.sort();
-                for key in keys {
-                    let Some(managed) = self.$field.get_mut(&key) else {
-                        continue;
-                    };
-                    if matches!(
-                        managed.state(),
-                        ResourceState::Created | ResourceState::Stopped | ResourceState::Retiring
-                    ) {
-                        continue;
-                    }
-                    managed.set_state(ResourceState::Stopping);
-                    match kairos_integration::ConnectionLifecycleCommand::disconnect(
-                        managed.connection_mut(),
-                    )
-                    .await
-                    {
-                        Ok(()) => managed.set_state(ResourceState::Stopped),
-                        Err(_) => managed.set_state(ResourceState::Failed),
+                for (_, managed) in self.$field.iter_mut() {
+                    if managed.state() == ResourceState::Created {
+                        managed.set_state(ResourceState::Stopped);
+                    } else if managed.state() != ResourceState::Stopped {
+                        managed.set_state(ResourceState::Stopping);
                     }
                 }
             }};
         }
+        request_stop!(binance_spot_websocket_connections);
+        request_stop!(binance_spot_user_websocket_connections);
+        request_stop!(binance_margin_websocket_connections);
+        request_stop!(binance_margin_user_websocket_connections);
+        request_stop!(binance_usdm_websocket_connections);
+        request_stop!(binance_usdm_user_websocket_connections);
+        request_stop!(binance_coinm_websocket_connections);
+        request_stop!(binance_coinm_user_websocket_connections);
+        request_stop!(binance_options_websocket_connections);
+        request_stop!(binance_options_user_websocket_connections);
+        request_stop!(binance_stocks_websocket_connections);
+        request_stop!(binance_stocks_user_websocket_connections);
+        request_stop!(okx_public_websocket_connections);
+        request_stop!(okx_private_websocket_connections);
+        request_stop!(hyperliquid_websocket_connections);
+        request_stop!(ibkr_account_query_connections);
+        request_stop!(ibkr_account_stream_connections);
+        request_stop!(ibkr_order_connections);
+        request_stop!(ibkr_execution_stream_connections);
+        request_stop!(ibkr_market_data_connections);
+        request_stop!(massive_stocks_websocket_connections);
+        request_stop!(massive_options_websocket_connections);
 
-        stop_family!(binance_spot_websocket_connections);
-        stop_family!(binance_spot_user_websocket_connections);
-        stop_family!(binance_margin_websocket_connections);
-        stop_family!(binance_margin_user_websocket_connections);
-        stop_family!(binance_usdm_websocket_connections);
-        stop_family!(binance_usdm_user_websocket_connections);
-        stop_family!(binance_coinm_websocket_connections);
-        stop_family!(binance_coinm_user_websocket_connections);
-        stop_family!(binance_options_websocket_connections);
-        stop_family!(binance_options_user_websocket_connections);
-        stop_family!(binance_stocks_websocket_connections);
-        stop_family!(binance_stocks_user_websocket_connections);
-        stop_family!(okx_public_websocket_connections);
-        stop_family!(okx_private_websocket_connections);
-        stop_family!(hyperliquid_websocket_connections);
-        stop_family!(ibkr_account_query_connections);
-        stop_family!(ibkr_account_stream_connections);
-        stop_family!(ibkr_order_connections);
-        stop_family!(ibkr_execution_stream_connections);
-        stop_family!(ibkr_market_data_connections);
-        stop_family!(massive_stocks_websocket_connections);
-        stop_family!(massive_options_websocket_connections);
+        std::future::poll_fn(|cx| {
+            self.poll_all_connection_lifecycle(cx, Instant::now(), state);
+            let mut complete = true;
+            macro_rules! check_stopped {
+                ($field:ident) => {
+                    complete &= self.$field.iter().all(|(_, managed)| {
+                        matches!(
+                            managed.state(),
+                            ResourceState::Stopped | ResourceState::Failed
+                        )
+                    });
+                };
+            }
+            check_stopped!(binance_spot_websocket_connections);
+            check_stopped!(binance_spot_user_websocket_connections);
+            check_stopped!(binance_margin_websocket_connections);
+            check_stopped!(binance_margin_user_websocket_connections);
+            check_stopped!(binance_usdm_websocket_connections);
+            check_stopped!(binance_usdm_user_websocket_connections);
+            check_stopped!(binance_coinm_websocket_connections);
+            check_stopped!(binance_coinm_user_websocket_connections);
+            check_stopped!(binance_options_websocket_connections);
+            check_stopped!(binance_options_user_websocket_connections);
+            check_stopped!(binance_stocks_websocket_connections);
+            check_stopped!(binance_stocks_user_websocket_connections);
+            check_stopped!(okx_public_websocket_connections);
+            check_stopped!(okx_private_websocket_connections);
+            check_stopped!(hyperliquid_websocket_connections);
+            check_stopped!(ibkr_account_query_connections);
+            check_stopped!(ibkr_account_stream_connections);
+            check_stopped!(ibkr_order_connections);
+            check_stopped!(ibkr_execution_stream_connections);
+            check_stopped!(ibkr_market_data_connections);
+            check_stopped!(massive_stocks_websocket_connections);
+            check_stopped!(massive_options_websocket_connections);
+            if complete {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
     }
 
     pub(crate) fn update_timer(&mut self, now: Instant, state: &mut ConnectionDriverState) {
@@ -829,9 +1011,8 @@ impl ConfluxSystem {
         while let Some((source, event)) = self.pending_system_events.pop_front() {
             state.push(source, ConnectionDriverOutput::System(event));
         }
-        if let Some(output) = state.pop() {
-            return Poll::Ready(output);
-        }
+
+        self.poll_all_connection_lifecycle(cx, Instant::now(), state);
 
         macro_rules! poll_family {
             ($field:ident, $trait:path, $map:expr, $family:literal) => {{
@@ -856,6 +1037,33 @@ impl ConfluxSystem {
                     let generation = managed.generation();
                     match <_ as $trait>::poll_next(managed.connection_mut(), cx) {
                         Poll::Ready(Ok(event)) => {
+                            let event = ($map)(event);
+                            if participant_event_identity(&event).is_some_and(
+                                |(participant, connection_key)| {
+                                    participant != &descriptor.participant
+                                        || connection_key != &descriptor.connection_key
+                                },
+                            ) {
+                                managed.set_state(ResourceState::Failed);
+                                let error = format!(
+                                    "provider event identity does not match managed descriptor {}",
+                                    descriptor.connection_key
+                                );
+                                state.push(
+                                    format!("connection-state:{}:{key}", $family),
+                                    ConnectionDriverOutput::System(
+                                        SystemEvent::ConnectionStateChanged {
+                                            connection: ManagedConnectionIdentity {
+                                                descriptor,
+                                                generation,
+                                            },
+                                            state: ResourceState::Failed,
+                                            error: Some(error),
+                                        },
+                                    ),
+                                );
+                                continue;
+                            }
                             state.push(
                                 source,
                                 ConnectionDriverOutput::Integration(IntegrationEvent {
@@ -863,12 +1071,38 @@ impl ConfluxSystem {
                                         descriptor,
                                         generation,
                                     },
-                                    event: ($map)(event),
+                                    event,
                                 }),
                             );
                         }
                         Poll::Ready(Err(error)) => {
-                            managed.set_state(ResourceState::Degraded);
+                            let recoverable = is_recoverable_connection_error(&error);
+                            let retry_scheduled = recoverable
+                                && state.schedule_retry(
+                                    &format!("lifecycle:{}:{key}", stringify!($field)),
+                                    Instant::now(),
+                                    managed.policy().recovery,
+                                );
+                            managed.set_state(if is_permanent_connection_error(&error)
+                                || (recoverable && !retry_scheduled)
+                            {
+                                ResourceState::Failed
+                            } else {
+                                ResourceState::Degraded
+                            });
+                            state.push(
+                                format!("connection-state:{}:{key}", $family),
+                                ConnectionDriverOutput::System(
+                                    SystemEvent::ConnectionStateChanged {
+                                        connection: ManagedConnectionIdentity {
+                                            descriptor,
+                                            generation,
+                                        },
+                                        state: managed.state(),
+                                        error: Some(error.to_string()),
+                                    },
+                                ),
+                            );
                             state.push(
                                 source.clone(),
                                 ConnectionDriverOutput::System(SystemEvent::SourceFailed {
@@ -1009,6 +1243,201 @@ impl ConfluxSystem {
         state.pop().map_or(Poll::Pending, Poll::Ready)
     }
 
+    fn poll_all_connection_lifecycle(
+        &mut self,
+        cx: &mut Context<'_>,
+        now: Instant,
+        state: &mut ConnectionDriverState,
+    ) {
+        macro_rules! poll_lifecycle {
+            ($field:ident) => {{
+                let mut keys = self
+                    .$field
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>();
+                keys.sort();
+                for key in keys {
+                    let source = format!("integration:{key}");
+                    let lifecycle_source = format!("lifecycle:{}:{key}", stringify!($field));
+                    let Some(managed) = self.$field.get_mut(&key) else {
+                        state.clear_retry(&lifecycle_source);
+                        continue;
+                    };
+                    if !managed.lifecycle_in_progress() {
+                        let operation = match managed.state() {
+                            ResourceState::Created => Some(ManagedLifecycleOperation::Connect),
+                            ResourceState::Retiring => Some(ManagedLifecycleOperation::Disconnect),
+                            ResourceState::Stopping => Some(ManagedLifecycleOperation::Disconnect),
+                            ResourceState::Degraded | ResourceState::Failed
+                                if state.retry_due(&lifecycle_source, now) =>
+                            {
+                                Some(ManagedLifecycleOperation::Reconnect)
+                            }
+                            _ => None,
+                        };
+                        if let Some(operation) = operation {
+                            if !matches!(operation, ManagedLifecycleOperation::Disconnect) {
+                                managed.set_state(ResourceState::Starting);
+                            }
+                            managed.begin_lifecycle(operation);
+                        }
+                    }
+                    let Poll::Ready((operation, result)) = managed.poll_lifecycle(cx) else {
+                        continue;
+                    };
+                    let identity = ManagedConnectionIdentity {
+                        descriptor: managed.connection().descriptor().clone(),
+                        generation: managed.generation(),
+                    };
+                    match result {
+                        Ok(()) => {
+                            if matches!(
+                                managed.state(),
+                                ResourceState::Retiring | ResourceState::Stopping
+                            ) && !matches!(operation, ManagedLifecycleOperation::Disconnect)
+                            {
+                                managed.begin_lifecycle(ManagedLifecycleOperation::Disconnect);
+                                cx.waker().wake_by_ref();
+                                continue;
+                            }
+                            let retiring = managed.state() == ResourceState::Retiring;
+                            state.clear_retry(&lifecycle_source);
+                            managed.set_state(match operation {
+                                ManagedLifecycleOperation::Connect
+                                | ManagedLifecycleOperation::Reconnect => ResourceState::Ready,
+                                ManagedLifecycleOperation::Disconnect => ResourceState::Stopped,
+                            });
+                            state.push(
+                                format!("connection-state:{}:{key}", stringify!($field)),
+                                ConnectionDriverOutput::System(
+                                    SystemEvent::ConnectionStateChanged {
+                                        connection: identity,
+                                        state: managed.state(),
+                                        error: None,
+                                    },
+                                ),
+                            );
+                            if matches!(operation, ManagedLifecycleOperation::Disconnect)
+                                && retiring
+                            {
+                                state.push(
+                                    format!("lifecycle-stop:{}:{key}", stringify!($field)),
+                                    ConnectionDriverOutput::LifecycleStopped {
+                                        collection: stringify!($field),
+                                        key,
+                                        result: Ok(()),
+                                    },
+                                );
+                            } else if !matches!(operation, ManagedLifecycleOperation::Disconnect) {
+                                state.push(
+                                    source.clone(),
+                                    ConnectionDriverOutput::System(SystemEvent::SourceReady {
+                                        source,
+                                    }),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            if matches!(
+                                managed.state(),
+                                ResourceState::Retiring | ResourceState::Stopping
+                            ) && !matches!(operation, ManagedLifecycleOperation::Disconnect)
+                            {
+                                managed.begin_lifecycle(ManagedLifecycleOperation::Disconnect);
+                                cx.waker().wake_by_ref();
+                                continue;
+                            }
+                            if matches!(operation, ManagedLifecycleOperation::Disconnect) {
+                                let retiring = managed.state() == ResourceState::Retiring;
+                                state.clear_retry(&lifecycle_source);
+                                managed.set_state(ResourceState::Failed);
+                                state.push(
+                                    format!("connection-state:{}:{key}", stringify!($field)),
+                                    ConnectionDriverOutput::System(
+                                        SystemEvent::ConnectionStateChanged {
+                                            connection: identity,
+                                            state: ResourceState::Failed,
+                                            error: Some(error.to_string()),
+                                        },
+                                    ),
+                                );
+                                if retiring {
+                                    state.push(
+                                        format!("lifecycle-stop:{}:{key}", stringify!($field)),
+                                        ConnectionDriverOutput::LifecycleStopped {
+                                            collection: stringify!($field),
+                                            key,
+                                            result: Err(error.to_string()),
+                                        },
+                                    );
+                                }
+                                continue;
+                            }
+                            let recoverable = is_recoverable_connection_error(&error);
+                            let retry_scheduled = recoverable
+                                && state.schedule_retry(
+                                    &lifecycle_source,
+                                    now,
+                                    managed.policy().recovery,
+                                );
+                            let next_state = if is_permanent_connection_error(&error)
+                                || !recoverable
+                                || !retry_scheduled
+                            {
+                                state.clear_retry(&lifecycle_source);
+                                ResourceState::Failed
+                            } else {
+                                ResourceState::Degraded
+                            };
+                            managed.set_state(next_state);
+                            state.push(
+                                format!("connection-state:{}:{key}", stringify!($field)),
+                                ConnectionDriverOutput::System(
+                                    SystemEvent::ConnectionStateChanged {
+                                        connection: identity,
+                                        state: managed.state(),
+                                        error: Some(error.to_string()),
+                                    },
+                                ),
+                            );
+                            state.push(
+                                source.clone(),
+                                ConnectionDriverOutput::System(SystemEvent::SourceFailed {
+                                    source,
+                                    error: error.to_string(),
+                                }),
+                            );
+                        }
+                    }
+                }
+            }};
+        }
+
+        poll_lifecycle!(binance_spot_websocket_connections);
+        poll_lifecycle!(binance_spot_user_websocket_connections);
+        poll_lifecycle!(binance_margin_websocket_connections);
+        poll_lifecycle!(binance_margin_user_websocket_connections);
+        poll_lifecycle!(binance_usdm_websocket_connections);
+        poll_lifecycle!(binance_usdm_user_websocket_connections);
+        poll_lifecycle!(binance_coinm_websocket_connections);
+        poll_lifecycle!(binance_coinm_user_websocket_connections);
+        poll_lifecycle!(binance_options_websocket_connections);
+        poll_lifecycle!(binance_options_user_websocket_connections);
+        poll_lifecycle!(binance_stocks_websocket_connections);
+        poll_lifecycle!(binance_stocks_user_websocket_connections);
+        poll_lifecycle!(okx_public_websocket_connections);
+        poll_lifecycle!(okx_private_websocket_connections);
+        poll_lifecycle!(hyperliquid_websocket_connections);
+        poll_lifecycle!(ibkr_account_query_connections);
+        poll_lifecycle!(ibkr_account_stream_connections);
+        poll_lifecycle!(ibkr_order_connections);
+        poll_lifecycle!(ibkr_execution_stream_connections);
+        poll_lifecycle!(ibkr_market_data_connections);
+        poll_lifecycle!(massive_stocks_websocket_connections);
+        poll_lifecycle!(massive_options_websocket_connections);
+    }
+
     fn poll_all_contract_events(
         &mut self,
         cx: &mut Context<'_>,
@@ -1092,12 +1521,13 @@ impl ConfluxSystem {
                         state.maintenance_in_progress.remove(&source);
                         continue;
                     };
+                    let maintenance_continuing = state.maintenance_in_progress.contains(&source);
                     if managed.state() != ResourceState::Ready
-                        && managed.state() != ResourceState::Degraded
+                        && !(managed.state() == ResourceState::Degraded && maintenance_continuing)
                     {
                         continue;
                     }
-                    let due = state.maintenance_in_progress.contains(&source)
+                    let due = maintenance_continuing
                         || kairos_integration::ConnectionMaintenance::next_maintenance_at(
                             managed.connection(),
                         )
@@ -1105,6 +1535,10 @@ impl ConfluxSystem {
                     if !due {
                         continue;
                     }
+                    let identity = ManagedConnectionIdentity {
+                        descriptor: managed.connection().descriptor().clone(),
+                        generation: managed.generation(),
+                    };
                     match kairos_integration::ConnectionMaintenance::poll_maintenance(
                         managed.connection_mut(),
                         cx,
@@ -1121,7 +1555,26 @@ impl ConfluxSystem {
                             kairos_integration::MaintenanceOutcome::ReconnectRequired { reason },
                         )) => {
                             state.maintenance_in_progress.remove(&source);
-                            managed.set_state(ResourceState::Degraded);
+                            let retry_scheduled = state.schedule_retry(
+                                &format!("lifecycle:{}:{key}", stringify!($field)),
+                                now,
+                                managed.policy().recovery,
+                            );
+                            managed.set_state(if retry_scheduled {
+                                ResourceState::Degraded
+                            } else {
+                                ResourceState::Failed
+                            });
+                            state.push(
+                                format!("connection-state:{}:{key}", $family),
+                                ConnectionDriverOutput::System(
+                                    SystemEvent::ConnectionStateChanged {
+                                        connection: identity,
+                                        state: managed.state(),
+                                        error: Some(reason.clone()),
+                                    },
+                                ),
+                            );
                             state.push(
                                 source.clone(),
                                 ConnectionDriverOutput::System(SystemEvent::SourceFailed {
@@ -1132,7 +1585,32 @@ impl ConfluxSystem {
                         }
                         Poll::Ready(Err(error)) => {
                             state.maintenance_in_progress.remove(&source);
-                            managed.set_state(ResourceState::Degraded);
+                            let recoverable = is_recoverable_connection_error(&error);
+                            let retry_scheduled = recoverable
+                                && state.schedule_retry(
+                                    &format!("lifecycle:{}:{key}", stringify!($field)),
+                                    now,
+                                    managed.policy().recovery,
+                                );
+                            managed.set_state(
+                                if is_permanent_connection_error(&error)
+                                    || (recoverable && !retry_scheduled)
+                                {
+                                    ResourceState::Failed
+                                } else {
+                                    ResourceState::Degraded
+                                },
+                            );
+                            state.push(
+                                format!("connection-state:{}:{key}", $family),
+                                ConnectionDriverOutput::System(
+                                    SystemEvent::ConnectionStateChanged {
+                                        connection: identity,
+                                        state: managed.state(),
+                                        error: Some(error.to_string()),
+                                    },
+                                ),
+                            );
                             state.push(
                                 source.clone(),
                                 ConnectionDriverOutput::System(SystemEvent::SourceFailed {
@@ -1191,15 +1669,25 @@ impl ConfluxSystem {
         poll_maintenance!(massive_options_websocket_connections, "massive.options");
     }
 
-    pub(crate) fn next_wakeup_deadline(&self) -> Option<Instant> {
+    pub(crate) fn next_wakeup_deadline(
+        &self,
+        connection_driver: &ConnectionDriverState,
+    ) -> Option<Instant> {
         let mut deadline = if self.pending_system_events.is_empty() {
-            self.timers.values().map(|timer| timer.next).min()
+            self.timers
+                .values()
+                .map(|timer| timer.next)
+                .chain(connection_driver.lifecycle_retry_at.values().copied())
+                .min()
         } else {
             Some(Instant::now())
         };
         macro_rules! visit {
             ($field:ident) => {
                 for (_, managed) in self.$field.iter() {
+                    if managed.state() != ResourceState::Ready || managed.lifecycle_in_progress() {
+                        continue;
+                    }
                     if let Some(candidate) =
                         kairos_integration::ConnectionMaintenance::next_maintenance_at(
                             managed.connection(),
@@ -1248,6 +1736,94 @@ mod tests {
     use kairos_transport::SnapshotEnvelopeMetadata;
 
     use super::*;
+
+    #[test]
+    fn lifecycle_retry_only_becomes_due_after_it_is_scheduled() {
+        let mut state = ConnectionDriverState::new();
+        let now = Instant::now();
+
+        assert!(!state.retry_due("lifecycle:test", now));
+        state.schedule_retry("lifecycle:test", now, crate::RecoveryPolicy::default());
+        assert!(!state.retry_due("lifecycle:test", now));
+        assert!(state.retry_due("lifecycle:test", now + Duration::from_secs(1)));
+
+        state.schedule_retry(
+            "lifecycle:test",
+            now + Duration::from_secs(1),
+            crate::RecoveryPolicy::default(),
+        );
+        assert!(!state.retry_due("lifecycle:test", now + Duration::from_secs(2)));
+        assert!(state.retry_due("lifecycle:test", now + Duration::from_secs(3)));
+
+        state.clear_retry("lifecycle:test");
+        assert!(!state.retry_due("lifecycle:test", now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn lifecycle_retry_honors_custom_backoff_and_attempt_limit() {
+        let mut state = ConnectionDriverState::new();
+        let now = Instant::now();
+        let policy = crate::RecoveryPolicy {
+            initial_backoff: Duration::from_millis(10),
+            maximum_backoff: Duration::from_millis(15),
+            maximum_attempts: Some(2),
+        };
+
+        assert!(state.schedule_retry("lifecycle:test", now, policy));
+        assert!(!state.retry_due("lifecycle:test", now + Duration::from_millis(9)));
+        assert!(state.retry_due("lifecycle:test", now + Duration::from_millis(10)));
+        assert!(state.schedule_retry("lifecycle:test", now, policy));
+        assert!(!state.retry_due("lifecycle:test", now + Duration::from_millis(14)));
+        assert!(state.retry_due("lifecycle:test", now + Duration::from_millis(15)));
+        assert!(!state.schedule_retry("lifecycle:test", now, policy));
+        assert!(!state.retry_due("lifecycle:test", now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn ready_scheduler_keeps_one_fair_bounded_slot_per_source() {
+        let mut state = ConnectionDriverState::new();
+        state.push(
+            "source-a".into(),
+            ConnectionDriverOutput::System(SystemEvent::SourceReady {
+                source: "a-first".into(),
+            }),
+        );
+        state.push(
+            "source-a".into(),
+            ConnectionDriverOutput::System(SystemEvent::SourceReady {
+                source: "a-duplicate".into(),
+            }),
+        );
+        state.push(
+            "source-b".into(),
+            ConnectionDriverOutput::System(SystemEvent::SourceReady {
+                source: "b-first".into(),
+            }),
+        );
+
+        assert_eq!(state.ready.len(), 2);
+        assert!(matches!(
+            state.pop(),
+            Some(ConnectionDriverOutput::System(SystemEvent::SourceReady { source }))
+                if source == "a-first"
+        ));
+        state.push(
+            "source-a".into(),
+            ConnectionDriverOutput::System(SystemEvent::SourceReady {
+                source: "a-second".into(),
+            }),
+        );
+        assert!(matches!(
+            state.pop(),
+            Some(ConnectionDriverOutput::System(SystemEvent::SourceReady { source }))
+                if source == "b-first"
+        ));
+        assert!(matches!(
+            state.pop(),
+            Some(ConnectionDriverOutput::System(SystemEvent::SourceReady { source }))
+                if source == "a-second"
+        ));
+    }
 
     #[test]
     fn mmap_reader_and_writer_are_named_managed_resources() {

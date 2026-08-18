@@ -5,7 +5,7 @@ use kairos_market_contract::MarketEventFrame;
 use kairos_reference_contract::ReferenceEventFrame;
 use kairos_risk_contract::RiskEventFrame;
 
-use crate::{Contract, RestRequestOf};
+use crate::{Contract, ResourceState, RestRequestOf};
 
 pub struct ContractEvent<F> {
     pub client: String,
@@ -13,6 +13,11 @@ pub struct ContractEvent<F> {
 }
 
 pub enum SystemEvent {
+    ConnectionStateChanged {
+        connection: ManagedConnectionIdentity,
+        state: ResourceState,
+        error: Option<String>,
+    },
     SourceReady {
         source: String,
     },

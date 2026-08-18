@@ -36,15 +36,19 @@ class AccountViewKey:
         )
 
     def resource_path(self, root: str | Path) -> Path:
-        return (
-            Path(root)
-            / "account"
-            / "views"
-            / _component(self.account_runtime_id)
-            / _component(self.account_id)
-            / self.kind.value
-            / "current.snapshot"
-        )
+        return account_view_path(root, self)
+
+
+def account_view_path(root: str | Path, key: AccountViewKey) -> Path:
+    return (
+        Path(root)
+        / "account"
+        / "views"
+        / _component(key.account_runtime_id)
+        / _component(key.account_id)
+        / key.kind.value
+        / "current.snapshot"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +62,7 @@ class AccountViewFrame:
 class AccountViewReader:
     def __init__(self, root: str | Path, key: AccountViewKey, *, retries: int = 8) -> None:
         self.key = key
-        self._reader = SharedSnapshotReader(key.resource_path(root), retries=retries)
+        self._reader = SharedSnapshotReader(account_view_path(root, key), retries=retries)
 
     def read(self) -> AccountViewFrame:
         snapshot = self._reader.read()
@@ -92,4 +96,4 @@ def _component(value: str) -> str:
     )
 
 
-__all__ = ["AccountViewFrame", "AccountViewKey", "AccountViewKind", "AccountViewReader", "decode_view"]
+__all__ = ["AccountViewFrame", "AccountViewKey", "AccountViewKind", "AccountViewReader", "account_view_path", "decode_view"]

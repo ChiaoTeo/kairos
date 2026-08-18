@@ -96,8 +96,9 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
     let process = source("src/composition/launch/assembly.rs");
     let conflux = source("src/application/conflux.rs");
-    assert!(process.contains("aeron_publishers"));
-    assert!(conflux.contains("aeron_publishers.get_mut"));
+    assert!(process.contains("market_event_publishers"));
+    assert!(conflux.contains("market_event_publishers"));
+    assert!(conflux.contains("try_with"));
     assert!(!conflux.contains("event_socket_path"));
 }
 

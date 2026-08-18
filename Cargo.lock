@@ -2754,6 +2754,7 @@ dependencies = [
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
 ]
@@ -2773,6 +2774,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]
@@ -3003,6 +3005,7 @@ dependencies = [
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
 ]

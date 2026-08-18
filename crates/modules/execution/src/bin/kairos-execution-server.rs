@@ -46,19 +46,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let state = instance.state(&["execution", "execution-state.sqlite"])?;
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
-    let execution_snapshot = instance.service_snapshot("execution")?;
-    let intent_snapshot = instance.service_snapshot("intent")?;
+    let view_root = instance.snapshot(&[])?;
     let transport_identity = kairos_protocol::InstanceIdentity::new(
         workspace.id(),
         instance.launch_id(),
         instance.instance_id(),
     );
-    if let Some(parent) = execution_snapshot.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if let Some(parent) = intent_snapshot.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let reference_database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;
@@ -71,8 +64,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         reference_database,
         manifest_path: manifest,
         socket_path: socket,
-        execution_snapshot_path: execution_snapshot,
-        intent_snapshot_path: intent_snapshot,
+        view_root,
         transport_identity,
         source_id: format!("execution:{}", args.instance_id),
         simulated,

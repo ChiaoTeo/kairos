@@ -375,6 +375,7 @@ async def _run(args: argparse.Namespace) -> None:
     finally:
         if composition is not None:
             await composition.control.close()
+            composition.agent.close()
             await composition.notifications.runtime.close()
         sys.stdout.flush()
         sys.stderr.flush()

@@ -35,20 +35,6 @@ impl BinanceSpotSource {
             connection: ConnectionRef::managed(key),
         }
     }
-
-    #[cfg(test)]
-    pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
-        Ok(Self {
-            connection: ConnectionRef::Owned(
-                BinanceSpotRestConnection::new(
-                    kairos_conflux::ConnectionKey::new("reference-binance-spot")
-                        .map_err(|error| ReferenceError::Provider(error.to_string()))?,
-                    binance_rest_config(endpoint, None),
-                )
-                .map_err(|error| ReferenceError::Provider(error.to_string()))?,
-            ),
-        })
-    }
 }
 
 impl BinanceOptionsSource {
@@ -136,8 +122,6 @@ impl ReferenceSource for BinanceSpotSource {
                     .fetch_instruments()
                     .await
             }
-            #[cfg(test)]
-            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Spot)
@@ -169,8 +153,6 @@ impl ReferenceSource for BinanceOptionsSource {
                     .fetch_instruments()
                     .await
             }
-            #[cfg(test)]
-            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Option)
@@ -210,14 +192,6 @@ impl ReferenceSource for BinanceDerivativesSource {
                     .fetch_instruments()
                     .await
             }
-            #[cfg(test)]
-            BinanceDerivativesConnection::UsdM(ConnectionRef::Owned(connection)) => {
-                connection.fetch_instruments().await
-            }
-            #[cfg(test)]
-            BinanceDerivativesConnection::CoinM(ConnectionRef::Owned(connection)) => {
-                connection.fetch_instruments().await
-            }
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, self.product)
@@ -249,8 +223,6 @@ impl ReferenceSource for BinanceEquitySource {
                     .fetch_instruments()
                     .await
             }
-            #[cfg(test)]
-            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_equity_provider_catalog(facts)

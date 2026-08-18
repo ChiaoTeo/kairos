@@ -14,10 +14,7 @@ use kairos_transport::{
 };
 use std::path::{Path, PathBuf};
 
-pub fn account_view_path(
-    root: impl AsRef<Path>,
-    key: &AccountViewKey,
-) -> ContractResult<PathBuf> {
+pub fn account_view_path(root: impl AsRef<Path>, key: &AccountViewKey) -> ContractResult<PathBuf> {
     Ok(key.resource_path(root))
 }
 
@@ -51,10 +48,7 @@ pub struct AccountViewReader {
     reader: SharedSnapshotReader,
 }
 impl AccountViewReader {
-    pub fn resolved_path(
-        root: impl AsRef<Path>,
-        key: &AccountViewKey,
-    ) -> ContractResult<PathBuf> {
+    pub fn resolved_path(root: impl AsRef<Path>, key: &AccountViewKey) -> ContractResult<PathBuf> {
         account_view_path(root, key)
     }
 
@@ -89,10 +83,7 @@ pub struct AccountViewPublisher {
     writer: ReplacementSnapshotStorage,
 }
 impl AccountViewPublisher {
-    pub fn resolved_path(
-        root: impl AsRef<Path>,
-        key: &AccountViewKey,
-    ) -> ContractResult<PathBuf> {
+    pub fn resolved_path(root: impl AsRef<Path>, key: &AccountViewKey) -> ContractResult<PathBuf> {
         account_view_path(root, key)
     }
 
@@ -117,5 +108,49 @@ impl AccountViewPublisher {
             .publish(metadata, payload)
             .map(|_| ())
             .map_err(|error| ContractError::Transport(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_and_publisher_resolve_the_same_safe_path() {
+        let key = AccountViewKey::new(
+            "runtime/../一",
+            "account%/main",
+            AccountViewKind::ObservedOrders,
+        )
+        .unwrap();
+        let root = Path::new("/tmp/account-contract-views");
+        let reader = AccountViewReader::resolved_path(root, &key).unwrap();
+        let publisher = AccountViewPublisher::resolved_path(root, &key).unwrap();
+        assert_eq!(reader, publisher);
+        assert!(reader.starts_with(root));
+        assert!(!reader.to_string_lossy().contains("/../"));
+    }
+
+    #[test]
+    fn publisher_output_is_readable_through_the_contract_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let key = AccountViewKey::new("runtime", "account", AccountViewKind::Current).unwrap();
+        let mut publisher = AccountViewPublisher::create(root.path(), key.clone(), 4096).unwrap();
+        publisher.publish(test_metadata(), b"account-view").unwrap();
+        let frame = AccountViewReader::open(root.path(), key)
+            .unwrap()
+            .read()
+            .unwrap();
+        assert_eq!(frame.bytes(), b"account-view");
+    }
+
+    fn test_metadata() -> SnapshotEnvelopeMetadata {
+        SnapshotEnvelopeMetadata {
+            resource_epoch: 1,
+            producer_incarnation: 1,
+            generation: 1,
+            applied_event_sequence: 1,
+            published_at_unix_nanos: 1,
+        }
     }
 }

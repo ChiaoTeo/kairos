@@ -1,4 +1,4 @@
-use kairos_account_contract::{AccountViewKey, AccountViewKind};
+use kairos_account_contract::{account_view_path, AccountViewKey, AccountViewKind};
 
 #[test]
 fn account_view_resources_are_partitioned_by_runtime_account_and_kind() {
@@ -15,14 +15,14 @@ fn account_view_resources_are_partitioned_by_runtime_account_and_kind() {
     )
     .unwrap();
     assert_ne!(
-        current.resource_path("/runtime"),
-        observed_orders.resource_path("/runtime")
+        account_view_path("/runtime", &current).unwrap(),
+        account_view_path("/runtime", &observed_orders).unwrap()
     );
-    assert!(current
-        .resource_path("/runtime")
+    assert!(account_view_path("/runtime", &current)
+        .unwrap()
         .ends_with("current/current.snapshot"));
-    assert!(observed_orders
-        .resource_path("/runtime")
+    assert!(account_view_path("/runtime", &observed_orders)
+        .unwrap()
         .ends_with("observed-orders/current.snapshot"));
 }
 

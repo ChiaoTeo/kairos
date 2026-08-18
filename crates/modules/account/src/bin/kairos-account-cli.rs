@@ -19,7 +19,6 @@ use kairos_conflux::{
     ExternalAccountCredentialProfile, ShutdownMode,
 };
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
-use kairos_transport::SharedSnapshotReader;
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
 
@@ -1517,8 +1516,6 @@ fn read_mmap_query(
         .as_deref()
         .ok_or("--launch-id is required for an Account mmap query")?;
     let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
-    let socket_name =
-        resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
     if let Command::OpenOrders { symbol, limit } = command {
         let view_root = instance.snapshot(&[])?;
         let key = kairos_account_contract::AccountViewKey::new(
@@ -1577,13 +1574,19 @@ fn read_mmap_query(
         }));
     }
 
-    let frame = SharedSnapshotReader::open(snapshot_path)?.read_payload()?;
-    let view = kairos_account_contract::decode_account_current(&frame.payload)?;
+    let view_root = instance.snapshot(&[])?;
+    let key = kairos_account_contract::AccountViewKey::new(
+        format!("account:{account_id}"),
+        account_id,
+        kairos_account_contract::AccountViewKind::Current,
+    )?;
+    let frame = kairos_account_contract::view::AccountViewReader::open(view_root, key)?.read()?;
+    let view = frame.account_current()?;
     let metadata = view.metadata();
     if view.account_id() != account_id
         || metadata.completeness() != ViewCompleteness::COMPLETE
-        || metadata.generation() != frame.generation
-        || metadata.applied_revision() != Some(frame.applied_event_sequence)
+        || metadata.generation() != frame.generation()
+        || metadata.applied_revision() != Some(frame.envelope_metadata().applied_event_sequence)
     {
         return Err("Account current mmap identity, completeness, or watermark mismatch".into());
     }
@@ -1673,9 +1676,9 @@ fn read_mmap_query(
     }
     let mut result = serde_json::json!({
         "account_id": account_id,
-        "generation": frame.generation,
-        "event_sequence": frame.applied_event_sequence,
-        "producer_incarnation": frame.producer_incarnation,
+        "generation": frame.generation(),
+        "event_sequence": frame.envelope_metadata().applied_event_sequence,
+        "producer_incarnation": frame.envelope_metadata().producer_incarnation,
         "segments": segments,
     });
     if let Command::Balances {
@@ -1710,12 +1713,8 @@ fn resolve_runtime_account_resource(
         }
     }
 
-    let legacy = instance.service_snapshot("account")?;
-    if legacy.is_file() {
-        return Ok("account".to_owned());
-    }
     Err(format!(
-        "launch instance manifest has no runtime Account resource for {account_id}; use --socket-name only for legacy/manual processes"
+        "launch instance manifest has no runtime Account resource for {account_id}; use --socket-name for a manually managed process"
     )
     .into())
 }

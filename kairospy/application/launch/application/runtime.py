@@ -491,11 +491,7 @@ class LaunchRuntimeApplication:
                     "health": str(instance_workspace.health(socket_name)),
                     "socket_name": socket_name,
                     "required_segments": list(required_segments),
-                    "snapshot": str(
-                        instance_workspace.snapshot(
-                            socket_name, f"{socket_name}.snapshot"
-                        )
-                    ),
+                    "view_root": str(instance_workspace.snapshot()),
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
             component_endpoints: dict[str, dict[str, Any]] = {

@@ -62,9 +62,9 @@ impl ExecutionDependencyAccess {
                 .ok_or_else(|| format!("account {account_id} has no socket"))?;
             accounts.insert(account_id.clone(), PathBuf::from(socket));
             let snapshot = endpoint
-                .get("snapshot")
+                .get("view_root")
                 .and_then(Value::as_str)
-                .ok_or_else(|| format!("account {account_id} has no snapshot"))?;
+                .ok_or_else(|| format!("account {account_id} has no view_root"))?;
             account_snapshots.insert(account_id.clone(), PathBuf::from(snapshot));
         }
         let components = value.get("components").and_then(Value::as_object);

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import json
@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Literal, Mapping, cast
 
+from ...agent import AgentLaunchConfig
 from ..domain.identity import LaunchIdentity
 
 
@@ -27,6 +28,7 @@ class StrategyLaunchConfig:
     replay_end: datetime | None
     authoritative: bool
     notifications: Mapping[str, object]
+    agent: AgentLaunchConfig
 
     @classmethod
     def load(
@@ -94,11 +96,19 @@ class StrategyLaunchConfig:
             "backtest_market.start",
         )
         replay_end = _optional_datetime(
-            os.environ.get("KAIROS_BACKTEST_END")
-            or backtest_market.get("end"),
+            os.environ.get("KAIROS_BACKTEST_END") or backtest_market.get("end"),
             "backtest_market.end",
         )
         notifications = _mapping(raw.get("notifications"), "notifications")
+        agent = AgentLaunchConfig.from_mapping(
+            _mapping(raw.get("agent"), "agent"),
+            launch_mode=mode,
+        )
+        profile_snapshot = _mapping(raw.get("agent_profile"), "agent_profile")
+        if agent.enabled:
+            if not profile_snapshot:
+                raise ValueError("normalized launch agent_profile is required")
+            agent = replace(agent, profile_snapshot=dict(profile_snapshot))
         return cls(
             identity=LaunchIdentity(actual_launch_id, actual_mode),
             market_scope=cast(Literal["shared", "instance"], scope_value),
@@ -110,6 +120,7 @@ class StrategyLaunchConfig:
             replay_end=replay_end if mode == "backtest" else None,
             authoritative=authoritative,
             notifications=dict(notifications),
+            agent=agent,
         )
 
 

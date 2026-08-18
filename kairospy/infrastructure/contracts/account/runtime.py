@@ -24,6 +24,7 @@ from kairospy.infrastructure.transport.generated import kairos as _generated_kai
 from .view_contract import (
     AccountViewKey,
     AccountViewKind,
+    account_view_path,
     decode_view,
 )
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
@@ -79,13 +80,13 @@ def _response(status: int, value: Mapping[str, Any]) -> Mapping[str, Any]:
 class AccountCurrentViewReader:
     """Synchronous Account application projection over one v2 current view."""
 
-    def __init__(self, path: str | Path, *, account_id: AccountId) -> None:
+    def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
         sys.modules.setdefault("kairos", _generated_kairos)
         self._key = AccountViewKey(
             account_runtime_id=f"account:{account_id}",
             account_id=str(account_id),
         )
-        self._reader = SharedSnapshotReader(path)
+        self._reader = SharedSnapshotReader(account_view_path(view_root, self._key))
 
     @property
     def path(self) -> Path:

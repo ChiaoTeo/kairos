@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING, cast
 
 from kairospy.strategy import (
     StrategyContext as StrategyContextContract,
@@ -13,11 +14,15 @@ from kairospy.strategy import (
 )
 from kairospy.strategy.clock import StrategyClock
 from kairospy.application.account import AccountApplication
+from kairospy.application.agent import AgentApplication
 from kairospy.application.execution import ExecutionApplication
 from kairospy.application.market import MarketApplication
 from kairospy.application.notification import NotificationApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
+
+if TYPE_CHECKING:
+    from ..application.decisions import StrategyDecisionApplication
 
 
 class StrategyContext(StrategyContextContract):
@@ -32,6 +37,7 @@ class StrategyContext(StrategyContextContract):
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        agent: AgentApplication | None = None,
         notifications: NotificationApplication | None = None,
         launch_id: str = "",
         instance_id: str = "",
@@ -64,6 +70,7 @@ class StrategyContext(StrategyContextContract):
         self.account = account
         self.risk = risk
         self.execution = execution
+        self.agent = agent or AgentApplication.disabled()
         if notifications is None:
             notifications = NotificationApplication.disabled(
                 strategy_id=strategy_id,
@@ -71,7 +78,7 @@ class StrategyContext(StrategyContextContract):
                 instance_id=instance_id,
             )
         self.notifications = notifications
-        self.decisions = None
+        self.decisions = cast("StrategyDecisionApplication", None)
 
     def _bind(self, event: object | None) -> StrategyContext:
         self._event = event
@@ -81,6 +88,7 @@ class StrategyContext(StrategyContextContract):
         occurred_at = getattr(metadata, "occurred_at", None)
         self.market.bind_event(sequence)
         self.execution.bind_event(sequence, occurred_at_unix_nanos)
+        self.agent._bind_event(sequence, occurred_at)
         self.notifications.bind_event(occurred_at)
         return self
 

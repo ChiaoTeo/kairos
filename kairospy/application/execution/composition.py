@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from kairospy.application.workspace import InstanceWorkspace
@@ -15,8 +16,10 @@ from kairospy.domain_types import AccountId
 from kairospy.strategy import StrategyIdentity
 
 from .application import ExecutionApplication
+from .admission import IntentAdmissionEvidence
 from .config import ExecutionPolicy
 from .services import ExecutionEventCursorCheckpoint
+from .services.intent_admission_audit import IntentAdmissionAudit
 
 
 def build_strategy_access(
@@ -26,6 +29,10 @@ def build_strategy_access(
     identity: StrategyIdentity,
     policy: ExecutionPolicy,
     account_ids: tuple[AccountId, ...] = (),
+    decorate_commands: Callable[
+        [object, Callable[[IntentAdmissionEvidence], None]], object
+    ]
+    | None = None,
 ) -> ExecutionApplication:
     """Build Execution commands and projections for one Strategy identity."""
 
@@ -51,6 +58,11 @@ def build_strategy_access(
         require_limit_orders=policy.require_limit_orders,
         launch_id=identity.launch_id,
     )
+    if decorate_commands is not None:
+        admission_audit = IntentAdmissionAudit(
+            instance.state("execution", "intent-admission-audit.sqlite3")
+        )
+        commands = decorate_commands(commands, admission_audit.record)  # type: ignore[assignment]
     projection = ExecutionProjection(instance)
     return ExecutionApplication(
         commands,

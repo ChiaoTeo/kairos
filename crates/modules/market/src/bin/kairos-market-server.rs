@@ -27,6 +27,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         launch_id: args.launch_id,
         instance_id: args.instance_id,
         runtime_profile: args.runtime_profile,
+        aeron_dir: args.aeron_dir,
     })
     .await?
     .run()
@@ -46,4 +47,6 @@ struct Args {
     instance_id: String,
     #[arg(long)]
     runtime_profile: Option<String>,
+    #[arg(long, env = "AERON_DIR")]
+    aeron_dir: Option<PathBuf>,
 }

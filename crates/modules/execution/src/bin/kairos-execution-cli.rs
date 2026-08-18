@@ -94,7 +94,7 @@ fn read_current_execution_view(
         Some(instance.launch_id()),
         Some(instance.instance_id()),
     )?;
-    let frame = ExecutionViewReader::open(instance.root(), key.clone())?.read()?;
+    let frame = ExecutionViewReader::open(instance.snapshot(&[])?, key.clone())?.read()?;
     let envelope = frame.envelope_metadata();
     let view = frame.current_execution()?;
     let metadata = view.metadata();

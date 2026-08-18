@@ -89,106 +89,40 @@ impl MassiveOptionsCoverageSource {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         sync_store: SqlxProviderSyncStore,
-    ) -> ReferenceResult<Self> {
-        #[cfg(not(test))]
-        if !sync_store.supports_normalized_promotion() {
-            return Err(ReferenceError::Persistence(
-                "production Massive options ingestion requires normalized SQLite promotion".into(),
-            ));
-        }
+    ) -> ReferenceResult<(Self, kairos_conflux::ConfluxSystem)> {
         let api_key = api_key.into();
         let base_url = base_url.into();
-        let mut source = Self {
-            api_key,
-            base_url,
-            scopes: BTreeMap::new(),
-            last_good: BTreeMap::new(),
-            sync_store,
-            next_scope: 0,
-            coverage_dirty: false,
-        };
-        for underlying in source
-            .sync_store
+        let underlyings = sync_store
             .option_underlyings("massive-options")
-            .await?
-        {
-            source.load_scope(&underlying).await?;
+            .await?;
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        let mut keys = Vec::new();
+        for underlying in underlyings {
+            let key = kairos_conflux::ConnectionKey::new(Self::connection_key(&underlying)?)
+                .map_err(ReferenceError::Provider)?;
+            system
+                .connections()
+                .massive_rest
+                .create(
+                    key.clone(),
+                    MassiveRestConfig {
+                        environment: "public".into(),
+                        endpoint: base_url.clone(),
+                        api_key: secrecy::SecretString::new(api_key.clone().into()),
+                        instrument_query: MassiveInstrumentQuery::options(Some(
+                            underlying.clone(),
+                        )),
+                    },
+                )
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            keys.push((underlying, key));
         }
-        Ok(source)
+        let source = Self::from_keys(api_key, base_url, sync_store, keys).await?;
+        Ok((source, system))
     }
 
     fn scope_key(underlying: &str) -> String {
         format!("massive-options:{underlying}")
-    }
-
-    #[cfg(test)]
-    fn make_scope(&self, underlying: &str) -> ReferenceResult<ScopedMassiveOptions> {
-        let connection = massive_public_connection(
-            self.api_key.clone(),
-            self.base_url.clone(),
-            MassiveInstrumentQuery::options(Some(underlying.into())),
-        )?;
-        Ok(ScopedMassiveOptions {
-            connection: ConnectionRef::Owned(connection),
-            cursor: None,
-            legacy_accumulated: None,
-        })
-    }
-
-    #[cfg(test)]
-    async fn load_scope(&mut self, underlying: &str) -> ReferenceResult<()> {
-        let underlying = normalize_option_underlying(underlying)?;
-        if self.scopes.contains_key(&underlying) {
-            return Ok(());
-        }
-        let connection = match self.make_scope(&underlying)?.connection {
-            ConnectionRef::Owned(connection) => connection,
-            ConnectionRef::Managed(_, _) => unreachable!("test scope owns its connection"),
-        };
-        self.load_scope_with_connection(&underlying, connection)
-            .await
-    }
-
-    #[cfg(test)]
-    async fn load_scope_with_connection(
-        &mut self,
-        underlying: &str,
-        connection: MassiveRestConnection,
-    ) -> ReferenceResult<()> {
-        let underlying = normalize_option_underlying(underlying)?;
-        if self.scopes.contains_key(&underlying) {
-            return Err(ReferenceError::Invalid(format!(
-                "duplicate Massive options coverage connection: {underlying}"
-            )));
-        }
-        let key = Self::scope_key(&underlying);
-        if self.sync_store.prepare_projection(&key).await? {
-            tracing::info!(
-                event = "reference_provider_projection_reset",
-                component = "reference",
-                provider = %key,
-                projection_version = crate::services::sqlx_storage::PROVIDER_PROJECTION_VERSION,
-                "unfinished provider scan was reset for the current canonical projection"
-            );
-        }
-        let (cursor, accumulated) = self
-            .sync_store
-            .load_state(&key)
-            .await?
-            .unwrap_or((None, None));
-        #[cfg(test)]
-        if let Some(catalog) = self.sync_store.load_last_good(&key).await? {
-            self.last_good.insert(underlying.clone(), catalog);
-        }
-        let mut scope = ScopedMassiveOptions {
-            connection: ConnectionRef::Owned(connection),
-            cursor: None,
-            legacy_accumulated: None,
-        };
-        scope.cursor = cursor;
-        scope.legacy_accumulated = accumulated;
-        self.scopes.insert(underlying, scope);
-        Ok(())
     }
 
     async fn load_scope_with_key(
@@ -261,6 +195,41 @@ impl MassiveOptionsCoverageSource {
         Ok(())
     }
 
+    #[cfg(test)]
+    async fn set_option_underlying_with_connections(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<()> {
+        let underlying = normalize_option_underlying(underlying)?;
+        if enabled {
+            if self.scopes.contains_key(&underlying) {
+                return Ok(());
+            }
+            let (key, parameters) = self.connection_plan(&underlying)?;
+            connections
+                .massive_rest
+                .create(key.clone(), parameters)
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            self.set_option_underlying_with_key(&underlying, true, Some(key))
+                .await?;
+        } else {
+            let key = self.scopes.get(&underlying).map(|scope| match &scope.connection {
+                ConnectionRef::Managed(key, _) => key.clone(),
+            });
+            self.set_option_underlying_with_key(&underlying, false, None)
+                .await?;
+            if let Some(key) = key {
+                connections
+                    .massive_rest
+                    .remove(&key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
     fn merged_last_good(&self) -> ReferenceResult<ProviderCatalog> {
         merge_provider_catalog_views(self.last_good.values())
     }
@@ -297,14 +266,6 @@ impl MassiveOptionsCoverageSource {
                             .get(connection_key)
                             .map_err(|error| ReferenceError::Provider(error.to_string()))?
                             .fetch_instruments_page(cursor.as_deref(), 1000),
-                    )
-                    .await
-                }
-                #[cfg(test)]
-                ConnectionRef::Owned(connection) => {
-                    tokio::time::timeout(
-                        MASSIVE_PAGE_TIMEOUT,
-                        connection.fetch_instruments_page(cursor.as_deref(), 1000),
                     )
                     .await
                 }
@@ -402,15 +363,32 @@ impl MassiveEquitySource {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         sync_store: SqlxProviderSyncStore,
-    ) -> ReferenceResult<Self> {
-        let connection =
-            massive_public_connection(api_key, base_url, MassiveInstrumentQuery::equities())?;
-        Ok(Self {
-            connection: ConnectionRef::Owned(connection),
-            cursor: None,
-            accumulated: None,
-            sync_store,
-        })
+    ) -> ReferenceResult<(Self, kairos_conflux::ConfluxSystem)> {
+        let key = kairos_conflux::ConnectionKey::new("reference-massive-equity")
+            .map_err(ReferenceError::Provider)?;
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        system
+            .connections()
+            .massive_rest
+            .create(
+                key.clone(),
+                MassiveRestConfig {
+                    environment: "public".into(),
+                    endpoint: base_url.into(),
+                    api_key: secrecy::SecretString::new(api_key.into().into()),
+                    instrument_query: MassiveInstrumentQuery::equities(),
+                },
+            )
+            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+        Ok((
+            Self {
+                connection: ConnectionRef::managed(key),
+                cursor: None,
+                accumulated: None,
+                sync_store,
+            },
+            system,
+        ))
     }
 
     #[cfg(test)]
@@ -418,13 +396,7 @@ impl MassiveEquitySource {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         mut sync_store: SqlxProviderSyncStore,
-    ) -> ReferenceResult<Self> {
-        #[cfg(not(test))]
-        if !sync_store.supports_normalized_promotion() {
-            return Err(ReferenceError::Persistence(
-                "production Massive equity ingestion requires normalized SQLite promotion".into(),
-            ));
-        }
+    ) -> ReferenceResult<(Self, kairos_conflux::ConfluxSystem)> {
         if sync_store.prepare_projection("massive-equity").await? {
             tracing::info!(
                 event = "reference_provider_projection_reset",
@@ -438,34 +410,11 @@ impl MassiveEquitySource {
             .load_state("massive-equity")
             .await?
             .unwrap_or((None, None));
-        let mut source = Self::without_state(api_key, base_url, sync_store)?;
+        let (mut source, system) = Self::without_state(api_key, base_url, sync_store)?;
         source.cursor = cursor;
         source.accumulated = accumulated;
-        Ok(source)
+        Ok((source, system))
     }
-}
-
-#[cfg(test)]
-fn massive_public_connection(
-    api_key: impl Into<String>,
-    base_url: impl Into<String>,
-    instrument_query: MassiveInstrumentQuery,
-) -> ReferenceResult<MassiveRestConnection> {
-    let connection_key = kairos_conflux::ConnectionKey::new(format!(
-        "reference-massive-{}",
-        instrument_query.instrument_type.as_str()
-    ))
-    .map_err(ReferenceError::Provider)?;
-    MassiveRestConnection::new(
-        connection_key,
-        MassiveRestConfig {
-            environment: "public".into(),
-            endpoint: base_url.into(),
-            api_key: secrecy::SecretString::new(api_key.into().into()),
-            instrument_query,
-        },
-    )
-    .map_err(|error| ReferenceError::Provider(error.to_string()))
 }
 
 #[async_trait::async_trait(?Send)]
@@ -565,37 +514,36 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
     }
 
     #[cfg(test)]
-    async fn set_option_underlying(
+    async fn set_option_underlying_with_connections(
         &mut self,
         underlying: &str,
         enabled: bool,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<()> {
         let underlying = normalize_option_underlying(underlying)?;
-        let connection = if enabled && !self.scopes.contains_key(&underlying) {
-            Some(self.make_scope(&underlying)?.connection)
-        } else {
-            None
-        };
-        self.sync_store
-            .set_option_underlying("massive-options", &underlying, enabled)
-            .await?;
         if enabled {
-            if let Some(connection) = connection {
-                let connection = match connection {
-                    ConnectionRef::Owned(connection) => connection,
-                    ConnectionRef::Managed(_, _) => unreachable!("test scope owns connection"),
-                };
-                self.load_scope_with_connection(&underlying, connection)
-                    .await?;
+            if self.scopes.contains_key(&underlying) {
+                return Ok(());
             }
-        } else {
-            self.sync_store
-                .remove_last_good(&Self::scope_key(&underlying))
+            let (key, parameters) = self.connection_plan(&underlying)?;
+            connections
+                .massive_rest
+                .create(key.clone(), parameters)
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            self.set_option_underlying_with_key(&underlying, true, Some(key))
                 .await?;
-            self.scopes.remove(&underlying);
-            self.last_good.remove(&underlying);
-            self.next_scope = 0;
-            self.coverage_dirty = true;
+        } else {
+            let key = self.scopes.get(&underlying).map(|scope| match &scope.connection {
+                ConnectionRef::Managed(key, _) => key.clone(),
+            });
+            self.set_option_underlying_with_key(&underlying, false, None)
+                .await?;
+            if let Some(key) = key {
+                connections
+                    .massive_rest
+                    .remove(&key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            }
         }
         Ok(())
     }
@@ -630,8 +578,6 @@ impl ReferenceSource for MassiveEquitySource {
                     .fetch_instruments()
                     .await
             }
-            #[cfg(test)]
-            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         massive_provider_catalog(facts)
@@ -673,14 +619,6 @@ impl ReferenceSource for MassiveEquitySource {
                             .get(key)
                             .map_err(|error| ReferenceError::Provider(error.to_string()))?
                             .fetch_instruments_page(cursor.as_deref(), 1000),
-                    )
-                    .await
-                }
-                #[cfg(test)]
-                ConnectionRef::Owned(connection) => {
-                    tokio::time::timeout(
-                        MASSIVE_PAGE_TIMEOUT,
-                        connection.fetch_instruments_page(cursor.as_deref(), 1000),
                     )
                     .await
                 }

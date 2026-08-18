@@ -15,6 +15,7 @@ from .view import (
     AccountViewKey,
     AccountViewKind,
     AccountViewReader,
+    account_view_path,
     decode_view,
 )
 
@@ -25,6 +26,7 @@ __all__ = [
     "AccountViewKey",
     "AccountViewKind",
     "AccountViewReader",
+    "account_view_path",
     "backtest_mark_to_market",
     "decode_event",
     "decode_view",

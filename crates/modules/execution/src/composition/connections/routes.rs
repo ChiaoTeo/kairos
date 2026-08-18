@@ -116,7 +116,7 @@ fn binance_route(
             system
                 .connections()
                 .$stream
-                .create(stream_key.clone(), user())
+                .create_with_options(stream_key.clone(), user(), connection_options(option))
                 .map_err(|error| error.to_string())?;
             let stream_descriptor = system
                 .connections()
@@ -205,7 +205,7 @@ fn okx_route(
     system
         .connections()
         .okx_private_websocket
-        .create(
+        .create_with_options(
             stream_key.clone(),
             kairos_conflux::OkxPrivateWebSocketConfig {
                 connection: kairos_conflux::OkxWebSocketConfig {
@@ -218,6 +218,7 @@ fn okx_route(
                 segment_key: option.segment_key.clone(),
                 trading_mode,
             },
+            connection_options(option),
         )
         .map_err(|error| error.to_string())?;
     let stream_descriptor = system
@@ -256,7 +257,11 @@ fn ibkr_route(
     system
         .connections()
         .ibkr_order
-        .create(entry_key.clone(), order_config())
+        .create_with_options(
+            entry_key.clone(),
+            order_config(),
+            connection_options(option),
+        )
         .map_err(|error| error.to_string())?;
     let entry_descriptor = system
         .connections()
@@ -268,7 +273,11 @@ fn ibkr_route(
     system
         .connections()
         .ibkr_order
-        .create(query_key.clone(), order_config())
+        .create_with_options(
+            query_key.clone(),
+            order_config(),
+            connection_options(option),
+        )
         .map_err(|error| error.to_string())?;
     let query_descriptor = system
         .connections()
@@ -280,7 +289,7 @@ fn ibkr_route(
     system
         .connections()
         .ibkr_execution_stream
-        .create(
+        .create_with_options(
             stream_key.clone(),
             kairos_conflux::IbkrExecutionStreamConfig {
                 environment: environment(option),
@@ -290,6 +299,7 @@ fn ibkr_route(
                 account_id: option.account_id.clone(),
                 symbol: None,
             },
+            connection_options(option),
         )
         .map_err(|error| error.to_string())?;
     let stream_descriptor = system
@@ -311,6 +321,15 @@ fn binance_credential(option: &ExecutionConnectionOptions) -> kairos_conflux::Bi
         principal_id: option.principal_scope_id.clone(),
         api_key: option.api_key.clone(),
         secret: option.secret.clone(),
+    }
+}
+
+fn connection_options(
+    option: &ExecutionConnectionOptions,
+) -> kairos_conflux::ConnectionCreateOptions {
+    kairos_conflux::ConnectionCreateOptions {
+        required: option.required,
+        recovery: kairos_conflux::RecoveryPolicy::default(),
     }
 }
 

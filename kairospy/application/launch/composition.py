@@ -79,7 +79,7 @@ def build_backtest_driver(
     return StrategyBacktestDriver(
         account_socket=(None if account_endpoint is None else account_endpoint.socket),
         account_snapshot=(
-            None if account_endpoint is None else account_endpoint.snapshot
+            None if account_endpoint is None else account_endpoint.view_root
         ),
         account_id=account_id,
         risk_socket=None if endpoints.risk is None else endpoints.risk.socket,

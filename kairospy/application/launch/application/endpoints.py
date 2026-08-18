@@ -16,6 +16,7 @@ class ComponentEndpoint:
     component: str
     socket: Path
     snapshot: Path | None = None
+    view_root: Path | None = None
     required_segments: tuple[str, ...] = ()
 
 
@@ -86,6 +87,9 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
     snapshot = value.get("snapshot")
     if snapshot is not None and (not isinstance(snapshot, str) or not snapshot.strip()):
         raise RuntimeError(f"{component} endpoint has an invalid snapshot")
+    view_root = value.get("view_root")
+    if view_root is not None and (not isinstance(view_root, str) or not view_root.strip()):
+        raise RuntimeError(f"{component} endpoint has an invalid view_root")
     required_segments = value.get("required_segments", [])
     if not isinstance(required_segments, list) or any(
         not isinstance(segment, str) or not segment.strip()
@@ -93,10 +97,13 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
     ):
         raise RuntimeError(f"{component} endpoint has invalid required_segments")
     return ComponentEndpoint(
-        component,
-        Path(socket),
-        None if snapshot is None else Path(snapshot),
-        tuple(dict.fromkeys(segment.strip() for segment in required_segments)),
+        component=component,
+        socket=Path(socket),
+        snapshot=None if snapshot is None else Path(snapshot),
+        view_root=None if view_root is None else Path(view_root),
+        required_segments=tuple(
+            dict.fromkeys(segment.strip() for segment in required_segments)
+        ),
     )
 
 

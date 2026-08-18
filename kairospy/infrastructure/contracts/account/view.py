@@ -6,6 +6,7 @@ from .view_contract import (
     AccountViewKey,
     AccountViewKind,
     AccountViewReader,
+    account_view_path,
     decode_view,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "AccountViewKey",
     "AccountViewKind",
     "AccountViewReader",
+    "account_view_path",
     "decode_view",
 ]

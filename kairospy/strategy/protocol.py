@@ -26,6 +26,7 @@ from .results import CommandResult
 from .state import StrategyState
 
 if TYPE_CHECKING:
+    from kairospy.application.agent import AgentApplication
     from kairospy.application.strategy.application.decisions import (
         StrategyDecisionApplication,
     )
@@ -51,6 +52,7 @@ class StrategyContext(Protocol):
     account: AccountApplication
     risk: RiskApplication
     execution: ExecutionApplication
+    agent: "AgentApplication"
     clock: StrategyClock
     notifications: NotificationApplication
     decisions: "StrategyDecisionApplication"

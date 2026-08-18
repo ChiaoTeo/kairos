@@ -163,7 +163,8 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
     .expect("read Execution-owned admission policy");
     let projection = fs::read_to_string(root.join("dependencies/projection/mod.rs"))
         .expect("read Execution typed projections");
-    assert!(projection.contains("SharedSnapshotReader"));
+    assert!(projection.contains("AccountViewReader"));
+    assert!(!projection.contains("SharedSnapshotReader"));
     assert!(projection.contains("metadata.applied_revision()"));
     assert!(projection.contains("ViewCompleteness::COMPLETE"));
     assert!(projection.contains("FreshnessState::FRESH"));
@@ -365,8 +366,9 @@ fn execution_publication_is_owned_by_conflux_resources() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let actor = fs::read_to_string(root.join("src/application/conflux.rs")).expect("read actor");
     let services = rust_source(&root.join("src/services/publication"));
-    assert!(actor.contains("aeron_publishers"));
+    assert!(actor.contains("execution_event_publishers"));
     assert!(actor.contains("execution_view_publishers"));
+    assert!(actor.contains("try_with"));
     assert!(actor.contains("flush_durable_events"));
     assert!(!services.contains("SharedExecutionSnapshotPublisher"));
     assert!(!services.contains("SharedIntentSnapshotPublisher"));

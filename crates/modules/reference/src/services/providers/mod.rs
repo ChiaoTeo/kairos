@@ -21,8 +21,6 @@ enum ConnectionRef<C> {
         kairos_conflux::ConnectionKey,
         std::marker::PhantomData<fn() -> C>,
     ),
-    #[cfg(test)]
-    Owned(C),
 }
 
 impl<C> ConnectionRef<C> {

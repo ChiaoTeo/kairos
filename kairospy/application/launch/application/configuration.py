@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, cast
 
+from ...agent import AgentLaunchConfig
 from ...data import DatasetSetRef
 from ...workspace import ResourceScopePaths
 from .semantics import OptionBacktestConstraints
@@ -66,6 +67,8 @@ class LaunchPlan:
     live_safety: Mapping[str, Any] | None = None
     live_private_sync: Mapping[str, Any] | None = None
     notifications: Mapping[str, Any] | None = None
+    agent: Mapping[str, Any] | None = None
+    agent_profile: Mapping[str, Any] | None = None
 
     def normalized(self) -> dict[str, Any]:
         return cast(
@@ -104,6 +107,8 @@ class LaunchPlan:
                     "live_safety": self.live_safety,
                     "live_private_sync": self.live_private_sync,
                     "notifications": self.notifications,
+                    "agent": self.agent,
+                    "agent_profile": self.agent_profile,
                 }
             ),
         )
@@ -258,6 +263,10 @@ class LaunchConfig:
     def notifications(self) -> Mapping[str, Any]:
         return _optional_table(self.values.get("notifications"), "notifications")
 
+    @property
+    def agent(self) -> Mapping[str, Any]:
+        return _optional_table(self.values.get("agent"), "agent")
+
     def plan(self) -> LaunchPlan:
         self.require_valid()
         mode = self.mode
@@ -274,6 +283,11 @@ class LaunchConfig:
         )
         execution = dict(self.execution)
         notifications = _normalized_notifications(self.notifications)
+        agent = AgentLaunchConfig.from_mapping(
+            self.agent,
+            launch_mode=mode,
+        ).normalized()
+        agent_profile = _agent_profile_snapshot(self.root, agent)
         if (
             mode in {"backtest", "paper"}
             and execution.get("enabled", True)
@@ -409,6 +423,8 @@ class LaunchConfig:
             live_safety=live_safety,
             live_private_sync=live_private_sync,
             notifications=notifications,
+            agent=agent,
+            agent_profile=agent_profile,
         )
 
     @property
@@ -452,7 +468,14 @@ class LaunchConfig:
             not isinstance(strategy, str) or not strategy.strip() or ":" not in strategy
         ):
             issues.append("launch.strategy must be a module:callable reference")
-        for name in ("account", "execution", "strategy", "risk", "notifications"):
+        for name in (
+            "account",
+            "execution",
+            "strategy",
+            "risk",
+            "notifications",
+            "agent",
+        ):
             value = self.values.get(name)
             if value is not None and not isinstance(value, Mapping):
                 issues.append(f"[{name}] must be a table")
@@ -665,6 +688,12 @@ class LaunchConfig:
         notifications = self.values.get("notifications")
         if isinstance(notifications, Mapping):
             issues.extend(_notification_config_issues(notifications))
+        agent = self.values.get("agent")
+        if isinstance(agent, Mapping):
+            try:
+                AgentLaunchConfig.from_mapping(agent, launch_mode=mode)
+            except ValueError as error:
+                issues.append(str(error))
         mode_config = self.values.get(mode) if mode else None
         if isinstance(mode_config, Mapping) and "market" in mode_config:
             market = mode_config.get("market")
@@ -952,6 +981,76 @@ def _jsonable(value: object) -> object:
     return value
 
 
+def _agent_profile_snapshot(
+    workspace_root: Path, agent: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    if not agent.get("enabled", False):
+        return None
+    profile_id = agent.get("profile")
+    if (
+        not isinstance(profile_id, str)
+        or not profile_id
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in profile_id
+        )
+    ):
+        raise LaunchConfigError("agent.profile must be a safe resource id")
+    path = workspace_root / "config" / "agents" / "profiles" / f"{profile_id}.toml"
+    try:
+        raw = path.read_bytes()
+        values = tomllib.loads(raw.decode("utf-8"))
+    except FileNotFoundError as error:
+        raise LaunchConfigError(f"Agent Profile does not exist: {path}") from error
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise LaunchConfigError(f"Invalid Agent Profile: {path}") from error
+    value = values.get("profile", values)
+    if not isinstance(value, Mapping):
+        raise LaunchConfigError("Agent Profile must be a TOML table")
+    allowed = {
+        "id",
+        "version",
+        "goal",
+        "rubric",
+        "invalidation_rules",
+        "reason_codes",
+        "risk_flags",
+    }
+    unknown = sorted(str(key) for key in value if str(key) not in allowed)
+    if unknown:
+        raise LaunchConfigError(
+            f"Agent Profile contains unsupported field: {unknown[0]}"
+        )
+    actual_id = value.get("id", profile_id)
+    if actual_id != profile_id:
+        raise LaunchConfigError("Agent Profile identity mismatch")
+    version = value.get("version")
+    goal = value.get("goal")
+    if not isinstance(version, str) or not version.strip():
+        raise LaunchConfigError("Agent Profile version is required")
+    if not isinstance(goal, str) or not goal.strip():
+        raise LaunchConfigError("Agent Profile goal is required")
+    snapshot: dict[str, Any] = {
+        "id": profile_id,
+        "version": version.strip(),
+        "goal": goal.strip(),
+        "content_hash": hashlib.sha256(raw).hexdigest(),
+    }
+    for field in ("rubric", "invalidation_rules", "reason_codes", "risk_flags"):
+        items = value.get(field, [])
+        if not isinstance(items, list) or any(
+            not isinstance(item, str) or not item.strip() for item in items
+        ):
+            raise LaunchConfigError(
+                f"Agent Profile {field} must be an array of strings"
+            )
+        snapshot[field] = [item.strip() for item in items]
+    if not snapshot["rubric"] or not snapshot["invalidation_rules"]:
+        raise LaunchConfigError("Agent Profile rubric/invalidation_rules are required")
+    return snapshot
+
+
 def _normalized_notifications(value: Mapping[str, Any]) -> dict[str, Any]:
     enabled = value.get("enabled", False)
     required = value.get("required", False)
@@ -1018,7 +1117,9 @@ def _notification_config_issues(value: Mapping[str, Any]) -> list[str]:
         or isinstance(queue_capacity, bool)
         or not 1 <= queue_capacity <= 100_000
     ):
-        issues.append("notifications.queue_capacity must be an integer from 1 to 100000")
+        issues.append(
+            "notifications.queue_capacity must be an integer from 1 to 100000"
+        )
     grace = value.get("shutdown_grace_seconds", 5)
     if (
         not isinstance(grace, (int, float))
@@ -1054,10 +1155,14 @@ def _notification_config_issues(value: Mapping[str, Any]) -> list[str]:
             issues.append("notifications may reference at most 64 unique destinations")
     for route in defaults if isinstance(defaults, list) else []:
         if isinstance(route, str) and route not in route_names:
-            issues.append(f"notifications.default_routes references unknown route: {route}")
+            issues.append(
+                f"notifications.default_routes references unknown route: {route}"
+            )
     for route in lifecycle_routes if isinstance(lifecycle_routes, list) else []:
         if isinstance(route, str) and route not in route_names:
-            issues.append(f"notifications.lifecycle_routes references unknown route: {route}")
+            issues.append(
+                f"notifications.lifecycle_routes references unknown route: {route}"
+            )
     if enabled and not route_names:
         issues.append("enabled notifications require at least one route")
     if not enabled and route_names:

@@ -30,7 +30,7 @@ pub use kairos_transport::AeronEndpoint;
 pub use transport::AccountUdsTransport;
 pub use view::{
     account_view_path, decode_account_current, AccountViewKey, AccountViewKind,
-    AccountViewPublisher, ViewFrame, ViewMetadata,
+    AccountViewPublisher, AccountViewReader, ViewFrame, ViewMetadata,
 };
 
 use std::path::PathBuf;

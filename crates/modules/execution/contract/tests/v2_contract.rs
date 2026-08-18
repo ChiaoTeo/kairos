@@ -1,5 +1,5 @@
 use kairos_execution_contract::event::decode_event;
-use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind};
+use kairos_execution_contract::{execution_view_path, ExecutionViewKey, ExecutionViewKind};
 
 #[test]
 fn active_view_resources_are_partitioned_by_workspace_and_kind() {
@@ -18,14 +18,14 @@ fn active_view_resources_are_partitioned_by_workspace_and_kind() {
     )
     .unwrap();
     assert_ne!(
-        orders.resource_path("/runtime"),
-        intents.resource_path("/runtime")
+        execution_view_path("/runtime", &orders).unwrap(),
+        execution_view_path("/runtime", &intents).unwrap()
     );
-    assert!(orders
-        .resource_path("/runtime")
+    assert!(execution_view_path("/runtime", &orders)
+        .unwrap()
         .ends_with("active-orders/current.snapshot"));
-    assert!(intents
-        .resource_path("/runtime")
+    assert!(execution_view_path("/runtime", &intents)
+        .unwrap()
         .ends_with("active-intents/current.snapshot"));
 }
 

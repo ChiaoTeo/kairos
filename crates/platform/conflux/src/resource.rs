@@ -1,5 +1,9 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::Hash;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -14,6 +18,31 @@ pub enum ResourceState {
     Retiring,
     Stopped,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecoveryPolicy {
+    pub initial_backoff: Duration,
+    pub maximum_backoff: Duration,
+    pub maximum_attempts: Option<u32>,
+}
+
+impl Default for RecoveryPolicy {
+    fn default() -> Self {
+        Self {
+            initial_backoff: Duration::from_secs(1),
+            maximum_backoff: Duration::from_secs(32),
+            maximum_attempts: Some(6),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionCreateOptions {
+    pub required: bool,
+    pub recovery: RecoveryPolicy,
+}
+
+pub type ManagedConnectionPolicy = ConnectionCreateOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsureDisposition {
@@ -165,31 +194,57 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManagedLifecycleOperation {
+    Connect,
+    Reconnect,
+    Disconnect,
+}
+
+type ManagedLifecycleFuture<C> = Pin<
+    Box<
+        dyn Future<Output = (C, Result<(), kairos_integration::IntegrationError>)> + Send + 'static,
+    >,
+>;
+
+struct ManagedLifecycle<C> {
+    operation: ManagedLifecycleOperation,
+    future: ManagedLifecycleFuture<C>,
+}
+
 pub struct ManagedConnection<C> {
-    connection: C,
+    connection: Option<C>,
+    lifecycle: Option<ManagedLifecycle<C>>,
     revision: u64,
     epoch: u64,
     generation: u64,
     state: ResourceState,
+    policy: ManagedConnectionPolicy,
 }
 
 impl<C> ManagedConnection<C> {
-    fn new(connection: C, revision: u64, generation: u64) -> Self {
+    fn new(connection: C, revision: u64, generation: u64, policy: ManagedConnectionPolicy) -> Self {
         Self {
-            connection,
+            connection: Some(connection),
+            lifecycle: None,
             revision,
             epoch: 0,
             generation,
             state: ResourceState::Created,
+            policy,
         }
     }
 
     pub fn connection(&self) -> &C {
-        &self.connection
+        self.connection
+            .as_ref()
+            .expect("managed connection is unavailable during lifecycle transition")
     }
 
     pub fn connection_mut(&mut self) -> &mut C {
-        &mut self.connection
+        self.connection
+            .as_mut()
+            .expect("managed connection is unavailable during lifecycle transition")
     }
 
     pub const fn revision(&self) -> u64 {
@@ -208,6 +263,10 @@ impl<C> ManagedConnection<C> {
         self.state
     }
 
+    pub const fn policy(&self) -> ManagedConnectionPolicy {
+        self.policy
+    }
+
     pub fn set_state(&mut self, state: ResourceState) {
         self.state = state;
     }
@@ -222,9 +281,70 @@ impl<C> ManagedConnection<C> {
         self.epoch = next_epoch(self.epoch)?;
         self.revision = revision;
         self.generation = generation;
-        self.connection = connection;
+        assert!(
+            self.lifecycle.is_none(),
+            "cannot replace a connection during lifecycle transition"
+        );
+        self.connection = Some(connection);
         self.state = ResourceState::Created;
         Ok(())
+    }
+}
+
+impl<C> ManagedConnection<C>
+where
+    C: kairos_integration::ConnectionLifecycleCommand + Send + 'static,
+{
+    pub(crate) fn begin_lifecycle(&mut self, operation: ManagedLifecycleOperation) {
+        assert!(
+            self.lifecycle.is_none(),
+            "managed connection lifecycle is already in progress"
+        );
+        let mut connection = self
+            .connection
+            .take()
+            .expect("managed connection is present before lifecycle transition");
+        let future = Box::pin(async move {
+            let result = match operation {
+                ManagedLifecycleOperation::Connect => {
+                    kairos_integration::ConnectionLifecycleCommand::connect(&mut connection).await
+                }
+                ManagedLifecycleOperation::Reconnect => {
+                    kairos_integration::ConnectionLifecycleCommand::reconnect(&mut connection).await
+                }
+                ManagedLifecycleOperation::Disconnect => {
+                    kairos_integration::ConnectionLifecycleCommand::disconnect(&mut connection)
+                        .await
+                }
+            };
+            (connection, result)
+        });
+        self.lifecycle = Some(ManagedLifecycle { operation, future });
+    }
+
+    pub(crate) fn poll_lifecycle(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<(
+        ManagedLifecycleOperation,
+        Result<(), kairos_integration::IntegrationError>,
+    )> {
+        let Some(lifecycle) = self.lifecycle.as_mut() else {
+            return Poll::Pending;
+        };
+        let operation = lifecycle.operation;
+        match lifecycle.future.as_mut().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready((connection, result)) => {
+                self.connection = Some(connection);
+                self.lifecycle = None;
+                Poll::Ready((operation, result))
+            }
+        }
+    }
+
+    pub(crate) fn lifecycle_in_progress(&self) -> bool {
+        self.lifecycle.is_some()
     }
 }
 
@@ -427,19 +547,38 @@ where
 
         let generation = next_generation(self.generations.get(&key).copied())?;
         self.generations.insert(key.clone(), generation);
-        self.entries
-            .insert(key, ManagedConnection::new(create(), revision, generation));
+        self.entries.insert(
+            key,
+            ManagedConnection::new(
+                create(),
+                revision,
+                generation,
+                ConnectionCreateOptions::default(),
+            ),
+        );
         Ok(EnsureDisposition::Created)
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_new(&mut self, key: K, connection: C) -> Result<bool, ResourceError> {
+        self.insert_new_with_options(key, connection, ConnectionCreateOptions::default())
+    }
+
+    pub(crate) fn insert_new_with_options(
+        &mut self,
+        key: K,
+        connection: C,
+        options: ConnectionCreateOptions,
+    ) -> Result<bool, ResourceError> {
         if self.entries.contains_key(&key) {
             return Ok(false);
         }
         let generation = next_generation(self.generations.get(&key).copied())?;
         self.generations.insert(key.clone(), generation);
-        self.entries
-            .insert(key, ManagedConnection::new(connection, 0, generation));
+        self.entries.insert(
+            key,
+            ManagedConnection::new(connection, 0, generation, options),
+        );
         Ok(true)
     }
 
@@ -492,7 +631,37 @@ fn next_generation(current: Option<u64>) -> Result<u64, ResourceError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use super::*;
+
+    struct SlowConnection {
+        connects: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for SlowConnection {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl kairos_integration::ConnectionLifecycleCommand for SlowConnection {
+        async fn connect(&mut self) -> Result<(), kairos_integration::IntegrationError> {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            self.connects.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), kairos_integration::IntegrationError> {
+            Ok(())
+        }
+
+        async fn reconnect(&mut self) -> Result<(), kairos_integration::IntegrationError> {
+            self.connect().await
+        }
+    }
 
     #[test]
     fn named_resources_replace_only_on_a_newer_revision() {
@@ -573,5 +742,57 @@ mod tests {
         drop(connections.remove(&key));
         assert!(connections.insert_new(key.clone(), 20).unwrap());
         assert_eq!(connections.get(&key).unwrap().generation(), 2);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_future_remains_owned_by_the_managed_connection() {
+        let connects = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut managed = ManagedConnection::new(
+            SlowConnection {
+                connects: Arc::clone(&connects),
+                drops: Arc::clone(&drops),
+            },
+            0,
+            1,
+            ConnectionCreateOptions::default(),
+        );
+        managed.begin_lifecycle(ManagedLifecycleOperation::Connect);
+        assert!(managed.lifecycle_in_progress());
+
+        let (operation, result) = std::future::poll_fn(|cx| managed.poll_lifecycle(cx)).await;
+        assert_eq!(operation, ManagedLifecycleOperation::Connect);
+        assert!(result.is_ok());
+        assert_eq!(connects.load(Ordering::SeqCst), 1);
+        assert!(!managed.lifecycle_in_progress());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(managed);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_starting_slot_cancels_and_drops_its_connection() {
+        let connects = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut connections = ManagedConnections::new();
+        let key = "slow".to_owned();
+        connections
+            .insert_new(
+                key.clone(),
+                SlowConnection {
+                    connects: Arc::clone(&connects),
+                    drops: Arc::clone(&drops),
+                },
+            )
+            .unwrap();
+        connections
+            .get_mut(&key)
+            .unwrap()
+            .begin_lifecycle(ManagedLifecycleOperation::Connect);
+        drop(connections.remove(&key));
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(connects.load(Ordering::SeqCst), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }

@@ -2,9 +2,9 @@
 
 Document type: current architecture.
 
-Capital management turns strategy demand into safe, reconciled capital
-placement. It is not an alias for a participant's Funding Wallet API and it is
-not part of order execution.
+Capital management maintains policy-driven account funding targets and turns
+aggregated demand into safe, reconciled capital placement. It is not an alias
+for a participant's Funding Wallet API and it is not part of order execution.
 
 ## Three distinct ledgers
 
@@ -16,12 +16,11 @@ The system must keep three kinds of state separate.
    capabilities.
 2. **Logical capital allocation** describes how much capital a strategy may
    use. Risk owns policies, budgets, and reservations. The target live
-   topology gives Treasury authority over configured capital-source accounts
-   and gives each Strategy launch an exclusive trading lease over its trading
-   accounts; Risk limits still apply within that isolation.
+   topology gives each Strategy instance exclusive leases over every account
+   in its capital group; Risk limits still apply within that isolation.
 3. **Capital-operation lifecycle** describes an intended change in physical
    placement, such as an internal account transfer, Earn subscription, or Earn
-   redemption. A future Capital/Treasury application owns these durable
+   redemption. The Strategy instance's Capital application owns these durable
    intents and their reconciliation; Integration only executes participant
    primitives.
 
@@ -35,60 +34,97 @@ expected Account facts have been observed.
 |---|---|
 | Balances, positions, equity, available margin, Earn positions | Account |
 | Strategy/account limits and temporary capital reservations | Risk |
-| Capital-source liquidity, central Earn, and account-to-account allocation/return | Capital/Treasury |
+| Liquidity targets, Earn deployment, and movement inside one Strategy capital group | Capital |
 | Participant transfer, subscribe, redeem, and status-query calls | Integration |
-| Strategy-account internal placement and exchange-facing order lifecycle | Execution |
+| Exchange-facing order lifecycle | Execution |
 | Target position or trade intent | Strategy |
-| Risk shortfall to Treasury and Execution resume orchestration | System/launch composition |
+| Risk shortfall observation and post-funding re-evaluation | Strategy instance composition |
 
-Capital/Treasury becomes a business module when the first end-to-end capital
+Capital becomes a business module when the first end-to-end capital
 allocation use case is implemented. Until then, do not put its state in
 Integration, Account, Risk, or Execution merely to avoid creating the proper
 owner.
 
 ## Runtime scope
 
-A live capital pool is a Workspace-scoped business resource because multiple
-Strategy launches may request allocations from it. It is not owned by any one
-Strategy instance. Workspace configuration identifies one or more pools by a
-stable `capital_pool_id`, environment, managed accounts, assets, and permitted
-routes.
+Capital is an optional Strategy-instance capability. A Strategy can run
+without Capital when its accounts are pre-funded or externally funded; Risk
+and Execution must never require Capital health for an order whose required
+funds are already Account-observed and available. When Capital is enabled,
+that Strategy runtime instance owns exactly one Capital runtime instance. All accounts
+exclusively assigned to the Strategy instance form one `CapitalGroup`,
+including trading, funding, yield, and liquidity-buffer locations. The group
+is the complete capital and liquidity boundary for that Strategy across
+accounts, venues, and segments. There is no global Capital runtime, global
+capital pool, or central Treasury allocation layer.
 
-Each pool still has exactly one mutable state owner: one active Capital Actor
-instance holds a Workspace-scoped fenced writer lease for that
-`capital_pool_id`. A standby or restarted process may take over only with a
-new fencing token and after recovering the pool journal. The Actor owns
-allocation requests, reservations, targets, and operation plans; Account
-continues to own actual balances and positions.
+The relationship is one-to-one: a Capital runtime cannot manage several
+groups, and a group cannot be attached to several live Strategy instances.
+`capital_group_id` is the durable identity of the Strategy's assigned account
+set and is preserved across restarts. `instance_id` identifies only the
+current process run. A restarted instance recovers the same group journal and
+reconciles in-flight operations before writing.
 
-There is no mandatory single global pool. Separate legal entities,
-environments, custody domains, or operating mandates may require separate
-pools within one Workspace. Live pools are normally supervised as shared
-Workspace services. Paper and backtest pools are instance-scoped simulations
-so concurrent runs remain deterministic and isolated.
+With `capital.enabled = false`, no Capital process, journal, demand sink, or
+transfer wait state is created. A physical funding shortfall returns a
+structured unavailable-funding result to the Strategy instead of waiting for
+an absent service. With Capital enabled but degraded, only new capital
+operations are disabled; already funded orders continue through normal
+Account, Portfolio, Risk, and Execution checks.
 
-## Account catalog, pools, and transfer routes
+Each live group has exactly one mutable state owner: the Capital Actor inside
+the owning Strategy launch. It uses that launch's fenced account authorities
+and owns demand observations, targets, Capital reservations, and operation
+plans. Account continues to own actual balances and positions. Paper and
+backtest create an instance-local simulated Capital runtime with the same
+group semantics.
 
-Workspace owns one global catalog of configured external accounts,
-credentials, environments, and live leases. Capital does not copy or own that
-catalog. A Capital pool selects account locations from it and overlays capital
-policy:
+A CapitalGroup is the business identity of a body of capital, not an account.
+The model deliberately distinguishes two levels:
+
+- `ExternalAccountIdentity` is an external account/security principal. A
+  Binance master account, each Binance subaccount, and two independently
+  registered Binance accounts are distinct Accounts.
+- `AccountSegment` is a participant ledger inside one Account, such as Spot,
+  Funding, USD-M Futures, COIN-M Futures, or Margin.
+
+A balance location is identified by `Account + Segment + Asset`. The
+CapitalGroup contains one or more Accounts and the permitted Segments within
+them. Membership roles such as source, trading destination, liquidity buffer,
+or yield location attach to these balance locations. The exclusive lease and
+fencing unit is the entire Account, not an individual Segment. Spendable
+capacity from one balance location may belong to only one live CapitalGroup at
+a time; read-only observation may be shared.
+
+## Account membership and transfer routes
+
+Launch configuration resolves external accounts, credentials, environments,
+and exclusive leases before constructing the Strategy instance. Capital does
+not own credentials or duplicate Account state. It receives the resolved,
+fenced member set and overlays group-local capital policy:
 
 ```text
-Workspace account catalog
+Strategy instance configuration
         |
-        +--> capital pool membership
+        +--> CapitalGroup membership and role
         +--> directed transfer-route configuration
         +--> current account lease/fencing owner
 ```
 
-A Workspace may configure a default pool named `global`, but code must still
-address it by `capital_pool_id`; this avoids mixing live/testnet, legal
-entities, or unrelated custody domains later.
+The Strategy configuration names its `capital_group_id`, member Accounts, and
+permitted Segments.
+No separate global group registry is required. Instance composition must
+reject startup if another live Strategy instance holds a spendable lease for
+any member location.
+
+Movement between Segments of one Account and movement between Accounts in one
+Strategy group are both rebalancing. Movement between two Strategy groups
+changes ownership and is unsupported by the first system design; it cannot be
+inferred from a route, demand, or Intent.
 
 A transfer route is directed and explicit. Its configuration identifies:
 
-- source and destination account/segment;
+- source and destination `Account + Segment`;
 - participant operation kind, such as internal book transfer,
   account-to-account transfer, or withdrawal/deposit workflow;
 - supported assets and optional amount/daily limits;
@@ -97,18 +133,17 @@ A transfer route is directed and explicit. Its configuration identifies:
 - enabled/disabled state and policy version.
 
 Possessing an account lease is necessary but not sufficient to move funds.
-Every debit operation also requires the active pool Actor fencing token, an
-enabled route, an authorized Capital request, sufficient unreserved balance,
-and applicable Risk/Capital limits. A Strategy lease authorizes its Execution
+Every debit operation also requires the active CapitalGroup Actor fencing token, an
+enabled route, an authorized Capital rebalance decision, sufficient
+unreserved balance, and applicable Risk/Capital limits. A Strategy lease authorizes its Execution
 to make permitted writes inside that Strategy account; it does not authorize
 arbitrary cross-account transfers.
 
-For a transfer between distinct accounts, authority is checked on the source
-side. If the source is currently leased to a Strategy launch, an outgoing
-return requires a current request/delegation from that lease owner; Treasury
-cannot forcibly sweep it. The destination does not surrender its trading
-lease, but the transfer must correspond to a current allocation request and
-Account must observe the credit before settlement completes.
+For a transfer between distinct Accounts, authority is checked on the source
+side. Both Accounts and their endpoint Segments must be current members of the
+same CapitalGroup, the source Account lease must belong to the owning Strategy
+instance, and Account must observe the debit and credit before settlement
+completes. A route may not be used to escape the group boundary.
 
 Capital management must include, at minimum:
 
@@ -118,6 +153,44 @@ Capital management must include, at minimum:
 - Account-observed settlement and stale-fact rejection;
 - fenced writer takeover, immutable audit correlation, and alerts;
 - explicit return/recovery policy when a Strategy stops or a plan fails.
+
+## Account dependency and readiness
+
+Capital depends on Account and Portfolio application/contract facts; it never owns a
+second balance feed. The owning launch composition starts one Account runtime
+for each group member, builds the Portfolio view, and starts Capital only when
+enabled.
+Account uses read authority; the launch's fenced write authorities remain
+available to Execution and Capital for their permitted operations.
+
+Capital may be constructed or recover before Account becomes ready. It enters
+`WaitingForAccounts` and becomes `Ready` only after all required member views
+are complete, fresh, identity-matched, and at acceptable watermarks. Missing
+optional members produce `Degraded`; missing critical members block new
+writes.
+
+If Account becomes stale or unavailable:
+
+- Capital freezes new plans that debit or credit the affected location;
+- an acknowledged transfer remains `AwaitingAccountObservation` and is not
+  retried merely because the balance view is absent;
+- participant operation status may aid reconciliation, but cannot prove
+  balance settlement;
+- persisted snapshots may explain recovery state, but stale snapshots cannot
+  authorize new capacity or close a plan.
+
+Strategy instance composition starts Account dependencies before opening the
+Capital write barrier and supervises them together. Capital application code
+does not spawn Account processes. If an Account runtime stops later, Capital
+degrades and freezes affected routes. Paper/backtest use the same
+instance-local lifecycle.
+
+Startup acquires the complete member lease set before enabling writes. A
+partial lease or a critical Account readiness failure keeps Capital and
+Execution unavailable and releases any newly acquired leases; the Strategy
+must not start with a silently smaller capital group. Shutdown first closes
+new order admission, then drains or reconciles active Execution and Capital
+commitments, persists both owners, and finally releases member leases.
 
 ## Risk capacity and no-double-spend rules
 
@@ -130,12 +203,24 @@ configured policy limit
   = available Risk capacity
 ```
 
+Risk is fundamentally the risk-budget ledger and admission authority. It maps
+a proposed Execution plan into required budget usage, atomically reserves that
+usage, and later consumes, resizes, expires, or releases the reservation.
+Portfolio records current and historical portfolio facts; it does not grant
+risk capacity.
+
 An Account balance increase changes physical availability; it does not
 automatically increase a Strategy policy limit. If Capital only fulfills an
 already approved allocation, Risk keeps the same limit and refreshes its
-Account facts. A true budget increase is an explicit, versioned policy or
-allocation command. A budget decrease must be rejected while existing usage
+Account facts. A true budget increase is an explicit, versioned Risk policy
+command. A budget decrease must be rejected while existing usage
 and reservations exceed the proposed limit.
+
+Risk is a required, launch-scoped enforcement process for every order-producing
+Strategy. It is not embedded in user Strategy code and does not depend on
+Capital. If Risk is unavailable, Execution rejects new risk-increasing orders;
+cancel and explicitly governed emergency risk-reduction paths remain
+available. Signal-only launches with Execution disabled may omit Risk.
 
 Metrics do not share one accounting rule:
 
@@ -173,48 +258,75 @@ the local physical deduction while the order and Risk audit correlation remain
 active. Fills resize commitments; cancel/reject/expiry release them only after
 delivery certainty is resolved.
 
-Capital uses the same principle at pool scope. A Capital Actor atomically
-reserves source funds before submitting a transfer, so two allocation plans
-cannot spend the same pool balance. It releases or consumes that reservation
+Capital uses the same principle at CapitalGroup scope. A Capital Actor atomically
+reserves source funds before submitting a transfer, so two rebalance plans
+cannot spend the same group balance. It releases or consumes that reservation
 only through participant reconciliation plus Account-observed settlement.
+
+## Funding targets and rebalance decisions
+
+Capital maintains a versioned `minimum < target < maximum` policy for each
+member account/segment/asset. The policy also defines a stress buffer, minimum
+movement amount, deficit dwell time, cooldown, and hysteresis. This is the
+normal pre-funding mechanism; it is not derived from the latest order Intent.
+
+`CapitalDemandObserved` is advisory evidence. Capital deduplicates, expires,
+nets, and aggregates observations by destination, asset, and time horizon. It
+creates a rebalance decision only when the resulting target deficit persists,
+Account facts are fresh, an intra-group route is enabled, source surplus is
+unreserved, and all policy limits permit the movement. Repeated or replaced
+Intents must not be blindly summed.
 
 ## Control loop
 
 ```text
-Strategy trade/position intent
-        |
-        v
-Execution route and exposure plan
-        |
-        v
-Risk authorization and reservation
-        +--> sufficient: Execution may submit
-        |
-        +--> insufficient: system creates Treasury allocation target
+HOT PATH
+Strategy intent -> Execution plan -> Risk admission
+                                      |
+                     +----------------+----------------+
+                     |                                 |
+                 sufficient                    physical shortfall
+                     |                                 |
+          Risk reservation + order          defer/expire old plan
+                                                       |
+                                             demand observation only
+
+SLOW PATH
+Account facts + Risk budgets + scheduled demand + liquidity policy
                               |
                               v
-                         Capital movement plan
-                              |
-                              +--> redeem Earn if required
-                              +--> account transfer if required
+                    aggregate by account/asset/horizon
                               |
                               v
-                     Participant status reconciliation
+                  minimum / target / maximum evaluation
+                              |
+                       rebalance decision
+                              |
+                  redeem / transfer / reconcile
                               |
                               v
-                   Account observes available margin
+                    Account observes settlement
                               |
                               v
-                      Risk re-authorization
+             Strategy or durable Intent re-evaluates
                               |
                               v
-                        Execution resumes
+                 new Execution plan + fresh Risk check
 ```
 
 Strategy never supplies an authoritative raw margin requirement. Execution
 supplies the planned exposure; Risk calculates and authorizes the margin. The
-system routes a physical shortfall to the configured Workspace capital pool;
-that pool creates the Treasury allocation target.
+Strategy instance may report a physical shortfall to its Capital runtime, but
+that observation never authorizes a transfer. Capital aggregates it
+with policy targets and other demand before creating a rebalance decision.
+
+The normal production path is pre-funded. Capital maintains account buffers
+before order admission, so most intents never wait for a transfer. A
+short-lived trading intent expires when funding is unavailable. A durable
+target intent may remain deferred, but its old Execution plan, market inputs,
+OrderCommitment, and Risk reservation do not wait for a transfer. After
+Account observes funding, the target is evaluated again and receives a new
+plan and fresh Risk authorization.
 
 Execution must not submit orders against capital that is merely planned,
 submitted, or participant-acknowledged. The Account observation used for the
@@ -226,57 +338,59 @@ The target production model is an account network, not a fixed master-account
 hierarchy:
 
 ```text
-capital-source account(s) --transfer route--> Strategy trading account(s)
-Strategy trading account -> at most one active live Strategy launch
+Account A / Funding ----intra-account route----> Account A / USD-M
+Account A / Funding ----inter-account route----> Account B / Funding
+every Account (all of its Segments) -> exactly one live Strategy instance
 ```
 
-An account node is an `ExternalAccountIdentity` plus one of its addressable
-segments. A directed route records which operation can move a specific asset
-between two nodes and which authority is required. Binance master/subaccount
-transfer is one concrete route. Two independently configured accounts at the
-same participant are another possible route. No Capital domain invariant
-depends on a `master` or `subaccount` label.
+A route endpoint is an `ExternalAccountIdentity` plus one of its addressable
+Segments. A directed route records which operation can move a specific asset
+between two endpoints and which authority is required. Funding-to-USD-M is an
+intra-Account route. Binance master/subaccount transfer is an inter-Account
+route. Two independently registered accounts are also separate Accounts, but
+may require a withdrawal/deposit workflow rather than an internal transfer.
+No Capital domain invariant depends on a `master` or `subaccount` label.
 
 The current lease implementation already fences writes at external-account
-scope. Treasury must have authority for every source-side write, while every
-Strategy trading account remains exclusively leased to its live launch. A
+scope. Capital must use its Strategy instance's authority for every
+source-side write, while every member account remains exclusively leased to
+that instance. A
 multi-venue strategy may bind several dedicated accounts, but another live
 Strategy launch cannot trade through them at the same time. Two strategies
 never share one margin book.
 
-Consider 100,000 USDT distributed across configured capital accounts:
+Consider Strategy A's 100,000 USDT distributed across its own accounts:
 
 ```text
-Treasury liquidity buffer          20,000
-Strategy A trading-account target  30,000
-Strategy B trading-account target  20,000
-Central Earn deployment            30,000
+Funding liquidity buffer           20,000
+Spot trading-account target        30,000
+USD-M trading-account target       20,000
+Earn deployment                    30,000
 ```
 
-Each strategy is isolated in its own trading account even though Treasury can
-allocate from a set of capital-source accounts. If Strategy A already has
-sufficient collateral, Risk creates a logical reservation and no participant
-transfer occurs. If it has a physical shortfall, Treasury selects an eligible
-route, moves the allocation to Strategy A's account, and waits for Account to
-observe settlement. Execution may then perform Funding-to-USD-M placement
-inside Strategy A's account.
+All locations belong to the same Strategy instance, but keep distinct physical
+balances. If the target trading location already has sufficient collateral,
+Risk creates a logical reservation and no participant transfer occurs. If it
+has a physical shortfall, Capital selects an eligible intra-group route,
+moves funds, and waits for Account to observe settlement. Execution only plans
+and submits an order after the destination balance is available.
 
-Treasury must hold or present the route-specific source authority before it
-moves capital. A destination Strategy launch must provide a current allocation
-request tied to its fenced account ownership; Treasury must not push funds
-into an unrelated or stale launch. The logical reservation remains active
-while movement is pending so that another intent from the same strategy
-cannot consume the same allocation. Failure or expiry releases the
-reservation according to the Capital plan's policy.
+Capital must hold the route-specific source authority before it moves funds.
+The destination must be a current member with a current funding target tied to
+the same fenced Strategy instance. Capital creates its own source-funds reservation
+while movement is pending. It does not keep an order-level Risk reservation or
+OrderCommitment alive across the transfer. Failure or expiry releases the
+Capital reservation according to the plan policy.
 
 The ownership boundary determines the operation owner:
 
 | Operation | Owner |
 |---|---|
-| Funding, USD-M, or Earn placement inside one Strategy account | Execution |
-| Earn deployment and redemption in a central capital account | Capital/Treasury |
-| Movement between distinct external account identities | Capital/Treasury |
+| Funding, USD-M, or Earn placement inside the Strategy group | Capital |
+| Earn deployment and redemption | Capital |
+| Movement between member external account identities | Capital |
 | Trade orders inside a Strategy account | Execution |
+| Movement between Strategy groups | Unsupported; requires a future explicit ownership workflow |
 
 ## Integration primitives
 
@@ -315,8 +429,8 @@ when a business owner needs it and the shared economic semantics are proven.
 This lets Binance coverage grow continuously without turning Integration into
 a universal string-parameter API.
 
-The first Treasury adapter may use Binance master/subaccount transfer because
-it is a concrete account-to-account rail. The Capital request and plan still
+The first Capital adapter may use Binance master/subaccount transfer because
+it is a concrete account-to-account rail. The Capital target and plan still
 use source/destination account identities and route evidence, not master/sub
 domain fields. Cross-participant movement is modeled separately as a
 withdrawal/deposit workflow because it has address, network, fee,
@@ -346,15 +460,16 @@ Earn products even when a participant markets them next to Earn.
 
 ## First end-to-end implementation
 
-The first Capital/Treasury slice should implement one concrete workflow, for
-example: redeem Binance Simple Earn in a configured capital-source account,
-move USDT through a supported Binance account-to-account route into a Strategy
-account, let that Strategy's Execution place the funds into its USD-M segment,
-observe the resulting Account balance, and then release the strategy to trade.
-Binance may implement that first route with its master/subaccount API, but the
-business model must not depend on the hierarchy. That slice must persist:
+The first Capital slice should implement one concrete workflow, for example:
+redeem Binance Simple Earn in one member account, move USDT through a supported
+route into another member account or its USD-M segment, and observe the
+resulting Account balance. The movement is triggered by a
+persisting account funding deficit against a configured target, not by one
+Intent. Binance may implement that first route with its master/subaccount API,
+but the business model must not depend on the hierarchy. A later Strategy
+evaluation creates a fresh Execution plan. That slice must persist:
 
-- capital plan and strategy correlation;
+- target, rebalance decision, aggregated demand, and optional causal Strategy references;
 - idempotency keys for every participant operation;
 - Risk reservation identity;
 - submitted, indeterminate, terminal, and reconciled states;

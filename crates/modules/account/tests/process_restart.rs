@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account_contract::{
-    decode_account_current, AccountContractClient, DecimalValue, SimulatedSettlement,
+    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader, DecimalValue,
+    SimulatedSettlement,
 };
-use kairos_transport::{SharedSnapshotReader, SnapshotEnvelopeMetadata};
+use kairos_transport::SnapshotEnvelopeMetadata;
 use kairos_workspace::Workspace;
 use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
 
@@ -82,12 +83,15 @@ fn wait_for_snapshot(
         if let Some(error) = server.exit_error() {
             panic!("{error}");
         }
-        match SharedSnapshotReader::open(path).and_then(|reader| reader.read_payload()) {
-            Ok(frame) => match decode_account_current(&frame.payload) {
+        let reader =
+            AccountViewKey::new("account:paper-main", "paper-main", AccountViewKind::Current)
+                .and_then(|key| AccountViewReader::open(path, key));
+        match reader.and_then(|reader| reader.read()) {
+            Ok(frame) => match frame.account_current() {
                 Ok(view)
                     if previous_incarnation
-                        .is_none_or(|value| value != frame.producer_incarnation)
-                        && frame.generation >= minimum_generation =>
+                        .is_none_or(|value| value != frame.envelope_metadata().producer_incarnation)
+                        && frame.generation() >= minimum_generation =>
                 {
                     let balances = view.segments().get(0).balances();
                     if !balances.is_empty() {
@@ -96,18 +100,24 @@ fn wait_for_snapshot(
                         if balance == expected_balance {
                             return (
                                 SnapshotEnvelopeMetadata {
-                                    resource_epoch: frame.resource_epoch,
-                                    producer_incarnation: frame.producer_incarnation,
-                                    generation: frame.generation,
-                                    applied_event_sequence: frame.applied_event_sequence,
-                                    published_at_unix_nanos: frame.published_at_unix_nanos,
+                                    resource_epoch: frame.envelope_metadata().resource_epoch,
+                                    producer_incarnation: frame
+                                        .envelope_metadata()
+                                        .producer_incarnation,
+                                    generation: frame.generation(),
+                                    applied_event_sequence: frame
+                                        .envelope_metadata()
+                                        .applied_event_sequence,
+                                    published_at_unix_nanos: frame
+                                        .envelope_metadata()
+                                        .published_at_unix_nanos,
                                 },
                                 balance,
                             );
                         }
                         last_error = format!(
                             "balance is {balance}, expected {expected_balance}; generation={}",
-                            frame.generation
+                            frame.generation()
                         );
                     } else {
                         last_error = "snapshot has no balances".into();
@@ -116,7 +126,8 @@ fn wait_for_snapshot(
                 Ok(_) => {
                     last_error = format!(
                         "snapshot has not reached the expected incarnation/generation; incarnation={} generation={}",
-                        frame.producer_incarnation, frame.generation
+                        frame.envelope_metadata().producer_incarnation,
+                        frame.generation()
                     )
                 }
                 Err(error) => last_error = error.to_string(),
@@ -172,7 +183,7 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
     let instance = workspace
         .instance("paper", "restart-test", "instance-1")
         .unwrap();
-    let snapshot_path = instance.service_snapshot("account").unwrap();
+    let snapshot_path = instance.snapshot(&[]).unwrap();
     let socket_path = instance.socket("account").unwrap();
 
     let mut first = start_server(&workspace, &aeron_dir);

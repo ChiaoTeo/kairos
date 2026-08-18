@@ -9,10 +9,7 @@ pub use key::{RiskViewKey, RiskViewKind};
 pub use metadata::ViewMetadata;
 use std::path::{Path, PathBuf};
 
-pub fn risk_view_path(
-    root: impl AsRef<Path>,
-    key: &RiskViewKey,
-) -> ContractResult<PathBuf> {
+pub fn risk_view_path(root: impl AsRef<Path>, key: &RiskViewKey) -> ContractResult<PathBuf> {
     key.resource_path(root)
 }
 pub struct ViewFrame {
@@ -51,10 +48,7 @@ pub struct RiskViewReader {
     reader: SharedSnapshotReader,
 }
 impl RiskViewReader {
-    pub fn resolved_path(
-        root: impl AsRef<Path>,
-        key: &RiskViewKey,
-    ) -> ContractResult<PathBuf> {
+    pub fn resolved_path(root: impl AsRef<Path>, key: &RiskViewKey) -> ContractResult<PathBuf> {
         risk_view_path(root, key)
     }
 
@@ -90,10 +84,7 @@ pub struct RiskViewPublisher {
 }
 
 impl RiskViewPublisher {
-    pub fn resolved_path(
-        root: impl AsRef<Path>,
-        key: &RiskViewKey,
-    ) -> ContractResult<PathBuf> {
+    pub fn resolved_path(root: impl AsRef<Path>, key: &RiskViewKey) -> ContractResult<PathBuf> {
         risk_view_path(root, key)
     }
 
@@ -120,5 +111,44 @@ impl RiskViewPublisher {
             .publish(metadata, payload)
             .map(|_| ())
             .map_err(|error| ContractError::Transport(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_and_publisher_resolve_the_same_safe_path() {
+        let key = RiskViewKey::latest("risk/../一");
+        let root = Path::new("/tmp/risk-contract-views");
+        let reader = RiskViewReader::resolved_path(root, &key).unwrap();
+        let publisher = RiskViewPublisher::resolved_path(root, &key).unwrap();
+        assert_eq!(reader, publisher);
+        assert!(reader.starts_with(root));
+        assert!(!reader.to_string_lossy().contains("/../"));
+    }
+
+    #[test]
+    fn publisher_output_is_readable_through_the_contract_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let key = RiskViewKey::latest("risk");
+        let mut publisher = RiskViewPublisher::create(root.path(), key.clone(), 4096).unwrap();
+        publisher.publish(test_metadata(), b"risk-view").unwrap();
+        let frame = RiskViewReader::open(root.path(), key)
+            .unwrap()
+            .read()
+            .unwrap();
+        assert_eq!(frame.bytes(), b"risk-view");
+    }
+
+    fn test_metadata() -> SnapshotEnvelopeMetadata {
+        SnapshotEnvelopeMetadata {
+            resource_epoch: 1,
+            producer_incarnation: 1,
+            generation: 1,
+            applied_event_sequence: 1,
+            published_at_unix_nanos: 1,
+        }
     }
 }

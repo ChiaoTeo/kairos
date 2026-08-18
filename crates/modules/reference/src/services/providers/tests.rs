@@ -1207,10 +1207,25 @@ async fn hyperliquid_async_capability_maps_through_reference_end_to_end() {
             )
             .unwrap();
     });
-    let mut source =
-        HyperliquidSource::new(format!("http://{address}/info")).expect("build source");
+    let key = kairos_conflux::ConnectionKey::new("reference-hyperliquid-perpetual").unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system
+        .connections()
+        .hyperliquid_info_rest
+        .create(
+            key.clone(),
+            kairos_conflux::HyperliquidRestConfig {
+                environment: "public".into(),
+                endpoint: format!("http://{address}/info"),
+            },
+        )
+        .unwrap();
+    let mut source = HyperliquidSource::from_key(HyperliquidProduct::Perpetual, key);
 
-    let catalog = source.fetch_catalog().await.unwrap();
+    let catalog = source
+        .fetch_catalog_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(
@@ -1242,10 +1257,26 @@ async fn binance_async_capability_maps_through_reference_end_to_end() {
             )
             .unwrap();
     });
-    let mut source =
-        BinanceSpotSource::new(format!("http://{address}")).expect("build Binance source");
+    let key = kairos_conflux::ConnectionKey::new("reference-binance-spot").unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system
+        .connections()
+        .binance_spot_rest
+        .create(
+            key.clone(),
+            kairos_conflux::BinanceRestConfig {
+                environment: "public".into(),
+                endpoint: format!("http://{address}"),
+                credential: None,
+            },
+        )
+        .unwrap();
+    let mut source = BinanceSpotSource::from_key(key);
 
-    let catalog = source.fetch_catalog().await.unwrap();
+    let catalog = source
+        .fetch_catalog_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(catalog.markets.len(), 1);
@@ -1272,10 +1303,25 @@ async fn okx_async_capability_maps_through_reference_end_to_end() {
             )
             .unwrap();
     });
-    let mut source = OkxSource::new("okx-swap", OkxProduct::Swap, format!("http://{address}"))
-        .expect("build OKX source");
+    let key = kairos_conflux::ConnectionKey::new("reference-okx-swap").unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system
+        .connections()
+        .okx_public_rest
+        .create(
+            key.clone(),
+            kairos_conflux::OkxRestConfig {
+                environment: "public".into(),
+                endpoint: format!("http://{address}"),
+            },
+        )
+        .unwrap();
+    let mut source = OkxSource::from_key("okx-swap", OkxProduct::Swap, key);
 
-    let catalog = source.fetch_catalog().await.unwrap();
+    let catalog = source
+        .fetch_catalog_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(catalog.markets.len(), 1);
@@ -1305,14 +1351,25 @@ async fn okx_margin_is_spot_identity_with_explicit_margin_access() {
             )
             .unwrap();
     });
-    let mut source = OkxSource::new(
-        "okx-margin",
-        OkxProduct::Margin,
-        format!("http://{address}"),
-    )
-    .unwrap();
+    let key = kairos_conflux::ConnectionKey::new("reference-okx-margin").unwrap();
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system
+        .connections()
+        .okx_public_rest
+        .create(
+            key.clone(),
+            kairos_conflux::OkxRestConfig {
+                environment: "public".into(),
+                endpoint: format!("http://{address}"),
+            },
+        )
+        .unwrap();
+    let mut source = OkxSource::from_key("okx-margin", OkxProduct::Margin, key);
 
-    let catalog = source.fetch_catalog().await.unwrap();
+    let catalog = source
+        .fetch_catalog_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert_eq!(catalog.instruments[0].instrument_id, "instrument:spot:BTC");
@@ -1347,15 +1404,21 @@ async fn massive_persists_each_successful_page_before_a_later_page_fails() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("reference.sqlite");
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut source =
+    let (mut source, mut system) =
         MassiveEquitySource::new_with_sync_store("test-key", format!("http://{address}"), store)
             .await
             .unwrap();
 
-    let first = source.fetch_catalog_step().await.unwrap();
+    let first = source
+        .fetch_catalog_step_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     assert!(!first.complete);
     assert_eq!(first.page_count, 1);
-    assert!(source.fetch_catalog_step().await.is_err());
+    assert!(source
+        .fetch_catalog_step_with_connections(&mut system.connections())
+        .await
+        .is_err());
     server.join().unwrap();
 
     let mut reopened = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
@@ -1397,15 +1460,21 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("reference.sqlite");
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut source =
+    let (mut source, mut system) =
         MassiveOptionsCoverageSource::new("test-key", format!("http://{address}"), store)
             .await
             .unwrap();
 
     assert!(source.option_underlyings().is_empty());
-    source.set_option_underlying("spy", true).await.unwrap();
+    source
+        .set_option_underlying_with_connections("spy", true, &mut system.connections())
+        .await
+        .unwrap();
     assert_eq!(source.option_underlyings(), vec!["SPY"]);
-    let completed = source.fetch_catalog_step().await.unwrap();
+    let completed = source
+        .fetch_catalog_step_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
     assert!(completed.complete);
     assert!(completed
@@ -1421,8 +1490,14 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
     assert!(completed.catalog.listings.is_empty());
     assert!(completed.catalog.markets.is_empty());
 
-    source.set_option_underlying("SPY", false).await.unwrap();
-    let removed = source.fetch_catalog_step().await.unwrap();
+    source
+        .set_option_underlying_with_connections("SPY", false, &mut system.connections())
+        .await
+        .unwrap();
+    let removed = source
+        .fetch_catalog_step_with_connections(&mut system.connections())
+        .await
+        .unwrap();
     assert!(removed.complete);
     assert!(removed.catalog.instruments.is_empty());
     assert!(removed.catalog.markets.is_empty());
@@ -1463,29 +1538,38 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("reference.sqlite");
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut first =
+    let (mut first, mut first_system) =
         MassiveEquitySource::new_with_sync_store("test-key", format!("http://{address}"), store)
             .await
             .unwrap();
 
-    let partial = first.fetch_catalog_step().await.unwrap();
+    let partial = first
+        .fetch_catalog_step_with_connections(&mut first_system.connections())
+        .await
+        .unwrap();
     assert!(!partial.complete);
     assert_eq!(partial.page_count, 1);
     assert!(partial.catalog.markets.is_empty());
     drop(first);
 
     let store = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
-    let mut resumed =
+    let (mut resumed, mut resumed_system) =
         MassiveEquitySource::new_with_sync_store("test-key", format!("http://{address}"), store)
             .await
             .unwrap();
     for _ in 1..8 {
-        let partial = resumed.fetch_catalog_step().await.unwrap();
+        let partial = resumed
+            .fetch_catalog_step_with_connections(&mut resumed_system.connections())
+            .await
+            .unwrap();
         assert!(!partial.complete);
         assert_eq!(partial.page_count, 1);
         assert!(partial.catalog.markets.is_empty());
     }
-    let complete = resumed.fetch_catalog_step().await.unwrap();
+    let complete = resumed
+        .fetch_catalog_step_with_connections(&mut resumed_system.connections())
+        .await
+        .unwrap();
     server.join().unwrap();
 
     assert!(complete.complete);

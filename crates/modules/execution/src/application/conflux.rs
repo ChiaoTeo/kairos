@@ -940,7 +940,9 @@ impl ExecutionApplication {
             context
                 .system()
                 .execution_view_publishers
-                .try_with(&resource_key, |publisher| publisher.publish(metadata, &bytes))
+                .try_with(&resource_key, |publisher| {
+                    publisher.publish(metadata, &bytes)
+                })
                 .map_err(|error| match error {
                     ResourceOperationError::NotFound => {
                         ExecutionError::Gateway("Execution view publisher disappeared".into())

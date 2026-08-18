@@ -34,3 +34,18 @@ pub(super) fn validate_endpoint(endpoint: &AeronEndpoint) -> ContractResult<()> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_another_modules_stream() {
+        let endpoint =
+            AeronEndpoint::from_parts(None, "aeron:ipc", stream_ids::MARKET_EVENTS).unwrap();
+        assert!(matches!(
+            AccountEventPublisher::connect(&endpoint),
+            Err(ContractError::Invalid(_))
+        ));
+    }
+}

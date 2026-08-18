@@ -18,10 +18,9 @@ use kairos_reference::composition::{
 };
 use kairos_reference::ReferenceApplication;
 use kairos_reference_contract::{
-    ReferenceControlError, ReferenceOptionCoverageRequest, ReferenceRestRequest,
-    ReferenceRestResponse, ReferenceSourceControlRequest,
+    AeronEndpoint, ReferenceControlError, ReferenceEventPublisher, ReferenceOptionCoverageRequest,
+    ReferenceRestRequest, ReferenceRestResponse, ReferenceSourceControlRequest,
 };
-use kairos_transport::AeronBytePublisher;
 use kairos_workspace::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
@@ -80,13 +79,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (mut application, mut system, _) = composition.into_conflux();
     application.configure_conflux(args.refresh_interval, true);
 
-    let publisher = AeronBytePublisher::connect(
+    let event_endpoint = AeronEndpoint::from_parts(
         config.aeron_dir.as_deref(),
-        &config.aeron_channel,
+        config.aeron_channel.clone(),
         config.reference_changes_stream,
     )?;
+    let publisher = ReferenceEventPublisher::connect(&event_endpoint)?;
     system
-        .aeron_publishers
+        .reference_event_publishers
         .ensure_with("reference-changes".to_owned(), 1, || publisher)?;
 
     run_process(application, system, socket, health_file).await

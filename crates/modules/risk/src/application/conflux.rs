@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 
 use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, ResourceState, RestContract, SystemEvent,
+    ConfluxActor, ConfluxEvent, Context, Contract, ResourceOperationError, RestContract,
+    SystemEvent,
 };
 use kairos_risk_contract::{
     AdvanceRiskTimeResponse, Health, RiskCommandStatus, RiskControlError, RiskRestRequest,
@@ -64,11 +65,19 @@ impl ConfluxActor for RiskApplication {
 impl RiskApplication {
     fn publish_contract_outputs(&mut self, context: &mut Context<'_, Self>) {
         let view = super::contract::current_view(&self.current_view());
-        for (_, publisher) in context.system().risk_snapshot_publishers.iter_mut() {
-            match publisher.resource_mut().publish(&view) {
-                Ok(()) => publisher.set_state(ResourceState::Ready),
-                Err(error) => {
-                    publisher.set_state(ResourceState::Degraded);
+        let snapshot_keys = context
+            .system()
+            .risk_snapshot_publishers
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in snapshot_keys {
+            if let Err(error) = context
+                .system()
+                .risk_snapshot_publishers
+                .try_with(&key, |publisher| publisher.publish(&view))
+            {
+                if let ResourceOperationError::Operation(error) = error {
                     tracing::error!(
                         event = "snapshot_publish_failed",
                         component = "risk",
@@ -85,19 +94,24 @@ impl RiskApplication {
             if publishers.is_empty() {
                 break;
             }
+            let publisher_keys = publishers
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
             let mut published_to_all = true;
-            for (_, publisher) in publishers.iter_mut() {
-                match publisher.resource_mut().publish(&event) {
-                    Ok(()) => publisher.set_state(ResourceState::Ready),
+            for key in publisher_keys {
+                match publishers.try_with(&key, |publisher| publisher.publish(&event)) {
+                    Ok(()) => {}
                     Err(error) => {
                         published_to_all = false;
-                        publisher.set_state(ResourceState::Degraded);
-                        tracing::error!(
-                            event = "event_publish_failed",
-                            component = "risk",
-                            error = %error,
-                            "Risk Conflux ordered event publication failed"
-                        );
+                        if let ResourceOperationError::Operation(error) = error {
+                            tracing::error!(
+                                event = "event_publish_failed",
+                                component = "risk",
+                                error = %error,
+                                "Risk Conflux ordered event publication failed"
+                            );
+                        }
                     }
                 }
             }

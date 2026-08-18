@@ -39,3 +39,22 @@ impl futures_core::Stream for RiskEventStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_another_modules_stream_before_connecting() {
+        let endpoint = AeronEndpoint::from_parts(
+            None,
+            "aeron:ipc",
+            kairos_transport::stream_ids::MARKET_EVENTS,
+        )
+        .unwrap();
+        assert!(matches!(
+            RiskEventStream::connect(&endpoint, 1),
+            Err(ContractError::Invalid(_))
+        ));
+    }
+}

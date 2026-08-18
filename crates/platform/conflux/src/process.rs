@@ -1,10 +1,10 @@
+use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{future::poll_fn, pin::Pin};
 
-use kairos_integration::ConnectionLifecycleCommand;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -111,6 +111,7 @@ macro_rules! define_connection_control_command {
                 $create {
                     key: ConnectionKey,
                     parameters: $parameters,
+                    options: crate::ConnectionCreateOptions,
                     reply: oneshot::Sender<Result<(), ConnectionControlError>>,
                 },
                 $remove {
@@ -132,12 +133,21 @@ pub struct Conflux<A: ConfluxActor> {
     _rest_sender: mpsc::Sender<RestEnvelope<A>>,
     rest_requests: mpsc::Receiver<RestEnvelope<A>>,
     connection_controls: mpsc::Receiver<ConnectionControlCommand>,
+    pending_connection_removals: HashMap<String, PendingConnectionRemoval>,
     shutdown: watch::Receiver<Option<ShutdownMode>>,
     phase: Arc<AtomicU8>,
     source_tasks: Vec<tokio::task::JoinHandle<()>>,
     connection_driver: ConnectionDriverState,
+    startup_connection_outputs: VecDeque<ConnectionDriverOutput>,
     wakeup_timer: Option<Pin<Box<tokio::time::Sleep>>>,
     shutdown_timeout: Duration,
+}
+
+struct PendingConnectionRemoval {
+    collection: &'static str,
+    key: String,
+    deadline: tokio::time::Instant,
+    reply: oneshot::Sender<Result<(), ConnectionControlError>>,
 }
 
 const MAX_IDLE_POLL_CADENCE: Duration = Duration::from_millis(100);
@@ -214,10 +224,12 @@ impl<A: ConfluxActor> Conflux<A> {
                 _rest_sender: rest_sender,
                 rest_requests,
                 connection_controls,
+                pending_connection_removals: HashMap::new(),
                 shutdown,
                 phase,
                 source_tasks: Vec::new(),
                 connection_driver: ConnectionDriverState::new(),
+                startup_connection_outputs: VecDeque::new(),
                 wakeup_timer: None,
                 shutdown_timeout: config.shutdown_timeout,
             },
@@ -227,18 +239,89 @@ impl<A: ConfluxActor> Conflux<A> {
 
     pub async fn run(mut self) -> Result<ConfluxOutcome<A>, RunError<A::FatalError>> {
         self.set_phase(ProcessPhase::Starting);
-        self.system.start_installed_connections().await;
-        let startup_shutdown = self.run_started().await.map_err(|error| {
+        let lifecycle_shutdown = match self.prepare_connections().await {
+            Ok(mode) => mode,
+            Err(error) => {
+                self.set_phase(ProcessPhase::Failed);
+                let _ = tokio::time::timeout(
+                    self.shutdown_timeout,
+                    self.system.stop_connections(&mut self.connection_driver),
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        let actor_shutdown = self.run_started().await.map_err(|error| {
             self.set_phase(ProcessPhase::Failed);
             RunError::Actor(error)
         })?;
         self.set_phase(ProcessPhase::Running);
 
-        let shutdown_mode = match startup_shutdown {
+        let shutdown_mode = match lifecycle_shutdown.or(actor_shutdown) {
             Some(mode) => mode,
             None => self.run_until_shutdown().await?,
         };
         self.finish_shutdown(shutdown_mode).await
+    }
+
+    async fn prepare_connections(
+        &mut self,
+    ) -> Result<Option<ShutdownMode>, RunError<A::FatalError>> {
+        loop {
+            if let Some(mode) = *self.shutdown.borrow() {
+                return Ok(Some(mode));
+            }
+            match self.system.startup_status(&self.connection_driver) {
+                Ok(true) => return Ok(None),
+                Ok(false) => {}
+                Err(error) => return Err(RunError::RequiredConnection(error)),
+            }
+
+            let system_deadline = self
+                .system
+                .next_wakeup_deadline(&self.connection_driver)
+                .unwrap_or_else(|| tokio::time::Instant::now() + MAX_IDLE_POLL_CADENCE);
+            let deadline = self
+                .pending_connection_removals
+                .values()
+                .map(|pending| pending.deadline)
+                .min()
+                .map_or(system_deadline, |pending| pending.min(system_deadline));
+            let wakeup_timer = self
+                .wakeup_timer
+                .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(deadline)));
+            wakeup_timer.as_mut().reset(deadline);
+
+            enum StartupInput {
+                Shutdown,
+                Connection(ConnectionDriverOutput),
+                Timer(tokio::time::Instant),
+            }
+
+            let input = {
+                let mut connections =
+                    ConnectionDriver::new(&mut self.system, &mut self.connection_driver);
+                let mut timer = TimerDriver::new(wakeup_timer);
+                tokio::select! {
+                    _ = self.shutdown.changed() => StartupInput::Shutdown,
+                    connection = connections.next() => StartupInput::Connection(connection),
+                    now = timer.next() => StartupInput::Timer(now),
+                }
+            };
+            match input {
+                StartupInput::Shutdown => {
+                    return Ok(Some(
+                        self.shutdown.borrow().unwrap_or(ShutdownMode::Immediate),
+                    ));
+                }
+                StartupInput::Connection(output) => {
+                    self.startup_connection_outputs.push_back(output);
+                }
+                StartupInput::Timer(now) => {
+                    self.system.update_timer(now, &mut self.connection_driver);
+                }
+            }
+        }
     }
 
     async fn run_until_shutdown(&mut self) -> Result<ShutdownMode, RunError<A::FatalError>> {
@@ -246,11 +329,23 @@ impl<A: ConfluxActor> Conflux<A> {
             if let Some(mode) = *self.shutdown.borrow() {
                 return Ok(mode);
             }
+            if let Some(output) = self.startup_connection_outputs.pop_front() {
+                if let Some(mode) = self.run_connection_output(output).await? {
+                    return Ok(mode);
+                }
+                continue;
+            }
 
-            let deadline = self
+            let system_deadline = self
                 .system
-                .next_wakeup_deadline()
+                .next_wakeup_deadline(&self.connection_driver)
                 .unwrap_or_else(|| tokio::time::Instant::now() + MAX_IDLE_POLL_CADENCE);
+            let deadline = self
+                .pending_connection_removals
+                .values()
+                .map(|pending| pending.deadline)
+                .min()
+                .map_or(system_deadline, |pending| pending.min(system_deadline));
             let wakeup_timer = self
                 .wakeup_timer
                 .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(deadline)));
@@ -316,96 +411,71 @@ impl<A: ConfluxActor> Conflux<A> {
                 }
                 LoopInput::Control(Some(control)) => self.apply_connection_control(control).await,
                 LoopInput::Control(None) => {}
-                LoopInput::Connection(ConnectionDriverOutput::Integration(event)) => {
-                    let (requested_shutdown, _) = self
-                        .run_actor_event(ConfluxEvent::Integration(event))
-                        .await
-                        .map_err(|error| {
-                            self.set_phase(ProcessPhase::Failed);
-                            RunError::Actor(error)
-                        })?;
-                    if let Some(mode) = requested_shutdown {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::System(event)) => {
-                    let (requested_shutdown, _) = self
-                        .run_actor_event(ConfluxEvent::System(event))
-                        .await
-                        .map_err(|error| {
-                            self.set_phase(ProcessPhase::Failed);
-                            RunError::Actor(error)
-                        })?;
-                    if let Some(mode) = requested_shutdown {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::Account { client, frame }) => {
-                    if let Some(mode) = self
-                        .run_contract_event(ConfluxEvent::Account(ContractEvent { client, frame }))
-                        .await?
-                    {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::Execution { client, frame }) => {
-                    if let Some(mode) = self
-                        .run_contract_event(ConfluxEvent::Execution(ContractEvent {
-                            client,
-                            frame,
-                        }))
-                        .await?
-                    {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::Market { client, frame }) => {
-                    if let Some(mode) = self
-                        .run_contract_event(ConfluxEvent::Market(ContractEvent { client, frame }))
-                        .await?
-                    {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::Reference { client, frame }) => {
-                    if let Some(mode) = self
-                        .run_contract_event(ConfluxEvent::Reference(ContractEvent {
-                            client,
-                            frame,
-                        }))
-                        .await?
-                    {
-                        return Ok(mode);
-                    }
-                }
-                LoopInput::Connection(ConnectionDriverOutput::Risk { client, frame }) => {
-                    if let Some(mode) = self
-                        .run_contract_event(ConfluxEvent::Risk(ContractEvent { client, frame }))
-                        .await?
-                    {
+                LoopInput::Connection(output) => {
+                    if let Some(mode) = self.run_connection_output(output).await? {
                         return Ok(mode);
                     }
                 }
                 LoopInput::Timer(now) => {
                     self.system.update_timer(now, &mut self.connection_driver);
+                    self.expire_connection_removals(now);
                 }
             }
         }
     }
 
+    async fn run_connection_output(
+        &mut self,
+        output: ConnectionDriverOutput,
+    ) -> Result<Option<ShutdownMode>, RunError<A::FatalError>> {
+        match output {
+            ConnectionDriverOutput::Integration(event) => {
+                self.run_contract_event(ConfluxEvent::Integration(event))
+                    .await
+            }
+            ConnectionDriverOutput::System(event) => {
+                self.run_contract_event(ConfluxEvent::System(event)).await
+            }
+            ConnectionDriverOutput::Account { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Account(ContractEvent { client, frame }))
+                    .await
+            }
+            ConnectionDriverOutput::Execution { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Execution(ContractEvent { client, frame }))
+                    .await
+            }
+            ConnectionDriverOutput::Market { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Market(ContractEvent { client, frame }))
+                    .await
+            }
+            ConnectionDriverOutput::Reference { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Reference(ContractEvent { client, frame }))
+                    .await
+            }
+            ConnectionDriverOutput::Risk { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Risk(ContractEvent { client, frame }))
+                    .await
+            }
+            ConnectionDriverOutput::LifecycleStopped {
+                collection,
+                key,
+                result,
+            } => {
+                self.finish_connection_removal(collection, key, result);
+                Ok(None)
+            }
+        }
+    }
+
     async fn apply_connection_control(&mut self, command: ConnectionControlCommand) {
-        let mut stream_created = false;
         macro_rules! create {
-            ($reply:expr, $field:ident, $key:expr, $parameters:expr, $mode:ident) => {{
+            ($reply:expr, $field:ident, $key:expr, $parameters:expr, $options:expr, $mode:ident) => {{
                 let result = self
                     .system
                     .connections()
                     .$field
-                    .create($key, $parameters)
+                    .create_with_options($key, $parameters, $options)
                     .map_err(ConnectionControlError::from);
-                if result.is_ok() && stringify!($mode) == "Stream" {
-                    stream_created = true;
-                }
                 let _ = $reply.send(result);
             }};
         }
@@ -429,25 +499,45 @@ impl<A: ConfluxActor> Conflux<A> {
         macro_rules! remove_stream {
             ($reply:expr, $collection:ident, $key:expr) => {{
                 let key = $key;
-                let result = match self.system.$collection.get_mut(&key.to_string()) {
-                    None => Err(ConnectionControlError::NotFound(key.clone())),
+                match self.system.$collection.get_mut(&key.to_string()) {
+                    None => {
+                        let _ = $reply.send(Err(ConnectionControlError::NotFound(key.clone())));
+                    }
                     Some(value) if value.state() == ResourceState::Retiring => {
-                        Err(ConnectionControlError::Retiring(key.clone()))
+                        let _ = $reply.send(Err(ConnectionControlError::Retiring(key.clone())));
+                    }
+                    Some(value)
+                        if value.state() == ResourceState::Created
+                            || (value.state() == ResourceState::Starting
+                                && value.lifecycle_in_progress()) =>
+                    {
+                        // A not-yet-ready connection has no established
+                        // session to drain. Dropping its System-owned
+                        // lifecycle future cancels the handshake and drops
+                        // the connection in the same resource slot.
+                        self.system.$collection.remove(&key.to_string());
+                        self.connection_driver
+                            .clear_removed_connection(stringify!($collection), key.as_str());
+                        let _ = $reply.send(Ok(()));
                     }
                     Some(value) => {
+                        let identity = crate::ManagedConnectionIdentity {
+                            descriptor: value.connection().descriptor().clone(),
+                            generation: value.generation(),
+                        };
                         value.set_state(ResourceState::Retiring);
-                        ConnectionLifecycleCommand::disconnect(value.connection_mut())
-                            .await
-                            .map_err(|error| ConnectionControlError::Disconnect {
-                                key: key.clone(),
-                                error: error.to_string(),
-                            })
+                        self.connection_driver.purge_integration_identity(&identity);
+                        self.pending_connection_removals.insert(
+                            format!("{}:{}", stringify!($collection), key),
+                            PendingConnectionRemoval {
+                                collection: stringify!($collection),
+                                key: key.to_string(),
+                                deadline: tokio::time::Instant::now() + self.shutdown_timeout,
+                                reply: $reply,
+                            },
+                        );
                     }
-                };
-                if result.is_ok() {
-                    self.system.$collection.remove(&key.to_string());
                 }
-                let _ = $reply.send(result);
             }};
         }
         macro_rules! remove_family {
@@ -462,8 +552,8 @@ impl<A: ConfluxActor> Conflux<A> {
             ($(($field:ident, $handle:ident, $parameters:ty, $create:ident, $remove:ident, $typed:ident, $collection:ident, $mode:ident)),* $(,)?) => {
                 match command {
                     $(
-                        ConnectionControlCommand::$create { key, parameters, reply } => {
-                            create!(reply, $typed, key, parameters, $mode)
+                        ConnectionControlCommand::$create { key, parameters, options, reply } => {
+                            create!(reply, $typed, key, parameters, options, $mode)
                         }
                         ConnectionControlCommand::$remove { key, reply } => {
                             remove_family!($mode, reply, $collection, key)
@@ -474,12 +564,52 @@ impl<A: ConfluxActor> Conflux<A> {
         }
 
         for_each_handle_collection!(apply_connection_control);
-        // REST creation is complete at `Created` and must not scan or await
-        // unrelated streaming lifecycle work. Stream creation still uses the
-        // compatibility lifecycle path until the poll-driven lifecycle state
-        // machine replaces it.
-        if stream_created {
-            self.system.start_installed_connections().await;
+    }
+
+    fn finish_connection_removal(
+        &mut self,
+        collection: &'static str,
+        key: String,
+        result: Result<(), String>,
+    ) {
+        macro_rules! remove_completed {
+            ($(($field:ident, $handle:ident, $parameters:ty, $create:ident, $remove:ident, $typed:ident, $stored:ident, $mode:ident)),* $(,)?) => {{
+                $(
+                    if collection == stringify!($stored) {
+                        self.system.$stored.remove(&key);
+                    }
+                )*
+            }};
+        }
+        for_each_handle_collection!(remove_completed);
+        self.connection_driver
+            .clear_removed_connection(collection, &key);
+        let Some(pending) = self
+            .pending_connection_removals
+            .remove(&format!("{collection}:{key}"))
+        else {
+            return;
+        };
+        let result = result.map_err(|error| ConnectionControlError::Disconnect {
+            key: ConnectionKey::new(key).expect("stored connection key remains valid"),
+            error,
+        });
+        let _ = pending.reply.send(result);
+    }
+
+    fn expire_connection_removals(&mut self, now: tokio::time::Instant) {
+        let expired = self
+            .pending_connection_removals
+            .iter()
+            .filter(|(_, pending)| pending.deadline <= now)
+            .map(|(_, pending)| (pending.collection, pending.key.clone()))
+            .collect::<Vec<_>>();
+        for (collection, key) in expired {
+            self.finish_connection_removal(
+                collection,
+                key,
+                Err("disconnect deadline elapsed".into()),
+            );
         }
     }
 
@@ -635,9 +765,12 @@ impl<A: ConfluxActor> Conflux<A> {
         for task in self.source_tasks.drain(..) {
             task.abort();
         }
-        if tokio::time::timeout_at(deadline, self.system.stop_connections())
-            .await
-            .is_err()
+        if tokio::time::timeout_at(
+            deadline,
+            self.system.stop_connections(&mut self.connection_driver),
+        )
+        .await
+        .is_err()
         {
             mode = ShutdownMode::Immediate;
         }
@@ -709,10 +842,25 @@ macro_rules! define_handle_connection_collections {
                     key: ConnectionKey,
                     parameters: $parameters,
                 ) -> Result<(), ConnectionControlError> {
+                    self.create_with_options(
+                        key,
+                        parameters,
+                        crate::ConnectionCreateOptions::default(),
+                    )
+                    .await
+                }
+
+                pub async fn create_with_options(
+                    &self,
+                    key: ConnectionKey,
+                    parameters: $parameters,
+                    options: crate::ConnectionCreateOptions,
+                ) -> Result<(), ConnectionControlError> {
                     self.handle
                         .connection_control(|reply| ConnectionControlCommand::$create {
                             key,
                             parameters,
+                            options,
                             reply,
                         })
                         .await
@@ -843,6 +991,8 @@ pub struct ConfluxOutcome<A: ConfluxActor> {
 pub enum RunError<E> {
     #[error("Actor failed: {0}")]
     Actor(E),
+    #[error("required Integration connection failed during startup: {0}")]
+    RequiredConnection(String),
 }
 
 #[cfg(test)]
@@ -851,6 +1001,7 @@ mod tests {
 
     use super::*;
     use crate::{Contract, RestContract, SystemEvent};
+    use futures_util::StreamExt;
 
     struct TestRest;
 
@@ -862,6 +1013,15 @@ mod tests {
     #[derive(Default)]
     struct TestActor {
         total: i64,
+    }
+
+    struct SourceReadyActor {
+        ready: Option<oneshot::Sender<()>>,
+    }
+
+    struct StartupReadyActor {
+        key: ConnectionKey,
+        started_ready: Option<oneshot::Sender<bool>>,
     }
 
     impl Contract for TestActor {
@@ -885,6 +1045,60 @@ mod tests {
                 }
                 _ => Ok(None),
             }
+        }
+    }
+
+    impl Contract for SourceReadyActor {
+        type Rest = TestRest;
+    }
+
+    impl ConfluxActor for SourceReadyActor {
+        type FatalError = Infallible;
+        type LocalEvent = i64;
+
+        async fn handle(
+            &mut self,
+            event: ConfluxEvent<Self, Self::LocalEvent>,
+            _context: &mut Context<'_, Self>,
+        ) -> Result<Option<i64>, Self::FatalError> {
+            if matches!(event, ConfluxEvent::System(SystemEvent::SourceReady { .. })) {
+                if let Some(ready) = self.ready.take() {
+                    let _ = ready.send(());
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    impl Contract for StartupReadyActor {
+        type Rest = TestRest;
+    }
+
+    impl ConfluxActor for StartupReadyActor {
+        type FatalError = Infallible;
+        type LocalEvent = i64;
+
+        async fn started(
+            &mut self,
+            context: &mut Context<'_, Self>,
+        ) -> Result<(), Self::FatalError> {
+            let ready = context
+                .connections()
+                .binance_spot_websocket
+                .get(&self.key)
+                .is_ok();
+            if let Some(started_ready) = self.started_ready.take() {
+                let _ = started_ready.send(ready);
+            }
+            Ok(())
+        }
+
+        async fn handle(
+            &mut self,
+            _event: ConfluxEvent<Self, Self::LocalEvent>,
+            _context: &mut Context<'_, Self>,
+        ) -> Result<Option<i64>, Self::FatalError> {
+            Ok(None)
         }
     }
 
@@ -967,6 +1181,222 @@ mod tests {
                 );
             })
             .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pending_stream_connect_does_not_block_rest_or_dynamic_removal() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (accepted, accepted_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            let _ = accepted.send(());
+            std::future::pending::<()>().await;
+        });
+        let (conflux, handle) = Conflux::new(
+            TestActor::default(),
+            ConfluxSystem::new(),
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                let key = ConnectionKey::new("pending-binance-stream").unwrap();
+                handle
+                    .connections()
+                    .binance_spot_websocket
+                    .create(
+                        key.clone(),
+                        crate::BinanceWebSocketConfig {
+                            environment: "test".into(),
+                            endpoint,
+                            credential: None,
+                            event_capacity: 8,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), accepted_rx)
+                    .await
+                    .expect("Conflux must begin the stream handshake")
+                    .unwrap();
+
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_millis(100), handle.handle_rest(7))
+                        .await
+                        .expect("pending connect must not block REST")
+                        .unwrap(),
+                    Some(7)
+                );
+                tokio::time::timeout(
+                    Duration::from_millis(100),
+                    handle.connections().binance_spot_websocket.remove(key),
+                )
+                .await
+                .expect("removing a pending handshake must not block")
+                .unwrap();
+
+                handle.shutdown(ShutdownMode::Drain);
+                process.await.unwrap().unwrap();
+            })
+            .await;
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn removing_a_ready_stream_disconnects_before_releasing_the_slot() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (peer_closed, peer_closed_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while socket.next().await.is_some() {}
+            let _ = peer_closed.send(());
+        });
+        let (ready, ready_rx) = oneshot::channel();
+        let (conflux, handle) = Conflux::new(
+            SourceReadyActor { ready: Some(ready) },
+            ConfluxSystem::new(),
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                let key = ConnectionKey::new("ready-binance-stream").unwrap();
+                handle
+                    .connections()
+                    .binance_spot_websocket
+                    .create(
+                        key.clone(),
+                        crate::BinanceWebSocketConfig {
+                            environment: "test".into(),
+                            endpoint,
+                            credential: None,
+                            event_capacity: 8,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), ready_rx)
+                    .await
+                    .expect("connection must become ready")
+                    .unwrap();
+
+                tokio::time::timeout(
+                    Duration::from_secs(1),
+                    handle.connections().binance_spot_websocket.remove(key),
+                )
+                .await
+                .expect("ready connection removal must complete")
+                .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), peer_closed_rx)
+                    .await
+                    .expect("peer must observe disconnect")
+                    .unwrap();
+
+                handle.shutdown(ShutdownMode::Drain);
+                process.await.unwrap().unwrap();
+            })
+            .await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn preinstalled_stream_is_ready_before_actor_started() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while socket.next().await.is_some() {}
+        });
+        let key = ConnectionKey::new("startup-binance-stream").unwrap();
+        let mut system = ConfluxSystem::new();
+        system
+            .connections()
+            .binance_spot_websocket
+            .create(
+                key.clone(),
+                crate::BinanceWebSocketConfig {
+                    environment: "test".into(),
+                    endpoint,
+                    credential: None,
+                    event_capacity: 8,
+                },
+            )
+            .unwrap();
+        let (started_ready, started_ready_rx) = oneshot::channel();
+        let (conflux, handle) = Conflux::new(
+            StartupReadyActor {
+                key,
+                started_ready: Some(started_ready),
+            },
+            system,
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(1), started_ready_rx)
+                        .await
+                        .expect("Actor startup must follow connection startup")
+                        .unwrap()
+                );
+                handle.shutdown(ShutdownMode::Drain);
+                process.await.unwrap().unwrap();
+            })
+            .await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn required_connection_failure_prevents_actor_startup() {
+        let key = ConnectionKey::new("required-binance-stream").unwrap();
+        let mut system = ConfluxSystem::new();
+        system
+            .connections()
+            .binance_spot_websocket
+            .create_with_options(
+                key.clone(),
+                crate::BinanceWebSocketConfig {
+                    environment: "test".into(),
+                    endpoint: "ws://127.0.0.1:9".into(),
+                    credential: None,
+                    event_capacity: 8,
+                },
+                crate::ConnectionCreateOptions {
+                    required: true,
+                    recovery: crate::RecoveryPolicy {
+                        maximum_attempts: Some(0),
+                        ..crate::RecoveryPolicy::default()
+                    },
+                },
+            )
+            .unwrap();
+        let (started_ready, started_ready_rx) = oneshot::channel();
+        let (conflux, _handle) = Conflux::new(
+            StartupReadyActor {
+                key,
+                started_ready: Some(started_ready),
+            },
+            system,
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), conflux.run())
+            .await
+            .expect("required connection failure must be bounded");
+        assert!(matches!(result, Err(RunError::RequiredConnection(_))));
+        assert!(started_ready_rx.await.is_err());
     }
 
     #[test]
@@ -1074,10 +1504,13 @@ mod tests {
     #[test]
     fn outer_select_only_awaits_async_driver_or_channel_methods() {
         let source = include_str!("process.rs");
-        let start = source
+        let runtime = &source[source
+            .find("async fn run_until_shutdown")
+            .expect("runtime loop must exist")..];
+        let start = runtime
             .find("let input = {\n                let mut connections")
             .expect("outer runtime select must remain recognizable");
-        let select = &source[start..];
+        let select = &runtime[start..];
         let end = select
             .find("\n            match input")
             .expect("outer runtime select must end before input dispatch");
@@ -1113,6 +1546,20 @@ mod tests {
                 "outer select must await async source `{required}`"
             );
         }
+    }
+
+    #[test]
+    fn connection_lifecycle_is_polled_instead_of_awaited_by_the_actor_loop() {
+        let process = include_str!("process.rs");
+        let system = include_str!("system.rs");
+        let resource = include_str!("resource.rs");
+        assert!(!process.contains(concat!("start_installed", "_connections")));
+        assert!(!process.contains(concat!("ConnectionLifecycleCommand::", "connect")));
+        assert!(!process.contains(concat!("ConnectionLifecycleCommand::", "disconnect")));
+        assert!(system.contains("poll_all_connection_lifecycle(cx"));
+        assert!(resource.contains("ManagedLifecycleFuture"));
+        assert!(resource.contains("begin_lifecycle"));
+        assert!(resource.contains("poll_lifecycle"));
     }
 
     struct StuckStoppingActor;

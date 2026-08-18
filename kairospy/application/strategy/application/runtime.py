@@ -13,6 +13,7 @@ from .decisions import StrategyDecisionApplication
 from ..services.decision_journal import StrategyDecisionJournal
 from ..services.journal import StrategyLifecycleJournal
 from kairospy.application.account import AccountApplication
+from kairospy.application.agent import AgentApplication
 from kairospy.application.execution import (
     ExecutionApplication,
     ExecutionBacktestResult,
@@ -84,6 +85,7 @@ class StrategyApplication:
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        agent: AgentApplication | None = None,
         notifications: NotificationApplication | None = None,
         decision_journal: StrategyDecisionJournal | None = None,
         decision_notification_routes: tuple[str, ...] = (),
@@ -116,6 +118,7 @@ class StrategyApplication:
             account=account,
             risk=risk,
             execution=execution,
+            agent=agent,
             notifications=notifications,
             launch_id=launch_id,
             instance_id=instance_id,

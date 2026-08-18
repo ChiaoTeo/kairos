@@ -18,7 +18,6 @@ use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use crate::ReferenceApplication;
 
 use kairos_conflux::{load_workspace_credential, BinanceCredential};
-use kairos_transport::AeronBytePublisher;
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
     fn from(error: kairos_reference_contract::ContractError) -> Self {
@@ -82,7 +81,7 @@ impl ReferenceComposition {
 pub type ComposedReferenceApplication = ReferenceApplication;
 
 pub struct ReferenceEventWriter {
-    publisher: kairos_transport::AeronBytePublisher,
+    publisher: kairos_reference_contract::ReferenceEventPublisher,
 }
 
 pub struct ReferenceEventWriterConfig {
@@ -439,13 +438,15 @@ fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product:
 
 impl ReferenceEventWriter {
     pub fn connect(config: &ReferenceEventWriterConfig) -> ReferenceResult<Self> {
+        let endpoint = kairos_reference_contract::AeronEndpoint::from_parts(
+            config.aeron_dir.as_deref(),
+            config.aeron_channel.clone(),
+            config.reference_changes_stream,
+        )
+        .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
         Ok(Self {
-            publisher: AeronBytePublisher::connect(
-                config.aeron_dir.as_deref(),
-                &config.aeron_channel,
-                config.reference_changes_stream,
-            )
-            .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?,
+            publisher: kairos_reference_contract::ReferenceEventPublisher::connect(&endpoint)
+                .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?,
         })
     }
 

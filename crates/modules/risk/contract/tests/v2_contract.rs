@@ -1,11 +1,11 @@
-use kairos_risk_contract::{DecodedRiskEvent, RiskViewKey};
+use kairos_risk_contract::{risk_view_path, DecodedRiskEvent, RiskViewKey};
 
 #[test]
 fn risk_latest_view_is_partitioned_by_actor() {
     let key = RiskViewKey::latest("risk:instance-1");
-    assert!(key
-        .resource_path("/runtime")
-        .ends_with("risk/risk:instance-1/latest/current.snapshot"));
+    assert!(risk_view_path("/runtime", &key)
+        .unwrap()
+        .ends_with("risk/risk%3Ainstance-1/latest/current.snapshot"));
 }
 
 #[test]

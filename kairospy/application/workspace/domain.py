@@ -154,6 +154,12 @@ class WorkspacePaths(ResourceScopePaths):
     def notification_config(self) -> Path:
         return self.child("config", "notifications", "notifications.toml")
 
+    def agent_profiles_root(self) -> Path:
+        return self.child("config", "agents", "profiles")
+
+    def agent_mcp_config(self) -> Path:
+        return self.child("config", "agents", "mcp.toml")
+
     def account_state(self) -> Path:
         return self.child("state", "account", "account-state.json")
 

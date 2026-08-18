@@ -108,10 +108,7 @@ impl ExecutionViewPublisher {
     ) -> ContractResult<Self> {
         Ok(Self {
             key: key.clone(),
-            writer: ReplacementSnapshotStorage::create(
-                execution_view_path(root, &key)?,
-                slot_size,
-            )
+            writer: ReplacementSnapshotStorage::create(execution_view_path(root, &key)?, slot_size)
                 .map_err(|error| ContractError::Transport(error.to_string()))?,
         })
     }
@@ -127,5 +124,58 @@ impl ExecutionViewPublisher {
             .publish(metadata, payload)
             .map(|_| ())
             .map_err(|error| ContractError::Transport(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reader_and_publisher_resolve_the_same_safe_path() {
+        let key = ExecutionViewKey::new(
+            "workspace/../一",
+            ExecutionViewKind::ActiveOrders,
+            Some("launch"),
+            Some("instance"),
+        )
+        .unwrap();
+        let root = Path::new("/tmp/execution-contract-views");
+        let reader = ExecutionViewReader::resolved_path(root, &key).unwrap();
+        let publisher = ExecutionViewPublisher::resolved_path(root, &key).unwrap();
+        assert_eq!(reader, publisher);
+        assert!(reader.starts_with(root));
+        assert!(!reader.to_string_lossy().contains("/../"));
+    }
+
+    #[test]
+    fn publisher_output_is_readable_through_the_contract_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let key = ExecutionViewKey::new(
+            "workspace",
+            ExecutionViewKind::ActiveOrders,
+            Some("launch"),
+            Some("instance"),
+        )
+        .unwrap();
+        let mut publisher = ExecutionViewPublisher::create(root.path(), key.clone(), 4096).unwrap();
+        publisher
+            .publish(test_metadata(), b"execution-view")
+            .unwrap();
+        let frame = ExecutionViewReader::open(root.path(), key)
+            .unwrap()
+            .read()
+            .unwrap();
+        assert_eq!(frame.bytes(), b"execution-view");
+    }
+
+    fn test_metadata() -> SnapshotEnvelopeMetadata {
+        SnapshotEnvelopeMetadata {
+            resource_epoch: 1,
+            producer_incarnation: 1,
+            generation: 1,
+            applied_event_sequence: 1,
+            published_at_unix_nanos: 1,
+        }
     }
 }
