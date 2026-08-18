@@ -11,8 +11,8 @@ mod services;
 
 pub use application::{
     CloseCircuit, ConsumeReservation, ExpireReservations, LimitView, OpenCircuit, PublishPolicy,
-    ReleaseReservation, ResizeReservation, RiskApplication, RiskCurrentView, RiskDecision,
-    RiskError, RiskEvent, RiskEventPublisher, RiskProcess, RiskSnapshot, RiskSnapshotPublisher,
+    ReleaseReservation, ResizeReservation, RiskApplication, RiskClockMode, RiskCurrentView,
+    RiskDecision, RiskError, RiskEvent, RiskHost, RiskSnapshot,
 };
 pub use domain::{
     Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks,

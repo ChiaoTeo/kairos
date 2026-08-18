@@ -2,7 +2,9 @@ mod client;
 mod types;
 pub use client::ExecutionControlClient;
 pub use types::{
-    CancelOrderRequest, CommandEnvelope, ExecutionControlError, ExecutionControlResponse,
-    ExecutionRouteCandidateResponse, ExecutionRoutesResponse, ReconcileExecutionRequest,
+    CancelOrderRequest, CommandEnvelope, ExecutionCommandStatus, ExecutionControlError,
+    ExecutionControlResponse, ExecutionHealthResponse, ExecutionReconcileResponse,
+    ExecutionRestRequest, ExecutionRestResponse, ExecutionRouteCandidateResponse,
+    ExecutionRouteHealth, ExecutionRoutesQuery, ExecutionRoutesResponse, ReconcileExecutionRequest,
     ReplaceOrderRequest, SubmitIntentRequest,
 };

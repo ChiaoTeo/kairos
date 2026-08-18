@@ -1,49 +1,9 @@
-//! Application-owned administrative commands.
+//! Contract-owned administrative commands and application mappings.
 
-use kairos_primitives::{
-    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId,
-    ReferenceStatus, Symbol, UnixNanos,
+pub use kairos_reference_contract::{
+    UpsertAssetRequest as UpsertAssetCommand, UpsertInstrumentRequest as UpsertInstrumentCommand,
+    UpsertListingRequest as UpsertListingCommand,
 };
-use serde::Deserialize;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct UpsertAssetCommand {
-    pub asset_id: AssetId,
-    pub code: String,
-    pub name: Option<String>,
-    pub asset_class: AssetClass,
-    pub status: ReferenceStatus,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct UpsertInstrumentCommand {
-    pub instrument_id: InstrumentId,
-    pub symbol: Symbol,
-    pub name: Option<String>,
-    pub instrument_type: InstrumentKind,
-    #[serde(default)]
-    pub issuer_id: Option<IssuerId>,
-    #[serde(default)]
-    pub share_class: Option<String>,
-    #[serde(default)]
-    pub primary_currency_asset_id: Option<AssetId>,
-    pub underlying_instrument_id: Option<InstrumentId>,
-    pub expiry_unix_nanos: Option<UnixNanos>,
-    pub strike: Option<String>,
-    pub option_right: Option<String>,
-    pub status: ReferenceStatus,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct UpsertListingCommand {
-    pub listing_id: ListingId,
-    pub instrument_id: InstrumentId,
-    pub exchange_id: Exchange,
-    pub exchange_symbol: Symbol,
-    pub status: ReferenceStatus,
-    pub effective_from_unix_nanos: UnixNanos,
-    pub effective_to_unix_nanos: Option<UnixNanos>,
-}
 
 impl From<UpsertAssetCommand> for crate::domain::Asset {
     fn from(value: UpsertAssetCommand) -> Self {

@@ -1,131 +1,21 @@
-//! Demand-driven construction of configured provider sources.
-
-use kairos_workspace::Workspace;
-
-use super::super::config::{BinanceSpotTransport, MarketConfig, MarketSourceBinding as Binding};
-use super::routing::binding_matches_market;
-use crate::domain::source::SourceId;
-use crate::services::source::{SourceActivator, SourceHandle};
-
-/// Demand-driven source construction for live and paper Market processes.
-///
-/// The activator contains only immutable workspace/configuration facts. The
-/// active source map and all subscription state remain owned by MarketActor.
-pub(crate) struct ConfiguredMarketSourceActivator {
-    workspace: Workspace,
-}
-
-impl ConfiguredMarketSourceActivator {
-    pub(crate) fn new(workspace: Workspace) -> Self {
-        Self { workspace }
-    }
-}
-
-impl SourceActivator for ConfiguredMarketSourceActivator {
-    fn activate<'a>(
-        &'a mut self,
-        market: &'a crate::ResolvedMarket,
-        source_input_capacity: usize,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SourceHandle, String>> + Send + 'a>,
-    > {
-        let workspace = self.workspace.clone();
-        let market = market.clone();
-        Box::pin(async move { activate_workspace_source(workspace, market, source_input_capacity) })
-    }
-}
-
-fn activate_workspace_source(
-    workspace: Workspace,
-    market: crate::ResolvedMarket,
-    source_input_capacity: usize,
-) -> Result<SourceHandle, String> {
-    let credentials_root = workspace
-        .existing_path(&["config", "credentials"], &["credentials"])
-        .map_err(|error| error.to_string())?;
-    let market_config = MarketConfig::load(&workspace)?;
-    let configured_route_exists = market_config
-        .sources
-        .values()
-        .any(|binding| binding_matches_market(binding, &market));
-    let mut candidates = market_config
-        .sources
-        .iter()
-        .filter(|(id, binding)| {
-            binding.enabled()
-                && market
-                    .source_id
-                    .as_ref()
-                    .is_none_or(|requested| requested.as_str().eq_ignore_ascii_case(id))
-                && binding_matches_market(binding, &market)
-        })
-        .map(|(id, binding)| (id.clone(), binding.clone()))
-        .collect::<Vec<_>>();
-
-    // Public Binance Spot is the built-in default route. It keeps a
-    // minimal workspace usable without turning provider source creation
-    // into a required static Market configuration.
-    if candidates.is_empty()
-        && !configured_route_exists
-        && market.source_id.is_none()
-        && market.route.provider_id == "binance"
-        && market.route.provider_product == "spot"
-    {
-        candidates.push((
-            "binance-spot".into(),
-            Binding::BinanceSpot {
-                enabled: true,
-                transport: BinanceSpotTransport::Websocket,
-                endpoint: None,
-                snapshot_interval_ms: 1_000,
-            },
-        ));
-    }
-    let [(source_id, binding)] = candidates.as_slice() else {
-        return Err(if candidates.is_empty() {
-            format!(
-                "no Market source supports exchange={:?} market_type={} asset_type={:?}",
-                market.exchange_id, market.route.provider_product, market.asset_type
-            )
-        } else {
-            format!(
-                "market route is ambiguous; candidates={}",
-                candidates
-                    .iter()
-                    .map(|(id, _)| id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        });
-    };
-
-    let mut staging = crate::MarketApplication::new_with_source_capacity(
-        "market-source-activation",
-        1,
-        source_input_capacity,
-    )
-    .map_err(|error| error.to_string())?;
-    super::attach_configured(&mut staging, &credentials_root, source_id, binding)?;
-    staging.take_source_handle(&SourceId::new(source_id.clone())?)
-}
+//! Explicit one-shot diagnostic source composition.
 
 mod manual {
     //! Process composition for concrete provider feeds.
 
     use crate::domain::source::{SourceDescriptor, SourceId};
-    use crate::services::source::{
-        spawn_snapshot, spawn_stream, spawn_stream_with_policy, StreamFailurePolicy,
-    };
+    use crate::services::source::{spawn_snapshot, spawn_stream};
     use crate::MarketApplication;
-    use kairos_integration::participants::binance;
     use kairos_integration::participants::hyperliquid::{
-        HyperliquidConnection, HyperliquidConnectionConfig,
+        info::HyperliquidInfoRestConnection, HyperliquidRestConfig, HyperliquidWebSocketConfig,
+        HyperliquidWebSocketConnection,
     };
     use kairos_integration::participants::massive::{
-        MarketType as MassiveMarketType, MassiveConnection, MassiveConnectionConfig,
+        MassiveOptionsWebSocketConnection, MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
     };
     use kairos_integration::participants::okx::{
-        InstrumentType as OkxProviderInstrumentType, OkxConnection, OkxConnectionConfig,
+        public::{OkxPublicRestConnection, OkxPublicWebSocketConnection},
+        OkxRestConfig, OkxWebSocketConfig,
     };
 
     /// Market-owned source routing classification. Provider adapters map this to
@@ -142,6 +32,7 @@ mod manual {
     /// Canonical endpoint defaults shared by the one-shot CLI and Market server.
     pub fn default_endpoint(provider: &str) -> &'static str {
         match provider {
+            "binance-spot-rest" => "https://api.binance.com",
             "binance-spot-websocket" => "wss://stream.binance.com:9443/ws",
             "binance-equity" => "https://api.binance.com",
             "binance-usdm-futures-websocket" => "wss://fstream.binance.com/ws",
@@ -184,7 +75,10 @@ mod manual {
     }
 
     pub(crate) fn attach_stream<
-        C: kairos_integration::application::AsyncMarketEventSource + 'static,
+        C: kairos_integration::ConnectionLifecycleCommand
+            + kairos_integration::MarketSubscriptionCommand
+            + kairos_integration::MarketDataStream
+            + 'static,
     >(
         runtime: &mut MarketApplication,
         source_id: &str,
@@ -205,34 +99,6 @@ mod manual {
         runtime.attach_source(spawn_stream(descriptor, connection, input_capacity))
     }
 
-    pub(crate) fn attach_binance_stream(
-        runtime: &mut MarketApplication,
-        source_id: &str,
-        market_type: &str,
-        asset_type: &str,
-        connection: binance::BinanceAsyncMarket,
-    ) -> Result<(), String> {
-        let descriptor = SourceDescriptor::new(
-            SourceId::new(source_id)?,
-            kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
-            market_type,
-            Some(asset_type.into()),
-        )?
-        .with_observation_capabilities([
-            crate::ObservationKind::Quote,
-            crate::ObservationKind::Trade,
-            crate::ObservationKind::Bar,
-            crate::ObservationKind::OrderBook,
-        ]);
-        let input_capacity = runtime.source_input_capacity();
-        runtime.attach_source(spawn_stream_with_policy(
-            descriptor,
-            connection,
-            input_capacity,
-            StreamFailurePolicy::MarketScopedResync,
-        ))
-    }
-
     pub(crate) fn attach_binance_snapshot<C>(
         runtime: &mut MarketApplication,
         source_id: &str,
@@ -242,7 +108,7 @@ mod manual {
         interval: std::time::Duration,
     ) -> Result<(), String>
     where
-        C: kairos_integration::application::AsyncMarketSnapshotConnection + 'static,
+        C: kairos_integration::MarketQuoteQuery + 'static,
     {
         let descriptor = SourceDescriptor::new(
             SourceId::new(source_id)?,
@@ -272,14 +138,13 @@ mod manual {
         source_id: &str,
         market_type: &str,
         asset_type: &str,
-        instrument_type: OkxProviderInstrumentType,
         endpoint: impl Into<String>,
         interval: std::time::Duration,
     ) -> Result<(), String> {
-        let provider = OkxConnection::connect(OkxConnectionConfig {
+        let provider = OkxPublicRestConnection::new(OkxRestConfig {
+            binding_id: source_id.into(),
             environment: "public".into(),
-            rest_base_url: endpoint.into(),
-            shared_quota: None,
+            endpoint: endpoint.into(),
         })
         .map_err(|error| error.to_string())?;
         let descriptor = SourceDescriptor::new(
@@ -291,7 +156,7 @@ mod manual {
         .with_observation_capabilities([crate::ObservationKind::Quote]);
         let handle = spawn_snapshot(
             descriptor,
-            provider.market_snapshot(instrument_type),
+            provider,
             interval,
             runtime.source_input_capacity(),
         );
@@ -303,10 +168,11 @@ mod manual {
         market_type: &str,
         endpoint: impl Into<String>,
     ) -> Result<(), String> {
-        let provider = OkxConnection::connect(OkxConnectionConfig {
+        let provider = OkxPublicWebSocketConnection::new(OkxWebSocketConfig {
+            binding_id: source_id.into(),
             environment: "public".into(),
-            rest_base_url: "https://www.okx.com".into(),
-            shared_quota: None,
+            endpoint: endpoint.into(),
+            event_capacity: 4_096,
         })
         .map_err(|error| error.to_string())?;
         attach_stream(
@@ -319,9 +185,7 @@ mod manual {
                 crate::ObservationKind::Trade,
                 crate::ObservationKind::OrderBook,
             ],
-            provider
-                .live_market(endpoint)
-                .map_err(|error| error.to_string())?,
+            provider,
         )
     }
 
@@ -332,9 +196,10 @@ mod manual {
         endpoint: impl Into<String>,
         interval: std::time::Duration,
     ) -> Result<(), String> {
-        let provider = HyperliquidConnection::connect(HyperliquidConnectionConfig {
+        let provider = HyperliquidInfoRestConnection::new(HyperliquidRestConfig {
+            binding_id: source_id.into(),
             environment: "public".into(),
-            info_endpoint: endpoint.into(),
+            endpoint: endpoint.into(),
         })
         .map_err(|error| error.to_string())?;
         let descriptor = SourceDescriptor::new(
@@ -346,7 +211,7 @@ mod manual {
         .with_observation_capabilities([crate::ObservationKind::Quote]);
         let handle = spawn_snapshot(
             descriptor,
-            provider.market_snapshot(),
+            provider,
             interval,
             runtime.source_input_capacity(),
         );
@@ -359,9 +224,12 @@ mod manual {
         market_type: &str,
         endpoint: impl Into<String>,
     ) -> Result<(), String> {
-        let provider = HyperliquidConnection::connect(HyperliquidConnectionConfig {
+        let provider = HyperliquidWebSocketConnection::new(HyperliquidWebSocketConfig {
+            binding_id: source_id.into(),
             environment: "public".into(),
-            info_endpoint: "https://api.hyperliquid.xyz/info".into(),
+            endpoint: endpoint.into(),
+            event_capacity: 4_096,
+            user: None,
         })
         .map_err(|error| error.to_string())?;
         attach_stream(
@@ -374,9 +242,7 @@ mod manual {
                 crate::ObservationKind::Trade,
                 crate::ObservationKind::OrderBook,
             ],
-            provider
-                .live_market(endpoint)
-                .map_err(|error| error.to_string())?,
+            provider,
         )
     }
 
@@ -412,27 +278,13 @@ mod manual {
         api_key: impl Into<String>,
         endpoint: impl Into<String>,
     ) -> Result<(), String> {
-        let market_type = match product {
-            MarketProduct::Equity => MassiveMarketType::Equity,
-            MarketProduct::Options => MassiveMarketType::Option,
-            _ => return Err("Massive market source requires equity or options product".into()),
-        };
-        let endpoint = endpoint.into();
-        let provider = MassiveConnection::connect(MassiveConnectionConfig {
+        let config = MassiveWebSocketConfig {
+            binding_id: source_id.into(),
             environment: "public".into(),
-            rest_base_url: endpoint.clone(),
+            endpoint: endpoint.into(),
             api_key: secrecy::SecretString::new(api_key.into().into()),
-        })
-        .map_err(|error| error.to_string())?;
-        let connection = provider
-            .live_market(
-                market_type,
-                endpoint,
-                kairos_integration::participants::massive::MassiveChannelConfig {
-                    event_queue_capacity: 4_096,
-                },
-            )
-            .map_err(|error| error.to_string())?;
+            event_capacity: 4_096,
+        };
         let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
         descriptor.market_type = Some(
             kairos_primitives::ProviderProductCode::new(route_market_type)
@@ -447,14 +299,24 @@ mod manual {
             crate::ObservationKind::Quote,
             crate::ObservationKind::Trade,
         ]);
-        let handle = spawn_stream(descriptor, connection, runtime.source_input_capacity());
-        runtime.attach_source(handle)
+        match product {
+            MarketProduct::Equity => runtime.attach_source(spawn_stream(
+                descriptor,
+                MassiveStocksWebSocketConnection::new(config).map_err(|error| error.to_string())?,
+                runtime.source_input_capacity(),
+            )),
+            MarketProduct::Options => runtime.attach_source(spawn_stream(
+                descriptor,
+                MassiveOptionsWebSocketConnection::new(config)
+                    .map_err(|error| error.to_string())?,
+                runtime.source_input_capacity(),
+            )),
+            _ => Err("Massive market source requires equity or options product".into()),
+        }
     }
 }
 
-pub(crate) use manual::{
-    attach_binance_snapshot, attach_binance_stream, attach_massive_source_with_id, attach_stream,
-};
+pub(crate) use manual::{attach_binance_snapshot, attach_stream};
 pub use manual::{
     attach_hyperliquid_live_source, attach_hyperliquid_snapshot_source,
     attach_massive_market_source, attach_okx_live_source, attach_okx_snapshot_source,

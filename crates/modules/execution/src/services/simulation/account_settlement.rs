@@ -85,7 +85,7 @@ impl SimulatedAccountSettlement {
         self.client(&account_id)?
             .apply_simulated_settlement(&SimulatedSettlement {
                 fill_id: fill.fill_id.to_string(),
-                order_id: fill.order_id.to_string(),
+                order_id: Some(fill.order_id.to_string()),
                 segment_key: order.segment_key.to_string(),
                 instrument_id: fill.instrument_id.to_string(),
                 quantity: decimal_value(fill.quantity.mantissa(), fill.quantity.scale()),
@@ -95,18 +95,20 @@ impl SimulatedAccountSettlement {
                     OrderSide::Sell => "sell",
                 }
                 .into(),
-                settlement_asset: commitment
-                    .settlement_asset
-                    .as_ref()
-                    .ok_or_else(|| {
-                        "simulated fill has no Reference-confirmed settlement asset".to_string()
-                    })?
-                    .to_string(),
-                settlement_delta: DecimalValue {
+                settlement_asset: Some(
+                    commitment
+                        .settlement_asset
+                        .as_ref()
+                        .ok_or_else(|| {
+                            "simulated fill has no Reference-confirmed settlement asset".to_string()
+                        })?
+                        .to_string(),
+                ),
+                settlement_delta: Some(DecimalValue {
                     mantissa: i64::try_from(settlement_delta.mantissa())
                         .map_err(|_| "settlement delta exceeds Decimal64 range")?,
                     scale: settlement_delta.scale() as u8,
-                },
+                }),
                 fee_asset: fill.fee_currency.as_ref().map(ToString::to_string),
                 fee_amount: (fill.fee.mantissa() != 0)
                     .then_some(decimal_value(fill.fee.mantissa(), fill.fee.scale())),

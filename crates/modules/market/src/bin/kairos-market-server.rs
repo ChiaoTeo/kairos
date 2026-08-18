@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use kairos_market::composition::{build_market_process, MarketProcessRequest};
+use kairos_market::composition::{build_market_host, MarketHostRequest};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     kairos_workspace::logging::init("market");
-    let result = run().await;
+    let result = tokio::task::LocalSet::new().run_until(run()).await;
     if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "market", error = %error, "market server failed");
     }
@@ -21,7 +21,7 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     tracing::info!(event = "process_start", component = "market", instance_id = %args.instance_id, runtime_profile = ?args.runtime_profile, "starting market server");
-    build_market_process(MarketProcessRequest {
+    build_market_host(MarketHostRequest {
         workspace: args.workspace,
         launch_mode: args.launch_mode,
         launch_id: args.launch_id,

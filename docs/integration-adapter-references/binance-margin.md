@@ -18,15 +18,15 @@ cache, execution engine, event bus, and runtime are not used.
 
 ## Kairos mapping and behavior
 
-- `BinanceSpotPrincipalConnection` owns the shared credential, clock, HTTP lane,
-  and quota context.
-- `BinanceMarginPrincipalConnection` projects either Cross or Isolated Margin;
-  the connection domain remains provider-native and distinct.
-- `BinanceMarginOrderEntry` sends submit/cancel once with a 10-second deadline;
+- `BinanceMarginRestConnection` directly implements account query, order command, and order query.
+- `BinanceMarginWebSocketConnection` owns public market subscriptions;
+  `BinanceMarginUserWebSocketConnection` owns the authenticated listen-key stream and
+  demultiplexes account and execution facts.
+- Margin submit/cancel is sent once;
   ambiguous transport/server/deadline failure is `Indeterminate`.
-- `BinanceMarginOrderQuery` exposes open/history/detail queries. History
+- `OrderQuery` exposes open/history/detail queries. History
   requires a provider symbol, matching the provider endpoint.
-- `BinanceMarginOrderEvents` creates and renews the product-specific listen
+- The user WebSocket connection creates and renews the product-specific listen
   key on the caller Tokio runtime and normalizes `executionReport` into a
   binding/epoch-stamped external event.
 - Isolated Margin requires an explicit `isolated_symbol` in Execution route
@@ -36,13 +36,9 @@ cache, execution engine, event bus, and runtime are not used.
   field.
 - Socket loss, credential rotation, listen-key keepalive failure, and bounded
   queue overflow require route-scoped reconciliation before reconnect.
-- Provider symbols enter commands through Reference-owned
-  `ProviderInstrumentRef`; Integration does not parse canonical market IDs.
-- Production and direct CLI paths are async-only for both margin products;
-  the old public blocking margin order-entry path was removed.
-- Account composition projects Cross and Isolated Margin through native async
-  snapshot and private-event capabilities. The old blocking Account snapshot
-  synchronization path has been removed.
+- Provider symbols enter commands through `ParticipantInstrumentRef`; Integration does not parse
+  canonical market IDs.
+- The provider path is async-first and has no hidden blocking transport.
 - Account owns the snapshot/stream barrier, per-segment recovery buffer,
   continuity checks, resync, freshness, current view, and business events.
 - Cross and Isolated segments keep independent Account segment identities;
@@ -57,6 +53,5 @@ cache, execution engine, event bus, and runtime are not used.
 - Verify isolated-symbol permissions and account activation failures are
   classified as proven provider rejection rather than ambiguous delivery.
 
-The remaining items above concern live-provider fault/smoke coverage; the
-Account production composition migration itself is complete and has focused
-async-capability tests.
+The remaining items above concern live-provider fault/smoke coverage. Business-module composition
+migration is intentionally deferred.

@@ -2,7 +2,7 @@ use crate::domain::Account;
 use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -27,15 +27,12 @@ enum PersistenceJob {
 pub(crate) struct AccountPersistenceWorker {
     sender: Option<SyncSender<PersistenceJob>>,
     handle: Option<JoinHandle<()>>,
-    last_error: Arc<Mutex<Option<String>>>,
     pending: Arc<AtomicUsize>,
 }
 
 impl AccountPersistenceWorker {
     pub(crate) fn new(mut store: JsonAccountStore) -> Self {
         let (sender, receiver) = mpsc::sync_channel(8);
-        let last_error = Arc::new(Mutex::new(None));
-        let worker_error = Arc::clone(&last_error);
         let pending = Arc::new(AtomicUsize::new(0));
         let worker_pending = Arc::clone(&pending);
         let handle = thread::Builder::new()
@@ -63,7 +60,7 @@ impl AccountPersistenceWorker {
                             }
                             let result = store.append_journal(&all_records);
                             if let Err(error) = &result {
-                                record_error(&worker_error, error);
+                                tracing::error!(event = "account_persistence_failed", error = %error, "Account journal persistence failed");
                             }
                             for (_, response) in batch {
                                 if let Some(response) = response {
@@ -88,7 +85,7 @@ impl AccountPersistenceWorker {
                                     &pending_business_events,
                                 );
                                 if let Err(error) = &result {
-                                    record_error(&worker_error, error);
+                                    tracing::error!(event = "account_persistence_failed", error = %error, "Account checkpoint persistence failed");
                                 }
                                 let _ = response.send(result);
                                 worker_pending.fetch_sub(1, Ordering::Relaxed);
@@ -111,7 +108,7 @@ impl AccountPersistenceWorker {
                                 &pending_business_events,
                             );
                             if let Err(error) = &result {
-                                record_error(&worker_error, error);
+                                tracing::error!(event = "account_persistence_failed", error = %error, "Account checkpoint persistence failed");
                             }
                             let _ = response.send(result);
                         }
@@ -123,7 +120,6 @@ impl AccountPersistenceWorker {
         Self {
             sender: Some(sender),
             handle: Some(handle),
-            last_error,
             pending,
         }
     }
@@ -180,13 +176,6 @@ impl AccountPersistenceWorker {
         }
     }
 
-    pub(crate) fn take_error(&self) -> Option<String> {
-        self.last_error
-            .lock()
-            .ok()
-            .and_then(|mut error| error.take())
-    }
-
     pub(crate) fn checkpoint(
         &self,
         actor_id: String,
@@ -234,11 +223,5 @@ impl Drop for AccountPersistenceWorker {
             // Dropping a non-finished handle detaches it. This keeps account
             // shutdown bounded if the filesystem is stuck.
         }
-    }
-}
-
-fn record_error(last_error: &Arc<Mutex<Option<String>>>, error: &str) {
-    if let Ok(mut last_error) = last_error.lock() {
-        *last_error = Some(error.to_owned());
     }
 }

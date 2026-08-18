@@ -5,69 +5,21 @@
 //! contract and sent over Aeron or mmap.  Keeping the adapters here prevents
 //! generated FlatBuffers types from leaking into the Actor.
 
-use std::path::{Path, PathBuf};
-
-use crate::application::{ExecutionBusinessEvent, ExecutionCurrentView};
+use crate::application::ExecutionCurrentView;
 use crate::domain::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, ExecutionOrder, ExecutionOrderStatus,
     OrderCommitment, OrderSide, OrderType, RiskReservationEvidence, RiskReservationSagaStatus,
 };
 use flatbuffers::FlatBufferBuilder;
-use kairos_execution_contract::{
-    event_metadata, view_metadata, EncodeContext, ExecutionViewKey, ExecutionViewKind,
-    ExecutionViewPublisher,
-};
+use kairos_execution_contract::{event_metadata, view_metadata, EncodeContext, ExecutionViewKey};
 use kairos_protocol::generated::kairos::execution::v_2 as fb;
 use kairos_protocol::InstanceIdentity;
-use kairos_transport::SnapshotEnvelopeMetadata;
-
-const DEFAULT_SLOT_SIZE: usize = 4 * 1024 * 1024;
 
 mod encoding;
 mod events;
-mod snapshots;
 
-pub use events::AeronExecutionEventPublisher;
-pub use snapshots::{SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher};
-
-pub enum ExecutionEventPublication {
-    Aeron(AeronExecutionEventPublisher),
-    #[cfg(test)]
-    Memory(std::sync::Arc<std::sync::Mutex<Vec<ExecutionBusinessEvent>>>),
-}
-
-impl ExecutionEventPublication {
-    #[cfg(test)]
-    pub fn memory() -> (
-        Self,
-        std::sync::Arc<std::sync::Mutex<Vec<ExecutionBusinessEvent>>>,
-    ) {
-        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        (Self::Memory(events.clone()), events)
-    }
-
-    pub fn publish(&mut self, event: &ExecutionBusinessEvent) -> Result<(), String> {
-        match self {
-            Self::Aeron(publisher) => publisher.publish(event),
-            #[cfg(test)]
-            Self::Memory(events) => {
-                events
-                    .lock()
-                    .map_err(|error| error.to_string())?
-                    .push(event.clone());
-                Ok(())
-            }
-        }
-    }
-}
-
-impl From<AeronExecutionEventPublisher> for ExecutionEventPublication {
-    fn from(publisher: AeronExecutionEventPublisher) -> Self {
-        Self::Aeron(publisher)
-    }
-}
-
-use encoding::*;
+pub(crate) use encoding::*;
+pub(crate) use events::encode_business_change;
 
 #[cfg(test)]
 mod tests {
@@ -76,6 +28,7 @@ mod tests {
         CommitmentBasis, CommitmentResource, OrderCommitment, RiskReservationEvidence,
         RiskReservationSagaStatus,
     };
+    use kairos_execution_contract::ExecutionViewKind;
     use kairos_primitives::{
         AccountId, Currency, Generation, InstrumentId, Money, OrderId, Quantity, SegmentKey,
         Sequence, UnixNanos,
@@ -167,27 +120,5 @@ mod tests {
         assert_eq!(current.metadata().applied_revision(), Some(4));
         assert_eq!(current.commitments().len(), 1);
         assert_eq!(current.risk_reservations().len(), 1);
-
-        let directory = tempfile::tempdir().unwrap();
-        let legacy_path = directory
-            .path()
-            .join("snapshots/execution/execution.snapshot");
-        let mut publisher = SharedExecutionSnapshotPublisher::create_with_identity(
-            &legacy_path,
-            1024 * 1024,
-            "execution",
-            identity.clone(),
-        )
-        .unwrap();
-        publisher.publish(&snapshot).unwrap();
-        let reader =
-            kairos_execution_contract::ExecutionViewReader::open(directory.path(), current_key)
-                .unwrap();
-        let frame = reader.read().unwrap();
-        assert_eq!(frame.envelope_metadata().applied_event_sequence, 4);
-        assert_eq!(
-            frame.current_execution().unwrap().metadata().generation(),
-            3
-        );
     }
 }

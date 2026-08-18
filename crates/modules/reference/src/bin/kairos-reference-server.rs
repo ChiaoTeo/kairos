@@ -1,3 +1,6 @@
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
 use axum::{
     body::to_bytes,
     extract::{Request, State},
@@ -6,33 +9,30 @@ use axum::{
     Json, Router,
 };
 use clap::Parser;
+use kairos_conflux::{
+    Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
+};
 use kairos_reference::application::control;
-use kairos_reference::application::{
-    ReferenceReadModel, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
-};
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ComposedReferenceApplication,
-    ReferenceCompositionConfig, ReferenceEventWriter, ReferenceEventWriterConfig,
+    build_application, ensure_database_parent, ReferenceCompositionConfig,
 };
+use kairos_reference::ReferenceApplication;
+use kairos_reference_contract::{
+    ReferenceControlError, ReferenceOptionCoverageRequest, ReferenceRestRequest,
+    ReferenceRestResponse, ReferenceSourceControlRequest,
+};
+use kairos_transport::AeronBytePublisher;
 use kairos_workspace::workspace::Workspace;
-use serde_json::{json, Value};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self as std_mpsc, SyncSender, TrySendError};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use serde::Serialize;
+use serde_json::json;
 use tokio::net::UnixListener;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{mpsc, oneshot, RwLock};
-use tracing::Instrument as TracingInstrument;
+use tokio::task::LocalSet;
+use tracing::Instrument as _;
 
-// Provider refreshes and SQL persistence run on the caller's Tokio runtime.
-// The separate bounded Aeron publication worker below isolates the transport
-// client without turning provider acquisition back into blocking work.
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     kairos_workspace::logging::init("reference");
-    let result = run().await;
+    let result = LocalSet::new().run_until(run()).await;
     if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "reference", error = %error, "reference server failed");
     }
@@ -45,22 +45,9 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    tracing::info!(
-        event = "process_start",
-        component = "reference",
-        "starting reference server"
-    );
     let workspace = Workspace::open(args.workspace)?;
-    if let Some(path) = &args.socket {
-        if !path.starts_with(workspace.root()) {
-            return Err("reference socket must be inside workspace".into());
-        }
-    }
-    if let Some(path) = &args.health_file {
-        if !path.starts_with(workspace.root()) {
-            return Err("reference health file must be inside workspace".into());
-        }
-    }
+    validate_workspace_path(workspace.root(), args.socket.as_deref(), "socket")?;
+    validate_workspace_path(workspace.root(), args.health_file.as_deref(), "health file")?;
     let _process_lock = workspace.process_lock("reference").map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             "reference is already running for this workspace".to_string()
@@ -68,337 +55,129 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             format!("acquire reference workspace lock: {error}")
         }
     })?;
+
     let database = workspace.child(&["state", "reference", "reference.sqlite"])?;
-    if args.reference_changes_stream <= 0 {
-        return Err("reference event stream id must be positive".into());
-    }
-    let aeron_channel = args.aeron_channel;
-    let aeron_dir = args.aeron_dir.clone();
-    let reference_changes_stream = args.reference_changes_stream;
-    tracing::info!(
-        event = "reference_transport_config",
-        component = "reference",
-        aeron_channel = %aeron_channel,
-        reference_changes_stream,
-        "reference transport configured"
-    );
-    if let Some(parent) = database.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     ensure_database_parent(&database)?;
     let config = ReferenceCompositionConfig {
         workspace: Some(workspace.root().to_path_buf()),
         database,
-        aeron_dir: aeron_dir.clone(),
-        aeron_channel: aeron_channel.clone(),
-        reference_changes_stream,
+        aeron_dir: args.aeron_dir.clone(),
+        aeron_channel: args.aeron_channel.clone(),
+        reference_changes_stream: args.reference_changes_stream,
     };
-    let composition = build_application(&config, true).await?;
-    let mut application = composition.application;
-    let mut event_writer = composition.event_writer;
+
     if args.run_mode == "once" {
-        let refresh = application.refresh().await?;
-        if let Some(writer) = event_writer.as_mut() {
-            loop {
-                let publications = application.pending_publications(EVENT_BATCH_LIMIT).await?;
-                if publications.is_empty() {
-                    break;
-                }
-                // Aeron is a best-effort notification stream. A successful
-                // publish also includes the normal no-subscriber drop case;
-                // SQLite is the recovery source for late consumers.
-                writer.publish(&publications)?;
-                let event_ids = publications
-                    .iter()
-                    .map(|event| event.event_id().to_owned())
-                    .collect::<Vec<_>>();
-                application.acknowledge_publications(&event_ids).await?;
-            }
-        }
-        tracing::info!(
-            event = "initial_refresh_complete",
-            component = "reference",
-            generation = application.generation().get(),
-            event_sequence = application.event_sequence().get(),
-            events = refresh.events.len(),
-            "reference catalog initialized"
-        );
-        println!(
-            "reference generation={} event_sequence={} events={}",
-            application.generation().get(),
-            application.event_sequence().get(),
-            refresh.events.len()
-        );
-        return Ok(());
+        return run_once(&config).await;
     }
 
-    let socket = if let Some(socket) = args.socket {
-        if !socket.starts_with(workspace.root()) {
-            return Err("reference socket must be inside workspace".into());
-        }
-        socket
-    } else {
-        workspace.process_socket("reference")?
-    };
+    let socket = args
+        .socket
+        .unwrap_or(workspace.process_socket("reference")?);
     let health_file = args
         .health_file
         .or_else(|| workspace.health_file("reference").ok());
-    let event_writer_config = event_writer.take().map(|_| ReferenceEventWriterConfig {
-        aeron_dir,
-        aeron_channel,
-        reference_changes_stream,
-    });
-    run_process(
-        application,
-        event_writer_config,
-        socket,
-        health_file,
-        args.refresh_interval,
-        true,
-    )
-    .await
+    let composition = build_application(&config, false).await?;
+    let (mut application, mut system, _) = composition.into_conflux();
+    application.configure_conflux(args.refresh_interval, true);
+
+    let publisher = AeronBytePublisher::connect(
+        config.aeron_dir.as_deref(),
+        &config.aeron_channel,
+        config.reference_changes_stream,
+    )?;
+    system
+        .aeron_publishers
+        .ensure_with("reference-changes".to_owned(), 1, || publisher)?;
+
+    run_process(application, system, socket, health_file).await
 }
 
-async fn run_process(
-    mut application: ComposedReferenceApplication,
-    event_writer_config: Option<ReferenceEventWriterConfig>,
-    socket: PathBuf,
-    health_file: Option<PathBuf>,
-    refresh_interval: Duration,
-    initial_refresh: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event_publisher = event_writer_config.map(EventPublisherRuntime::new);
-    tracing::info!(event = "process_starting", component = "reference", socket = %socket.display(), refresh_interval_secs = refresh_interval.as_secs(), "reference process starting");
-    if let Some(parent) = socket.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    // The workspace process lock is already held by the caller. Only now is
-    // it safe to remove a stale socket from a previous crashed process.
-    let _ = std::fs::remove_file(&socket);
-    let listener = UnixListener::bind(&socket)?;
-    let (sender, mut receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
-    let control_queue_depth = Arc::new(AtomicUsize::new(0));
-    let initial_read_model = application.read_model().await;
-    let read_model = Arc::new(RwLock::new(initial_read_model));
-    let health_status = Arc::new(RwLock::new(String::from("ready")));
-    let router = Router::new()
-        .fallback(reference_http_handler)
-        .with_state(ReferenceServerState {
-            sender,
-            read_model: Arc::clone(&read_model),
-            health_status: Arc::clone(&health_status),
-            control_queue_depth: Arc::clone(&control_queue_depth),
-        });
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
-    tracing::info!(event = "process_ready", component = "reference", socket = %socket.display(), "reference control socket ready");
-    let initial_status = reference_status(&application);
-    write_health(&health_file, &application, initial_status).await?;
-
-    // The control plane is available before the first provider refresh. A
-    // full Massive universe can require several paginated requests, and a
-    // provider rate limit must not make the process appear dead.
-    if initial_refresh {
-        let refresh_started = Instant::now();
-        let status = match refresh_cycle(&mut application, event_publisher.as_ref()).await {
-            Ok(()) => reference_status(&application),
-            Err(error) => {
-                let provider_health = application.provider_health();
-                let degraded_providers = provider_health
-                    .iter()
-                    .filter(|health| health.status != "ready" && health.status != "unknown")
-                    .map(|health| health.source_id.as_str())
-                    .collect::<Vec<_>>();
-                tracing::warn!(
-                    event = "initial_refresh_failed",
-                    component = "reference",
-                    source = %application.source_id(),
-                    duration_ms = refresh_started.elapsed().as_millis() as u64,
-                    provider_count = provider_health.len(),
-                    degraded_provider_count = degraded_providers.len(),
-                    stale_provider_count = provider_health.iter().filter(|health| health.stale).count(),
-                    degraded_providers = ?degraded_providers,
-                    fallback = "last_persisted_catalog",
-                    error = %error,
-                    "reference initial refresh failed; serving last persisted catalog"
-                );
-                "degraded"
-            }
-        };
-        *read_model.write().await = application.read_model().await;
-        *health_status.write().await = status.to_owned();
-        write_health(&health_file, &application, status).await?;
-    }
-    let mut interval = tokio::time::interval_at(
-        tokio::time::Instant::now() + refresh_interval,
-        refresh_interval,
-    );
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut publication_interval = tokio::time::interval(Duration::from_millis(50));
-    publication_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut publication_retry_after = tokio::time::Instant::now();
-    let mut stopping = false;
-    while !stopping {
-        tokio::select! {
-            Some(request) = receiver.recv() => {
-                control_queue_depth.fetch_sub(1, Ordering::Relaxed);
-                let response = handle_request(&mut application, event_publisher.as_ref(), &request.method, &request.target, &String::from_utf8_lossy(&request.body)).await;
-                if let Ok((should_stop, status, payload)) = &response {
-                    stopping = *should_stop;
-                    let _ = request.response.send(Ok((*should_stop, *status, payload.clone())));
-                    let path = request.target.split_once('?').map_or(request.target.as_str(), |(path, _)| path);
-                    if matches!(path, control::REFRESH | control::PUBLISH | control::ASSETS | control::INSTRUMENTS | control::LISTINGS | control::SOURCE_PAUSE | control::SOURCE_RESUME | control::OPTIONS_COVERAGE_ADD | control::OPTIONS_COVERAGE_REMOVE) {
-                        let status = if *status < 400 { reference_status(&application) } else { "degraded" };
-                        *health_status.write().await = status.to_owned();
-                        let _ = write_health(&health_file, &application, status).await;
-                    }
-                } else {
-                    let _ = request.response.send(response.map_err(|error| error.to_string()));
-                }
-                *read_model.write().await = application.read_model().await;
-            }
-            _ = interval.tick() => {
-                let refresh_started = Instant::now();
-                let status = match refresh_cycle(&mut application, event_publisher.as_ref()).await {
-                    Ok(()) => reference_status(&application),
-                    Err(error) => {
-                        let provider_health = application.provider_health();
-                        let degraded_providers = provider_health
-                            .iter()
-                            .filter(|health| health.status != "ready" && health.status != "unknown")
-                            .map(|health| health.source_id.as_str())
-                            .collect::<Vec<_>>();
-                        tracing::warn!(
-                            event = "refresh_failed",
-                            component = "reference",
-                            source = %application.source_id(),
-                            duration_ms = refresh_started.elapsed().as_millis() as u64,
-                            provider_count = provider_health.len(),
-                            degraded_provider_count = degraded_providers.len(),
-                            stale_provider_count = provider_health.iter().filter(|health| health.stale).count(),
-                            degraded_providers = ?degraded_providers,
-                            fallback = if provider_health.iter().any(|health| health.stale) { "last_known_good" } else { "none" },
-                            error = %error,
-                            "reference refresh failed"
-                        );
-                        "degraded"
-                    }
-                };
-                *read_model.write().await = application.read_model().await;
-                *health_status.write().await = status.to_owned();
-                write_health(&health_file, &application, status).await?;
-            }
-            _ = publication_interval.tick(), if event_publisher.is_some() => {
-                if tokio::time::Instant::now() >= publication_retry_after {
-                    if let Err(error) = publish_pending_batch(event_publisher.as_ref(), &mut application).await {
-                        publication_retry_after = tokio::time::Instant::now() + Duration::from_secs(1);
-                        tracing::debug!(
-                            event = "reference_publication_deferred",
-                            component = "reference",
-                            error = %error,
-                            "reference pending publication remains durable for a later retry"
-                        );
-                    }
-                }
-            }
+async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let mut composition = build_application(config, true).await?;
+    composition.activate_sources().await?;
+    let (mut application, _, event_writer) = composition.into_conflux();
+    let mut writer = event_writer.ok_or("reference publication is not configured")?;
+    let refresh = application.refresh().await?;
+    loop {
+        let publications = application.pending_publications(1_024).await?;
+        if publications.is_empty() {
+            break;
         }
+        writer.publish(&publications)?;
+        let event_ids = publications
+            .iter()
+            .map(|event| event.event_id().to_owned())
+            .collect::<Vec<_>>();
+        application.acknowledge_publications(&event_ids).await?;
     }
-    let _ = std::fs::remove_file(&socket);
-    server.abort();
-    let _ = server.await;
-    tracing::info!(
-        event = "process_stopped",
-        component = "reference",
-        "reference process stopped"
+    println!(
+        "reference generation={} event_sequence={} events={}",
+        application.generation().get(),
+        application.event_sequence().get(),
+        refresh.events.len()
     );
     Ok(())
 }
 
-struct ReferenceHttpRequest {
-    method: String,
-    target: String,
-    body: Vec<u8>,
-    response: oneshot::Sender<Result<(bool, u16, Value), String>>,
-}
-
-struct PublishRequest {
-    publications: Vec<kairos_reference::ReferencePublication>,
-    response: SyncSender<Result<(), String>>,
-}
-
-struct EventPublisherRuntime {
-    requests: SyncSender<PublishRequest>,
-}
-
-impl EventPublisherRuntime {
-    fn new(config: ReferenceEventWriterConfig) -> Self {
-        let (requests, receiver) =
-            std_mpsc::sync_channel::<PublishRequest>(EVENT_PUBLISH_QUEUE_CAPACITY);
-        std::thread::Builder::new()
-            .name("reference-event-publisher".into())
-            .spawn(move || {
-                let mut writer = ReferenceEventWriter::connect(&config)
-                    .expect("connect reference event publisher worker");
-                while let Ok(request) = receiver.recv() {
-                    let result = writer
-                        .publish(&request.publications)
-                        .map_err(|error| error.to_string());
-                    let _ = request.response.send(result);
-                }
-            })
-            .expect("start reference event publisher worker");
-        Self { requests }
+async fn run_process(
+    application: ReferenceApplication,
+    system: ConfluxSystem,
+    socket: PathBuf,
+    health_file: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    remove_socket(&socket)?;
+    if let Some(parent) = socket.parent() {
+        tokio::fs::create_dir_all(parent).await?;
     }
+    let listener = UnixListener::bind(&socket)?;
+    let (conflux, handle) = Conflux::new(
+        application,
+        system,
+        ConfluxConfig {
+            ingress_capacity: 256,
+            ..ConfluxConfig::default()
+        },
+    )?;
+    let process = tokio::task::spawn_local(conflux.run());
+    let router = Router::new()
+        .fallback(reference_http_handler)
+        .with_state(ReferenceHost {
+            handle: handle.clone(),
+        });
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
 
-    fn publish(
-        &self,
-        publications: &[kairos_reference::ReferencePublication],
-    ) -> kairos_reference::domain::ReferenceResult<()> {
-        let receiver = self.enqueue(publications)?;
-        receiver
-            .recv()
-            .map_err(|error| {
-                kairos_reference::domain::ReferenceError::Publication(error.to_string())
-            })?
-            .map_err(kairos_reference::domain::ReferenceError::Publication)
-    }
+    let startup = handle
+        .handle(ConfluxEvent::Rest(ReferenceRestRequest::Health))
+        .await
+        .map_err(|_| "Reference Conflux startup health failed")?;
+    let status = match startup {
+        Some(ReferenceRestResponse::Health(Ok(health))) => health.status,
+        _ => return Err("Reference Actor omitted its startup health response".into()),
+    };
+    write_health(health_file.as_deref(), &status).await?;
+    kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
 
-    fn enqueue(
-        &self,
-        publications: &[kairos_reference::ReferencePublication],
-    ) -> kairos_reference::domain::ReferenceResult<std_mpsc::Receiver<Result<(), String>>> {
-        let (response, receiver) = std_mpsc::sync_channel(1);
-        match self.requests.try_send(PublishRequest {
-            publications: publications.to_vec(),
-            response,
-        }) {
-            Ok(()) => Ok(receiver),
-            Err(TrySendError::Full(_)) => {
-                Err(kairos_reference::domain::ReferenceError::Publication(
-                    "reference event publisher queue is full".into(),
-                ))
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                Err(kairos_reference::domain::ReferenceError::Publication(
-                    "reference event publisher is unavailable".into(),
-                ))
-            }
-        }
-    }
+    let outcome = process.await.map_err(|error| error.to_string())??;
+    server.abort();
+    let _ = server.await;
+    remove_socket(&socket)?;
+    write_health(health_file.as_deref(), "stopped").await?;
+    tracing::info!(
+        event = "process_stopped",
+        component = "reference",
+        phase = ?outcome.phase,
+        discarded_inputs = outcome.discarded_inputs,
+        "Reference Conflux process stopped"
+    );
+    Ok(())
 }
 
 #[derive(Clone)]
-struct ReferenceServerState {
-    sender: Sender<ReferenceHttpRequest>,
-    read_model: Arc<RwLock<ReferenceReadModel>>,
-    health_status: Arc<RwLock<String>>,
-    control_queue_depth: Arc<AtomicUsize>,
+struct ReferenceHost {
+    handle: ConfluxHandle<ReferenceApplication>,
 }
 
-async fn reference_http_handler(
-    State(state): State<ReferenceServerState>,
-    request: Request,
-) -> Response {
+async fn reference_http_handler(State(host): State<ReferenceHost>, request: Request) -> Response {
     let started = Instant::now();
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
@@ -409,444 +188,204 @@ async fn reference_http_handler(
         path = %path,
         status = tracing::field::Empty,
         duration_ms = tracing::field::Empty,
-        result = tracing::field::Empty,
-        error_code = tracing::field::Empty,
-        retryable = tracing::field::Empty,
-        trace_id = tracing::field::Empty,
-        span_id = tracing::field::Empty
     );
-    kairos_workspace::logging::record_counter("kairos.control.request", 1);
-    kairos_workspace::logging::record_counter("kairos.operation", 1);
     kairos_workspace::logging::set_remote_parent(&span, request.headers());
-    let response = reference_http_handler_inner(state, request)
+    let response = reference_http_handler_inner(host, request)
         .instrument(span.clone())
         .await;
-    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
     span.record("status", response.status().as_u16());
-    span.record("duration_ms", duration_ms);
-    span.record(
-        "result",
-        if response.status().is_success() {
-            "accepted"
-        } else {
-            "rejected"
-        },
-    );
-    kairos_workspace::logging::record_duration_ms("kairos.control.request.duration", duration_ms);
-    kairos_workspace::logging::record_duration_ms("kairos.operation.duration", duration_ms);
-    if response.status().is_server_error() {
-        kairos_workspace::logging::mark_span_error(&span, "control.internal_error", true);
-        kairos_workspace::logging::record_counter("kairos.control.request.failed", 1);
-        kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
-    } else if !response.status().is_success() {
-        span.record("error_code", "control.request_rejected");
-        span.record("retryable", false);
-    }
-    if path == control::HEALTH && response.status().is_success() {
-        tracing::debug!(parent: &span, event = "control_request_completed", component = "reference", duration_ms, result = "accepted", "reference health request completed");
-    } else if response.status().is_success() {
-        tracing::info!(parent: &span, event = "control_request_completed", component = "reference", duration_ms, result = "accepted", "reference control request completed");
-    } else {
-        tracing::warn!(parent: &span, event = "control_request_completed", component = "reference", duration_ms, result = "rejected", "reference control request failed");
-    }
+    span.record("duration_ms", started.elapsed().as_secs_f64() * 1_000.0);
     response
 }
 
-async fn reference_http_handler_inner(state: ReferenceServerState, request: Request) -> Response {
+async fn reference_http_handler_inner(host: ReferenceHost, request: Request) -> Response {
     let method = request.method().as_str().to_owned();
     let target = request
         .uri()
         .path_and_query()
         .map(|value| value.as_str().to_owned())
         .unwrap_or_else(|| request.uri().path().to_owned());
-    let path = target
-        .split_once('?')
-        .map_or(target.as_str(), |(path, _)| path);
-    if method == "GET" && path != control::HEALTH {
-        return (
-            StatusCode::METHOD_NOT_ALLOWED,
-            Json(json!({"error":"Reference business queries use the contract-owned read-only SQLite client"})),
-        )
-            .into_response();
-    }
-    if path == control::HEALTH && method != "GET" {
-        return (
-            StatusCode::METHOD_NOT_ALLOWED,
-            Json(json!({"error":"/v1/health only accepts GET"})),
-        )
-            .into_response();
-    }
-    if path == control::HEALTH {
-        let model = state.read_model.read().await;
-        let status = state.health_status.read().await;
-        return Json(health_json_read_model(&model, &status)).into_response();
-    }
     let body = match to_bytes(
         request.into_body(),
         kairos_workspace::control::MAX_HTTP_BODY_BYTES,
     )
     .await
     {
-        Ok(body) => body.to_vec(),
-        Err(_) => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(json!({"error":"request body too large"})),
-            )
-                .into_response()
-        }
+        Ok(body) => body,
+        Err(_) => return json_error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
     };
-    let (response_sender, response_receiver) = oneshot::channel();
-    match state.sender.try_send(ReferenceHttpRequest {
-        method,
-        target,
-        body,
-        response: response_sender,
-    }) {
-        Ok(()) => {
-            state.control_queue_depth.fetch_add(1, Ordering::Relaxed);
+    let request = match decode_request(&method, &target, &body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match request {
+        HostRequest::Stop => {
+            host.handle.shutdown(ShutdownMode::Drain);
+            (StatusCode::ACCEPTED, Json(json!({"status":"stopping"}))).into_response()
         }
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            return (
+        HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
+            Ok(Some(response)) => encode_response(response),
+            Ok(None) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Reference Actor omitted its REST response",
+            ),
+            Err(_) => json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error":"reference control queue is full"})),
-            )
-                .into_response()
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({"error":"reference process is stopping"})),
-            )
-                .into_response()
-        }
-    }
-    match response_receiver.await {
-        Ok(Ok((_, status, payload))) => (
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(payload),
-        )
-            .into_response(),
-        Ok(Err(error)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error":error})),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"reference process did not respond"})),
-        )
-            .into_response(),
+                "reference process is stopping",
+            ),
+        },
     }
 }
 
-async fn handle_request(
-    application: &mut ComposedReferenceApplication,
-    writer: Option<&EventPublisherRuntime>,
-    method: &str,
-    target: &str,
-    body: &str,
-) -> Result<(bool, u16, Value), Box<dyn std::error::Error>> {
-    let started = Instant::now();
-    tracing::info!(event = "control_request", component = "reference", path = %target, "reference control request received");
+enum HostRequest {
+    Rest(ReferenceRestRequest),
+    Stop,
+}
+
+fn decode_request(method: &str, target: &str, body: &[u8]) -> Result<HostRequest, Response> {
     let path = target.split_once('?').map_or(target, |(path, _)| path);
-    if method != "POST" && path != control::HEALTH {
-        return Ok((
-            false,
-            StatusCode::METHOD_NOT_ALLOWED.as_u16(),
-            json!({"error":"Reference REST accepts only control commands"}),
+    if path == control::STOP {
+        return if method == "POST" {
+            Ok(HostRequest::Stop)
+        } else {
+            Err(json_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "stop accepts only POST",
+            ))
+        };
+    }
+    if path == control::HEALTH {
+        return if method == "GET" {
+            Ok(HostRequest::Rest(ReferenceRestRequest::Health))
+        } else {
+            Err(json_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "health accepts only GET",
+            ))
+        };
+    }
+    if method != "POST" {
+        return Err(json_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Reference business queries use the contract-owned SQLite client",
         ));
     }
-    let (status, body, stopping) = match path {
-        control::HEALTH => (200, health_json(application, "ready"), false),
-        control::REFRESH => match match query_value(target, "source") {
-            Some(source_id) => application.refresh_source(source_id).await,
-            None => application.refresh().await,
-        } {
-            Ok(result) => {
-                let publication = publish_pending(writer, application).await;
-                {
-                    let (events, publication_pending, publication_error) = match publication {
-                        Ok(events) => (events, false, None),
-                        Err(error) => {
-                            tracing::debug!(
-                                event = "reference_publication_deferred",
-                                component = "reference",
-                                error = %error,
-                                "Reference commit is durable while events await publication"
-                            );
-                            (0, true, Some(error.to_string()))
-                        }
-                    };
-                    (
-                        200,
-                        json!({
-                            "generation": result.generation,
-                            "event_sequence": result.event_sequence,
-                            "events": events,
-                            "publication_pending": publication_pending,
-                            "publication_error": publication_error,
-                        }),
-                        false,
-                    )
-                }
-            }
-            Err(error) => (503, json!({"error": error.to_string()}), false),
+    let request = match path {
+        control::REFRESH => ReferenceRestRequest::Refresh {
+            source_id: query_value(target, "source").map(str::to_owned),
         },
-        control::PUBLISH => match publish_pending(writer, application).await {
-            Ok(events) => (
-                200,
-                json!({"generation": application.generation().get(), "events": events}),
-                false,
-            ),
-            Err(error) => (503, json!({"error": error.to_string()}), false),
-        },
-        control::SOURCE_PAUSE | control::SOURCE_RESUME => {
-            let Some(source_id) = query_value(target, "source") else {
-                return Err("source is required".into());
-            };
-            let paused = path == control::SOURCE_PAUSE;
-            match application.set_source_paused(source_id, paused).await {
-                Ok(()) => (
-                    200,
-                    json!({"source_id": source_id, "status": if paused { "paused" } else { "resumed" }}),
-                    false,
-                ),
-                Err(error) => (400, json!({"error": error.to_string()}), false),
-            }
+        control::PUBLISH => ReferenceRestRequest::Publish,
+        control::SOURCE_PAUSE => ReferenceRestRequest::PauseSource(ReferenceSourceControlRequest {
+            source_id: required_query(target, "source")?,
+        }),
+        control::SOURCE_RESUME => {
+            ReferenceRestRequest::ResumeSource(ReferenceSourceControlRequest {
+                source_id: required_query(target, "source")?,
+            })
         }
-        control::OPTIONS_COVERAGE_ADD | control::OPTIONS_COVERAGE_REMOVE => {
-            let Some(underlying) = query_value(target, "underlying") else {
-                return Err("underlying is required".into());
-            };
-            let enabled = path == control::OPTIONS_COVERAGE_ADD;
-            match application.set_option_underlying(underlying, enabled).await {
-                Ok(result) => (
-                    200,
-                    json!({
-                        "source_id": "massive-options",
-                        "underlying": underlying,
-                        "enabled": enabled,
-                        "underlyings": application.option_underlyings(),
-                        "generation": result.generation,
-                        "event_sequence": result.event_sequence,
-                        "changed": result.changed,
-                    }),
-                    false,
-                ),
-                Err(error) => (400, json!({"error": error.to_string()}), false),
-            }
+        control::OPTIONS_COVERAGE_ADD => {
+            ReferenceRestRequest::AddOptionCoverage(ReferenceOptionCoverageRequest {
+                underlying: required_query(target, "underlying")?,
+            })
         }
-        control::ASSETS => match serde_json::from_str::<UpsertAssetCommand>(body) {
-            Ok(asset) => match application.upsert_asset(asset).await {
-                Ok(generation) => match publish_pending(writer, application).await {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
-                    Err(error) => (503, json!({"error": error.to_string()}), false),
-                },
-                Err(error) => (400, json!({"error": error.to_string()}), false),
-            },
-            Err(error) => (
-                400,
-                json!({"error": format!("invalid asset: {error}")}),
-                false,
-            ),
-        },
-        control::INSTRUMENTS => match serde_json::from_str::<UpsertInstrumentCommand>(body) {
-            Ok(instrument) => match application.upsert_instrument(instrument).await {
-                Ok(generation) => match publish_pending(writer, application).await {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
-                    Err(error) => (503, json!({"error": error.to_string()}), false),
-                },
-                Err(error) => (400, json!({"error": error.to_string()}), false),
-            },
-            Err(error) => (
-                400,
-                json!({"error": format!("invalid instrument: {error}")}),
-                false,
-            ),
-        },
-        control::LISTINGS => match serde_json::from_str::<UpsertListingCommand>(body) {
-            Ok(listing) => match application.upsert_listing(listing).await {
-                Ok(generation) => match publish_pending(writer, application).await {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
-                    Err(error) => (503, json!({"error": error.to_string()}), false),
-                },
-                Err(error) => (400, json!({"error": error.to_string()}), false),
-            },
-            Err(error) => (
-                400,
-                json!({"error": format!("invalid listing: {error}")}),
-                false,
-            ),
-        },
-        control::STOP => (202, json!({"status": "stopping"}), true),
-        _ => (
-            404,
-            json!({"error": "unknown reference control path"}),
-            false,
-        ),
+        control::OPTIONS_COVERAGE_REMOVE => {
+            ReferenceRestRequest::RemoveOptionCoverage(ReferenceOptionCoverageRequest {
+                underlying: required_query(target, "underlying")?,
+            })
+        }
+        control::ASSETS => ReferenceRestRequest::UpsertAsset(decode(body)?),
+        control::INSTRUMENTS => ReferenceRestRequest::UpsertInstrument(decode(body)?),
+        control::LISTINGS => ReferenceRestRequest::UpsertListing(decode(body)?),
+        _ => {
+            return Err(json_error(
+                StatusCode::NOT_FOUND,
+                "unknown Reference control path",
+            ))
+        }
     };
-    tracing::info!(event = "control_response", component = "reference", path = %path, status, duration_ms = started.elapsed().as_millis(), "reference control response sent");
-    Ok((stopping, status, body))
+    Ok(HostRequest::Rest(request))
+}
+
+fn decode<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, Response> {
+    serde_json::from_slice(body).map_err(|error| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":"invalid Reference request", "details":error.to_string()})),
+        )
+            .into_response()
+    })
+}
+
+fn encode_response(response: ReferenceRestResponse) -> Response {
+    match response {
+        ReferenceRestResponse::Health(result) => result_response(result),
+        ReferenceRestResponse::Refresh(result) => result_response(result),
+        ReferenceRestResponse::Publish(result) => result_response(result),
+        ReferenceRestResponse::PauseSource(result) => result_response(result),
+        ReferenceRestResponse::ResumeSource(result) => result_response(result),
+        ReferenceRestResponse::AddOptionCoverage(result) => result_response(result),
+        ReferenceRestResponse::RemoveOptionCoverage(result) => result_response(result),
+        ReferenceRestResponse::UpsertAsset(result) => result_response(result),
+        ReferenceRestResponse::UpsertInstrument(result) => result_response(result),
+        ReferenceRestResponse::UpsertListing(result) => result_response(result),
+    }
+}
+
+fn result_response<T: Serialize>(result: Result<T, ReferenceControlError>) -> Response {
+    match result {
+        Ok(value) => (StatusCode::OK, Json(json!(value))).into_response(),
+        Err(error) => {
+            let status = if error.retryable {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(json!({"error": error}))).into_response()
+        }
+    }
 }
 
 fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
-    let Some((_, query)) = target.split_once('?') else {
-        return None;
-    };
+    let (_, query) = target.split_once('?')?;
     query.split('&').find_map(|pair| {
         let (key, value) = pair.split_once('=')?;
         (key == name).then_some(value)
     })
 }
 
-fn publish(
-    writer: Option<&EventPublisherRuntime>,
-    application: &ComposedReferenceApplication,
-    publications: &[kairos_reference::ReferencePublication],
-) -> kairos_reference::domain::ReferenceResult<()> {
-    publish_events(writer, publications)?;
-    tracing::info!(
-        event = "reference_changes_published",
-        component = "reference",
-        generation = application.generation().get(),
-        event_sequence = application.event_sequence().get(),
-        change_count = publications.len(),
-        "reference changes published"
-    );
-    Ok(())
-}
-
-fn publish_events(
-    writer: Option<&EventPublisherRuntime>,
-    publications: &[kairos_reference::ReferencePublication],
-) -> kairos_reference::domain::ReferenceResult<()> {
-    let writer = writer.ok_or_else(|| {
-        kairos_reference::domain::ReferenceError::Publication(
-            "reference publication is not configured".into(),
+fn required_query(target: &str, name: &str) -> Result<String, Response> {
+    query_value(target, name).map(str::to_owned).ok_or_else(|| {
+        json_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("{name} is required"),
         )
-    })?;
-    writer.publish(publications)
+    })
 }
 
-async fn publish_pending(
-    writer: Option<&EventPublisherRuntime>,
-    application: &mut ComposedReferenceApplication,
-) -> kairos_reference::domain::ReferenceResult<usize> {
-    let count = publish_pending_batch(writer, application).await?;
-    tracing::info!(
-        event = "reference_pending_events_published",
-        component = "reference",
-        event_count = count,
-        "reference pending events published"
-    );
-    Ok(count)
+fn json_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error":message}))).into_response()
 }
 
-async fn publish_pending_batch(
-    writer: Option<&EventPublisherRuntime>,
-    application: &mut ComposedReferenceApplication,
-) -> kairos_reference::domain::ReferenceResult<usize> {
-    let publications = application.pending_publications(EVENT_BATCH_LIMIT).await?;
-    if publications.is_empty() {
-        return Ok(0);
-    }
-    publish(writer, application, &publications)?;
-    let event_ids = publications
-        .iter()
-        .map(|event| event.event_id().to_owned())
-        .collect::<Vec<_>>();
-    application.acknowledge_publications(&event_ids).await?;
-    Ok(publications.len())
-}
-
-async fn refresh_cycle(
-    application: &mut ComposedReferenceApplication,
-    publisher: Option<&EventPublisherRuntime>,
-) -> kairos_reference::domain::ReferenceResult<()> {
-    application.refresh().await?;
-    if let Err(error) = publish_pending(publisher, application).await {
-        tracing::debug!(
-            event = "reference_publication_deferred",
-            component = "reference",
-            error = %error,
-            "Reference commit is durable while events await publication"
-        );
+fn validate_workspace_path(
+    workspace: &Path,
+    path: Option<&Path>,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if path.is_some_and(|path| !path.starts_with(workspace)) {
+        return Err(format!("reference {label} must be inside workspace").into());
     }
     Ok(())
 }
 
-const EVENT_BATCH_LIMIT: usize = 1024;
-const CONTROL_QUEUE_CAPACITY: usize = 64;
-const EVENT_PUBLISH_QUEUE_CAPACITY: usize = 8;
-
-fn health_json(application: &ComposedReferenceApplication, status: &str) -> Value {
-    let providers = application
-        .provider_health()
-        .into_iter()
-        .map(|provider| {
-            json!({
-                "source_id": provider.source_id,
-                "status": provider.status,
-                "stale": provider.stale,
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "status": status,
-        "pid": std::process::id(),
-        "dependencies": { "providers": providers },
-    })
-}
-
-fn health_json_read_model(model: &ReferenceReadModel, status: &str) -> Value {
-    let providers = model
-        .provider_health()
-        .iter()
-        .map(|provider| {
-            json!({
-                "source_id": provider.source_id,
-                "status": provider.status,
-                "stale": provider.stale,
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "status": status,
-        "pid": std::process::id(),
-        "dependencies": { "providers": providers },
-    })
-}
-
-fn reference_status(application: &ComposedReferenceApplication) -> &'static str {
-    if application
-        .provider_health()
-        .iter()
-        .any(|provider| provider.stale)
-    {
-        "degraded"
-    } else {
-        "ready"
+fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
-async fn write_health(
-    path: &Option<PathBuf>,
-    application: &ComposedReferenceApplication,
-    status: &str,
-) -> Result<(), std::io::Error> {
+async fn write_health(path: Option<&Path>, status: &str) -> Result<(), std::io::Error> {
     let Some(path) = path else {
         return Ok(());
     };
@@ -855,7 +394,8 @@ async fn write_health(
     }
     tokio::fs::write(
         path,
-        serde_json::to_vec(&health_json(application, status)).map_err(std::io::Error::other)?,
+        serde_json::to_vec(&json!({"status":status, "pid":std::process::id()}))
+            .map_err(std::io::Error::other)?,
     )
     .await
 }
@@ -894,10 +434,7 @@ struct Args {
     socket: Option<PathBuf>,
     #[arg(long = "health-file")]
     health_file: Option<PathBuf>,
-    #[arg(
-        long = "aeron-channel",
-        default_value = kairos_transport::DEFAULT_CHANNEL
-    )]
+    #[arg(long = "aeron-channel", default_value = kairos_transport::DEFAULT_CHANNEL)]
     aeron_channel: String,
     #[arg(
         long = "reference-changes-stream",
@@ -907,11 +444,7 @@ struct Args {
     reference_changes_stream: i32,
     #[arg(long)]
     aeron_dir: Option<String>,
-    #[arg(
-        long = "refresh-interval",
-        default_value = "5m",
-        value_parser = parse_refresh_interval
-    )]
+    #[arg(long = "refresh-interval", default_value = "5m", value_parser = parse_refresh_interval)]
     refresh_interval: Duration,
     #[arg(long = "run-mode", default_value = "daemon", value_parser = ["daemon", "once"])]
     run_mode: String,
@@ -957,7 +490,6 @@ mod tests {
             canonical.reference_changes_stream,
             kairos_transport::stream_ids::REFERENCE_CHANGES
         );
-
         assert!(Args::try_parse_from([
             "kairos-reference",
             "--workspace",

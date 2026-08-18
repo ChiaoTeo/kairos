@@ -27,6 +27,3 @@ pub use application::{
     RefreshQuoteIntent, ReplaceOrder, RiskReservationSagaStatus, SnapshotWatermark,
     SplitOrderPolicy, SubmitOrder, TradeBar, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
-
-#[cfg(test)]
-pub(crate) use application::ExecutionProcess;

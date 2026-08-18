@@ -43,6 +43,6 @@ fn canonical_view_key_contains_all_partition_identity() {
     .unwrap();
     assert_eq!(
         key.canonical_key(),
-        "market=market:fixture;source=source:fixture;view=order-book;qualifier="
+        "scope=market:fixture;source=source:fixture;view=order-book;qualifier="
     );
 }

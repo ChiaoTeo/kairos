@@ -13,6 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 axum = "0.8"
 kairos-primitives = { path = "../../primitives" }
+kairos-conflux = { path = "../../platform/conflux" }
 kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"

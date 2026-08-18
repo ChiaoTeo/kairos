@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use kairos_integration::application::credential::load_workspace_credential;
-use kairos_integration::application::{
-    AsyncHistoricalMarketDataConnection, HistoricalMarketRequest, MarketEventKind,
+use kairos_integration::composition::credentials::load_workspace_credential;
+use kairos_integration::participants::binance::{
+    spot::BinanceSpotRestConnection, BinanceRestConfig,
 };
-use kairos_integration::participants::binance;
 use kairos_integration::participants::massive::{
-    MarketType as MassiveMarketType, MassiveConnection, MassiveConnectionConfig,
+    InstrumentQuery, MassiveRestConfig, MassiveRestConnection,
+};
+use kairos_integration::{
+    HistoricalBarQuery, HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery,
+    HistoricalWindow, MarketEvent, MarketEventKind,
 };
 use kairos_market::composition::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
@@ -80,18 +83,15 @@ async fn download(
         });
     let start_time_unix_nanos = millis_to_nanos(command.start)?;
     let end_time_unix_nanos = millis_to_nanos(command.end)?;
-    let data_kind = match command.data_kind {
-        HistoricalDataKind::Bar => kairos_integration::application::MarketDataKind::Bar,
-        HistoricalDataKind::Quote => kairos_integration::application::MarketDataKind::Quote,
-        HistoricalDataKind::Trade => kairos_integration::application::MarketDataKind::Trade,
-    };
-    let request = HistoricalMarketRequest {
-        symbol: kairos_primitives::Symbol::new(command.symbol.clone())
+    let window = HistoricalWindow {
+        symbol: kairos_primitives::ParticipantSymbol::new(command.symbol.clone())
             .map_err(|error| error.to_string())?,
-        data_kind,
         start_time_unix_nanos,
         end_time_unix_nanos,
-        interval: Some(command.interval.clone()),
+    };
+    let bar_request = HistoricalBarRequest {
+        window: window.clone(),
+        interval: command.interval.clone(),
         adjusted: Some(command.adjusted),
     };
     let events = match provider {
@@ -114,23 +114,26 @@ async fn download(
                 .ok_or("Massive workspace credential does not exist")?
                 .api_key
             };
-            let provider = MassiveConnection::connect(MassiveConnectionConfig {
+            let mut provider = MassiveRestConnection::new(MassiveRestConfig {
+                binding_id: "market-history".into(),
                 environment: "public".into(),
-                rest_base_url: endpoint,
+                endpoint,
                 api_key: secrecy::SecretString::new(api_key.into()),
+                instrument_query: match command.market_type {
+                    HistoricalMarketType::Equity => InstrumentQuery::equities(),
+                    HistoricalMarketType::Option => InstrumentQuery::options(None),
+                },
             })?;
-            provider
-                .historical_market(match command.market_type {
-                    HistoricalMarketType::Equity => MassiveMarketType::Equity,
-                    HistoricalMarketType::Option => MassiveMarketType::Option,
-                })?
-                .fetch(&request)
-                .await?
+            fetch_historical(&mut provider, command.data_kind, &window, &bar_request).await?
         }
         HistoricalProvider::Binance => {
-            binance::spot_historical_market(endpoint)?
-                .fetch(&request)
-                .await?
+            let mut provider = BinanceSpotRestConnection::new(BinanceRestConfig {
+                binding_id: "market-history".into(),
+                environment: "public".into(),
+                endpoint,
+                credential: None,
+            })?;
+            fetch_historical(&mut provider, command.data_kind, &window, &bar_request).await?
         }
     };
     let instrument_id = command
@@ -251,6 +254,101 @@ async fn download(
         register_dataset(workspace_root, &manifest, &output, &manifest_path)?;
     }
     Ok(manifest)
+}
+
+async fn fetch_historical<C>(
+    connection: &mut C,
+    kind: HistoricalDataKind,
+    window: &HistoricalWindow,
+    bar_request: &HistoricalBarRequest,
+) -> Result<Vec<MarketEvent>, kairos_integration::IntegrationError>
+where
+    C: HistoricalBarQuery + HistoricalQuoteQuery + HistoricalTradeQuery,
+{
+    let venue = kairos_integration::MarketVenueEvidence::default();
+    match kind {
+        HistoricalDataKind::Bar => Ok(connection
+            .fetch_bars(bar_request)
+            .await?
+            .into_iter()
+            .map(|bar| MarketEvent {
+                symbol: bar.symbol,
+                kind: MarketEventKind::Bar,
+                price: None,
+                quantity: None,
+                rate: None,
+                ask_price: None,
+                ask_quantity: None,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: Some(kairos_integration::Bar {
+                    timeframe: bar.interval,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                    derivation: bar.derivation,
+                }),
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: None,
+                observed_at_unix_nanos: bar.opened_at_unix_nanos,
+                venue: venue.clone(),
+            })
+            .collect()),
+        HistoricalDataKind::Quote => Ok(connection
+            .fetch_quotes(window)
+            .await?
+            .into_iter()
+            .map(|quote| MarketEvent {
+                symbol: quote.symbol,
+                kind: MarketEventKind::Quote,
+                price: quote.bid_price.or(quote.last_price),
+                quantity: quote.bid_quantity,
+                rate: None,
+                ask_price: quote.ask_price,
+                ask_quantity: quote.ask_quantity,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: None,
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: None,
+                observed_at_unix_nanos: quote.observed_at_unix_nanos,
+                venue: venue.clone(),
+            })
+            .collect()),
+        HistoricalDataKind::Trade => Ok(connection
+            .fetch_trades(window)
+            .await?
+            .into_iter()
+            .map(|trade| MarketEvent {
+                symbol: trade.symbol,
+                kind: MarketEventKind::Trade,
+                price: Some(trade.price),
+                quantity: Some(trade.quantity),
+                rate: None,
+                ask_price: None,
+                ask_quantity: None,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: None,
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: trade
+                    .participant_trade_id
+                    .as_deref()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .map(Into::into),
+                observed_at_unix_nanos: trade.event_at_unix_nanos,
+                venue: venue.clone(),
+            })
+            .collect()),
+    }
 }
 
 fn millis_to_nanos(value: i64) -> Result<kairos_primitives::UnixNanos, String> {

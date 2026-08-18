@@ -1,6 +1,6 @@
 //! Provider event normalization into Market-owned facts.
 
-use kairos_integration::application::{MarketEvent, MarketEventKind};
+use kairos_integration::{MarketEvent, MarketEventKind};
 use kairos_primitives::Money;
 
 use super::messages::{SourceInput, SourceOrderBookUpdate};
@@ -242,7 +242,7 @@ pub(super) fn normalize(
 
 fn trade_scope(
     market: &ResolvedMarket,
-    evidence: &kairos_integration::application::MarketVenueEvidence,
+    evidence: &kairos_integration::MarketVenueEvidence,
 ) -> Result<crate::ObservationScope, String> {
     if !market.route.provider_id.eq_ignore_ascii_case("massive") {
         return Ok(market.scope.clone());
@@ -286,8 +286,8 @@ fn trade_scope(
 mod tests {
     use super::{normalize, Normalized};
     use crate::{MarketDataRoute, ObservationScope, ResolvedMarket, SourceId};
-    use kairos_integration::application::{
-        MarketBar, MarketEvent, MarketEventKind, MarketVenueEvidence,
+    use kairos_integration::{
+        Bar as IntegrationBar, MarketEvent, MarketEventKind, MarketVenueEvidence,
     };
 
     fn massive_market() -> ResolvedMarket {
@@ -314,7 +314,7 @@ mod tests {
     fn event(kind: MarketEventKind) -> MarketEvent {
         MarketEvent {
             kind,
-            symbol: kairos_primitives::Symbol::new("AAPL").unwrap(),
+            symbol: kairos_primitives::ParticipantSymbol::new("AAPL").unwrap(),
             price: Some("100".parse().unwrap()),
             quantity: Some("1".parse().unwrap()),
             rate: None,
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn massive_bar_from_instrument_route_is_consolidated_without_a_fake_market() {
         let mut event = event(MarketEventKind::Bar);
-        event.bar = Some(MarketBar {
+        event.bar = Some(IntegrationBar {
             timeframe: "1m".into(),
             open: "100".parse().unwrap(),
             high: "102".parse().unwrap(),

@@ -21,7 +21,8 @@
   `primary_exchange=BATO` maps to Cboe BZX Options Listing; `OPRA` is treated
   as a consolidated network and does not create an Exchange, Listing, or
   Market. Massive reference rows never generate `market:massive:*`.
-- Stock and option catalogs are independent capability projections. Each page
+- Stock and option catalogs use the target `InstrumentCatalogQuery` on the concrete
+  `MassiveRestConnection`, with provider-native request filters. Each page
   is persisted as its own SQLite staging row before its cursor is exposed as
   completed progress; only a page with no next cursor promotes a candidate.
   This avoids repeatedly serializing a growing candidate on every page.
@@ -62,3 +63,20 @@
   bid, and ask exchange codes, tape, TRF identity, participant timestamp, and
   TRF timestamp in `MarketVenueEvidence`. They do not construct canonical
   `MarketId`s; Market composition owns that resolution.
+
+## Connection topology audit (2026-08-17)
+
+- Massive is an API-key-authenticated data provider, not a trading-account provider; the target
+  topology does not invent public/private account connections.
+- REST uses `api.massive.com` for reference and historical queries. Source:
+  <https://massive.com/docs/rest>.
+- Live WebSockets use asset-class endpoints such as `wss://socket.massive.com/stocks`; the socket
+  authenticates once and accepts multiple channel/symbol subscriptions. Massive documents a
+  default limit of one concurrent connection per asset class. Source:
+  <https://massive.com/docs/websocket/quickstart>.
+- The current `MassiveConnection` is a REST/capability factory and
+  `MassiveAsyncMarketStream` is the real socket owner. The target types are one
+  `MassiveRestConnection` plus concrete asset-class WebSocket connections, initially Stocks and
+  Options. They directly implement the redesigned Integration traits; no pass-through
+  Massive-specific mirror trait is added. Equity/Option query filters do not require duplicate
+  REST connections.

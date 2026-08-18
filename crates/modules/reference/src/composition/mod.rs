@@ -1,27 +1,23 @@
 //! Composition shared by the one-shot CLI and the long-running server.
 
 mod config;
-mod providers;
+mod publication;
 
 pub use config::{
     ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
 };
+pub use publication::ReferenceEventPublisherRuntime;
 
 use std::path::Path;
 
-use self::providers::{
-    BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
-    CompositeSource, HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource,
-    OkxSource, ParticipantAugmentedSource,
-};
 use crate::domain::ReferenceResult;
-use crate::services::source::{ProviderUpdate, ReferenceSource};
+use crate::services::providers::{
+    HyperliquidProduct, OkxProduct, ReferenceProviderPlan, ReferenceSourcePlan,
+};
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use crate::ReferenceApplication;
 
-use kairos_integration::application::credential::load_workspace_credential;
-use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
-use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
+use kairos_integration::composition::credentials::load_workspace_credential;
 use kairos_transport::AeronBytePublisher;
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
@@ -48,135 +44,26 @@ pub struct ReferenceCompositionConfig {
 pub struct ReferenceComposition {
     pub application: ComposedReferenceApplication,
     pub event_writer: Option<ReferenceEventWriter>,
+    system: kairos_conflux::ConfluxSystem,
+}
+
+impl ReferenceComposition {
+    pub async fn activate_sources(&mut self) -> ReferenceResult<()> {
+        self.application.activate_sources(&mut self.system).await
+    }
+
+    pub fn into_conflux(
+        self,
+    ) -> (
+        ReferenceApplication,
+        kairos_conflux::ConfluxSystem,
+        Option<ReferenceEventWriter>,
+    ) {
+        (self.application, self.system, self.event_writer)
+    }
 }
 
 pub type ComposedReferenceApplication = ReferenceApplication;
-
-type ProductionComposite = CompositeSource<ConfiguredProviderSource>;
-
-pub struct ConfiguredReferenceSource {
-    inner: ParticipantAugmentedSource<ProductionComposite>,
-}
-
-enum ConfiguredProviderSource {
-    BinanceSpot(BinanceSpotSource),
-    BinanceDerivatives(BinanceDerivativesSource),
-    BinanceOptions(BinanceOptionsSource),
-    BinanceEquity(BinanceEquitySource),
-    Okx(OkxSource),
-    Hyperliquid(HyperliquidSource),
-    MassiveEquity(MassiveEquitySource),
-    MassiveOptions(MassiveOptionsCoverageSource),
-}
-
-#[async_trait::async_trait]
-impl ReferenceSource for ConfiguredProviderSource {
-    fn source_id(&self) -> &str {
-        match self {
-            Self::BinanceSpot(source) => source.source_id(),
-            Self::BinanceDerivatives(source) => source.source_id(),
-            Self::BinanceOptions(source) => source.source_id(),
-            Self::BinanceEquity(source) => source.source_id(),
-            Self::Okx(source) => source.source_id(),
-            Self::Hyperliquid(source) => source.source_id(),
-            Self::MassiveEquity(source) => source.source_id(),
-            Self::MassiveOptions(source) => source.source_id(),
-        }
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<crate::domain::ProviderCatalog> {
-        match self {
-            Self::BinanceSpot(source) => source.fetch_catalog().await,
-            Self::BinanceDerivatives(source) => source.fetch_catalog().await,
-            Self::BinanceOptions(source) => source.fetch_catalog().await,
-            Self::BinanceEquity(source) => source.fetch_catalog().await,
-            Self::Okx(source) => source.fetch_catalog().await,
-            Self::Hyperliquid(source) => source.fetch_catalog().await,
-            Self::MassiveEquity(source) => source.fetch_catalog().await,
-            Self::MassiveOptions(source) => source.fetch_catalog().await,
-        }
-    }
-
-    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        match self {
-            Self::BinanceSpot(source) => source.fetch_catalog_step().await,
-            Self::BinanceDerivatives(source) => source.fetch_catalog_step().await,
-            Self::BinanceOptions(source) => source.fetch_catalog_step().await,
-            Self::BinanceEquity(source) => source.fetch_catalog_step().await,
-            Self::Okx(source) => source.fetch_catalog_step().await,
-            Self::Hyperliquid(source) => source.fetch_catalog_step().await,
-            Self::MassiveEquity(source) => source.fetch_catalog_step().await,
-            Self::MassiveOptions(source) => source.fetch_catalog_step().await,
-        }
-    }
-
-    async fn set_option_underlying(
-        &mut self,
-        underlying: &str,
-        enabled: bool,
-    ) -> ReferenceResult<()> {
-        match self {
-            Self::MassiveOptions(source) => source.set_option_underlying(underlying, enabled).await,
-            _ => Err(crate::domain::ReferenceError::Invalid(format!(
-                "{} does not support option coverage",
-                self.source_id()
-            ))),
-        }
-    }
-
-    fn option_underlyings(&self) -> Vec<String> {
-        match self {
-            Self::MassiveOptions(source) => source.option_underlyings(),
-            _ => Vec::new(),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ReferenceSource for ConfiguredReferenceSource {
-    fn source_id(&self) -> &str {
-        self.inner.source_id()
-    }
-
-    fn normalized_facts_authoritative(&self) -> bool {
-        self.inner.normalized_facts_authoritative()
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<crate::domain::ProviderCatalog> {
-        self.inner.fetch_catalog().await
-    }
-
-    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        self.inner.fetch_catalog_step().await
-    }
-
-    async fn advance_source(
-        &mut self,
-        source_id: &str,
-    ) -> ReferenceResult<Option<crate::domain::ProviderCatalog>> {
-        self.inner.advance_source(source_id).await
-    }
-
-    async fn set_source_paused(&mut self, source_id: &str, paused: bool) -> ReferenceResult<()> {
-        self.inner.set_source_paused(source_id, paused).await
-    }
-
-    async fn set_option_underlying(
-        &mut self,
-        underlying: &str,
-        enabled: bool,
-    ) -> ReferenceResult<()> {
-        self.inner.set_option_underlying(underlying, enabled).await
-    }
-
-    fn option_underlyings(&self) -> Vec<String> {
-        self.inner.option_underlyings()
-    }
-
-    fn provider_health(&self) -> Vec<crate::domain::ProviderHealth> {
-        self.inner.provider_health()
-    }
-}
 
 pub struct ReferenceEventWriter {
     publisher: kairos_transport::AeronBytePublisher,
@@ -220,9 +107,9 @@ pub fn default_endpoint(provider: &str) -> &'static str {
 /// OKX, and Hyperliquid products are built in; credentialed providers such as
 /// Massive are added only when explicitly enabled in
 /// `[reference.providers.*]`. Every provider can be explicitly disabled there.
-async fn build_default_source(
+async fn build_source_plan(
     config: &ReferenceCompositionConfig,
-) -> ReferenceResult<ConfiguredReferenceSource> {
+) -> ReferenceResult<ReferenceSourcePlan> {
     let workspace = config
         .workspace
         .as_ref()
@@ -236,60 +123,58 @@ async fn build_default_source(
         .map_err(crate::domain::ReferenceError::Provider)?;
     let reference = reference.as_ref();
 
-    let mut sources = Vec::new();
+    let mut providers = Vec::new();
     if !provider_disabled(reference, "binance")
         && product_enabled_or_default(reference, "binance", "spot", true)
     {
-        sources.push(ConfiguredProviderSource::BinanceSpot(
-            BinanceSpotSource::new(product_endpoint(
+        providers.push(ReferenceProviderPlan::BinanceSpot {
+            key: "reference-binance-spot".into(),
+            endpoint: product_endpoint(
                 reference,
                 "binance",
                 "spot",
                 default_endpoint("binance-spot"),
-            ))?,
-        ));
+            ),
+        });
     }
     if !provider_disabled(reference, "binance")
         && product_enabled_or_default(reference, "binance", "usd-m-futures", true)
     {
-        sources.push(ConfiguredProviderSource::BinanceDerivatives(
-            BinanceDerivativesSource::new(
-                BinanceInstrumentType::UsdMFutures,
-                product_endpoint(
-                    reference,
-                    "binance",
-                    "usd-m-futures",
-                    default_endpoint("binance-usdm-futures"),
-                ),
-            )?,
-        ));
+        providers.push(ReferenceProviderPlan::BinanceUsdM {
+            key: "reference-binance-usdm".into(),
+            endpoint: product_endpoint(
+                reference,
+                "binance",
+                "usd-m-futures",
+                default_endpoint("binance-usdm-futures"),
+            ),
+        });
     }
     if !provider_disabled(reference, "binance")
         && product_enabled_or_default(reference, "binance", "coin-m-futures", true)
     {
-        sources.push(ConfiguredProviderSource::BinanceDerivatives(
-            BinanceDerivativesSource::new(
-                BinanceInstrumentType::CoinMFutures,
-                product_endpoint(
-                    reference,
-                    "binance",
-                    "coin-m-futures",
-                    default_endpoint("binance-coinm-futures"),
-                ),
-            )?,
-        ));
+        providers.push(ReferenceProviderPlan::BinanceCoinM {
+            key: "reference-binance-coinm".into(),
+            endpoint: product_endpoint(
+                reference,
+                "binance",
+                "coin-m-futures",
+                default_endpoint("binance-coinm-futures"),
+            ),
+        });
     }
     if !provider_disabled(reference, "binance")
         && product_enabled_or_default(reference, "binance", "options", true)
     {
-        sources.push(ConfiguredProviderSource::BinanceOptions(
-            BinanceOptionsSource::new(product_endpoint(
+        providers.push(ReferenceProviderPlan::BinanceOptions {
+            key: "reference-binance-options".into(),
+            endpoint: product_endpoint(
                 reference,
                 "binance",
                 "options",
                 default_endpoint("binance-options"),
-            ))?,
-        ));
+            ),
+        });
     }
 
     let credentials_root = workspace
@@ -297,41 +182,51 @@ async fn build_default_source(
         .map(|workspace| workspace.config_root().join("credentials"));
     if !provider_disabled(reference, "okx") {
         for (product, source_id, instrument_type) in [
-            ("spot", "okx-spot", OkxInstrumentType::Spot),
-            ("margin", "okx-margin", OkxInstrumentType::Margin),
-            ("swap", "okx-swap", OkxInstrumentType::Swap),
-            ("futures", "okx-futures", OkxInstrumentType::Futures),
-            ("options", "okx-options", OkxInstrumentType::Option),
+            ("spot", "okx-spot", OkxProduct::Spot),
+            ("margin", "okx-margin", OkxProduct::Margin),
+            ("swap", "okx-swap", OkxProduct::Swap),
+            ("futures", "okx-futures", OkxProduct::Futures),
+            ("options", "okx-options", OkxProduct::Option),
         ] {
             if product_enabled_or_default(reference, "okx", product, true) {
-                sources.push(ConfiguredProviderSource::Okx(OkxSource::new(
-                    source_id,
-                    instrument_type,
-                    product_endpoint(reference, "okx", product, default_endpoint(source_id)),
-                )?));
+                providers.push(ReferenceProviderPlan::Okx {
+                    key: format!("reference-{source_id}"),
+                    source_id: source_id.into(),
+                    product: instrument_type,
+                    endpoint: product_endpoint(
+                        reference,
+                        "okx",
+                        product,
+                        default_endpoint(source_id),
+                    ),
+                });
             }
         }
     }
     if !provider_disabled(reference, "hyperliquid") {
         if product_enabled_or_default(reference, "hyperliquid", "perpetual", true) {
-            sources.push(ConfiguredProviderSource::Hyperliquid(
-                HyperliquidSource::new(product_endpoint(
+            providers.push(ReferenceProviderPlan::Hyperliquid {
+                key: "reference-hyperliquid-perpetual".into(),
+                product: HyperliquidProduct::Perpetual,
+                endpoint: product_endpoint(
                     reference,
                     "hyperliquid",
                     "perpetual",
                     default_endpoint("hyperliquid"),
-                ))?,
-            ));
+                ),
+            });
         }
         if product_enabled_or_default(reference, "hyperliquid", "spot", true) {
-            sources.push(ConfiguredProviderSource::Hyperliquid(
-                HyperliquidSource::spot(product_endpoint(
+            providers.push(ReferenceProviderPlan::Hyperliquid {
+                key: "reference-hyperliquid-spot".into(),
+                product: HyperliquidProduct::Spot,
+                endpoint: product_endpoint(
                     reference,
                     "hyperliquid",
                     "spot",
                     default_endpoint("hyperliquid"),
-                ))?,
-            ));
+                ),
+            });
         }
     }
 
@@ -359,23 +254,25 @@ async fn build_default_source(
         let endpoint = provider_endpoint(reference, "massive", default_endpoint("massive"));
         if product_enabled_or_default(reference, "massive", "equity", true) {
             let equity_sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-            sources.push(ConfiguredProviderSource::MassiveEquity(
-                MassiveEquitySource::new_with_sync_store(
-                    credential.api_key.clone(),
-                    endpoint.clone(),
-                    equity_sync_store,
-                )
-                .await?,
-            ));
+            providers.push(ReferenceProviderPlan::MassiveEquity {
+                key: "reference-massive-equity".into(),
+                api_key: credential.api_key.clone(),
+                endpoint: endpoint.clone(),
+                sync_store: equity_sync_store,
+            });
         }
         if product_enabled_or_default(reference, "massive", "options", true) {
             // Stock-options coverage is explicit and mutable at runtime. Do
             // not make a global options reference scan the default just
             // because Massive can enumerate it.
-            let sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-            sources.push(ConfiguredProviderSource::MassiveOptions(
-                MassiveOptionsCoverageSource::new(credential.api_key, endpoint, sync_store).await?,
-            ));
+            let mut sync_store = SqlxProviderSyncStore::open(&config.database).await?;
+            let underlyings = sync_store.option_underlyings("massive-options").await?;
+            providers.push(ReferenceProviderPlan::MassiveOptions {
+                api_key: credential.api_key,
+                endpoint,
+                sync_store,
+                underlyings,
+            });
         }
     }
 
@@ -404,16 +301,18 @@ async fn build_default_source(
             .and_then(|value| value.endpoint.clone())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| default_endpoint("binance-equity").to_owned());
-        sources.push(ConfiguredProviderSource::BinanceEquity(
-            BinanceEquitySource::new(
-                endpoint,
-                secrecy::SecretString::new(credential.api_key.into()),
-            )?,
-        ));
+        providers.push(ReferenceProviderPlan::BinanceEquity {
+            key: "reference-binance-stocks".into(),
+            endpoint,
+            credential: kairos_integration::participants::binance::BinanceCredential {
+                principal_id: credential_id.unwrap_or("reference-binance-stocks").into(),
+                api_key: secrecy::SecretString::new(credential.api_key.into()),
+                secret: credential.secret,
+            },
+        });
     }
 
     let sync_store = SqlxProviderSyncStore::open(&config.database).await?;
-    let source = CompositeSource::new_with_sync_store(sources, Some(sync_store)).await?;
     let mut participants = vec![
         configured_provider("binance", "Binance"),
         configured_provider("hyperliquid", "Hyperliquid"),
@@ -442,9 +341,11 @@ async fn build_default_source(
             }
         }
     }
-    Ok(ConfiguredReferenceSource {
-        inner: ParticipantAugmentedSource::wrap(source, participants),
-    })
+    Ok(ReferenceSourcePlan::new(
+        providers,
+        participants,
+        sync_store,
+    ))
 }
 
 fn configured_provider(id: &str, name: &str) -> crate::domain::Entity {
@@ -552,7 +453,9 @@ pub async fn build_application(
             kairos_transport::stream_ids::REFERENCE_CHANGES
         )));
     }
-    let source = build_default_source(config).await?;
+    let source_plan = build_source_plan(config).await?;
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    source_plan.install(&mut system)?;
     let store = SqlxCatalogStore::open(&config.database).await?;
     let event_writer = if publish {
         Some(ReferenceEventWriter::connect(
@@ -566,8 +469,9 @@ pub async fn build_application(
         None
     };
     Ok(ReferenceComposition {
-        application: ReferenceApplication::new("reference-actor", source, store).await?,
+        application: ReferenceApplication::new("reference-actor", source_plan, store).await?,
         event_writer,
+        system,
     })
 }
 

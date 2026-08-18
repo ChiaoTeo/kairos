@@ -2,32 +2,20 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::application::capabilities::account_facts::{
+use crate::domain::account::{
     external_instrument_ref, ExternalAccountEvent as AccountEvent,
     ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
     ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
     ExternalOrderEvent as OrderEvent, ExternalOrderStatus as OrderStatus,
+    ExternalPosition as Position,
 };
-use crate::application::capabilities::{
-    execution_facts::normalize_order_status, DecimalValue as ExecutionDecimal, OrderSide, OrderType,
+use crate::{
+    domain::execution::normalize_order_status, DecimalValue as ExecutionDecimal, OrderSide,
+    OrderType,
 };
-use crate::application::{ExternalEventEnvelope, ExternalExecutionEvent};
+use crate::{ExternalEventEnvelope, ExternalExecutionEvent};
 use kairos_primitives::{Currency, FillId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
-use tokio_tungstenite::tungstenite::Message;
-
-pub(crate) fn login_succeeded(message: &Message) -> Result<bool, String> {
-    let Message::Text(text) = message else {
-        return Err("OKX private stream did not return a login response".into());
-    };
-    let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    if value.get("event").and_then(Value::as_str) == Some("error") {
-        return Ok(false);
-    }
-    Ok(value.get("event").and_then(Value::as_str) == Some("login")
-        && value.get("code").and_then(Value::as_str).unwrap_or("0") == "0")
-}
-
 pub(crate) fn parse_event(segment_key: &str, text: &str) -> Result<Option<AccountEvent>, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     if value.get("event").is_some() {
@@ -39,6 +27,8 @@ pub(crate) fn parse_event(segment_key: &str, text: &str) -> Result<Option<Accoun
         .and_then(Value::as_str)
     {
         Some("account") => parse_account_event(segment_key, &value),
+        Some("positions") => parse_positions_event(segment_key, &value),
+        Some("balance_and_position") => parse_balance_and_position_event(segment_key, &value),
         Some("orders") => parse_order_event(segment_key, &value),
         _ => Ok(None),
     }
@@ -86,7 +76,7 @@ pub(crate) fn parse_execution_events(
                 .map(|value| UnixNanos::from(value.saturating_mul(1_000_000)))
                 .unwrap_or(received_at_unix_nanos);
             let trade_id = text("tradeId").filter(|value| *value != "0");
-            let provider_event_id = Some(format!(
+            let participant_event_id = Some(format!(
                 "okx:{provider_order_id}:{}:{state}:{}",
                 trade_id.unwrap_or("none"),
                 event_time_millis.unwrap_or_default()
@@ -107,8 +97,8 @@ pub(crate) fn parse_execution_events(
                 binding_id: binding_id.into(),
                 channel_id: channel_id.into(),
                 channel_epoch,
-                provider_event_id,
-                provider_sequence: value.get("seqId").and_then(Value::as_u64),
+                participant_event_id,
+                participant_sequence: value.get("seqId").and_then(Value::as_u64),
                 observed_at_unix_nanos,
                 received_at_unix_nanos,
                 payload: ExternalExecutionEvent {
@@ -172,36 +162,83 @@ fn parse_account_event(segment_key: &str, value: &Value) -> Result<Option<Accoun
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .ok_or_else(|| "OKX account event data is missing".to_string())?;
-    let code = row
-        .get("ccy")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "OKX account event currency is missing".to_string())?;
-    let total = decimal_field(row, "eq").or_else(|_| decimal_field(row, "cashBal"))?;
-    Ok(Some(AccountEvent::Snapshot(AccountSnapshot {
+    let details = row
+        .get("details")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| std::slice::from_ref(row));
+    let balances = details.iter().map(balance).collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(AccountEvent::Snapshot(snapshot(
+        segment_key,
+        balances,
+        Vec::new(),
+        row.get("uTime").and_then(Value::as_str),
+    )?)))
+}
+
+fn parse_positions_event(segment_key: &str, value: &Value) -> Result<Option<AccountEvent>, String> {
+    let rows = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "OKX positions event data is missing".to_string())?;
+    let positions = rows.iter().map(position).collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(AccountEvent::Snapshot(snapshot(
+        segment_key,
+        Vec::new(),
+        positions,
+        rows.first()
+            .and_then(|row| row.get("uTime"))
+            .and_then(Value::as_str),
+    )?)))
+}
+
+fn parse_balance_and_position_event(
+    segment_key: &str,
+    value: &Value,
+) -> Result<Option<AccountEvent>, String> {
+    let row = value
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .ok_or_else(|| "OKX balance_and_position event data is missing".to_string())?;
+    let balances = row
+        .get("balData")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(balance)
+        .collect::<Result<Vec<_>, _>>()?;
+    let positions = row
+        .get("posData")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(position)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(AccountEvent::Snapshot(snapshot(
+        segment_key,
+        balances,
+        positions,
+        row.get("pTime").and_then(Value::as_str),
+    )?)))
+}
+
+fn snapshot(
+    segment_key: &str,
+    balances: Vec<Balance>,
+    positions: Vec<Position>,
+    observed_millis: Option<&str>,
+) -> Result<AccountSnapshot, String> {
+    Ok(AccountSnapshot {
         segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
-        balances: vec![Balance {
-            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-            asset_code: kairos_primitives::Currency::new(code)?,
-            total,
-            available: decimal_field(row, "availBal").ok(),
-            locked: decimal_field(row, "frozenBal").ok(),
-            ..Default::default()
-        }],
-        collateral: vec![Balance {
-            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-            asset_code: kairos_primitives::Currency::new(code)?,
-            total,
-            available: decimal_field(row, "availBal").ok(),
-            locked: decimal_field(row, "frozenBal").ok(),
-            ..Default::default()
-        }],
-        positions: Vec::new(),
+        collateral: balances.clone(),
+        balances,
+        positions,
         open_orders: Vec::new(),
         status: AccountStatus::Ready,
-        observed_at_unix_nanos: row
-            .get("uTime")
-            .and_then(Value::as_str)
+        observed_at_unix_nanos: observed_millis
             .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| value.saturating_mul(1_000_000))
             .unwrap_or_else(now_nanos)
             .into(),
         equity: None,
@@ -211,7 +248,61 @@ fn parse_account_event(segment_key: &str, value: &Value) -> Result<Option<Accoun
         margin_mode: None,
         position_mode: None,
         partial: true,
-    })))
+    })
+}
+
+fn balance(row: &Value) -> Result<Balance, String> {
+    let code = row
+        .get("ccy")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "OKX account event currency is missing".to_string())?;
+    let total = decimal_field(row, "eq").or_else(|_| decimal_field(row, "cashBal"))?;
+    Ok(Balance {
+        asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
+        asset_code: kairos_primitives::Currency::new(code)?,
+        total,
+        available: decimal_field(row, "availBal")
+            .or_else(|_| decimal_field(row, "cashBal"))
+            .ok(),
+        locked: decimal_field(row, "frozenBal").ok(),
+        ..Default::default()
+    })
+}
+
+fn position(row: &Value) -> Result<Position, String> {
+    let instrument = row
+        .get("instId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "OKX position instrument is missing".to_string())?;
+    let instrument_type = row
+        .get("instType")
+        .and_then(Value::as_str)
+        .unwrap_or("contract");
+    Ok(Position {
+        participant_instrument: external_instrument_ref(
+            crate::domain::ParticipantKind::Exchange,
+            "okx",
+            instrument_type,
+            instrument,
+        )?,
+        position_side: match row.get("posSide").and_then(Value::as_str) {
+            Some("long") => kairos_primitives::PositionSide::Long,
+            Some("short") => kairos_primitives::PositionSide::Short,
+            _ => kairos_primitives::PositionSide::Net,
+        },
+        quantity: decimal_field(row, "pos")?,
+        average_price: decimal_field(row, "avgPx").ok(),
+        mark_price: decimal_field(row, "markPx").ok(),
+        unrealized_pnl: decimal_field(row, "upl").ok(),
+        realized_pnl: decimal_field(row, "realizedPnl").ok(),
+        updated_at_unix_nanos: row
+            .get("uTime")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| value.saturating_mul(1_000_000))
+            .unwrap_or_else(now_nanos)
+            .into(),
+    })
 }
 
 fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountEvent>, String> {
@@ -293,7 +384,7 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             fill_id: kairos_primitives::FillId::new(fill_id)?,
             order_id: kairos_primitives::OrderId::new(order_id)?,
             segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
-            provider_instrument: external_instrument_ref(
+            participant_instrument: external_instrument_ref(
                 crate::domain::ParticipantKind::Exchange,
                 "okx",
                 row.get("instType").and_then(Value::as_str).unwrap_or("okx"),
@@ -352,10 +443,10 @@ fn now_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{parse_event, parse_execution_events};
-    use crate::application::capabilities::account_facts::{
+    use crate::domain::account::{
         ExternalAccountEvent as AccountEvent, ExternalOrderStatus as AccountOrderStatus,
     };
-    use crate::application::capabilities::{OrderSide, OrderType};
+    use crate::{OrderSide, OrderType};
     use kairos_primitives::{OrderStatus, UnixNanos};
 
     #[test]

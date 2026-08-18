@@ -17,6 +17,7 @@ clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
 futures-util = { version = "0.3", features = ["alloc"] }
 kairos-integration = { path = "../../platform/integration" }
+kairos-conflux = { path = "../../platform/conflux" }
 kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
 kairos-protocol = { path = "../../platform/protocol" }
 kairos-transport = { path = "../../platform/transport" }

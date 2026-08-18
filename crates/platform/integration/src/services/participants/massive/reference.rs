@@ -1,46 +1,29 @@
 //! Massive instrument normalization without Reference-owned canonical IDs.
 
-use kairos_primitives::{Currency, ProviderSymbol, UnixNanos};
+use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
 
-use crate::application::capabilities::reference::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
+use crate::{
+    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, IntegrationError,
+    ParticipantKind, ParticipantRef,
 };
-use crate::application::capabilities::{ParticipantKind, ParticipantRef};
-use crate::application::IntegrationError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MassiveMarketRow {
-    pub ticker: String,
-    pub exchange: Option<String>,
-    pub market_type: String,
-    pub base: Option<String>,
-    pub quote: Option<String>,
-    pub active: bool,
-    pub price_tick: Option<String>,
-    pub amount_tick: Option<String>,
-    pub price_precision: i32,
-    pub amount_precision: i32,
-    pub underlying: Option<String>,
-    pub expiry_unix_nanos: Option<u64>,
-    pub strike: Option<String>,
-    pub option_right: Option<String>,
-    pub contract_size: Option<String>,
-}
-
-pub trait MassiveMarketClient: Send {
-    fn load_markets(&mut self) -> Result<Vec<MassiveMarketRow>, String>;
-
-    fn load_markets_page(
-        &mut self,
-        _cursor: Option<&str>,
-        _limit: usize,
-    ) -> Result<super::connection::MassiveMarketPage, String> {
-        Ok(super::connection::MassiveMarketPage {
-            rows: self.load_markets()?,
-            next_cursor: None,
-            complete: true,
-        })
-    }
+pub(crate) struct MassiveMarketRow {
+    pub(crate) ticker: String,
+    pub(crate) exchange: Option<String>,
+    pub(crate) market_type: String,
+    pub(crate) base: Option<String>,
+    pub(crate) quote: Option<String>,
+    pub(crate) active: bool,
+    pub(crate) price_tick: Option<String>,
+    pub(crate) amount_tick: Option<String>,
+    pub(crate) price_precision: i32,
+    pub(crate) amount_precision: i32,
+    pub(crate) underlying: Option<String>,
+    pub(crate) expiry_unix_nanos: Option<u64>,
+    pub(crate) strike: Option<String>,
+    pub(crate) option_right: Option<String>,
+    pub(crate) contract_size: Option<String>,
 }
 
 pub(crate) fn normalize(
@@ -71,12 +54,12 @@ pub(crate) fn normalize(
             };
             let symbol = |value: Option<String>| {
                 value
-                    .map(ProviderSymbol::new)
+                    .map(ParticipantSymbol::new)
                     .transpose()
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))
             };
             Ok(ExternalInstrument {
-                source_symbol: ProviderSymbol::new(row.ticker)
+                source_symbol: ParticipantSymbol::new(row.ticker)
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                 source_venue: row.exchange.filter(|value| !value.trim().is_empty()),
                 kind,
@@ -109,7 +92,7 @@ pub(crate) fn normalize(
 #[cfg(test)]
 mod tests {
     use super::{normalize, MassiveMarketRow};
-    use crate::application::capabilities::reference::ExternalInstrumentKind;
+    use crate::ExternalInstrumentKind;
 
     #[test]
     fn preserves_massive_venue_and_option_facts_without_canonical_ids() {

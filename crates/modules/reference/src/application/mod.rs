@@ -2,6 +2,7 @@
 
 mod app;
 mod commands;
+mod conflux;
 pub mod control;
 mod queries;
 

@@ -3,32 +3,76 @@ use super::{
     RefreshAccount,
 };
 use crate::domain::{AccountEvent, AccountObservedFill, AccountSegment};
-use crate::services::integration::{AccountAsyncSnapshotGateway, AccountSnapshotGateway};
+use crate::services::integration::AccountSnapshotGateway;
 use crate::services::persistence::JsonAccountStore;
 use crate::services::runtime::AccountRuntime;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AccountRuntimeMode {
+    #[default]
+    Live,
+    Simulation,
+}
+
 pub struct AccountApplication {
     runtime: AccountRuntime,
-    async_snapshot_source: Option<AccountAsyncSnapshotGateway>,
+    runtime_mode: AccountRuntimeMode,
+    business_time_unix_nanos: Option<u64>,
+    pub(super) conflux: super::conflux::AccountConfluxState,
 }
 
 impl AccountApplication {
     pub(crate) fn new(runtime: AccountRuntime) -> Self {
         Self {
             runtime,
-            async_snapshot_source: None,
+            runtime_mode: AccountRuntimeMode::Live,
+            business_time_unix_nanos: None,
+            conflux: super::conflux::AccountConfluxState::default(),
         }
+    }
+
+    pub(crate) fn enable_simulation(&mut self) {
+        self.runtime_mode = AccountRuntimeMode::Simulation;
+    }
+
+    pub const fn runtime_mode(&self) -> AccountRuntimeMode {
+        self.runtime_mode
+    }
+
+    pub const fn simulation_commands_enabled(&self) -> bool {
+        matches!(self.runtime_mode, AccountRuntimeMode::Simulation)
+    }
+
+    pub const fn business_time_unix_nanos(&self) -> Option<u64> {
+        self.business_time_unix_nanos
+    }
+
+    pub fn advance_business_time(
+        &mut self,
+        event_time_unix_nanos: u64,
+    ) -> Result<(), AccountError> {
+        if !self.simulation_commands_enabled() {
+            return Err(AccountError::Invalid(
+                "simulation command is disabled for this Account application".into(),
+            ));
+        }
+        if self
+            .business_time_unix_nanos
+            .is_some_and(|current| event_time_unix_nanos < current)
+        {
+            return Err(AccountError::Invalid(
+                "account business time cannot move backwards".into(),
+            ));
+        }
+        self.business_time_unix_nanos = Some(event_time_unix_nanos);
+        Ok(())
     }
 
     pub fn generation(&self) -> u64 {
         self.runtime.generation()
-    }
-
-    pub(crate) fn take_persistence_error(&self) -> Option<String> {
-        self.runtime.take_persistence_error()
     }
 
     pub(crate) fn has_refresh_worker(&self) -> bool {
@@ -179,6 +223,11 @@ impl AccountApplication {
         &mut self,
         fill: crate::domain::AccountFill,
     ) -> Result<(), AccountError> {
+        if !self.simulation_commands_enabled() {
+            return Err(AccountError::Invalid(
+                "simulation command is disabled for this Account application".into(),
+            ));
+        }
         info!(event = "account_fill_started", component = "account", fill_id = ?fill.fill_id, order_id = ?fill.order_id, segment = %fill.segment_key, "applying account fill");
         match self
             .runtime
@@ -201,6 +250,11 @@ impl AccountApplication {
     }
 
     pub fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), AccountError> {
+        if !self.simulation_commands_enabled() {
+            return Err(AccountError::Invalid(
+                "simulation command is disabled for this Account application".into(),
+            ));
+        }
         if request.segment_key.trim().is_empty() {
             return Err(AccountError::Invalid("segment_key is required".into()));
         }
@@ -251,41 +305,6 @@ impl AccountApplication {
         AccountRuntime::new(segments, None, store)
             .map(Self::new)
             .map_err(AccountError::Invalid)
-    }
-
-    pub(crate) fn attach_async_sources(&mut self, snapshot: AccountAsyncSnapshotGateway) {
-        self.async_snapshot_source = Some(snapshot);
-    }
-
-    pub async fn refresh_report_async(
-        &mut self,
-        request: RefreshAccount,
-    ) -> Result<AccountRefreshReport, AccountError> {
-        if self.async_snapshot_source.is_none() {
-            return Err(AccountError::Source(
-                "async account snapshot source is not configured".into(),
-            ));
-        }
-        let account_id = request.account_id.to_string();
-        let segments = self.selected_refresh_segments(&request)?;
-        let fetches = self
-            .async_snapshot_source
-            .as_mut()
-            .expect("async snapshot source checked")
-            .fetch(segments)
-            .await;
-        self.apply_refresh_fetches(&account_id, fetches)
-    }
-
-    pub(crate) fn take_async_snapshot_source(&mut self) -> Option<AccountAsyncSnapshotGateway> {
-        self.async_snapshot_source.take()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn async_source_count(&self) -> usize {
-        self.async_snapshot_source
-            .as_ref()
-            .map_or(0, |source| source.len())
     }
 
     pub(crate) fn selected_refresh_segments(

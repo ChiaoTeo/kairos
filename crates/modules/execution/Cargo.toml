@@ -15,6 +15,7 @@ axum = "0.8"
 flatbuffers = "25.12.19"
 kairos-primitives = { path = "../../primitives" }
 kairos-integration = { path = "../../platform/integration" }
+kairos-conflux = { path = "../../platform/conflux" }
 kairos-protocol = { path = "../../platform/protocol" }
 kairos-transport = { path = "../../platform/transport" }
 kairos-execution-contract = { path = "contract" }

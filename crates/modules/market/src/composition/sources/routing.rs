@@ -44,6 +44,7 @@ pub(crate) fn binding_provider_product(
                 config::HyperliquidMarketType::Perpetual => "perpetual",
             },
         ),
+        MarketSourceBinding::Ibkr { .. } => ("ibkr", "equity"),
     }
 }
 
@@ -89,16 +90,8 @@ pub(crate) fn binding_supports_canonical_market(
                 }
         }
         // Both are broker/data-provider surfaces rather than canonical venues.
-        MarketSourceBinding::BinanceEquity { .. } | MarketSourceBinding::Massive { .. } => false,
+        MarketSourceBinding::BinanceEquity { .. }
+        | MarketSourceBinding::Massive { .. }
+        | MarketSourceBinding::Ibkr { .. } => false,
     }
-}
-
-pub(super) fn binding_matches_market(
-    binding: &MarketSourceBinding,
-    market: &crate::ResolvedMarket,
-) -> bool {
-    let provider = market.route.provider_id.as_str();
-    let provider_product = market.route.provider_product.as_str();
-    let (expected_provider, expected_product) = binding_provider_product(binding);
-    provider == expected_provider && provider_product == expected_product
 }

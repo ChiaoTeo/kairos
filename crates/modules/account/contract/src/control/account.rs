@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::{ContractError, ContractResult};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Health {
     pub status: String,
     #[serde(default)]
@@ -46,22 +46,39 @@ impl<'de> Deserialize<'de> for DecimalValue {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SimulatedSettlement {
     pub fill_id: String,
-    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
     pub segment_key: String,
     pub instrument_id: String,
     pub quantity: DecimalValue,
     pub price: DecimalValue,
     pub side: String,
-    pub settlement_asset: String,
-    pub settlement_delta: DecimalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settlement_asset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settlement_delta: Option<DecimalValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_asset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_amount: Option<DecimalValue>,
     pub occurred_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MarkToMarketRequest {
+    pub segment_key: String,
+    pub instrument_id: String,
+    pub quote_asset: String,
+    pub mark_price: DecimalValue,
+    pub observed_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceAccountTimeRequest {
+    pub event_time_unix_nanos: u64,
 }
 
 pub struct AccountContractClient {
@@ -87,6 +104,19 @@ impl AccountContractClient {
         settlement: &SimulatedSettlement,
     ) -> ContractResult<()> {
         self.post("/v1/simulation/settlements", settlement)
+    }
+
+    pub fn mark_to_market(&self, request: &MarkToMarketRequest) -> ContractResult<()> {
+        self.post("/v1/mark-to-market", request)
+    }
+
+    pub fn advance_time(&self, event_time_unix_nanos: u64) -> ContractResult<()> {
+        self.post(
+            "/v1/time/advance",
+            &AdvanceAccountTimeRequest {
+                event_time_unix_nanos,
+            },
+        )
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> ContractResult<T> {
@@ -170,4 +200,40 @@ fn parse_decimal(value: &str) -> Result<(i64, u8), String> {
             .ok_or_else(|| format!("decimal is out of range: {value}"))?;
     }
     Ok((mantissa, scale))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AdvanceAccountTimeRequest, DecimalValue, MarkToMarketRequest};
+
+    #[test]
+    fn simulation_controls_have_typed_contract_shapes() {
+        let mark = MarkToMarketRequest {
+            segment_key: "spot".into(),
+            instrument_id: "instrument:btc".into(),
+            quote_asset: "USDT".into(),
+            mark_price: DecimalValue {
+                mantissa: 6_400_025,
+                scale: 2,
+            },
+            observed_at_unix_nanos: 10,
+        };
+        assert_eq!(
+            serde_json::to_value(mark).unwrap(),
+            serde_json::json!({
+                "segment_key": "spot",
+                "instrument_id": "instrument:btc",
+                "quote_asset": "USDT",
+                "mark_price": "64000.25",
+                "observed_at_unix_nanos": 10
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(AdvanceAccountTimeRequest {
+                event_time_unix_nanos: 11
+            })
+            .unwrap(),
+            serde_json::json!({"event_time_unix_nanos": 11})
+        );
+    }
 }

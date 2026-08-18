@@ -16,7 +16,7 @@ pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
 pub(crate) struct AttachedSource {
     pub(crate) descriptor: SourceDescriptor,
     pub(crate) commands: mpsc::Sender<SourceCommand>,
-    pub(crate) inputs: mpsc::Receiver<SourceInput>,
+    pub(crate) inputs: Option<mpsc::Receiver<SourceInput>>,
     pub(crate) task: Option<tokio::task::JoinHandle<()>>,
     pub(crate) confirmed: BTreeMap<BusinessSubscriptionKey, ProviderSubscriptionId>,
 }
@@ -59,27 +59,6 @@ impl MarketActor {
             .insert(descriptor.id.clone(), SourceState::starting(descriptor));
         self.refresh_feed_status();
         Ok(())
-    }
-
-    pub(crate) fn take_source_handle(
-        &mut self,
-        source_id: &SourceId,
-    ) -> Result<crate::services::source::SourceHandle, String> {
-        let mut attached = self
-            .attached_sources
-            .remove(source_id)
-            .ok_or_else(|| format!("market source is not attached: {source_id}"))?;
-        self.sources.remove(source_id);
-        self.refresh_feed_status();
-        Ok(crate::services::source::SourceHandle {
-            descriptor: attached.descriptor,
-            commands: attached.commands,
-            inputs: attached.inputs,
-            task: attached
-                .task
-                .take()
-                .ok_or_else(|| format!("market source task is missing: {source_id}"))?,
-        })
     }
 
     pub(crate) fn source_is_stopped(&self, source_id: &SourceId) -> bool {

@@ -11,7 +11,14 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use control::{AccountContractClient, DecimalValue, Health, SimulatedSettlement};
+pub use control::{
+    AccountCommandStatus, AccountControlError, AccountRefreshResponse, AccountRestRequest,
+    AccountRestResponse, AccountSegmentsRequest, AdvanceAccountTimeResponse,
+};
+pub use control::{
+    AccountContractClient, AdvanceAccountTimeRequest, DecimalValue, Health, MarkToMarketRequest,
+    SimulatedSettlement,
+};
 pub use control::{AccountControlClient, AccountControlResponse};
 pub use encode::{
     event_metadata, view_metadata, BalanceEncoder, EncodeContext, ObservedOrderEncoder,

@@ -3,10 +3,14 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::control::{Amount, AuthorizeRequest, Reservation, RiskDecision};
+use crate::control::{
+    AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Amount, AuthorizeRequest, CloseCircuitRequest,
+    ConsumeReservationRequest, OpenCircuitRequest, PublishPolicyRequest, ReleaseReservationRequest,
+    Reservation, ResizeReservationRequest, RiskCommandStatus, RiskDecision, RiskPolicy,
+};
 use crate::{ContractError, ContractResult};
 
-#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Eq, PartialEq)]
 pub struct Health {
     pub status: String,
     pub generation: u64,
@@ -41,6 +45,41 @@ impl RiskControlClient {
         self.post("/v1/authorizations", request)
     }
 
+    pub fn publish_policy(&self, policy: &RiskPolicy) -> ContractResult<RiskCommandStatus> {
+        self.post(
+            "/v1/publish_policy",
+            &PublishPolicyRequest {
+                policy: policy.clone(),
+            },
+        )
+    }
+
+    pub fn advance_time(
+        &self,
+        event_time_unix_nanos: u64,
+    ) -> ContractResult<AdvanceRiskTimeResponse> {
+        self.post(
+            "/v1/time/advance",
+            &AdvanceRiskTimeRequest {
+                event_time_unix_nanos,
+            },
+        )
+    }
+
+    pub fn open_circuit(
+        &self,
+        request: &OpenCircuitRequest,
+    ) -> ContractResult<crate::control::CircuitState> {
+        self.post("/v1/open_circuit", request)
+    }
+
+    pub fn close_circuit(
+        &self,
+        request: &CloseCircuitRequest,
+    ) -> ContractResult<crate::control::CircuitState> {
+        self.post("/v1/close_circuit", request)
+    }
+
     pub fn resize(
         &self,
         reservation_id: &str,
@@ -49,31 +88,31 @@ impl RiskControlClient {
     ) -> ContractResult<Reservation> {
         self.post(
             "/v1/resize",
-            &serde_json::json!({
-                "reservation_id": reservation_id,
-                "amount": amount,
-                "at_unix_nanos": at_unix_nanos,
-            }),
+            &ResizeReservationRequest {
+                reservation_id: reservation_id.to_owned(),
+                amount: *amount,
+                at_unix_nanos,
+            },
         )
     }
 
     pub fn release(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
         self.post(
             "/v1/release",
-            &serde_json::json!({
-                "reservation_id": reservation_id,
-                "at_unix_nanos": at_unix_nanos,
-            }),
+            &ReleaseReservationRequest {
+                reservation_id: reservation_id.to_owned(),
+                at_unix_nanos,
+            },
         )
     }
 
     pub fn consume(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
         self.post(
             "/v1/consume",
-            &serde_json::json!({
-                "reservation_id": reservation_id,
-                "at_unix_nanos": at_unix_nanos,
-            }),
+            &ConsumeReservationRequest {
+                reservation_id: reservation_id.to_owned(),
+                at_unix_nanos,
+            },
         )
     }
 

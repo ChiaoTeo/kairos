@@ -64,11 +64,6 @@ impl MarketApplication {
             })
     }
 
-    pub(crate) fn has_replay_source(&self) -> bool {
-        let replay_id = SourceId::new("replay").expect("static replay source id");
-        self.actor.attached_sources.contains_key(&replay_id)
-    }
-
     pub(crate) fn next_request_id(&mut self) -> SourceRequestId {
         let id = SourceRequestId::new(self.actor.next_source_request_id);
         self.actor.next_source_request_id = self.actor.next_source_request_id.saturating_add(1);
@@ -290,6 +285,11 @@ impl MarketApplication {
         &mut self,
         timeout: std::time::Duration,
     ) -> Result<(), String> {
+        let supervised = self
+            .actor
+            .attached_sources
+            .values()
+            .all(|source| source.inputs.is_none());
         let mut pending = self
             .actor
             .attached_sources
@@ -310,6 +310,17 @@ impl MarketApplication {
                 }
             }
             while !joins.is_empty() {
+                if supervised {
+                    if let Some(joined) = joins.join_next().await {
+                        let (source_id, result) = joined
+                            .map_err(|error| format!("market source join wrapper failed: {error}"))?;
+                        result.map_err(|error| {
+                            format!("market source task failed ({source_id}): {error}")
+                        })?;
+                        pending.remove(&source_id);
+                    }
+                    continue;
+                }
                 tokio::select! {
                     input = self.next_source_input() => {
                         if let Some(input) = input {
@@ -329,10 +340,24 @@ impl MarketApplication {
                     }
                 }
             }
-            while let Some(input) = self.next_source_input().await {
-                self.apply_source_input(input)
-                    .await
-                    .map_err(|error| error.to_string())?;
+            if !supervised {
+                while let Some(input) = self.next_source_input().await {
+                    self.apply_source_input(input)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+            } else {
+                for source in self.actor.attached_sources.keys().cloned().collect::<Vec<_>>() {
+                    let epoch = self
+                        .current_view()
+                        .sources
+                        .get(&source)
+                        .map(|state| state.epoch)
+                        .unwrap_or_default();
+                    self.actor
+                        .apply_source_status(&source, epoch, SourceStatus::Stopped, None)
+                        .map_err(|error| error.to_string())?;
+                }
             }
             Ok::<(), String>(())
         })
@@ -372,7 +397,7 @@ mod tests {
         SubscriptionId, SubscriptionMemberRequirement, SubscriptionStatus,
     };
     use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
-    use crate::services::source::{SourceActivator, SourceHandle};
+    use crate::services::source::SourceHandle;
 
     fn resolved_market_with_asset_type(
         market_id: &str,
@@ -402,46 +427,6 @@ mod tests {
             )?,
         )?
         .with_asset_type(asset_type)
-    }
-
-    struct CountingActivator {
-        calls: usize,
-    }
-
-    impl SourceActivator for CountingActivator {
-        fn activate<'a>(
-            &'a mut self,
-            _market: &'a crate::ResolvedMarket,
-            _source_input_capacity: usize,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<SourceHandle, String>> + Send + 'a>,
-        > {
-            self.calls += 1;
-            Box::pin(async move {
-                let descriptor = SourceDescriptor::new(
-                    SourceId::new("counted-route").unwrap(),
-                    Exchange::new("binance").unwrap(),
-                    "spot",
-                    Some("crypto".into()),
-                )
-                .unwrap();
-                let (commands, mut command_receiver) = mpsc::channel(2);
-                let (_input_sender, inputs) = mpsc::channel(2);
-                let task = tokio::spawn(async move {
-                    while let Some(command) = command_receiver.recv().await {
-                        if matches!(command, SourceCommand::Shutdown) {
-                            return;
-                        }
-                    }
-                });
-                Ok(SourceHandle {
-                    descriptor,
-                    commands,
-                    inputs,
-                    task,
-                })
-            })
-        }
     }
 
     fn attach_test_source(application: &mut MarketApplication, id: &str, stop_on_shutdown: bool) {
@@ -569,37 +554,6 @@ mod tests {
             empty.current_view().subscriptions[0].status,
             SubscriptionStatus::Degraded
         );
-    }
-
-    #[tokio::test]
-    async fn concurrent_same_route_intents_share_one_activation() {
-        let mut application = MarketApplication::new("market", 10).unwrap();
-        let market = resolved_market_with_asset_type(
-            "market:binance:spot:BTCUSDT",
-            "instrument:spot:BTC-USDT",
-            "binance",
-            "spot",
-            "crypto",
-            "BTCUSDT",
-        )
-        .unwrap();
-        application
-            .subscribe_static(SubscriptionId::new("one").unwrap(), "test", market.clone())
-            .unwrap();
-        application
-            .subscribe_static(SubscriptionId::new("two").unwrap(), "test", market)
-            .unwrap();
-        let mut activator = CountingActivator { calls: 0 };
-        application
-            .activate_sources_for_subscriptions(&mut activator)
-            .await
-            .unwrap();
-        assert_eq!(activator.calls, 1);
-        assert_eq!(application.current_view().sources.len(), 1);
-        application
-            .shutdown_sources(Duration::from_secs(1))
-            .await
-            .unwrap();
     }
 
     #[tokio::test]

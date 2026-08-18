@@ -182,7 +182,7 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
     client
         .apply_simulated_settlement(&SimulatedSettlement {
             fill_id: "restart-persisted-fill".into(),
-            order_id: "restart-persisted-order".into(),
+            order_id: Some("restart-persisted-order".into()),
             segment_key: "spot".into(),
             instrument_id: "paper:BTC-USDT".into(),
             quantity: DecimalValue {
@@ -194,11 +194,11 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
                 scale: 0,
             },
             side: "buy".into(),
-            settlement_asset: "USDT".into(),
-            settlement_delta: DecimalValue {
+            settlement_asset: Some("USDT".into()),
+            settlement_delta: Some(DecimalValue {
                 mantissa: -100,
                 scale: 0,
-            },
+            }),
             fee_asset: None,
             fee_amount: None,
             occurred_at_unix_nanos: 1_000_000_000,

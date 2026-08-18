@@ -19,6 +19,7 @@ flatbuffers = "25.12.19"
 futures-util = "0.3"
 kairos-protocol = { path = "../../platform/protocol" }
 kairos-integration = { path = "../../platform/integration" }
+kairos-conflux = { path = "../../platform/conflux" }
 kairos-transport = { path = "../../platform/transport" }
 kairos-market-contract = { path = "contract" }
 kairos-reference-contract = { path = "../reference/contract" }

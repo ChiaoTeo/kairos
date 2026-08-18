@@ -399,12 +399,6 @@ impl AccountRuntime {
         self.actor.persistence_metadata().2.get()
     }
 
-    pub(crate) fn take_persistence_error(&self) -> Option<String> {
-        self.persistence
-            .as_ref()
-            .and_then(AccountPersistenceWorker::take_error)
-    }
-
     pub(crate) fn actor_id(&self) -> &str {
         self.actor.persistence_metadata().0
     }

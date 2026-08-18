@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut composition = build_application(&config, args.command.requires_publication()).await?;
+    composition.activate_sources().await?;
     let value = execute(
         &mut composition.application,
         composition.event_writer.as_mut(),

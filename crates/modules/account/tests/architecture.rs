@@ -129,25 +129,32 @@ fn account_application_does_not_expose_provider_capability_or_fee_queries() {
 }
 
 #[test]
-fn account_process_has_one_live_fact_source_and_mode_gated_paper_settlement() {
-    let process = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/process.rs"),
-    )
-    .expect("read account process");
-    assert!(!process.contains("\"/v1/fill\""));
-    assert!(!process.contains("\"/v1/order-event\""));
-    assert!(process.contains("\"/v1/simulation/settlements\""));
-    assert!(process.contains("if self.simulation_commands_enabled"));
-    assert!(process.contains("simulation settlement is disabled"));
-    assert!(process.contains("simulation command is disabled"));
-    assert!(process.contains("fn simulated_account_fill"));
-    assert!(process.contains("SimulatedSettlement"));
+fn account_conflux_has_one_live_fact_source_and_mode_gated_paper_settlement() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
+        .expect("read account server");
+    let actor = fs::read_to_string(root.join("src/application/conflux.rs"))
+        .expect("read Account Conflux actor");
+    assert!(!server.contains("\"/v1/fill\""));
+    assert!(!server.contains("\"/v1/order-event\""));
+    assert!(server.contains("\"/v1/simulation/settlements\""));
+    assert!(actor.contains("self.apply_simulated_fill"));
+    assert!(actor.contains("fn simulated_fill"));
+    assert!(actor.contains("SimulatedSettlement"));
     let composition = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/composition/account.rs"),
     )
     .expect("read Account composition");
-    assert!(composition.contains("with_simulation_commands_enabled"));
+    assert!(composition.contains("application.enable_simulation()"));
     assert!(composition.contains("\"paper\" | \"simulated\""));
+
+    let application = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/service.rs"),
+    )
+    .expect("read Account application");
+    assert!(application.contains("AccountRuntimeMode::Live"));
+    assert!(application.contains("AccountRuntimeMode::Simulation"));
+    assert!(application.contains("simulation command is disabled for this Account application"));
 
     let integration = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services/integration.rs"),
@@ -291,30 +298,30 @@ fn native_account_refresh_does_not_bridge_async_io_through_blocking_threads() {
         assert!(!source.contains("Box<dyn AccountReadConnection"));
         assert!(!source.contains("async_account_read_channel"));
         assert!(source.contains("AccountApplication::with_async_dependencies"));
-        assert!(source.contains("attach_async_sources"));
+        assert!(source.contains("account_system"));
     }
 
     assert!(!composition.contains("pub async fn refresh_report"));
     let application =
         fs::read_to_string(root.join("application/service.rs")).expect("read application facade");
-    assert!(application.contains("pub async fn refresh_report_async"));
+    assert!(!application.contains("pub async fn refresh_report_async"));
     assert!(!application.contains("refresh_market_profile"));
 }
 
 #[test]
-fn account_process_gates_readiness_and_tracks_external_stream_continuity() {
+fn account_conflux_gates_readiness_and_tracks_external_stream_continuity() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let process =
-        fs::read_to_string(root.join("src/application/process.rs")).expect("read account process");
+    let actor = fs::read_to_string(root.join("src/application/conflux.rs"))
+        .expect("read Account Conflux actor");
     let synchronization = fs::read_to_string(root.join("src/services/synchronization.rs"))
         .expect("read account segment synchronization");
-    assert!(process.contains("segment_sync"));
+    assert!(actor.contains("AccountConfluxState"));
     assert!(synchronization.contains("initial_snapshot_complete"));
     assert!(synchronization.contains("channel_health"));
     assert!(synchronization.contains("event_watermarks"));
     assert!(synchronization.contains("recovery_events"));
-    assert!(process.contains("account stream sequence gap"));
-    assert!(process.contains("provider_event_id"));
+    assert!(actor.contains("Account stream sequence gap"));
+    assert!(actor.contains("provider_event_id"));
 }
 
 #[test]
@@ -364,13 +371,14 @@ fn binance_derivatives_account_streams_are_native_async_in_production_compositio
                 .next()
         })
         .expect("Binance native composition");
-    assert!(native_binance.contains("AccountAsyncEventSource::BinanceFutures"));
+    assert!(native_binance.contains("AccountAsyncEventSource::BinanceUsdM"));
+    assert!(native_binance.contains("AccountAsyncEventSource::BinanceCoinM"));
     assert!(native_binance.contains("AccountAsyncEventSource::BinanceOptions"));
     assert!(native_binance.contains("AccountAsyncEventSource::BinanceMargin"));
-    assert!(native_binance.contains("BinanceFuturesChannelConfig"));
-    assert!(native_binance.contains("BinanceOptionsChannelConfig"));
-    assert!(native_binance.contains("BinanceMarginChannelConfig"));
-    assert!(native_binance.contains("isolated_margin_connection(provider_symbol)"));
+    assert!(native_binance.contains("BinanceUsdMUserWebSocketConnection"));
+    assert!(native_binance.contains("BinanceCoinMUserWebSocketConnection"));
+    assert!(native_binance.contains("BinanceOptionsUserWebSocketConnection"));
+    assert!(native_binance.contains("BinanceMarginUserWebSocketConnection"));
     assert!(native_binance.contains("values.isolated_margin_symbol"));
     assert!(!native_binance.contains("market_id.split"));
     assert!(!native_binance.contains("blocking_futures_account_stream"));
@@ -390,7 +398,7 @@ fn integration_owns_credential_records_and_environment_conventions() {
 }
 
 #[test]
-fn ibkr_account_uses_one_native_async_hard_session() {
+fn ibkr_account_uses_explicit_virtual_query_and_stream_connections() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let composition =
         fs::read_to_string(root.join("composition/account.rs")).expect("read composition");
@@ -399,9 +407,9 @@ fn ibkr_account_uses_one_native_async_hard_session() {
         .nth(1)
         .and_then(|source| source.split("/// Inspect an account credential").next())
         .expect("IBKR native composition");
-    assert!(native.contains("IbkrConnection::connect"));
-    assert!(native.contains("connection.account_read()"));
-    assert!(native.contains(".account_events("));
+    assert!(native.contains("IbkrAccountQueryConnection::new"));
+    assert!(native.contains("IbkrAccountStreamConnection::new"));
+    assert!(native.contains("client_id: options.client_id.saturating_add(1)"));
     assert!(!native.contains("blocking::account"));
     assert!(!native.contains("spawn_blocking"));
 
@@ -415,11 +423,10 @@ fn ibkr_account_uses_one_native_async_hard_session() {
 fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
     let account_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let integration_root = account_root.join("../../platform/integration/src");
-    let facts =
-        fs::read_to_string(integration_root.join("application/capabilities/account_facts.rs"))
-            .expect("read Integration account facts");
+    let facts = fs::read_to_string(integration_root.join("domain/account.rs"))
+        .expect("read Integration account facts");
     assert!(!facts.contains("canonical_account_identity"));
-    assert!(facts.contains("provider_instrument: ProviderInstrumentRef"));
+    assert!(facts.contains("participant_instrument: ParticipantInstrumentRef"));
     assert!(!facts.contains("pub instrument_id: InstrumentId"));
     assert!(!facts.contains("pub market_id: Option<MarketId>"));
 
@@ -473,8 +480,10 @@ fn account_server_bootstrap_selects_only_a_registered_account() {
 #[test]
 fn account_control_plane_does_not_duplicate_balance_or_position_views() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let process =
-        fs::read_to_string(root.join("src/application/process.rs")).expect("read Account process");
+    let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
+        .expect("read Account server");
+    let actor =
+        fs::read_to_string(root.join("src/application/conflux.rs")).expect("read Account actor");
     let contract = fs::read_to_string(root.join("contract/src/control/account.rs"))
         .expect("read Account control contract");
     for obsolete in [
@@ -486,11 +495,11 @@ fn account_control_plane_does_not_duplicate_balance_or_position_views() {
         "PositionsResponse",
     ] {
         assert!(
-            !process.contains(obsolete) && !contract.contains(obsolete),
+            !server.contains(obsolete) && !actor.contains(obsolete) && !contract.contains(obsolete),
             "Account control plane duplicates mmap business view: {obsolete}"
         );
     }
-    let publisher = fs::read_to_string(root.join("src/composition/publisher.rs"))
+    let publisher = fs::read_to_string(root.join("src/services/publication.rs"))
         .expect("read Account mmap publisher");
     assert!(publisher.contains("encode_balances"));
     assert!(publisher.contains("encode_positions"));
@@ -553,36 +562,18 @@ fn account_application_has_no_synchronous_business_query_facade() {
 #[test]
 fn account_rest_exposes_health_as_its_only_get_query() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let process =
-        fs::read_to_string(root.join("src/application/process.rs")).expect("read Account process");
-    assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
-    assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
+    let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
+        .expect("read Account server");
+    assert!(server.contains("(\"GET\", \"/v1/health\")"));
+    assert!(!server.contains("(\"GET\", \"/v1/balances\")"));
 
     let contract = fs::read_to_string(root.join("contract/src/control/client.rs"))
         .expect("read Account control client");
     assert_eq!(contract.matches("\"GET\"").count(), 1);
     assert!(contract.contains("\"GET\", \"/v1/health\""));
 
-    let health = process
-        .split("fn health_json(&self)")
-        .nth(1)
-        .expect("Account health function")
-        .split("fn business_status")
-        .next()
-        .expect("Account health body");
-    for forbidden in [
-        "account_id",
-        "actor_id",
-        "generation",
-        "event_sequence",
-        "business_time_unix_nanos",
-        "stream_queue_depth",
-        "persistence_queue_depth",
-    ] {
-        assert!(
-            !health.contains(forbidden),
-            "Account health leaks {forbidden}"
-        );
-    }
-    assert!(health.contains("last_refresh_duration_ms"));
+    let types = fs::read_to_string(root.join("contract/src/control/account.rs"))
+        .expect("read typed Account health contract");
+    assert!(types.contains("pub generation: u64"));
+    assert!(types.contains("pub event_sequence: u64"));
 }

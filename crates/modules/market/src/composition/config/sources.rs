@@ -58,6 +58,17 @@ pub enum MarketSourceBinding {
         #[serde(default = "default_source_snapshot_interval_ms")]
         snapshot_interval_ms: u64,
     },
+    Ibkr {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        host: String,
+        port: u16,
+        client_id: i32,
+        exchange: String,
+        currency: String,
+        #[serde(default = "default_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
 }
 
 impl MarketSourceBinding {
@@ -68,7 +79,8 @@ impl MarketSourceBinding {
             | Self::BinanceDerivatives { enabled, .. }
             | Self::Massive { enabled, .. }
             | Self::Okx { enabled, .. }
-            | Self::Hyperliquid { enabled, .. } => *enabled,
+            | Self::Hyperliquid { enabled, .. }
+            | Self::Ibkr { enabled, .. } => *enabled,
         }
     }
 }

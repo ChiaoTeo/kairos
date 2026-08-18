@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MarketProcessRequest {
+pub struct MarketHostRequest {
     pub workspace: PathBuf,
     pub launch_mode: String,
     pub launch_id: Option<String>,

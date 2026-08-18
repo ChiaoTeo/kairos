@@ -3,10 +3,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kairos_risk::composition::{
-    compose_risk_application, AeronRiskEventPublisher, MmapRiskSnapshotPublisher,
-};
-use kairos_risk::RiskProcess;
+use kairos_risk::composition::{build_risk_host, RiskHostConfig};
 use kairos_risk::{Amount, EnforcementMode, Metric, PolicyScope, RiskPolicy};
 use kairos_workspace::workspace::Workspace;
 
@@ -42,29 +39,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = instance.service_snapshot("risk")?;
     let normalized_path = instance.normalized_config()?;
     let policies = load_risk_policies(&workspace, &normalized_path, &args.launch_mode)?;
-    let application =
-        compose_risk_application(format!("risk:{}", args.instance_id), policies, Some(state))?;
-    RiskProcess::new(
-        application,
-        socket,
-        Duration::from_millis(args.interval_ms),
-        Some(health),
-    )?
-    .with_replay_clock(args.launch_mode == "backtest")
-    .with_snapshot_publisher(MmapRiskSnapshotPublisher::create(
-        snapshot,
-        1024 * 1024,
-        format!("risk:{}", args.instance_id),
-    )?)
-    .with_event_publisher(AeronRiskEventPublisher::connect(
-        args.aeron_dir.as_deref(),
-        &args.aeron_channel,
-        args.risk_events_stream_id,
-        format!("risk:{}", args.instance_id),
-        transport_identity,
-    )?)
-    .run()
-    .await
+    let host = build_risk_host(RiskHostConfig {
+        actor_id: format!("risk:{}", args.instance_id),
+        policies,
+        state_path: Some(state),
+        socket_path: socket,
+        health_file: Some(health),
+        interval: Duration::from_millis(args.interval_ms),
+        replay_clock: args.launch_mode == "backtest",
+        snapshot_path: snapshot,
+        snapshot_slot_size: 1024 * 1024,
+        aeron_dir: args.aeron_dir,
+        event_channel: args.aeron_channel,
+        event_stream_id: args.risk_events_stream_id,
+        identity: transport_identity,
+    })?;
+    tokio::task::LocalSet::new().run_until(host.run()).await
 }
 
 fn load_risk_policies(

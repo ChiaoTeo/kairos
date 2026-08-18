@@ -70,3 +70,65 @@ pub struct ReconcileExecutionRequest {
     pub order_id: Option<String>,
     pub reason: Option<String>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExecutionRestRequest {
+    Health,
+    Routes(ExecutionRoutesQuery),
+    SubmitIntent(SubmitIntentRequest),
+    CancelOrder {
+        order_id: String,
+        request: CancelOrderRequest,
+    },
+    ReplaceOrder {
+        order_id: String,
+        request: ReplaceOrderRequest,
+    },
+    Reconcile(ReconcileExecutionRequest),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExecutionRestResponse {
+    Health(Result<ExecutionHealthResponse, ExecutionControlError>),
+    Routes(Result<ExecutionRoutesResponse, ExecutionControlError>),
+    SubmitIntent(Result<ExecutionCommandStatus, ExecutionControlError>),
+    CancelOrder(Result<ExecutionCommandStatus, ExecutionControlError>),
+    ReplaceOrder(Result<ExecutionCommandStatus, ExecutionControlError>),
+    Reconcile(Result<ExecutionReconcileResponse, ExecutionControlError>),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionRoutesQuery {
+    pub account_id: Option<String>,
+    pub segment_key: Option<String>,
+    pub instrument_id: Option<String>,
+    pub market_id: Option<String>,
+    pub participant_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionRouteHealth {
+    pub route_id: String,
+    pub status: String,
+    pub required: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionHealthResponse {
+    pub status: String,
+    pub writer_recovery_ready: bool,
+    pub routes: Vec<ExecutionRouteHealth>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionCommandStatus {
+    pub status: String,
+    pub command_id: Option<String>,
+    pub intent_id: Option<String>,
+    pub order_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionReconcileResponse {
+    pub changed: usize,
+}

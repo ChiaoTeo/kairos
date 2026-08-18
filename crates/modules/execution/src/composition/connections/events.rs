@@ -4,75 +4,115 @@ use super::*;
 /// provider implementations concrete; Execution owns which sources form an
 /// execution route.
 pub enum ExecutionAsyncEventSource {
-    BinanceSpot(kairos_integration::participants::binance::BinanceSpotOrderEvents),
-    BinanceFutures(kairos_integration::participants::binance::BinanceFuturesOrderEvents),
-    BinanceMargin(kairos_integration::participants::binance::BinanceMarginOrderEvents),
-    BinanceOptions(kairos_integration::participants::binance::BinanceOptionsOrderEvents),
-    Ibkr(kairos_integration::participants::ibkr::IbkrOrderEvents),
-    OkxTrading(kairos_integration::participants::okx::OkxTradingOrderEvents),
+    BinanceSpot(
+        kairos_integration::participants::binance::spot::BinanceSpotUserWebSocketConnection,
+    ),
+    BinanceUsdM(
+        kairos_integration::participants::binance::usdm::BinanceUsdMUserWebSocketConnection,
+    ),
+    BinanceCoinM(
+        kairos_integration::participants::binance::coinm::BinanceCoinMUserWebSocketConnection,
+    ),
+    BinanceMargin(
+        kairos_integration::participants::binance::margin::BinanceMarginUserWebSocketConnection,
+    ),
+    BinanceOptions(
+        kairos_integration::participants::binance::options::BinanceOptionsUserWebSocketConnection,
+    ),
+    BinanceStocks(
+        kairos_integration::participants::binance::advanced::stocks::BinanceStocksUserWebSocketConnection,
+    ),
+    Ibkr(kairos_integration::participants::ibkr::IbkrExecutionStreamConnection),
+    OkxTrading(kairos_integration::participants::okx::private::OkxPrivateWebSocketConnection),
 }
 
-impl AsyncOrderEventSource for ExecutionAsyncEventSource {
-    async fn connect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot(source) => source.connect_channel().await,
-            Self::BinanceFutures(source) => source.connect_channel().await,
-            Self::BinanceMargin(source) => source.connect_channel().await,
-            Self::BinanceOptions(source) => source.connect_channel().await,
-            Self::Ibkr(source) => source.connect_channel().await,
-            Self::OkxTrading(source) => source.connect_channel().await,
-        }
-    }
-
-    async fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot(source) => source.disconnect_channel().await,
-            Self::BinanceFutures(source) => source.disconnect_channel().await,
-            Self::BinanceMargin(source) => source.disconnect_channel().await,
-            Self::BinanceOptions(source) => source.disconnect_channel().await,
-            Self::Ibkr(source) => source.disconnect_channel().await,
-            Self::OkxTrading(source) => source.disconnect_channel().await,
-        }
-    }
-
-    async fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot(source) => source.reconnect_channel().await,
-            Self::BinanceFutures(source) => source.reconnect_channel().await,
-            Self::BinanceMargin(source) => source.reconnect_channel().await,
-            Self::BinanceOptions(source) => source.reconnect_channel().await,
-            Self::Ibkr(source) => source.reconnect_channel().await,
-            Self::OkxTrading(source) => source.reconnect_channel().await,
-        }
-    }
-
-    fn channel_health(&self) -> ConnectionHealth {
-        match self {
-            Self::BinanceSpot(source) => source.channel_health(),
-            Self::BinanceFutures(source) => source.channel_health(),
-            Self::BinanceMargin(source) => source.channel_health(),
-            Self::BinanceOptions(source) => source.channel_health(),
-            Self::Ibkr(source) => source.channel_health(),
-            Self::OkxTrading(source) => source.channel_health(),
-        }
-    }
-
-    async fn next_order_event(
+impl ExecutionStream for ExecutionAsyncEventSource {
+    async fn next(
         &mut self,
     ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
         match self {
-            Self::BinanceSpot(source) => source.next_order_event().await,
-            Self::BinanceFutures(source) => source.next_order_event().await,
-            Self::BinanceMargin(source) => source.next_order_event().await,
-            Self::BinanceOptions(source) => source.next_order_event().await,
-            Self::Ibkr(source) => source.next_order_event().await,
-            Self::OkxTrading(source) => source.next_order_event().await,
+            Self::BinanceSpot(source) => ExecutionStream::next(source).await,
+            Self::BinanceUsdM(source) => ExecutionStream::next(source).await,
+            Self::BinanceCoinM(source) => ExecutionStream::next(source).await,
+            Self::BinanceMargin(source) => ExecutionStream::next(source).await,
+            Self::BinanceOptions(source) => ExecutionStream::next(source).await,
+            Self::BinanceStocks(source) => ExecutionStream::next(source).await,
+            Self::Ibkr(source) => ExecutionStream::next(source).await,
+            Self::OkxTrading(source) => ExecutionStream::next(source).await,
         }
     }
 }
 
-pub fn compose_execution_stream(
-    _options: &ExecutionConnectionOptions,
-) -> Result<Option<Box<dyn OrderEventSource>>, String> {
-    Ok(None)
+macro_rules! delegate_source {
+    ($self:ident, $method:ident) => {
+        match $self {
+            Self::BinanceSpot(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::BinanceUsdM(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::BinanceCoinM(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::BinanceMargin(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::BinanceOptions(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::BinanceStocks(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::Ibkr(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+            Self::OkxTrading(source) => {
+                kairos_integration::ConnectionLifecycleCommand::$method(source).await
+            }
+        }
+    };
+}
+
+impl kairos_integration::ConnectionLifecycleCommand for ExecutionAsyncEventSource {
+    async fn connect(&mut self) -> Result<(), IntegrationError> {
+        delegate_source!(self, connect)
+    }
+    async fn disconnect(&mut self) -> Result<(), IntegrationError> {
+        delegate_source!(self, disconnect)
+    }
+    async fn reconnect(&mut self) -> Result<(), IntegrationError> {
+        delegate_source!(self, reconnect)
+    }
+}
+
+impl kairos_integration::ConnectionHealthQuery for ExecutionAsyncEventSource {
+    fn connection_health(&mut self) -> ConnectionHealth {
+        match self {
+            Self::BinanceSpot(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::BinanceUsdM(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::BinanceCoinM(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::BinanceMargin(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::BinanceOptions(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::BinanceStocks(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::Ibkr(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+            Self::OkxTrading(source) => {
+                kairos_integration::ConnectionHealthQuery::connection_health(source)
+            }
+        }
+    }
 }

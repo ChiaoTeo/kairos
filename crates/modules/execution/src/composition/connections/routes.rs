@@ -1,579 +1,493 @@
-//! Multi-route capability assembly over provider-native Integration handles.
+//! Multi-route assembly over provider-native concrete Integration connections.
 
-use super::super::providers::*;
 use super::*;
-use crate::application::ExecutionAsyncRoute;
-use crate::services::routing::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyncOrderQuery};
-use kairos_integration::application::ParticipantInstrumentTypeRef;
-use kairos_integration::participants::binance::ConnectionDomain as BinanceConnectionDomain;
-use kairos_integration::participants::binance::{
-    BinanceFuturesChannelConfig, BinanceMarginChannelConfig, BinanceOptionsChannelConfig,
-    BinanceSpotConnection,
-};
-use kairos_integration::participants::okx::{OkxConnection, OkxPrivateChannelConfig};
+use crate::services::gateway::ExecutionConnectionPlan;
+use kairos_integration::participants::{binance, ibkr, okx};
 
-pub fn compose_execution_routes(
+pub(crate) fn install_execution_connections(
+    system: &mut kairos_conflux::ConfluxSystem,
     options: &[ExecutionConnectionOptions],
-) -> Result<ExecutionConnections, String> {
-    let Some(_) = options.first() else {
-        return Err("at least one Execution route is required".into());
+) -> Result<(Vec<ExecutionConnectionPlan>, Vec<ConnectionDescriptor>), String> {
+    validate_ibkr_client_ids(options)?;
+    let mut plans = Vec::new();
+    let mut descriptors = Vec::new();
+    for option in options {
+        if matches!(
+            option.participant_id.trim().to_ascii_lowercase().as_str(),
+            "simulated" | "paper"
+        ) {
+            continue;
+        }
+        let instrument_type = instrument_type(option)?;
+        let (entry, query, stream, entry_descriptor) = concrete_route(option)?;
+        let query_descriptor = query_descriptor(&query);
+        let entry_key = entry_descriptor.binding_id.clone();
+        let query_key = query_descriptor.binding_id.clone();
+        let stream_key = stream_descriptor(&stream).binding_id.clone();
+        install_entry(system, entry_key.clone(), entry)?;
+        install_query(system, query_key.clone(), query)?;
+        install_stream(system, stream_key.clone(), stream)?;
+        plans.push(ExecutionConnectionPlan {
+            route_id: option.route_id.clone(),
+            required: option.required,
+            account_id: kairos_primitives::AccountId::new(&option.account_id)
+                .map_err(|e| e.to_string())?,
+            segment_key: kairos_primitives::SegmentKey::new(&option.segment_key)
+                .map_err(|e| e.to_string())?,
+            instrument_type,
+            entry_key,
+            query_key,
+            stream_key,
+            entry_descriptor: entry_descriptor.clone(),
+            query_descriptor,
+        });
+        descriptors.push(entry_descriptor);
+    }
+    Ok((plans, descriptors))
+}
+
+fn query_descriptor(value: &ExecutionAsyncOrderQuery) -> ConnectionDescriptor {
+    match value {
+        ExecutionAsyncOrderQuery::BinanceSpot(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::BinanceMargin(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::BinanceUsdM(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::BinanceCoinM(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::BinanceOptions(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::BinanceStocks(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::OkxTrading(v) => v.descriptor(),
+        ExecutionAsyncOrderQuery::Ibkr(v) => v.descriptor(),
+    }
+    .clone()
+}
+
+fn stream_descriptor(value: &ExecutionAsyncEventSource) -> &ConnectionDescriptor {
+    match value {
+        ExecutionAsyncEventSource::BinanceSpot(v) => v.descriptor(),
+        ExecutionAsyncEventSource::BinanceMargin(v) => v.descriptor(),
+        ExecutionAsyncEventSource::BinanceUsdM(v) => v.descriptor(),
+        ExecutionAsyncEventSource::BinanceCoinM(v) => v.descriptor(),
+        ExecutionAsyncEventSource::BinanceOptions(v) => v.descriptor(),
+        ExecutionAsyncEventSource::BinanceStocks(v) => v.descriptor(),
+        ExecutionAsyncEventSource::OkxTrading(v) => v.descriptor(),
+        ExecutionAsyncEventSource::Ibkr(v) => v.descriptor(),
+    }
+}
+
+fn install_entry(
+    system: &mut kairos_conflux::ConfluxSystem,
+    key: String,
+    value: ExecutionAsyncOrderEntry,
+) -> Result<(), String> {
+    macro_rules! put {
+        ($field:ident, $value:expr) => {
+            system
+                .$field
+                .ensure_with(key, 1, || $value)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        };
+    }
+    match value {
+        ExecutionAsyncOrderEntry::BinanceSpot(v) => put!(binance_spot_rest_connections, v),
+        ExecutionAsyncOrderEntry::BinanceMargin(v) => put!(binance_margin_rest_connections, v),
+        ExecutionAsyncOrderEntry::BinanceUsdM(v) => put!(binance_usdm_rest_connections, v),
+        ExecutionAsyncOrderEntry::BinanceCoinM(v) => put!(binance_coinm_rest_connections, v),
+        ExecutionAsyncOrderEntry::BinanceOptions(v) => put!(binance_options_rest_connections, v),
+        ExecutionAsyncOrderEntry::BinanceStocks(v) => put!(binance_stocks_rest_connections, v),
+        ExecutionAsyncOrderEntry::OkxTrading(v) => put!(okx_private_rest_connections, v),
+        ExecutionAsyncOrderEntry::Ibkr(v) => put!(ibkr_order_connections, v),
+    }
+}
+
+fn install_query(
+    system: &mut kairos_conflux::ConfluxSystem,
+    key: String,
+    value: ExecutionAsyncOrderQuery,
+) -> Result<(), String> {
+    macro_rules! put {
+        ($field:ident, $value:expr) => {
+            system
+                .$field
+                .ensure_with(key, 1, || $value)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        };
+    }
+    match value {
+        ExecutionAsyncOrderQuery::BinanceSpot(v) => put!(binance_spot_rest_connections, v),
+        ExecutionAsyncOrderQuery::BinanceMargin(v) => put!(binance_margin_rest_connections, v),
+        ExecutionAsyncOrderQuery::BinanceUsdM(v) => put!(binance_usdm_rest_connections, v),
+        ExecutionAsyncOrderQuery::BinanceCoinM(v) => put!(binance_coinm_rest_connections, v),
+        ExecutionAsyncOrderQuery::BinanceOptions(v) => put!(binance_options_rest_connections, v),
+        ExecutionAsyncOrderQuery::BinanceStocks(v) => put!(binance_stocks_rest_connections, v),
+        ExecutionAsyncOrderQuery::OkxTrading(v) => put!(okx_private_rest_connections, v),
+        ExecutionAsyncOrderQuery::Ibkr(v) => put!(ibkr_order_connections, v),
+    }
+}
+
+fn install_stream(
+    system: &mut kairos_conflux::ConfluxSystem,
+    key: String,
+    value: ExecutionAsyncEventSource,
+) -> Result<(), String> {
+    macro_rules! put {
+        ($field:ident, $value:expr) => {
+            system
+                .$field
+                .ensure_with(key, 1, || $value)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        };
+    }
+    match value {
+        ExecutionAsyncEventSource::BinanceSpot(v) => {
+            put!(binance_spot_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::BinanceMargin(v) => {
+            put!(binance_margin_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::BinanceUsdM(v) => {
+            put!(binance_usdm_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::BinanceCoinM(v) => {
+            put!(binance_coinm_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::BinanceOptions(v) => {
+            put!(binance_options_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::BinanceStocks(v) => {
+            put!(binance_stocks_user_websocket_connections, v)
+        }
+        ExecutionAsyncEventSource::OkxTrading(v) => put!(okx_private_websocket_connections, v),
+        ExecutionAsyncEventSource::Ibkr(v) => put!(ibkr_execution_stream_connections, v),
+    }
+}
+
+fn concrete_route(
+    option: &ExecutionConnectionOptions,
+) -> Result<
+    (
+        ExecutionAsyncOrderEntry,
+        ExecutionAsyncOrderQuery,
+        ExecutionAsyncEventSource,
+        ConnectionDescriptor,
+    ),
+    String,
+> {
+    let provider = option.participant_id.trim().to_ascii_lowercase();
+    let product = normalize(&option.product);
+    let binding_id = format!("execution.{}", option.route_id);
+    match provider.as_str() {
+        "binance" => binance_route(option, &product, binding_id),
+        "okx" | "okex" => okx_route(option, &product, binding_id),
+        "ibkr" => ibkr_route(option, &product, binding_id),
+        _ => Err(format!(
+            "production execution route is not available for {} {}",
+            option.participant_id, option.product
+        )),
+    }
+}
+
+fn binance_route(
+    option: &ExecutionConnectionOptions,
+    product: &str,
+    binding_id: String,
+) -> Result<
+    (
+        ExecutionAsyncOrderEntry,
+        ExecutionAsyncOrderQuery,
+        ExecutionAsyncEventSource,
+        ConnectionDescriptor,
+    ),
+    String,
+> {
+    let rest = |suffix: &str| binance::BinanceRestConfig {
+        binding_id: format!("{binding_id}.{suffix}"),
+        environment: environment(option),
+        endpoint: option.base_url.clone(),
+        credential: Some(binance_credential(option)),
     };
-    if options.len() == 1 {
-        let provider = options[0].participant_id.trim().to_ascii_lowercase();
-        let product = options[0].product.trim().to_ascii_lowercase();
-        if matches!(provider.as_str(), "simulated" | "paper") {
-            return compose_execution_connections(&options[0]);
-        }
-        if provider == "ibkr" {
-            return compose_ibkr_async_execution(&options[0]);
-        }
-        let native_async = (provider == "binance"
-            && matches!(
-                product.as_str(),
-                "spot"
-                    | "cross-margin"
-                    | "isolated-margin"
-                    | "usd-m-futures"
-                    | "coin-m-futures"
-                    | "options"
+    let user = |suffix: &str| binance::BinanceUserWebSocketConfig {
+        binding_id: format!("{binding_id}.{suffix}"),
+        environment: environment(option),
+        rest_endpoint: option.base_url.clone(),
+        websocket_endpoint: option.websocket_url.clone(),
+        credential: binance_credential(option),
+        event_capacity: option.order_event_queue_capacity.max(1),
+        segment_key: option.segment_key.clone(),
+    };
+
+    macro_rules! family {
+        ($rest:path, $stream:path, $entry:ident, $query:ident, $event:ident, $name:literal) => {{
+            let entry_connection = <$rest>::new(rest(concat!($name, ".command")))
+                .map_err(|error| error.to_string())?;
+            let descriptor = entry_connection.descriptor().clone();
+            let query_connection =
+                <$rest>::new(rest(concat!($name, ".query"))).map_err(|error| error.to_string())?;
+            let stream_connection = <$stream>::new(user(concat!($name, ".stream")))
+                .map_err(|error| error.to_string())?;
+            Ok((
+                ExecutionAsyncOrderEntry::$entry(entry_connection),
+                ExecutionAsyncOrderQuery::$query(query_connection),
+                ExecutionAsyncEventSource::$event(stream_connection),
+                descriptor,
             ))
-            || provider == "okx"
-            || provider == "okex";
-        if !native_async {
+        }};
+    }
+
+    match product {
+        "spot" => family!(
+            binance::spot::BinanceSpotRestConnection,
+            binance::spot::BinanceSpotUserWebSocketConnection,
+            BinanceSpot,
+            BinanceSpot,
+            BinanceSpot,
+            "spot"
+        ),
+        "cross-margin" | "isolated-margin" => {
+            if product == "isolated-margin"
+                && option
+                    .isolated_symbol
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err("Binance isolated-margin route requires isolated_symbol".into());
+            }
+            family!(
+                binance::margin::BinanceMarginRestConnection,
+                binance::margin::BinanceMarginUserWebSocketConnection,
+                BinanceMargin,
+                BinanceMargin,
+                BinanceMargin,
+                "margin"
+            )
+        }
+        "usd-m-futures" => family!(
+            binance::usdm::BinanceUsdMRestConnection,
+            binance::usdm::BinanceUsdMUserWebSocketConnection,
+            BinanceUsdM,
+            BinanceUsdM,
+            BinanceUsdM,
+            "usdm"
+        ),
+        "coin-m-futures" => family!(
+            binance::coinm::BinanceCoinMRestConnection,
+            binance::coinm::BinanceCoinMUserWebSocketConnection,
+            BinanceCoinM,
+            BinanceCoinM,
+            BinanceCoinM,
+            "coinm"
+        ),
+        "options" => family!(
+            binance::options::BinanceOptionsRestConnection,
+            binance::options::BinanceOptionsUserWebSocketConnection,
+            BinanceOptions,
+            BinanceOptions,
+            BinanceOptions,
+            "options"
+        ),
+        "equity" | "stocks" => family!(
+            binance::advanced::stocks::BinanceStocksRestConnection,
+            binance::advanced::stocks::BinanceStocksUserWebSocketConnection,
+            BinanceStocks,
+            BinanceStocks,
+            BinanceStocks,
+            "stocks"
+        ),
+        _ => Err(format!("unsupported Binance execution product: {product}")),
+    }
+}
+
+fn okx_route(
+    option: &ExecutionConnectionOptions,
+    product: &str,
+    binding_id: String,
+) -> Result<
+    (
+        ExecutionAsyncOrderEntry,
+        ExecutionAsyncOrderQuery,
+        ExecutionAsyncEventSource,
+        ConnectionDescriptor,
+    ),
+    String,
+> {
+    let trading_mode = okx_trading_mode(product, option.trading_mode.as_deref())?;
+    let credential = okx_credential(option);
+    let rest_config = |suffix: &str| okx::OkxPrivateRestConfig {
+        connection: okx::OkxRestConfig {
+            binding_id: format!("{binding_id}.{suffix}"),
+            environment: environment(option),
+            endpoint: option.base_url.clone(),
+        },
+        credential: credential.clone(),
+    };
+    let entry = okx::private::OkxPrivateRestConnection::new(rest_config("command"))
+        .map_err(|error| error.to_string())?;
+    let descriptor = entry.descriptor().clone();
+    let query = okx::private::OkxPrivateRestConnection::new(rest_config("query"))
+        .map_err(|error| error.to_string())?;
+    let stream = okx::private::OkxPrivateWebSocketConnection::new(okx::OkxPrivateWebSocketConfig {
+        connection: okx::OkxWebSocketConfig {
+            binding_id: format!("{binding_id}.stream"),
+            environment: environment(option),
+            endpoint: option.websocket_url.clone(),
+            event_capacity: option.order_event_queue_capacity.max(1),
+        },
+        credential,
+        segment_key: option.segment_key.clone(),
+        trading_mode,
+    })
+    .map_err(|error| error.to_string())?;
+    Ok((
+        ExecutionAsyncOrderEntry::OkxTrading(entry),
+        ExecutionAsyncOrderQuery::OkxTrading(query),
+        ExecutionAsyncEventSource::OkxTrading(stream),
+        descriptor,
+    ))
+}
+
+fn ibkr_route(
+    option: &ExecutionConnectionOptions,
+    product: &str,
+    binding_id: String,
+) -> Result<
+    (
+        ExecutionAsyncOrderEntry,
+        ExecutionAsyncOrderQuery,
+        ExecutionAsyncEventSource,
+        ConnectionDescriptor,
+    ),
+    String,
+> {
+    if !matches!(product, "equity" | "stocks" | "spot") {
+        return Err(format!("unsupported IBKR execution product: {product}"));
+    }
+    let order_config = || ibkr::IbkrOrderConfig {
+        binding_id: format!("{binding_id}.order"),
+        environment: environment(option),
+        host: option.host.clone(),
+        port: option.port,
+        client_id: option.client_id,
+        account_id: option.account_id.clone(),
+    };
+    let entry =
+        ibkr::IbkrOrderConnection::new(order_config()).map_err(|error| error.to_string())?;
+    let descriptor = entry.descriptor().clone();
+    let query =
+        ibkr::IbkrOrderConnection::new(order_config()).map_err(|error| error.to_string())?;
+    let stream = ibkr::IbkrExecutionStreamConnection::new(ibkr::IbkrExecutionStreamConfig {
+        binding_id: format!("{binding_id}.stream"),
+        environment: environment(option),
+        host: option.host.clone(),
+        port: option.port,
+        client_id: option.client_id.saturating_add(1),
+        account_id: option.account_id.clone(),
+        symbol: None,
+    })
+    .map_err(|error| error.to_string())?;
+    Ok((
+        ExecutionAsyncOrderEntry::Ibkr(entry),
+        ExecutionAsyncOrderQuery::Ibkr(query),
+        ExecutionAsyncEventSource::Ibkr(stream),
+        descriptor,
+    ))
+}
+
+fn binance_credential(option: &ExecutionConnectionOptions) -> binance::BinanceCredential {
+    binance::BinanceCredential {
+        principal_id: option.principal_scope_id.clone(),
+        api_key: option.api_key.clone(),
+        secret: option.secret.clone(),
+    }
+}
+
+fn okx_credential(option: &ExecutionConnectionOptions) -> okx::OkxCredential {
+    okx::OkxCredential {
+        principal_id: option.principal_scope_id.clone(),
+        api_key: option.api_key.clone(),
+        secret: option.secret.clone(),
+        passphrase: option.passphrase.clone(),
+    }
+}
+
+fn environment(option: &ExecutionConnectionOptions) -> String {
+    let endpoint = option.base_url.to_ascii_lowercase();
+    if endpoint.contains("test") || endpoint.contains("demo") {
+        "test".into()
+    } else {
+        "live".into()
+    }
+}
+
+fn instrument_type(
+    option: &ExecutionConnectionOptions,
+) -> Result<ParticipantInstrumentTypeRef, String> {
+    let provider = option.participant_id.trim().to_ascii_lowercase();
+    let product = normalize(&option.product);
+    let value = match provider.as_str() {
+        "binance" => match product.as_str() {
+            "spot" => "binance-spot",
+            "cross-margin" => "binance-cross-margin",
+            "isolated-margin" => "binance-isolated-margin",
+            "usd-m-futures" => "binance-usdm",
+            "coin-m-futures" => "binance-coinm",
+            "options" => "binance-options",
+            "equity" | "stocks" => "binance-stocks",
+            _ => return Err(format!("unsupported Binance execution product: {product}")),
+        },
+        "okx" | "okex" => match product.as_str() {
+            "spot" | "margin" | "swap" | "futures" | "option" | "options" => product.as_str(),
+            _ => return Err(format!("unsupported OKX execution product: {product}")),
+        },
+        "ibkr" => "equity",
+        _ => return Err(format!("unsupported execution participant: {provider}")),
+    };
+    ParticipantInstrumentTypeRef::new(value)
+}
+
+fn okx_trading_mode(product: &str, configured: Option<&str>) -> Result<String, String> {
+    let mode = configured.map(normalize).unwrap_or_else(|| {
+        if product == "spot" {
+            "cash".into()
+        } else {
+            String::new()
+        }
+    });
+    if !matches!(mode.as_str(), "cash" | "cross" | "isolated") {
+        return Err(format!(
+            "OKX {product} execution route requires trading_mode cash, cross, or isolated"
+        ));
+    }
+    if product == "spot" && mode != "cash" {
+        return Err("OKX spot execution requires cash trading_mode".into());
+    }
+    if product == "margin" && mode == "cash" {
+        return Err("OKX margin execution requires cross or isolated trading_mode".into());
+    }
+    Ok(mode)
+}
+
+fn validate_ibkr_client_ids(options: &[ExecutionConnectionOptions]) -> Result<(), String> {
+    let mut identities = std::collections::BTreeSet::new();
+    for option in options
+        .iter()
+        .filter(|option| option.participant_id.eq_ignore_ascii_case("ibkr"))
+    {
+        let identity = (
+            option.host.trim().to_ascii_lowercase(),
+            option.port,
+            option.client_id,
+        );
+        if !identities.insert(identity) {
             return Err(format!(
-                "production async execution route is not available for {} {}; migrate the provider-native async capability",
-                options[0].participant_id, options[0].product
+                "duplicate IBKR host/port/client_id across Execution routes: {}:{} client_id={}",
+                option.host, option.port, option.client_id
             ));
         }
     }
-    let mut ibkr_client_identities = std::collections::BTreeSet::new();
-    for option in options {
-        let provider = option.participant_id.trim().to_ascii_lowercase();
-        let product = option.product.trim().to_ascii_lowercase();
-        match provider.as_str() {
-            "binance"
-                if matches!(
-                    product.as_str(),
-                    "spot"
-                        | "cross-margin"
-                        | "isolated-margin"
-                        | "usd-m-futures"
-                        | "coin-m-futures"
-                        | "options"
-                ) => {}
-            "ibkr" if matches!(product.as_str(), "equity" | "stocks") => {
-                let identity = (
-                    option.host.trim().to_ascii_lowercase(),
-                    option.port,
-                    option.client_id,
-                );
-                if !ibkr_client_identities.insert(identity) {
-                    return Err(format!(
-                        "duplicate IBKR host/port/client_id across Execution routes: {}:{} client_id={}; allocate a distinct TWS client id per order-event route",
-                        option.host, option.port, option.client_id
-                    ));
-                }
-            }
-            "okx" | "okex" => {
-                okx_trading_shape(&product, option.trading_mode.as_deref())?;
-            }
-            _ => {
-                return Err(format!(
-                    "multi-route async composition is not yet available for {} {}; migrate the provider-native capability first",
-                    option.participant_id, option.product
-                ))
-            }
-        }
-    }
-
-    let mut binance_contexts: Vec<(usize, BinanceSpotConnection)> = Vec::new();
-    let mut okx_contexts: Vec<(usize, OkxConnection)> = Vec::new();
-    let mut descriptors = Vec::with_capacity(options.len());
-    let mut async_entry_routes = Vec::with_capacity(options.len());
-    let mut async_query_routes = Vec::with_capacity(options.len());
-    let mut streams = Vec::with_capacity(options.len());
-
-    for (option_index, option) in options.iter().enumerate() {
-        let account_id = kairos_primitives::AccountId::new(option.account_id.clone())
-            .map_err(|error| error.to_string())?;
-        let segment_key = kairos_primitives::SegmentKey::new(option.segment_key.clone())
-            .map_err(|error| error.to_string())?;
-        let provider = option.participant_id.trim().to_ascii_lowercase();
-        let product = option.product.trim().to_ascii_lowercase();
-        if provider == "binance" {
-            let connection = if matches!(
-                product.as_str(),
-                "spot" | "cross-margin" | "isolated-margin"
-            ) {
-                let context_index = if let Some(index) =
-                    binance_contexts.iter().position(|(representative, _)| {
-                        same_binance_spot_provider_context(&options[*representative], option)
-                    }) {
-                    index
-                } else {
-                    binance_contexts
-                        .push((option_index, binance_spot_provider_connection(option)?));
-                    binance_contexts.len() - 1
-                };
-                Some(binance_spot_private_connection_from_provider(
-                    &binance_contexts[context_index].1,
-                    option,
-                )?)
-            } else {
-                None
-            };
-            if matches!(product.as_str(), "cross-margin" | "isolated-margin") {
-                let (margin, provider_instrument_type, isolated_symbol): (
-                    _,
-                    ParticipantInstrumentTypeRef,
-                    Option<String>,
-                ) = if product == "isolated-margin" {
-                    let symbol = option
-                        .isolated_symbol
-                        .as_ref()
-                        .filter(|value| !value.trim().is_empty())
-                        .ok_or_else(|| {
-                            "Binance isolated-margin route requires isolated_symbol".to_string()
-                        })?
-                        .to_ascii_uppercase();
-                    (
-                        connection
-                            .as_ref()
-                            .expect("Spot family connection for margin route")
-                            .isolated_margin_connection(symbol.clone())
-                            .map_err(|error| error.to_string())?,
-                        BinanceConnectionDomain::IsolatedMargin.into(),
-                        Some(symbol),
-                    )
-                } else {
-                    (
-                        connection
-                            .as_ref()
-                            .expect("Spot family connection for margin route")
-                            .cross_margin_connection(),
-                        BinanceConnectionDomain::CrossMargin.into(),
-                        None,
-                    )
-                };
-                let descriptor = margin.descriptor().clone();
-                async_entry_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id.clone(),
-                    segment_key.clone(),
-                    Some(provider_instrument_type.clone()),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderEntry::BinanceMargin(
-                        margin.order_entry().map_err(|error| error.to_string())?,
-                    ),
-                )?);
-                async_query_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id,
-                    segment_key,
-                    Some(provider_instrument_type),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderQuery::BinanceMargin(
-                        margin.order_query().map_err(|error| error.to_string())?,
-                    ),
-                )?);
-                streams.push(
-                    ExecutionAsyncRoute::new(
-                        option.route_id.clone(),
-                        option.required,
-                        ExecutionAsyncEventSource::BinanceMargin(
-                            margin
-                                .order_events(&BinanceMarginChannelConfig {
-                                    websocket_stream_url: option.websocket_url.clone(),
-                                    isolated_symbol,
-                                    event_queue_capacity: option.order_event_queue_capacity,
-                                })
-                                .map_err(|error| error.to_string())?,
-                        ),
-                    )
-                    .with_binding_id(descriptor.binding_id.clone()),
-                );
-                descriptors.push(descriptor);
-                continue;
-            }
-            if matches!(product.as_str(), "usd-m-futures" | "coin-m-futures") {
-                let (futures, provider_instrument_type): (_, ParticipantInstrumentTypeRef) =
-                    if product == "usd-m-futures" {
-                        (
-                            binance_futures_private_connection(
-                                option,
-                                BinanceConnectionDomain::UsdMFutures,
-                            )?,
-                            BinanceConnectionDomain::UsdMFutures.into(),
-                        )
-                    } else {
-                        (
-                            binance_futures_private_connection(
-                                option,
-                                BinanceConnectionDomain::CoinMFutures,
-                            )?,
-                            BinanceConnectionDomain::CoinMFutures.into(),
-                        )
-                    };
-                let descriptor = futures.descriptor().clone();
-                async_entry_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id.clone(),
-                    segment_key.clone(),
-                    Some(provider_instrument_type.clone()),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderEntry::BinanceFutures(futures.order_entry()),
-                )?);
-                async_query_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id,
-                    segment_key,
-                    Some(provider_instrument_type),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderQuery::BinanceFutures(futures.order_query()),
-                )?);
-                streams.push(
-                    ExecutionAsyncRoute::new(
-                        option.route_id.clone(),
-                        option.required,
-                        ExecutionAsyncEventSource::BinanceFutures(
-                            futures
-                                .order_events(&BinanceFuturesChannelConfig {
-                                    websocket_stream_url: option.websocket_url.clone(),
-                                    event_queue_capacity: option.order_event_queue_capacity,
-                                })
-                                .map_err(|error| error.to_string())?,
-                        ),
-                    )
-                    .with_binding_id(descriptor.binding_id.clone()),
-                );
-                descriptors.push(descriptor);
-                continue;
-            }
-            if product == "options" {
-                let options_connection = binance_options_private_connection(option)?;
-                let descriptor = options_connection.descriptor().clone();
-                async_entry_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id.clone(),
-                    segment_key.clone(),
-                    Some(BinanceConnectionDomain::Options.into()),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderEntry::BinanceOptions(options_connection.order_entry()),
-                )?);
-                async_query_routes.push(ExecutionRoute::new(
-                    option.route_id.clone(),
-                    account_id,
-                    segment_key,
-                    Some(BinanceConnectionDomain::Options.into()),
-                    descriptor.clone(),
-                    ExecutionAsyncOrderQuery::BinanceOptions(options_connection.order_query()),
-                )?);
-                streams.push(
-                    ExecutionAsyncRoute::new(
-                        option.route_id.clone(),
-                        option.required,
-                        ExecutionAsyncEventSource::BinanceOptions(
-                            options_connection
-                                .order_events(&BinanceOptionsChannelConfig {
-                                    websocket_stream_url: option.websocket_url.clone(),
-                                    event_queue_capacity: option.order_event_queue_capacity,
-                                })
-                                .map_err(|error| error.to_string())?,
-                        ),
-                    )
-                    .with_binding_id(descriptor.binding_id.clone()),
-                );
-                descriptors.push(descriptor);
-                continue;
-            }
-            let connection = connection.expect("Spot family connection for spot route");
-            let descriptor = connection.spot_descriptor();
-            let channel = binance_spot_channel_config(option);
-            async_entry_routes.push(ExecutionRoute::new(
-                option.route_id.clone(),
-                account_id.clone(),
-                segment_key.clone(),
-                Some(BinanceConnectionDomain::Spot.into()),
-                descriptor.clone(),
-                ExecutionAsyncOrderEntry::BinanceSpot(
-                    connection
-                        .spot_order_entry()
-                        .map_err(|error| error.to_string())?,
-                ),
-            )?);
-            async_query_routes.push(ExecutionRoute::new(
-                option.route_id.clone(),
-                account_id,
-                segment_key,
-                Some(BinanceConnectionDomain::Spot.into()),
-                descriptor.clone(),
-                ExecutionAsyncOrderQuery::BinanceSpot(
-                    connection
-                        .spot_order_query()
-                        .map_err(|error| error.to_string())?,
-                ),
-            )?);
-            streams.push(
-                ExecutionAsyncRoute::new(
-                    option.route_id.clone(),
-                    option.required,
-                    ExecutionAsyncEventSource::BinanceSpot(
-                        connection
-                            .spot_order_events(&channel)
-                            .map_err(|error| error.to_string())?,
-                    ),
-                )
-                .with_binding_id(descriptor.binding_id.clone()),
-            );
-            descriptors.push(descriptor);
-            continue;
-        }
-
-        if provider == "ibkr" {
-            let connection = ibkr_connection(option)?;
-            let descriptor = connection.descriptor().clone();
-            async_entry_routes.push(ExecutionRoute::new(
-                option.route_id.clone(),
-                account_id.clone(),
-                segment_key.clone(),
-                Some(ParticipantInstrumentTypeRef::new("equity")?),
-                descriptor.clone(),
-                ExecutionAsyncOrderEntry::Ibkr(connection.order_entry()),
-            )?);
-            async_query_routes.push(ExecutionRoute::new(
-                option.route_id.clone(),
-                account_id,
-                segment_key,
-                Some(ParticipantInstrumentTypeRef::new("equity")?),
-                descriptor.clone(),
-                ExecutionAsyncOrderQuery::Ibkr(connection.order_query()),
-            )?);
-            streams.push(
-                ExecutionAsyncRoute::new(
-                    option.route_id.clone(),
-                    option.required,
-                    ExecutionAsyncEventSource::Ibkr(connection.order_events(None)),
-                )
-                .with_binding_id(descriptor.binding_id.clone()),
-            );
-            descriptors.push(descriptor);
-            continue;
-        }
-
-        let (instrument_type, trading_mode) =
-            okx_trading_shape(&product, option.trading_mode.as_deref())?;
-        let context_index = if let Some(index) =
-            okx_contexts.iter().position(|(representative, _)| {
-                same_okx_provider_context(&options[*representative], option)
-            }) {
-            index
-        } else {
-            okx_contexts.push((option_index, okx_provider_connection(option)?));
-            okx_contexts.len() - 1
-        };
-        let connection =
-            okx_private_connection_from_provider(&okx_contexts[context_index].1, option)?;
-        let async_entry = connection
-            .trading_order_entry(instrument_type, trading_mode)
-            .map_err(|error| error.to_string())?;
-        let entry_descriptor = async_entry.descriptor().clone();
-        let async_query = connection.trading_order_query(instrument_type);
-        let query_descriptor = async_query.descriptor().clone();
-        async_entry_routes.push(ExecutionRoute::new(
-            option.route_id.clone(),
-            account_id.clone(),
-            segment_key.clone(),
-            Some(instrument_type.into()),
-            entry_descriptor.clone(),
-            ExecutionAsyncOrderEntry::OkxTrading(async_entry),
-        )?);
-        async_query_routes.push(ExecutionRoute::new(
-            option.route_id.clone(),
-            account_id,
-            segment_key,
-            Some(instrument_type.into()),
-            query_descriptor,
-            ExecutionAsyncOrderQuery::OkxTrading(async_query),
-        )?);
-        streams.push(
-            ExecutionAsyncRoute::new(
-                option.route_id.clone(),
-                option.required,
-                ExecutionAsyncEventSource::OkxTrading(
-                    connection
-                        .trading_order_events(
-                            instrument_type,
-                            trading_mode,
-                            &OkxPrivateChannelConfig {
-                                websocket_url: option.websocket_url.clone(),
-                                event_queue_capacity: option.order_event_queue_capacity,
-                            },
-                        )
-                        .map_err(|error| error.to_string())?,
-                ),
-            )
-            .with_binding_id(entry_descriptor.binding_id.clone()),
-        );
-        descriptors.push(entry_descriptor);
-    }
-
-    Ok(ExecutionConnections {
-        descriptor: descriptors.first().cloned(),
-        descriptors,
-        order_entry: None,
-        order_query: None,
-        execution_stream: None,
-        async_order_entry: Some(ExecutionAsyncOrderEntryRoutes {
-            inner: RoutedAsyncOrderEntry::new(async_entry_routes)?,
-            writer_fences: Vec::new(),
-        }),
-        async_order_query: Some(ExecutionAsyncOrderQueryRoutes {
-            inner: RoutedAsyncOrderQuery::new(async_query_routes)?,
-        }),
-        async_execution_streams: streams,
-    })
+    Ok(())
 }
 
-/// Compose one-shot/direct CLI adapters. Migrated providers use their native
-/// async capability and bounded Execution proxies; remaining explicit CLI
-/// Direct one-shot adapters are retained only for explicitly synchronous
-/// callers; the production route is composed exclusively from async clients.
-pub fn compose_execution_connections(
-    options: &ExecutionConnectionOptions,
-) -> Result<ExecutionConnections, String> {
-    let provider = options.participant_id.trim().to_ascii_lowercase();
-    let product = options.product.trim().to_ascii_lowercase();
-    if provider == "binance" && product == "spot" {
-        let connection = binance_spot_private_connection(options)?;
-        let descriptor = connection.spot_descriptor();
-        let channel = binance_spot_channel_config(options);
-        let async_order_entry = ExecutionAsyncOrderEntry::BinanceSpot(
-            connection
-                .spot_order_entry()
-                .map_err(|error| error.to_string())?,
-        );
-        let async_order_query = ExecutionAsyncOrderQuery::BinanceSpot(
-            connection
-                .spot_order_query()
-                .map_err(|error| error.to_string())?,
-        );
-        let account_id = kairos_primitives::AccountId::new(options.account_id.clone())
-            .map_err(|error| error.to_string())?;
-        let segment_key = kairos_primitives::SegmentKey::new(options.segment_key.clone())
-            .map_err(|error| error.to_string())?;
-        let entry_routes = ExecutionAsyncOrderEntryRoutes {
-            inner: RoutedAsyncOrderEntry::new(vec![ExecutionRoute::new(
-                options.route_id.clone(),
-                account_id.clone(),
-                segment_key.clone(),
-                Some(BinanceConnectionDomain::Spot.into()),
-                descriptor.clone(),
-                async_order_entry,
-            )?])?,
-            writer_fences: Vec::new(),
-        };
-        let query_routes = ExecutionAsyncOrderQueryRoutes {
-            inner: RoutedAsyncOrderQuery::new(vec![ExecutionRoute::new(
-                options.route_id.clone(),
-                account_id,
-                segment_key,
-                Some(BinanceConnectionDomain::Spot.into()),
-                descriptor.clone(),
-                async_order_query,
-            )?])?,
-        };
-        let binding_id = descriptor.binding_id.clone();
-        return Ok(ExecutionConnections {
-            descriptor: Some(descriptor.clone()),
-            descriptors: vec![descriptor],
-            order_entry: None,
-            order_query: None,
-            execution_stream: None,
-            async_order_entry: Some(entry_routes),
-            async_order_query: Some(query_routes),
-            async_execution_streams: vec![ExecutionAsyncRoute::new(
-                options.route_id.clone(),
-                options.required,
-                ExecutionAsyncEventSource::BinanceSpot(
-                    connection
-                        .spot_order_events(&channel)
-                        .map_err(|error| error.to_string())?,
-                ),
-            )
-            .with_binding_id(binding_id)],
-        });
-    }
-    if provider == "okx" || provider == "okex" {
-        let (instrument_type, trading_mode) =
-            okx_trading_shape(&product, options.trading_mode.as_deref())?;
-        let connection = okx_private_connection(options)?;
-        let async_entry = connection
-            .trading_order_entry(instrument_type, trading_mode)
-            .map_err(|error| error.to_string())?;
-        let entry_descriptor = async_entry.descriptor().clone();
-        let async_query = connection.trading_order_query(instrument_type);
-        let query_descriptor = async_query.descriptor().clone();
-        let order_events = connection
-            .trading_order_events(
-                instrument_type,
-                trading_mode,
-                &OkxPrivateChannelConfig {
-                    websocket_url: options.websocket_url.clone(),
-                    event_queue_capacity: options.order_event_queue_capacity,
-                },
-            )
-            .map_err(|error| error.to_string())?;
-        let account_id = kairos_primitives::AccountId::new(options.account_id.clone())
-            .map_err(|error| error.to_string())?;
-        let segment_key = kairos_primitives::SegmentKey::new(options.segment_key.clone())
-            .map_err(|error| error.to_string())?;
-        let entry_routes = ExecutionAsyncOrderEntryRoutes {
-            inner: RoutedAsyncOrderEntry::new(vec![ExecutionRoute::new(
-                options.route_id.clone(),
-                account_id.clone(),
-                segment_key.clone(),
-                Some(instrument_type.into()),
-                entry_descriptor.clone(),
-                ExecutionAsyncOrderEntry::OkxTrading(async_entry),
-            )?])?,
-            writer_fences: Vec::new(),
-        };
-        let query_routes = ExecutionAsyncOrderQueryRoutes {
-            inner: RoutedAsyncOrderQuery::new(vec![ExecutionRoute::new(
-                options.route_id.clone(),
-                account_id,
-                segment_key,
-                Some(instrument_type.into()),
-                query_descriptor,
-                ExecutionAsyncOrderQuery::OkxTrading(async_query),
-            )?])?,
-        };
-        let binding_id = entry_descriptor.binding_id.clone();
-        return Ok(ExecutionConnections {
-            descriptor: Some(entry_descriptor.clone()),
-            descriptors: vec![entry_descriptor],
-            order_entry: None,
-            order_query: None,
-            execution_stream: None,
-            async_order_entry: Some(entry_routes),
-            async_order_query: Some(query_routes),
-            async_execution_streams: vec![ExecutionAsyncRoute::new(
-                options.route_id.clone(),
-                options.required,
-                ExecutionAsyncEventSource::OkxTrading(order_events),
-            )
-            .with_binding_id(binding_id)],
-        });
-    }
-
-    Ok(ExecutionConnections {
-        descriptor: None,
-        descriptors: Vec::new(),
-        order_entry: Some(compose_order_entry(options)?),
-        order_query: compose_order_query(options)?,
-        execution_stream: compose_execution_stream(options)?,
-        async_order_entry: None,
-        async_order_query: None,
-        async_execution_streams: Vec::new(),
-    })
+fn normalize(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
 }

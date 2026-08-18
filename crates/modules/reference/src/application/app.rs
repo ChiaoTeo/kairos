@@ -15,7 +15,7 @@ use crate::application::queries::{LifecycleQuery, ReferenceQuery, ReferenceRecor
 use crate::application::queries::{MarketQuery, ReferenceKind};
 use crate::application::{UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand};
 use crate::services::actor::ReferenceActor;
-use crate::services::source::ReferenceSource;
+use crate::services::providers::ReferenceSourcePlan;
 use crate::services::sqlx_storage::SqlxCatalogStore;
 use kairos_primitives::{Generation, Sequence};
 use tracing::{info, warn};
@@ -23,6 +23,8 @@ use tracing::{info, warn};
 /// Public application boundary for reference data.
 pub struct ReferenceApplication {
     actor: ReferenceActor,
+    refresh_interval: std::time::Duration,
+    initial_refresh: bool,
 }
 
 /// Immutable read-side view. It contains no provider, SQLite connection, or
@@ -71,17 +73,56 @@ impl ReferencePublication {
 }
 
 impl ReferenceApplication {
-    pub(crate) async fn new<S>(
+    pub(crate) async fn new(
+        actor_id: impl Into<String>,
+        source_plan: ReferenceSourcePlan,
+        store: SqlxCatalogStore,
+    ) -> ReferenceResult<Self> {
+        Ok(Self {
+            actor: ReferenceActor::new(actor_id, source_plan, store).await?,
+            refresh_interval: std::time::Duration::from_secs(300),
+            initial_refresh: true,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn new_test<S>(
         actor_id: impl Into<String>,
         source: S,
         store: SqlxCatalogStore,
     ) -> ReferenceResult<Self>
     where
-        S: ReferenceSource + 'static,
+        S: crate::services::source::ReferenceSource + 'static,
     {
         Ok(Self {
-            actor: ReferenceActor::new(actor_id, source, store).await?,
+            actor: ReferenceActor::new_test(actor_id, source, store).await?,
+            refresh_interval: std::time::Duration::from_secs(300),
+            initial_refresh: true,
         })
+    }
+
+    pub fn configure_conflux(
+        &mut self,
+        refresh_interval: std::time::Duration,
+        initial_refresh: bool,
+    ) {
+        self.refresh_interval = refresh_interval;
+        self.initial_refresh = initial_refresh;
+    }
+
+    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
+        self.refresh_interval
+    }
+
+    pub(crate) fn initial_refresh(&self) -> bool {
+        self.initial_refresh
+    }
+
+    pub async fn activate_sources(
+        &mut self,
+        system: &mut kairos_conflux::ConfluxSystem,
+    ) -> ReferenceResult<()> {
+        self.actor.activate_sources(system).await
     }
 
     pub fn actor_id(&self) -> &str {
@@ -132,6 +173,7 @@ impl ReferenceApplication {
         self.actor.option_underlyings()
     }
 
+    #[cfg(test)]
     pub async fn set_option_underlying(
         &mut self,
         underlying: &str,
@@ -140,6 +182,34 @@ impl ReferenceApplication {
         let result = self
             .actor
             .set_option_underlying(underlying, enabled)
+            .await?;
+        Ok(ReferenceRefreshResult {
+            generation: result.generation,
+            event_sequence: result.event_sequence,
+            changed: result.changed,
+            change_count: result.event_count,
+            events: result.events,
+        })
+    }
+
+    #[cfg(not(test))]
+    pub(crate) fn massive_option_connection(
+        &self,
+        underlying: &str,
+    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
+        self.actor.massive_option_connection(underlying)
+    }
+
+    #[cfg(not(test))]
+    pub(crate) async fn set_managed_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+    ) -> ReferenceResult<ReferenceRefreshResult> {
+        let result = self
+            .actor
+            .set_managed_option_underlying(underlying, enabled, connection)
             .await?;
         Ok(ReferenceRefreshResult {
             generation: result.generation,
@@ -192,19 +262,32 @@ impl ReferenceApplication {
                     .collect::<Vec<_>>();
                 let stale_provider_count =
                     provider_health.iter().filter(|health| health.stale).count();
-                warn!(
-                    event = "reference_refresh_failed",
-                    component = "reference",
-                    source = %self.source_id(),
-                    duration_ms = started.elapsed().as_millis() as u64,
-                    provider_count = provider_health.len(),
-                    degraded_provider_count = degraded_providers.len(),
-                    stale_provider_count,
-                    degraded_providers = ?degraded_providers,
-                    fallback = if stale_provider_count > 0 { "last_known_good" } else { "none" },
-                    error = %error,
-                    "reference refresh failed"
-                );
+                if error.is_sync_in_progress() {
+                    info!(
+                        event = "reference_sync_in_progress",
+                        component = "reference",
+                        source = %self.source_id(),
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        provider_count = provider_health.len(),
+                        syncing_provider_count = degraded_providers.len(),
+                        syncing_providers = ?degraded_providers,
+                        "reference refresh is waiting for initial provider scans"
+                    );
+                } else {
+                    warn!(
+                        event = "reference_refresh_failed",
+                        component = "reference",
+                        source = %self.source_id(),
+                        duration_ms = started.elapsed().as_millis() as u64,
+                        provider_count = provider_health.len(),
+                        degraded_provider_count = degraded_providers.len(),
+                        stale_provider_count,
+                        degraded_providers = ?degraded_providers,
+                        fallback = if stale_provider_count > 0 { "last_known_good" } else { "none" },
+                        error = %error,
+                        "reference refresh failed"
+                    );
+                }
                 return Err(error);
             }
         };

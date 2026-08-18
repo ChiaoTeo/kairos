@@ -12,11 +12,11 @@ impl ExecutionApplication {
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
             .open_orders(&ExternalOrderQuery {
-                binding_id: query.binding_id.clone(),
+                instrument_type: None,
                 symbol: query.symbol.clone(),
                 order_id: query.order_id.clone(),
                 limit: query.limit,
-                since_unix_millis: query.since_unix_nanos,
+                since_unix_nanos: query.since_unix_nanos,
             })
             .map(|orders| {
                 let count = orders.len();
@@ -34,11 +34,11 @@ impl ExecutionApplication {
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
             .order_history(&ExternalOrderQuery {
-                binding_id: query.binding_id.clone(),
+                instrument_type: None,
                 symbol: query.symbol.clone(),
                 order_id: query.order_id.clone(),
                 limit: query.limit,
-                since_unix_millis: query.since_unix_nanos,
+                since_unix_nanos: query.since_unix_nanos,
             })
             .map(|orders| orders.into_iter().map(remote_order).collect())
             .map_err(|error| ExecutionError::Gateway(error.to_string()))
@@ -52,11 +52,11 @@ impl ExecutionApplication {
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
             .order_detail(&ExternalOrderQuery {
-                binding_id: query.binding_id.clone(),
+                instrument_type: None,
                 symbol: query.symbol.clone(),
                 order_id: query.order_id.clone(),
                 limit: query.limit,
-                since_unix_millis: query.since_unix_nanos,
+                since_unix_nanos: query.since_unix_nanos,
             })
             .map(|order| order.map(remote_order))
             .map_err(|error| ExecutionError::Gateway(error.to_string()))
@@ -263,60 +263,16 @@ impl ExecutionApplication {
         Ok(changed)
     }
 
-    pub fn next_remote_execution_event(
-        &mut self,
-    ) -> Result<Option<RemoteOrderUpdate>, ExecutionError> {
-        self.execution_stream
-            .as_mut()
-            .ok_or_else(|| ExecutionError::Gateway("execution stream is not configured".into()))?
-            .try_next_order_event()
-            .map(|event| event.map(|envelope| remote_execution_event(envelope.payload)))
-            .map_err(|error| ExecutionError::Gateway(error.to_string()))
-    }
-
-    /// Transfer ownership of the provider stream to the runtime stream
-    /// consumer.  HTTP requests must not pull provider events themselves.
-    pub(crate) fn take_execution_stream(&mut self) -> Option<Box<dyn OrderEventSource>> {
-        self.execution_stream.take()
-    }
-
-    /// Transfer the order-entry connection to the composition-owned gateway
-    /// worker.  Execution state does not own the provider connection after
-    /// process startup.
-    pub(crate) fn take_order_entry(&mut self) -> Option<Box<dyn OrderEntryConnection>> {
-        self.order_entry.take()
-    }
-
-    pub(crate) fn install_order_entry(&mut self, connection: Box<dyn OrderEntryConnection>) {
+    pub(crate) fn install_order_entry(&mut self, connection: Box<dyn BlockingOrderCommand>) {
         self.order_entry = Some(connection);
     }
 
-    /// Transfer ownership of the provider order-query connection to the
-    /// composition-owned query worker.
-    pub(crate) fn take_order_query(&mut self) -> Option<Box<dyn OrderQueryConnection>> {
-        self.order_query.take()
-    }
-
-    pub(crate) fn install_order_query(&mut self, connection: Box<dyn OrderQueryConnection>) {
+    pub(crate) fn install_order_query(&mut self, connection: Box<dyn BlockingOrderQuery>) {
         self.order_query = Some(connection);
     }
 
     pub fn has_order_query(&self) -> bool {
         self.order_query.is_some()
-    }
-
-    /// Pull one provider update and reconcile it into the local execution
-    /// journal.  The provider order id is matched against the stored exchange
-    /// order id; this keeps the integration event provider-neutral while the
-    /// execution application remains the owner of lifecycle state.
-    pub fn consume_remote_execution_event(
-        &mut self,
-    ) -> Result<Option<(RemoteOrderUpdate, ExecutionOrder)>, ExecutionError> {
-        let Some(event) = self.next_remote_execution_event()? else {
-            return Ok(None);
-        };
-        let applied = self.apply_remote_execution_event(event.clone())?;
-        Ok(Some((event, applied)))
     }
 
     /// Apply one normalized exchange fact received from the private order stream.

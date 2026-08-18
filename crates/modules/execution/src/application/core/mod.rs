@@ -100,16 +100,18 @@ fn planned_risk_reservation(
     }
 }
 use crate::services::persistence::{ExecutionOutboxEntry, ExecutionStateStore};
-use kairos_integration::application::ExternalOrderQuery;
-use kairos_integration::application::{
+use kairos_integration::blocking::{
+    OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
+};
+use kairos_integration::ExternalOrderQuery;
+use kairos_integration::{
     CommandOutcome, DecimalValue as ConnectionDecimalValue, OrderEntryEvent, OrderEntryRequest,
     OrderEntryStatus,
 };
-use kairos_integration::application::{
+use kairos_integration::{
     OrderEntryOptions as ConnectionOrderEntryOptions, OrderSide as ConnectionOrderSide,
     OrderType as ConnectionOrderType, TimeInForce,
 };
-use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use tracing::{debug, info, warn};
 
 mod intents;
@@ -122,9 +124,8 @@ pub struct ExecutionApplication {
     actor: crate::services::actor::ExecutionActor,
     pending_business_events: std::collections::VecDeque<ExecutionBusinessEvent>,
     execution_routes: BTreeMap<ExecutionRouteId, ConfiguredExecutionRoute>,
-    order_entry: Option<Box<dyn OrderEntryConnection>>,
-    order_query: Option<Box<dyn OrderQueryConnection>>,
-    execution_stream: Option<Box<dyn OrderEventSource>>,
+    order_entry: Option<Box<dyn BlockingOrderCommand>>,
+    order_query: Option<Box<dyn BlockingOrderQuery>>,
     store: Option<Box<dyn ExecutionStateStore>>,
     intent_planner: Option<QueuedExecutionIntentPlanner>,
     order_admission: Option<ExecutionOrderAdmissionService>,
@@ -134,11 +135,13 @@ pub struct ExecutionApplication {
     writer_recovery_ready: bool,
     risk_recovery_ready: bool,
     risk_recovery_error: Option<String>,
+    business_time_unix_nanos: Option<u64>,
+    pub(crate) conflux: super::conflux::ExecutionConfluxState,
 }
 
 struct ConfiguredExecutionRoute {
     candidate: ExecutionRouteCandidate,
-    provider_instrument: kairos_integration::application::ProviderInstrumentRef,
+    participant_instrument: kairos_integration::ParticipantInstrumentRef,
 }
 
 /// Concrete process wiring selected by Execution composition.
@@ -147,9 +150,8 @@ struct ConfiguredExecutionRoute {
 /// account/segment/provider bindings. They are deliberately not part of the
 /// public application contract.
 pub(crate) struct ExecutionApplicationWiring {
-    pub(crate) order_entry_gateway: Option<Box<dyn OrderEntryConnection>>,
-    pub(crate) order_query_gateway: Option<Box<dyn OrderQueryConnection>>,
-    pub(crate) legacy_execution_stream: Option<Box<dyn OrderEventSource>>,
+    pub(crate) order_entry_gateway: Option<Box<dyn BlockingOrderCommand>>,
+    pub(crate) order_query_gateway: Option<Box<dyn BlockingOrderQuery>>,
     pub(crate) state_store: Option<Box<dyn ExecutionStateStore>>,
 }
 
@@ -158,12 +160,25 @@ impl ExecutionApplication {
     /// dependencies.  The application remains the state owner; concrete
     /// Dependency reads stay behind the intent-planning boundary.
     pub fn advance_time(&mut self, event_time_unix_nanos: u64) -> Result<(), ExecutionError> {
+        if self
+            .business_time_unix_nanos
+            .is_some_and(|current| event_time_unix_nanos < current)
+        {
+            return Err(ExecutionError::Invalid(
+                "execution business time cannot move backwards".into(),
+            ));
+        }
         if let Some(intent_planner) = self.intent_planner.as_mut() {
             intent_planner
                 .advance_time(event_time_unix_nanos)
                 .map_err(ExecutionError::Invalid)?;
         }
+        self.business_time_unix_nanos = Some(event_time_unix_nanos);
         Ok(())
+    }
+
+    pub const fn business_time_unix_nanos(&self) -> Option<u64> {
+        self.business_time_unix_nanos
     }
     pub(crate) fn assemble(
         actor_id: impl Into<String>,
@@ -180,7 +195,6 @@ impl ExecutionApplication {
             execution_routes: BTreeMap::new(),
             order_entry: wiring.order_entry_gateway,
             order_query: wiring.order_query_gateway,
-            execution_stream: wiring.legacy_execution_stream,
             store: wiring.state_store,
             intent_planner: None,
             order_admission: None,
@@ -190,6 +204,8 @@ impl ExecutionApplication {
             writer_recovery_ready: true,
             risk_recovery_ready: true,
             risk_recovery_error: None,
+            business_time_unix_nanos: None,
+            conflux: Default::default(),
         };
         if let Some(store) = application.store.as_mut() {
             if let Some(snapshot) = store.load().map_err(ExecutionError::Persistence)? {
@@ -228,7 +244,7 @@ impl ExecutionApplication {
     #[cfg(test)]
     pub(crate) fn assemble_for_test(
         actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
+        order_entry: Option<Box<dyn BlockingOrderCommand>>,
         state_store: Option<Box<dyn ExecutionStateStore>>,
     ) -> Result<Self, ExecutionError> {
         Self::assemble(
@@ -236,7 +252,6 @@ impl ExecutionApplication {
             ExecutionApplicationWiring {
                 order_entry_gateway: order_entry,
                 order_query_gateway: None,
-                legacy_execution_stream: None,
                 state_store,
             },
         )
@@ -245,8 +260,8 @@ impl ExecutionApplication {
     #[cfg(test)]
     pub(crate) fn assemble_for_test_with_query(
         actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn OrderQueryConnection>>,
+        order_entry: Option<Box<dyn BlockingOrderCommand>>,
+        order_query: Option<Box<dyn BlockingOrderQuery>>,
         state_store: Option<Box<dyn ExecutionStateStore>>,
     ) -> Result<Self, ExecutionError> {
         Self::assemble(
@@ -254,26 +269,6 @@ impl ExecutionApplication {
             ExecutionApplicationWiring {
                 order_entry_gateway: order_entry,
                 order_query_gateway: order_query,
-                legacy_execution_stream: None,
-                state_store,
-            },
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn assemble_for_test_with_query_and_stream(
-        actor_id: impl Into<String>,
-        order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn OrderQueryConnection>>,
-        execution_stream: Option<Box<dyn OrderEventSource>>,
-        state_store: Option<Box<dyn ExecutionStateStore>>,
-    ) -> Result<Self, ExecutionError> {
-        Self::assemble(
-            actor_id,
-            ExecutionApplicationWiring {
-                order_entry_gateway: order_entry,
-                order_query_gateway: order_query,
-                legacy_execution_stream: execution_stream,
                 state_store,
             },
         )
@@ -283,13 +278,13 @@ impl ExecutionApplication {
     pub(crate) fn configure_execution_route(
         &mut self,
         candidate: ExecutionRouteCandidate,
-        provider_instrument: kairos_integration::application::ProviderInstrumentRef,
+        participant_instrument: kairos_integration::ParticipantInstrumentRef,
     ) {
         self.execution_routes.insert(
             candidate.route_id.clone(),
             ConfiguredExecutionRoute {
                 candidate,
-                provider_instrument,
+                participant_instrument,
             },
         );
     }
@@ -516,9 +511,9 @@ fn to_connection_request(
     let access_id = order.execution_route_id.as_ref().ok_or_else(|| {
         "execution_route_id is required; provider identity is not inferred".to_string()
     })?;
-    let provider_instrument = execution_routes
+    let participant_instrument = execution_routes
         .get(access_id)
-        .map(|route| route.provider_instrument.clone())
+        .map(|route| route.participant_instrument.clone())
         .ok_or_else(|| format!("execution access is not configured: {access_id}"))?;
     Ok(OrderEntryRequest {
         order_id: order.order_id.clone(),
@@ -528,7 +523,7 @@ fn to_connection_request(
             .map_err(|error| error.to_string())?,
         instrument_id: order.instrument_id.clone(),
         market_id: order.market_id.clone(),
-        provider_instrument,
+        participant_instrument,
         side: match order.side {
             OrderSide::Buy => ConnectionOrderSide::Buy,
             OrderSide::Sell => ConnectionOrderSide::Sell,
@@ -750,18 +745,18 @@ fn now_nanos() -> u64 {
         .as_nanos() as u64
 }
 
-fn remote_order(order: kairos_integration::application::ExternalOrder) -> RemoteOrder {
+fn remote_order(order: kairos_integration::ExternalOrder) -> RemoteOrder {
     RemoteOrder {
         binding_id: order.binding_id,
         order_id: order.order_id,
         client_order_id: order.client_order_id,
         symbol: order.symbol,
         side: match order.side {
-            kairos_integration::application::OrderSide::Buy => OrderSide::Buy,
-            kairos_integration::application::OrderSide::Sell => OrderSide::Sell,
+            kairos_integration::OrderSide::Buy => OrderSide::Buy,
+            kairos_integration::OrderSide::Sell => OrderSide::Sell,
         },
         order_type: match order.order_type {
-            kairos_integration::application::OrderType::Market => OrderType::Market,
+            kairos_integration::OrderType::Market => OrderType::Market,
             _ => OrderType::Limit,
         },
         status: remote_status(&format!("{:?}", order.status)),
@@ -773,48 +768,8 @@ fn remote_order(order: kairos_integration::application::ExternalOrder) -> Remote
         average_fill_price: order
             .average_fill_price
             .map(|value| value.try_into().expect("normalized average price")),
-        occurred_at_unix_nanos: order.occurred_at_unix_millis,
+        occurred_at_unix_nanos: order.occurred_at_unix_nanos,
     }
-}
-
-fn remote_execution_event(
-    event: kairos_integration::application::ExternalExecutionEvent,
-) -> RemoteOrderUpdate {
-    RemoteOrderUpdate {
-        order_id: event.order_id,
-        symbol: event.symbol,
-        status: remote_status(&format!("{:?}", event.status)),
-        fill_quantity: event
-            .fill_quantity
-            .and_then(|value| format_decimal(value).parse().ok()),
-        fill_price: event
-            .fill_price
-            .and_then(|value| format_decimal(value).parse().ok()),
-        execution_id: event.execution_id,
-        fee_currency: event.fee_currency,
-        fee_amount: event
-            .fee_amount
-            .and_then(|value| format_decimal(value).parse().ok()),
-        occurred_at_unix_nanos: event.occurred_at_unix_nanos,
-        reason: event.reason,
-    }
-}
-
-fn format_decimal(value: kairos_integration::application::DecimalValue) -> String {
-    if value.scale == 0 {
-        return value.mantissa.to_string();
-    }
-    let negative = value.mantissa < 0;
-    let digits = value.mantissa.unsigned_abs().to_string();
-    let scale = value.scale as usize;
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let split = padded.len() - scale;
-    format!(
-        "{}{}.{}",
-        if negative { "-" } else { "" },
-        &padded[..split],
-        &padded[split..]
-    )
 }
 
 fn parse_decimal(value: &str) -> Result<(i64, u8), ExecutionError> {

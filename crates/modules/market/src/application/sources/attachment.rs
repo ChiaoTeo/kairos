@@ -28,7 +28,10 @@ impl MarketApplication {
         }
         let actor = MarketActor::new(actor_id, max_dynamic_members, source_input_capacity)
             .map_err(MarketError::Invalid)?;
-        Ok(Self { actor })
+        Ok(Self {
+            actor,
+            conflux: super::super::conflux::MarketConfluxState::default(),
+        })
     }
 
     pub(crate) fn restore_with_source_capacity(
@@ -44,6 +47,7 @@ impl MarketApplication {
         Ok(Self {
             actor: MarketActor::restore(checkpoint, max_dynamic_members, source_input_capacity)
                 .map_err(MarketError::Invalid)?,
+            conflux: super::super::conflux::MarketConfluxState::default(),
         })
     }
 
@@ -62,23 +66,12 @@ impl MarketApplication {
             AttachedSource {
                 descriptor: handle.descriptor,
                 commands: handle.commands,
-                inputs: handle.inputs,
+                inputs: Some(handle.inputs),
                 task: Some(handle.task),
                 confirmed: BTreeMap::new(),
             },
         );
         Ok(())
-    }
-
-    pub(crate) fn take_source_handle(
-        &mut self,
-        source_id: &SourceId,
-    ) -> Result<SourceHandle, String> {
-        self.actor.take_source_handle(source_id)
-    }
-
-    pub(crate) fn has_sources(&self) -> bool {
-        !self.actor.attached_sources.is_empty()
     }
 
     pub(crate) async fn next_source_input(&mut self) -> Option<SourceInput> {
@@ -102,7 +95,10 @@ impl MarketApplication {
                     .attached_sources
                     .get_mut(source_id)
                     .expect("source id was collected from the same map");
-                match std::pin::Pin::new(&mut source.inputs).poll_recv(context) {
+                let Some(inputs) = source.inputs.as_mut() else {
+                    continue;
+                };
+                match std::pin::Pin::new(inputs).poll_recv(context) {
                     std::task::Poll::Ready(Some(input)) => {
                         self.actor.next_source_input_index = (index + 1) % source_count;
                         return std::task::Poll::Ready(Some(input));
@@ -118,6 +114,16 @@ impl MarketApplication {
             }
         })
         .await
+    }
+
+    pub(crate) fn take_source_inputs(
+        &mut self,
+    ) -> Vec<(SourceId, tokio::sync::mpsc::Receiver<SourceInput>)> {
+        self.actor
+            .attached_sources
+            .iter_mut()
+            .filter_map(|(id, source)| source.inputs.take().map(|inputs| (id.clone(), inputs)))
+            .collect()
     }
 
     pub fn sources_complete(&self) -> bool {

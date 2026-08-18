@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use kairos_integration::application::{AsyncMarketSnapshotConnection, IntegrationError};
+use kairos_integration::{IntegrationError, MarketEvent, MarketEventKind, MarketQuoteQuery};
 use tokio::sync::mpsc;
 
 use super::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
@@ -22,7 +22,7 @@ pub(crate) fn spawn_snapshot<C>(
     input_capacity: usize,
 ) -> SourceHandle
 where
-    C: AsyncMarketSnapshotConnection + 'static,
+    C: MarketQuoteQuery + 'static,
 {
     let (commands, receiver) = mpsc::channel(COMMAND_CAPACITY);
     let (input_sender, inputs) = mpsc::channel(input_capacity);
@@ -48,7 +48,7 @@ async fn run<C>(
     mut commands: mpsc::Receiver<SourceCommand>,
     inputs: mpsc::Sender<SourceInput>,
 ) where
-    C: AsyncMarketSnapshotConnection,
+    C: MarketQuoteQuery,
 {
     let source_id = descriptor.id;
     let epoch = SourceEpoch::new(1);
@@ -107,11 +107,17 @@ async fn run<C>(
             _ = ticks.tick(), if !markets.is_empty() => {
                 let symbols = markets
                     .values()
-                    .map(|market| market.route.provider_symbol.clone())
+                    .map(|market| {
+                        kairos_primitives::ParticipantSymbol::new(
+                            market.route.provider_symbol.as_str(),
+                        )
+                        .expect("resolved provider symbol is a valid participant symbol")
+                    })
                     .collect::<Vec<_>>();
-                match connection.fetch_snapshot(&symbols).await {
-                    Ok(events) => {
-                        for event in events {
+                match connection.fetch_quotes(&symbols).await {
+                    Ok(quotes) => {
+                        for quote in quotes {
+                            let event = quote_event(quote);
                             let Some(market) = markets.values().find(|market| {
                                 market.route.provider_symbol.eq_ignore_ascii_case(event.symbol.as_str())
                             }) else { continue };
@@ -133,6 +139,27 @@ async fn run<C>(
                 }
             }
         }
+    }
+}
+
+fn quote_event(quote: kairos_integration::MarketQuote) -> MarketEvent {
+    MarketEvent {
+        symbol: quote.symbol,
+        kind: MarketEventKind::Quote,
+        price: quote.bid_price.or(quote.last_price),
+        quantity: quote.bid_quantity,
+        rate: None,
+        ask_price: quote.ask_price,
+        ask_quantity: quote.ask_quantity,
+        bids: Vec::new(),
+        asks: Vec::new(),
+        bar: None,
+        greeks: None,
+        first_sequence: None,
+        last_sequence: None,
+        sequence: None,
+        observed_at_unix_nanos: quote.observed_at_unix_nanos,
+        venue: kairos_integration::MarketVenueEvidence::default(),
     }
 }
 

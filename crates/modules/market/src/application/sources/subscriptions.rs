@@ -2,47 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
-use crate::domain::source::{SourceDescriptor, SourceId, SourceRouteKey};
+use crate::domain::source::{SourceDescriptor, SourceId};
 use crate::services::actor::{BusinessSubscriptionKey, PendingSourceRequest};
 use crate::services::source::messages::SourceCommand;
-use crate::services::source::SourceActivator;
 
 impl MarketApplication {
     pub async fn sync_source_subscriptions(&mut self) -> Result<(), MarketError> {
         self.reconcile_source_commands()
             .await
             .map_err(MarketError::Invalid)
-    }
-
-    pub(crate) async fn activate_sources_for_subscriptions(
-        &mut self,
-        activator: &mut dyn SourceActivator,
-    ) -> Result<(), MarketError> {
-        let markets = self
-            .current_view()
-            .subscriptions
-            .into_iter()
-            .flat_map(|subscription| subscription.members.into_values())
-            .map(|market| (SourceRouteKey::from_market(&market), market))
-            .collect::<BTreeMap<_, _>>()
-            .into_values();
-        for market in markets {
-            let matched = self
-                .actor
-                .attached_sources
-                .values()
-                .any(|source| source_accepts(&source.descriptor, &market));
-            if matched {
-                continue;
-            }
-            let handle = activator
-                .activate(&market, self.source_input_capacity())
-                .await
-                .map_err(MarketError::SourceUnavailable)?;
-            self.attach_source(handle)
-                .map_err(MarketError::SourceUnavailable)?;
-        }
-        Ok(())
     }
 
     async fn reconcile_source_commands(&mut self) -> Result<(), String> {

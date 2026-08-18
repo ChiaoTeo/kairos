@@ -1,6 +1,9 @@
 //! Single-owner Reference actor.
 
+use super::providers::ReferenceSourcePlan;
 use super::publication::{encode_publications, StoredPublication};
+#[cfg(not(test))]
+use super::source::ConfiguredReferenceSource;
 use super::source::ReferenceSource;
 use super::sqlx_storage::SqlxCatalogStore;
 use crate::domain::{
@@ -9,12 +12,18 @@ use crate::domain::{
 };
 use tracing::info;
 
+#[cfg(not(test))]
+type ActorReferenceSource = ConfiguredReferenceSource;
+#[cfg(test)]
+type ActorReferenceSource = Box<dyn ReferenceSource>;
+
 pub struct ReferenceActor {
     pub actor_id: String,
     pub metadata: CatalogMetadata,
     #[cfg(test)]
     pub catalog: ReferenceCatalog,
-    source: Box<dyn ReferenceSource>,
+    source: Option<ActorReferenceSource>,
+    source_plan: Option<ReferenceSourcePlan>,
     store: SqlxCatalogStore,
 }
 
@@ -36,14 +45,11 @@ impl From<&ReferenceCatalog> for CatalogMetadata {
 }
 
 impl ReferenceActor {
-    pub async fn new<S>(
+    pub async fn new(
         actor_id: impl Into<String>,
-        source: S,
+        source_plan: ReferenceSourcePlan,
         mut store: SqlxCatalogStore,
-    ) -> ReferenceResult<Self>
-    where
-        S: ReferenceSource + 'static,
-    {
+    ) -> ReferenceResult<Self> {
         #[cfg(test)]
         let catalog = store.load().await?.unwrap_or_default();
         #[cfg(test)]
@@ -70,23 +76,79 @@ impl ReferenceActor {
             metadata,
             #[cfg(test)]
             catalog,
-            source: Box::new(source),
+            source: None,
+            source_plan: Some(source_plan),
+            store,
+        })
+    }
+
+    #[cfg(test)]
+    pub async fn new_test<S>(
+        actor_id: impl Into<String>,
+        source: S,
+        mut store: SqlxCatalogStore,
+    ) -> ReferenceResult<Self>
+    where
+        S: ReferenceSource + 'static,
+    {
+        let catalog = store.load().await?.unwrap_or_default();
+        let metadata = CatalogMetadata::from(&catalog);
+        Ok(Self {
+            actor_id: actor_id.into(),
+            metadata,
+            catalog,
+            source: Some(Box::new(source)),
+            source_plan: None,
             store,
         })
     }
 
     pub fn source_id(&self) -> &str {
-        self.source.source_id()
+        self.source
+            .as_ref()
+            .map(|source| source.source_id())
+            .unwrap_or("reference-providers")
     }
 
     pub fn provider_health(&self) -> Vec<ProviderHealth> {
-        self.source.provider_health()
+        self.source
+            .as_ref()
+            .map(|source| source.provider_health())
+            .unwrap_or_default()
+    }
+
+    pub async fn activate_sources(
+        &mut self,
+        system: &mut kairos_conflux::ConfluxSystem,
+    ) -> ReferenceResult<()> {
+        if self.source.is_some() {
+            return Ok(());
+        }
+        let plan = self.source_plan.take().ok_or_else(|| {
+            crate::domain::ReferenceError::Provider("Reference source plan is unavailable".into())
+        })?;
+        let source = plan.activate(system).await?;
+        #[cfg(not(test))]
+        {
+            self.source = Some(source);
+        }
+        #[cfg(test)]
+        {
+            self.source = Some(Box::new(source));
+        }
+        Ok(())
+    }
+
+    fn source_mut(&mut self) -> ReferenceResult<&mut ActorReferenceSource> {
+        self.source.as_mut().ok_or_else(|| {
+            crate::domain::ReferenceError::Provider("Reference sources are not active".into())
+        })
     }
 
     pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
-        let normalized = self.source.normalized_facts_authoritative();
-        let incoming = self.source.fetch_catalog().await?;
+        let normalized = self.source_mut()?.normalized_facts_authoritative();
+        let incoming = self.source_mut()?.fetch_catalog().await?;
         if normalized {
             return self.reconcile_normalized(incoming, started).await;
         }
@@ -95,8 +157,8 @@ impl ReferenceActor {
 
     pub async fn refresh_source(&mut self, source_id: &str) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
-        let normalized = self.source.normalized_facts_authoritative();
-        match self.source.advance_source(source_id).await? {
+        let normalized = self.source_mut()?.normalized_facts_authoritative();
+        match self.source_mut()?.advance_source(source_id).await? {
             Some(incoming) if normalized => self.reconcile_normalized(incoming, started).await,
             Some(incoming) => self.reconcile(incoming, started).await,
             None => Ok(RefreshResult {
@@ -124,24 +186,58 @@ impl ReferenceActor {
         source_id: &str,
         paused: bool,
     ) -> ReferenceResult<()> {
-        self.source.set_source_paused(source_id, paused).await
+        self.source_mut()?
+            .set_source_paused(source_id, paused)
+            .await
     }
 
     pub fn option_underlyings(&self) -> Vec<String> {
-        self.source.option_underlyings()
+        self.source
+            .as_ref()
+            .map(|source| source.option_underlyings())
+            .unwrap_or_default()
     }
 
     /// Change Massive options coverage and immediately advance that source.
     /// Additions may require more pages and therefore legitimately return an
     /// unchanged catalog until the scoped candidate is complete; removals are
     /// reconciled immediately from the remaining committed scopes.
+    #[cfg(test)]
     pub async fn set_option_underlying(
         &mut self,
         underlying: &str,
         enabled: bool,
     ) -> ReferenceResult<RefreshResult> {
-        self.source
+        self.source_mut()?
             .set_option_underlying(underlying, enabled)
+            .await?;
+        self.refresh_source("massive-options").await
+    }
+
+    #[cfg(not(test))]
+    pub fn massive_option_connection(
+        &self,
+        underlying: &str,
+    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
+        self.source
+            .as_ref()
+            .ok_or_else(|| {
+                crate::domain::ReferenceError::Provider(
+                    "Reference provider connections have not been activated".into(),
+                )
+            })?
+            .massive_option_connection(underlying)
+    }
+
+    #[cfg(not(test))]
+    pub async fn set_managed_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+    ) -> ReferenceResult<RefreshResult> {
+        self.source_mut()?
+            .set_managed_option_underlying(underlying, enabled, connection)
             .await?;
         self.refresh_source("massive-options").await
     }

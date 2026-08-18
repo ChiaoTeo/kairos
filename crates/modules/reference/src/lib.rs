@@ -1,8 +1,5 @@
 //! Reference business boundary.
 
-#[cfg(test)]
-extern crate self as kairos_reference;
-
 pub mod application;
 pub mod composition;
 pub mod domain;

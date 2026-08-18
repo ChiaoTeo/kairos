@@ -10,10 +10,12 @@ pub mod event;
 pub mod transport;
 pub mod view;
 pub use control::{
-    Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, CloseCircuitRequest,
+    AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Allocation, Amount, AuthorizeRequest,
+    CircuitScope, CircuitState, CloseCircuitRequest, ConsumeReservationRequest,
     DependencyWatermarks, EnforcementMode, LimitView, Metric, OpenCircuitRequest, PolicyScope,
-    ReasonCode, Reservation, ReservationStatus, RiskContext, RiskCurrentView, RiskDecision,
-    RiskEvent, RiskPolicy,
+    PublishPolicyRequest, ReasonCode, ReleaseReservationRequest, Reservation, ReservationStatus,
+    ResizeReservationRequest, RiskCommandStatus, RiskContext, RiskControlError, RiskCurrentView,
+    RiskDecision, RiskEvent, RiskPolicy, RiskRestRequest, RiskRestResponse,
 };
 pub use control::{Health, RiskControlClient};
 pub use encode::{

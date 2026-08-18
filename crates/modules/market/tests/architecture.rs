@@ -13,9 +13,7 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
     for path in [
         "src/bin/kairos-market-server.rs",
         "src/composition/mod.rs",
-        "src/composition/sources/binance.rs",
-        "src/composition/sources/massive.rs",
-        "src/composition/sources/okx.rs",
+        "src/composition/sources/connections.rs",
         "src/services/source/snapshot.rs",
         "src/services/source/stream.rs",
     ] {
@@ -32,8 +30,12 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
 #[test]
 fn historical_download_uses_async_provider_capabilities() {
     let source = source("src/bin/kairos-market-cli.rs");
-    assert!(source.contains("AsyncHistoricalMarketDataConnection"));
-    assert!(source.contains(".fetch(&request)"));
+    assert!(source.contains("HistoricalBarQuery"));
+    assert!(source.contains("HistoricalQuoteQuery"));
+    assert!(source.contains("HistoricalTradeQuery"));
+    assert!(source.contains(".fetch_bars(bar_request)"));
+    assert!(source.contains(".fetch_quotes(window)"));
+    assert!(source.contains(".fetch_trades(window)"));
     assert!(source.contains(".await?"));
     assert!(!source.contains("kairos_integration::blocking"));
     assert!(!source.contains("blocking_historical_market"));
@@ -55,17 +57,16 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
             "production server must not select provider details: {forbidden}"
         );
     }
-    assert!(source.contains("build_market_process"));
+    assert!(source.contains("build_market_host"));
 }
 
 #[test]
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
-    let process = source("src/composition/launch/process.rs");
-    let runtime = source("src/application/process/lifecycle.rs");
-    assert!(process.contains("without_event_socket()"));
-    assert!(process.contains("with_aeron_event_publisher"));
-    assert!(process.contains("profile.scope != MarketRuntimeScope::Replay"));
-    assert!(runtime.contains("event_socket_path: Option<PathBuf>"));
+    let process = source("src/composition/launch/assembly.rs");
+    let conflux = source("src/application/conflux.rs");
+    assert!(process.contains("aeron_publishers"));
+    assert!(conflux.contains("aeron_publishers.get_mut"));
+    assert!(!conflux.contains("event_socket_path"));
 }
 
 #[test]
@@ -208,7 +209,7 @@ fn reference_client_and_contract_are_composition_only() {
     let composition = source("src/composition/reference/projection.rs");
     assert!(composition.contains("ReferenceProjectionSnapshot"));
     assert!(composition.contains("ReconcileMarketUniverse"));
-    let process = source("src/composition/launch/process.rs");
+    let process = source("src/composition/launch/assembly.rs");
     let watcher = source("src/composition/reference/client.rs");
     assert!(process.contains("market_snapshot()"));
     assert!(watcher.contains("market_snapshot()"));
@@ -240,32 +241,13 @@ fn actor_is_the_single_source_runtime_state_owner() {
 
 #[test]
 fn market_rest_keeps_only_bounded_capability_queries_off_mmap() {
-    let process = source("src/application/process/ingress.rs");
-    assert!(process.contains("method == \"GET\" && path != HEALTH_PATH"));
-    assert!(process.contains("path != \"/v1/data-sources\""));
-    assert!(process.contains("\"/v1/data-sources\" if method == \"GET\""));
-    assert!(process.contains("Market business queries are available only through typed mmap views"));
-    assert!(process.contains("path == HEALTH_PATH && method != \"GET\""));
-    let health = process
-        .split("fn health(&self)")
-        .nth(1)
-        .expect("Market health function")
-        .split("fn subscribe")
-        .next()
-        .expect("Market health body");
-    for forbidden in [
-        "actor_id",
-        "generation",
-        "event_sequence",
-        "subscription_count",
-        "subscriptions",
-        "source_count",
-    ] {
-        assert!(
-            !health.contains(forbidden),
-            "Market health leaks {forbidden}"
-        );
-    }
+    let host = source("src/composition/host.rs");
+    let actor = source("src/application/conflux.rs");
+    assert!(host.contains("MarketRestRequest::Health"));
+    assert!(host.contains("MarketRestRequest::DataSources"));
+    assert!(actor.contains("MarketRestRequest::Health"));
+    assert!(actor.contains("MarketRestRequest::DataSources"));
+    assert!(actor.contains("market_view_publishers"));
 }
 
 #[test]
@@ -277,7 +259,7 @@ fn application_root_contains_only_its_module_boundary() {
         .filter(|path| path.is_file())
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    assert_eq!(files, vec!["mod.rs"]);
+    assert_eq!(files, vec!["mod.rs", "conflux.rs"]);
 }
 
 #[test]
@@ -313,7 +295,7 @@ fn composition_root_contains_only_its_module_boundary() {
         .filter(|path| path.is_file())
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    assert_eq!(files, vec!["mod.rs"]);
+    assert_eq!(files, vec!["host.rs", "mod.rs"]);
 }
 
 #[test]
@@ -377,9 +359,10 @@ fn view_checkpoint_and_change_have_distinct_boundaries() {
     let projection = source("src/application/observations/projection.rs");
     assert!(!projection.contains("pub fn snapshot"));
     assert!(projection.contains("pub fn current_view"));
-    let publication = source("src/application/process/publication.rs");
-    assert!(publication.contains("trait MarketChangePublisher"));
-    assert!(!publication.contains("SnapshotPublisher"));
+    assert!(!crate_root().join("src/application/process").exists());
+    let publication = source("src/services/publication/contract/mmap.rs");
+    assert!(publication.contains("fn encode_change_view"));
+    assert!(!publication.contains("trait MarketChangePublisher"));
 }
 
 #[test]
@@ -533,62 +516,61 @@ fn domain_is_not_a_public_crate_module() {
 }
 
 #[test]
-fn process_does_not_decode_control_wire_records() {
-    for file in [
-        "lifecycle.rs",
-        "actor_task.rs",
-        "ingress.rs",
-        "maintenance.rs",
-        "universe.rs",
-        "recovery.rs",
-        "publication.rs",
-        "shutdown.rs",
-    ] {
-        assert!(crate_root()
-            .join(format!("src/application/process/{file}"))
-            .is_file());
-    }
-    for file in ["transport.rs", "wire.rs", "ingress.rs", "response.rs"] {
-        assert!(crate_root()
-            .join(format!("src/services/control/{file}"))
-            .is_file());
-    }
-    assert!(!crate_root()
-        .join("src/application/process/runtime.rs")
-        .exists());
-    let process = [
-        source("src/application/process/actor_task.rs"),
-        source("src/application/process/ingress.rs"),
-    ]
-    .join("\n");
-    let process = process.split("#[cfg(test)]").next().unwrap_or(&process);
-    for forbidden in [
-        "serde::Deserialize",
-        "serde_json::from_str",
-        "serde_json::from_value",
-        "struct CommandEnvelope",
-        "struct SubscribePayload",
+fn conflux_uses_the_closed_market_contract() {
+    assert!(!crate_root().join("src/application/process").exists());
+    assert!(!crate_root().join("src/services/control").exists());
+    let actor = source("src/application/conflux.rs");
+    assert!(actor.contains("impl Contract for MarketApplication"));
+    assert!(actor.contains("ConfluxEvent::Rest(request)"));
+    assert!(actor.contains("MarketRestRequest"));
+    assert!(actor.contains("take_managed_source"));
+    assert!(!actor.contains("SourceActivator"));
+    let contract = source("contract/src/control/types.rs");
+    assert!(contract.contains("pub enum MarketRestRequest"));
+    assert!(contract.contains("pub enum MarketRestResponse"));
+    assert!(contract.contains("pub struct MarketCommandEnvelope"));
+}
+
+#[test]
+fn provider_connections_enter_market_through_named_conflux_collections() {
+    let installer = source("src/composition/sources/connections.rs");
+    let actor = source("src/application/conflux.rs");
+    for collection in [
+        "binance_spot_rest_connections",
+        "binance_spot_websocket_connections",
+        "binance_stocks_rest_connections",
+        "okx_public_rest_connections",
+        "okx_public_websocket_connections",
+        "hyperliquid_info_rest_connections",
+        "hyperliquid_websocket_connections",
+        "massive_stocks_websocket_connections",
+        "massive_options_websocket_connections",
+        "ibkr_market_data_connections",
     ] {
         assert!(
-            !process.contains(forbidden),
-            "Market process decodes control wire record: {forbidden}"
+            installer.contains(collection),
+            "installer misses {collection}"
+        );
+        assert!(
+            actor.contains(collection),
+            "Actor does not consume {collection}"
         );
     }
-    let wire = source("src/services/control/wire.rs");
-    assert!(wire.contains("struct CommandEnvelope"));
-    assert!(wire.contains("parse_subscribe_command"));
+    let driver = source("src/services/source/driver.rs");
+    assert!(!driver.contains("trait SourceActivator"));
 }
 
 #[test]
 fn publication_history_and_replay_implementations_have_final_owners() {
-    for file in ["fanout.rs", "queue.rs"] {
+    assert!(crate_root()
+        .join("src/services/publication/queue.rs")
+        .is_file());
+    assert!(!crate_root()
+        .join("src/services/publication/fanout.rs")
+        .exists());
+    for file in ["events.rs", "encoding.rs", "mmap.rs"] {
         assert!(crate_root()
-            .join(format!("src/services/publication/{file}"))
-            .is_file());
-    }
-    for file in ["views.rs", "events.rs", "encoding.rs", "mmap.rs"] {
-        assert!(crate_root()
-            .join(format!("src/composition/publication/{file}"))
+            .join(format!("src/services/publication/contract/{file}"))
             .is_file());
     }
     assert!(crate_root()
@@ -610,7 +592,7 @@ fn publication_history_and_replay_implementations_have_final_owners() {
         );
     }
 
-    let application = source("src/application/process/actor_task.rs");
+    let application = source("src/application/conflux.rs");
     let application = application
         .split("#[cfg(test)]")
         .next()
@@ -622,7 +604,7 @@ fn publication_history_and_replay_implementations_have_final_owners() {
 
 #[test]
 fn composition_uses_symmetric_launch_config_and_reference_modules() {
-    for file in ["mod.rs", "process.rs", "diagnostic.rs"] {
+    for file in ["mod.rs", "assembly.rs", "diagnostic.rs"] {
         assert!(crate_root()
             .join(format!("src/composition/launch/{file}"))
             .is_file());

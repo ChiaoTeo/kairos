@@ -7,7 +7,7 @@ mod sources;
 
 pub use dto::{MarketCollectionConfig, MarketConfig};
 pub use profile::{
-    MarketProcessRequest, MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile,
+    MarketHostRequest, MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile,
     MarketRuntimeScope,
 };
 pub use sources::{

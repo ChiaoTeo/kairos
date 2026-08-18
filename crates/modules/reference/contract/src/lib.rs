@@ -12,7 +12,11 @@ pub mod transport;
 
 pub use control::{
     ReferenceControlClient, ReferenceControlError, ReferenceControlRequest,
-    ReferenceControlResponse,
+    ReferenceControlResponse, ReferenceHealthResponse, ReferenceMutationResponse,
+    ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse, ReferenceProviderHealth,
+    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRestRequest,
+    ReferenceRestResponse, ReferenceSourceControlRequest, ReferenceSourceStatusResponse,
+    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
 };
 pub use encode::{event_metadata, EncodeContext, ReferenceEncoder};
 pub use error::{ContractError, ContractResult};

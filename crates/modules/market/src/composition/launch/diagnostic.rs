@@ -1,7 +1,13 @@
 //! Explicit one-shot diagnostic composition used only by `kairos-market-cli`.
 //! Production topology is selected exclusively from Workspace profiles.
 
-use kairos_integration::participants::binance::{self, ConnectionDomain};
+use kairos_integration::participants::binance::{
+    coinm::BinanceCoinMRestConnection,
+    options::BinanceOptionsRestConnection,
+    spot::{BinanceSpotRestConnection, BinanceSpotWebSocketConnection},
+    usdm::BinanceUsdMRestConnection,
+    BinanceRestConfig, BinanceWebSocketConfig,
+};
 
 use crate::MarketApplication;
 
@@ -23,7 +29,14 @@ pub fn attach_binance_spot_source(
             crate::ObservationKind::Bar,
             crate::ObservationKind::OrderBook,
         ],
-        binance::spot_websocket_market(endpoint).map_err(|error| error.to_string())?,
+        BinanceSpotWebSocketConnection::new(BinanceWebSocketConfig {
+            binding_id: "binance.public.websocket".into(),
+            environment: "public".into(),
+            endpoint: endpoint.into(),
+            credential: None,
+            event_capacity: 4_096,
+        })
+        .map_err(|error| error.to_string())?,
     )
 }
 
@@ -36,7 +49,13 @@ pub fn attach_binance_spot_rest_source(
         "binance.public.rest",
         "spot",
         "crypto",
-        binance::spot_snapshot(endpoint).map_err(|error| error.to_string())?,
+        BinanceSpotRestConnection::new(BinanceRestConfig {
+            binding_id: "binance.public.rest".into(),
+            environment: "public".into(),
+            endpoint: endpoint.into(),
+            credential: None,
+        })
+        .map_err(|error| error.to_string())?,
         std::time::Duration::from_secs(1),
     )
 }
@@ -45,34 +64,47 @@ pub fn attach_binance_derivatives_source(
     application: &mut MarketApplication,
     product: MarketProduct,
     endpoint: impl Into<String>,
-    path: impl Into<String>,
+    _path: impl Into<String>,
 ) -> Result<(), String> {
-    let (source_id, market_type, domain) = match product {
-        MarketProduct::UsdMFutures => (
-            "binance.public.rest.usd-m-futures",
-            "usd-m-futures",
-            ConnectionDomain::UsdMFutures,
-        ),
-        MarketProduct::CoinMFutures => (
-            "binance.public.rest.coin-m-futures",
-            "coin-m-futures",
-            ConnectionDomain::CoinMFutures,
-        ),
-        MarketProduct::Options => (
-            "binance.public.rest.options",
-            "options",
-            ConnectionDomain::Options,
-        ),
+    let (source_id, market_type) = match product {
+        MarketProduct::UsdMFutures => ("binance.public.rest.usd-m-futures", "usd-m-futures"),
+        MarketProduct::CoinMFutures => ("binance.public.rest.coin-m-futures", "coin-m-futures"),
+        MarketProduct::Options => ("binance.public.rest.options", "options"),
         _ => {
             return Err("Binance derivatives diagnostic requires futures or options product".into())
         }
     };
-    attach_binance_snapshot(
-        application,
-        source_id,
-        market_type,
-        "crypto",
-        binance::derivatives_snapshot(domain, endpoint, path).map_err(|error| error.to_string())?,
-        std::time::Duration::from_secs(1),
-    )
+    let config = BinanceRestConfig {
+        binding_id: source_id.into(),
+        environment: "public".into(),
+        endpoint: endpoint.into(),
+        credential: None,
+    };
+    match product {
+        MarketProduct::UsdMFutures => attach_binance_snapshot(
+            application,
+            source_id,
+            market_type,
+            "crypto",
+            BinanceUsdMRestConnection::new(config).map_err(|e| e.to_string())?,
+            std::time::Duration::from_secs(1),
+        ),
+        MarketProduct::CoinMFutures => attach_binance_snapshot(
+            application,
+            source_id,
+            market_type,
+            "crypto",
+            BinanceCoinMRestConnection::new(config).map_err(|e| e.to_string())?,
+            std::time::Duration::from_secs(1),
+        ),
+        MarketProduct::Options => attach_binance_snapshot(
+            application,
+            source_id,
+            market_type,
+            "crypto",
+            BinanceOptionsRestConnection::new(config).map_err(|e| e.to_string())?,
+            std::time::Duration::from_secs(1),
+        ),
+        _ => Err("Binance derivatives diagnostic requires futures or options product".into()),
+    }
 }

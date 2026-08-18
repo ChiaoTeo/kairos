@@ -2,13 +2,14 @@
 
 mod tests {
     use super::super::{ExecutionRoute, RoutedAsyncOrderEntry, RoutedAsyncOrderQuery};
-    use kairos_integration::application::{
-        AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
-        ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
+    use kairos_integration::{
+        CommandOutcome, ConnectionDescriptor, ExternalOrder, ExternalOrderQuery, IntegrationError,
+        OrderCommand, OrderQuery, ParticipantInstrumentTypeRef,
     };
-    use kairos_integration::application::{
+    use kairos_integration::{
         DecimalValue, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest, OrderEntryStatus,
-        OrderSide, OrderStatus, OrderType, ParticipantKind, ParticipantRef, ProviderInstrumentRef,
+        OrderSide, OrderStatus, OrderType, ParticipantInstrumentRef, ParticipantKind,
+        ParticipantRef,
     };
     use std::sync::{Arc, Mutex};
 
@@ -17,7 +18,7 @@ mod tests {
         calls: Arc<Mutex<Vec<&'static str>>>,
     }
 
-    impl AsyncOrderEntryConnection for RecordingEntry {
+    impl OrderCommand for RecordingEntry {
         async fn submit_order(
             &mut self,
             request: &OrderEntryRequest,
@@ -61,12 +62,12 @@ mod tests {
                 quantity: DecimalValue::new(1, 0),
                 filled_quantity: DecimalValue::new(0, 0),
                 average_fill_price: None,
-                occurred_at_unix_millis: None,
+                occurred_at_unix_nanos: None,
             }
         }
     }
 
-    impl AsyncOrderQueryConnection for FixtureQuery {
+    impl OrderQuery for FixtureQuery {
         async fn open_orders(
             &mut self,
             _query: &ExternalOrderQuery,
@@ -95,7 +96,7 @@ mod tests {
             participant: ParticipantRef::new(ParticipantKind::Exchange, participant).unwrap(),
             environment: "test".into(),
             principal_id: Some(binding_id.into()),
-            domain: kairos_integration::application::ConnectionDomainRef::new("spot").unwrap(),
+            domain: kairos_integration::ConnectionDomainRef::new("spot").unwrap(),
         }
     }
 
@@ -107,9 +108,9 @@ mod tests {
             segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
             instrument_id: kairos_primitives::InstrumentId::new("btc-usdt").unwrap(),
             market_id: None,
-            provider_instrument: ProviderInstrumentRef::new(
+            participant_instrument: ParticipantInstrumentRef::new(
                 ParticipantRef::new(ParticipantKind::Exchange, participant).unwrap(),
-                Some(kairos_integration::participants::binance::ConnectionDomain::Spot.into()),
+                Some(ParticipantInstrumentTypeRef::new(format!("{participant}-spot")).unwrap()),
                 "BTCUSDT",
             )
             .unwrap(),
@@ -127,7 +128,7 @@ mod tests {
         instrument_type: Option<&str>,
     ) -> OrderEntryRequest {
         let mut request = request(account, participant);
-        request.provider_instrument.instrument_type = instrument_type
+        request.participant_instrument.instrument_type = instrument_type
             .map(ParticipantInstrumentTypeRef::new)
             .transpose()
             .unwrap();
@@ -145,7 +146,7 @@ mod tests {
             route_id,
             kairos_primitives::AccountId::new(account_id).unwrap(),
             kairos_primitives::SegmentKey::new("spot").unwrap(),
-            Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
+            Some(ParticipantInstrumentTypeRef::new(format!("{participant}-spot")).unwrap()),
             descriptor(binding_id, participant),
             connection,
         )
@@ -297,7 +298,7 @@ mod tests {
 
         let one = router
             .order_detail(&ExternalOrderQuery {
-                binding_id: Some("execution.okx.hedge".into()),
+                instrument_type: None,
                 order_id: Some(kairos_primitives::OrderId::new("same-id").unwrap()),
                 ..ExternalOrderQuery::default()
             })

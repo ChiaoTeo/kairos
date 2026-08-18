@@ -6,12 +6,36 @@ fn source(path: &str) -> String {
 }
 
 #[test]
+fn reference_connections_enter_through_exact_conflux_collections() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let plan = std::fs::read_to_string(root.join("src/services/providers/plan.rs"))
+        .expect("read Reference provider plan");
+    for collection in [
+        "binance_spot_rest_connections",
+        "binance_usdm_rest_connections",
+        "binance_coinm_rest_connections",
+        "binance_options_rest_connections",
+        "binance_stocks_rest_connections",
+        "okx_public_rest_connections",
+        "hyperliquid_info_rest_connections",
+        "massive_rest_connections",
+    ] {
+        assert!(plan.contains(collection), "missing {collection}");
+    }
+    let actor =
+        std::fs::read_to_string(root.join("src/services/actor.rs")).expect("read Reference actor");
+    assert!(actor.contains("type ActorReferenceSource = ConfiguredReferenceSource"));
+    assert!(actor.contains("#[cfg(test)]\ntype ActorReferenceSource = Box<dyn ReferenceSource>"));
+    assert!(actor.contains("activate_sources"));
+}
+
+#[test]
 fn reference_provider_and_storage_paths_are_async_first() {
     let providers = [
-        "src/composition/providers/binance.rs",
-        "src/composition/providers/hyperliquid.rs",
-        "src/composition/providers/massive.rs",
-        "src/composition/providers/okx.rs",
+        "src/services/providers/binance.rs",
+        "src/services/providers/hyperliquid.rs",
+        "src/services/providers/massive.rs",
+        "src/services/providers/okx.rs",
     ]
     .into_iter()
     .map(source)
@@ -22,8 +46,8 @@ fn reference_provider_and_storage_paths_are_async_first() {
 
     let services = source("src/services/mod.rs");
     assert!(
-        !services.contains("mod providers"),
-        "concrete provider clients belong to composition"
+        services.contains("mod providers"),
+        "provider adapters are private Reference services"
     );
 
     let storage = source("src/services/sqlx_storage.rs");
@@ -35,9 +59,9 @@ fn reference_provider_and_storage_paths_are_async_first() {
 }
 
 #[test]
-fn concrete_providers_and_fan_in_remain_separate_composition_units() {
+fn concrete_provider_adapters_and_fan_in_remain_separate_service_units() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let providers = root.join("src/composition/providers");
+    let providers = root.join("src/services/providers");
     for unit in [
         "binance.rs",
         "fan_in.rs",
@@ -51,7 +75,7 @@ fn concrete_providers_and_fan_in_remain_separate_composition_units() {
             "missing provider unit: {unit}"
         );
     }
-    let module = source("src/composition/providers/mod.rs");
+    let module = source("src/services/providers/mod.rs");
     assert!(!module.contains("impl ReferenceSource for Binance"));
     assert!(!module.contains("impl ReferenceSource for Okx"));
     assert!(!module.contains("impl ReferenceSource for Hyperliquid"));
@@ -84,17 +108,20 @@ fn reference_domain_classification_is_not_unconstrained_text() {
 #[test]
 fn reference_rest_exposes_health_as_its_only_get_query() {
     let server = source("src/bin/kairos-reference-server.rs");
-    assert!(server.contains("method == \"GET\" && path != control::HEALTH"));
-    assert!(server
-        .contains("Reference business queries use the contract-owned read-only SQLite client"));
-    assert!(server.contains("path == control::HEALTH && method != \"GET\""));
-    let health = server
-        .split("fn health_json(application")
+    assert!(server.contains("if path == control::HEALTH"));
+    assert!(server.contains("Reference business queries use the contract-owned SQLite client"));
+    assert!(server.contains("method == \"GET\""));
+    assert!(server.contains("ConfluxEvent::Rest(request)"));
+    assert!(!server.contains("mpsc::channel"));
+    assert!(!server.contains("oneshot::channel"));
+    let contract = source("contract/src/control/types.rs");
+    let health = contract
+        .split("pub struct ReferenceHealthResponse")
         .nth(1)
-        .expect("Reference health functions")
-        .split("fn reference_status")
+        .expect("Reference health response")
+        .split("pub struct ReferenceProviderHealth")
         .next()
-        .expect("Reference health bodies");
+        .expect("Reference health response body");
     for forbidden in [
         "actor_id",
         "generation",
@@ -140,10 +167,16 @@ fn reference_uses_sqlite_as_its_only_current_fact_store() {
 #[test]
 fn administrative_writes_enter_through_application_commands() {
     let application = source("src/application/app.rs");
+    let commands = source("src/application/commands.rs");
+    let contract = source("contract/src/control/types.rs");
     let server = source("src/bin/kairos-reference-server.rs");
     assert!(application.contains("command: UpsertAssetCommand"));
     assert!(application.contains("command: UpsertInstrumentCommand"));
     assert!(application.contains("command: UpsertListingCommand"));
+    assert!(commands.contains("pub use kairos_reference_contract"));
+    assert!(contract.contains("pub struct UpsertAssetRequest"));
+    assert!(contract.contains("pub struct UpsertInstrumentRequest"));
+    assert!(contract.contains("pub struct UpsertListingRequest"));
     for domain_payload in [
         "from_str::<Asset>",
         "from_str::<Instrument>",
@@ -158,7 +191,7 @@ fn administrative_writes_enter_through_application_commands() {
 
 #[test]
 fn broker_and_data_provider_products_do_not_invent_canonical_venues() {
-    let binance = source("src/composition/providers/binance.rs");
+    let binance = source("src/services/providers/binance.rs");
     let equity_mapping = binance
         .split("pub(super) fn binance_equity_provider_catalog")
         .nth(1)
@@ -179,7 +212,7 @@ fn broker_and_data_provider_products_do_not_invent_canonical_venues() {
         );
     }
 
-    let massive = source("src/composition/providers/massive.rs");
+    let massive = source("src/services/providers/massive.rs");
     for forbidden in ["listing:massive", "market:massive"] {
         assert!(
             !massive.contains(forbidden),

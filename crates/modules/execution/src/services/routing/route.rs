@@ -10,7 +10,7 @@ pub(crate) struct ExecutionRoute<C> {
     /// Exact participant-owned product discriminator for this route. It is
     /// deliberately opaque to Execution: composition maps provider-native
     /// types into this value and routing only compares identity.
-    pub(crate) provider_instrument_type: Option<ParticipantInstrumentTypeRef>,
+    pub(crate) participant_instrument_type: Option<ParticipantInstrumentTypeRef>,
     pub(crate) descriptor: ConnectionDescriptor,
     pub(crate) connection: C,
 }
@@ -20,7 +20,7 @@ impl<C> ExecutionRoute<C> {
         route_id: impl Into<String>,
         account_id: AccountId,
         segment_key: SegmentKey,
-        provider_instrument_type: Option<ParticipantInstrumentTypeRef>,
+        participant_instrument_type: Option<ParticipantInstrumentTypeRef>,
         descriptor: ConnectionDescriptor,
         connection: C,
     ) -> Result<Self, String> {
@@ -33,7 +33,7 @@ impl<C> ExecutionRoute<C> {
             route_id,
             account_id,
             segment_key,
-            provider_instrument_type,
+            participant_instrument_type,
             descriptor,
             connection,
         })
@@ -42,7 +42,7 @@ impl<C> ExecutionRoute<C> {
     pub(super) fn matches_order(&self, request: &OrderEntryRequest) -> bool {
         self.account_id == request.account_id
             && self.segment_key == request.segment_key
-            && self.descriptor.participant == request.provider_instrument.participant
-            && self.provider_instrument_type == request.provider_instrument.instrument_type
+            && self.descriptor.participant == request.participant_instrument.participant
+            && self.participant_instrument_type == request.participant_instrument.instrument_type
     }
 }

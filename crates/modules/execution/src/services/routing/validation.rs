@@ -20,7 +20,7 @@ pub(super) fn validate_routes<C>(routes: &[ExecutionRoute<C>]) -> Result<(), Str
             if route.account_id == other.account_id
                 && route.segment_key == other.segment_key
                 && route.descriptor.participant == other.descriptor.participant
-                && route.provider_instrument_type == other.provider_instrument_type
+                && route.participant_instrument_type == other.participant_instrument_type
             {
                 return Err(format!(
                     "ambiguous Execution route for account={}, segment={}, participant={}",

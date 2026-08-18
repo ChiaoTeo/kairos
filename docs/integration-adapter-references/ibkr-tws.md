@@ -58,11 +58,11 @@ the execution socket.
 - Integration owns the TWS/Gateway socket, handshake, client-ID allocation,
   order-ID sequence, target-account binding, provider contracts and normalized
   external facts.
-- `IbkrConnection` represents the provider endpoint/environment and projects
-  an explicit principal/session binding.
-- The binding projects independent `AsyncOrderEntryConnection`,
-  `AsyncOrderQueryConnection` and `AsyncOrderEventSource` handles while sharing
-  one physical protocol session and order-ID allocator.
+- `IbkrAccountQueryConnection`, `IbkrAccountStreamConnection`, `IbkrOrderConnection`,
+  `IbkrExecutionStreamConnection`, and `IbkrMarketDataConnection` represent endpoint/client-ID
+  bindings. Concurrent roles use distinct client IDs and therefore distinct TCP sessions.
+- They directly implement their account, execution, or market capability traits. Each connection
+  keeps its library session and subscription objects private and publishes no capability handles.
 - Execution owns route ID, canonical instrument association, client order ID,
   durable order lifecycle and reconciliation.
 - SMART or another destination is an order-routing fact, not connection
@@ -81,17 +81,16 @@ header, LGPL-3.0 obligations and exact provenance here.
 
 ## Current implementation and remaining exit criteria
 
-The production Execution single-route path now uses `ibapi::Client` on the
-caller Tokio runtime. `IbkrConnection` projects entry, query and event handles
-from one shared client-id session. Session readiness validates the configured
-managed account, obtains `nextValidId`, scans the initial open-order set and
-sets the serialized allocator floor to the greater safe value. Normalized
+The Integration participant exposes account-query, account-stream, order, execution-stream, and
+market-data connections and no legacy
+`IbkrConnection`, `IbkrTwsConnection`, or `IbkrAsync*` public surface. Each owns one client-ID
+session on the caller Tokio runtime. Account-bound readiness validates the configured managed
+account. The order connection lazily obtains `nextValidId`, scans its open-order set, and sets the
+serialized allocator floor to the greater safe value before its first submit. Normalized
 query and stream facts use the canonical `ibkr:<order-id>` remote identity and
-carry the Integration binding ID. Direct CLI entry/query/event operations use
-bounded proxies backed by the same native async capabilities. The old blocking
-order and execution-stream adapters have been deleted. Account snapshot,
-open-order query and account-update stream now project from the same native
-async hard session; production Account no longer uses the blocking IBKR client.
+carry the Integration binding ID. The old blocking order and execution-stream adapters have been
+deleted. Query and stream consumers use separate client IDs so each long-running subscription has
+one mutable owner.
 
 Before composition, Execution acquires a workspace-owned `ExclusiveProcess`
 lease keyed by normalized TWS/Gateway host, port and client ID. The OS advisory
@@ -129,3 +128,21 @@ The execution slice is complete only when:
 6. ~~Execution production composition uses only the async IBKR projections~~; and
 7. ~~the migrated IBKR blocking execution path and per-command reconnect model
    are deleted~~.
+
+## Library/session topology audit (2026-08-17)
+
+- Current IBKR Campus documentation defines TWS API as a TCP socket protocol to an already
+  authenticated TWS or IB Gateway. `host + port + client_id` identifies one API connection, and a
+  TWS/Gateway supports up to 32 API client connections. Source:
+  <https://ibkrcampus.com/campus/ibkr-api-page/twsapi-doc/>.
+- One connection carries command/query messages, global notices and logical account/order/market
+  subscriptions. Disconnecting that client terminates its ongoing requests/subscriptions without
+  affecting other client IDs.
+- Local dependency inspection of `ibapi 3.3.0` confirms that its async `Client` owns connect,
+  `is_connected`, disconnect and typed subscription APIs. The third-party type remains private to
+  Integration.
+- The Kairos-owned transport types explicitly own connection, handshake/readiness and reconnect.
+  Trading additionally owns next-valid-order-ID allocation and global notices.
+- Account, order, and market-data traits are implemented directly by their concrete connections.
+  Library subscription objects remain private; composition must not duplicate any individual
+  `(host, port, client_id)` lifecycle and must allocate different IDs to concurrent roles.

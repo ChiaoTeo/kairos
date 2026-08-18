@@ -6,7 +6,6 @@ license = "MIT"
 
 [dependencies]
 kairos-primitives = { path = "../../primitives" }
-clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 reqwest = { workspace = true }
@@ -17,7 +16,6 @@ serde = { version = "1", features = ["derive"] }
 secrecy = { workspace = true }
 thiserror = "2"
 tracing = "0.1"
-kairos-network = { path = "../network" }
 hex = "0.4"
 hmac = "0.12"
 sha2 = "0.10"
@@ -25,13 +23,10 @@ url = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 futures-util = { version = "0.3", features = ["sink"] }
-ibapi = { version = "3.3", default-features = false, features = ["async", "sync"] }
-fs2 = "0.4"
-memmap2 = "0.9"
-
-[[bin]]
-name = "kairos-integration-cli"
-path = "src/bin/kairos-integration-cli.rs"
+ibapi = { version = "3.3", default-features = false, features = ["async"] }
+hyperliquid_rust_sdk = "0.6"
+ethers = { version = "2.0.14", default-features = false }
+uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
 tempfile = "3"

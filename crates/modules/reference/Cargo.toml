@@ -20,6 +20,7 @@ kairos-transport = { path = "../../platform/transport" }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 kairos-integration = { path = "../../platform/integration" }
+kairos-conflux = { path = "../../platform/conflux" }
 kairos-protocol = { path = "../../platform/protocol" }
 kairos-reference-contract = { path = "contract" }
 sqlx = { workspace = true }

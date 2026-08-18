@@ -1,9 +1,8 @@
 use clap::Parser;
 use kairos_execution::composition::{
-    compose_execution_process, ExecutionConnectionOptions, ExecutionProcessConfig,
-    ExecutionWriterFence,
+    build_execution_host, ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence,
 };
-use kairos_integration::application::credential::load_workspace_credential;
+use kairos_integration::composition::credentials::load_workspace_credential;
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
@@ -11,7 +10,7 @@ use serde::Deserialize;
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     kairos_workspace::logging::init("execution");
-    let result = run().await;
+    let result = tokio::task::LocalSet::new().run_until(run()).await;
     if let Err(error) = &result {
         tracing::error!(event = "process_failed", component = "execution", error = %error, "execution server failed");
     }
@@ -63,7 +62,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let reference_database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;
-    compose_execution_process(ExecutionProcessConfig {
+    build_execution_host(ExecutionHostConfig {
         actor_id: "execution".into(),
         route_options,
         writer_fences,

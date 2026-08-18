@@ -52,63 +52,6 @@ pub struct ExecutionInstrumentRoute {
     pub destination_market_id: Option<String>,
 }
 
-/// Business-owned capability composition for one configured execution route.
-/// Integration defines each connection/capability; Execution decides which
-/// capabilities belong to the route.
-pub struct ExecutionConnections {
-    pub descriptor: Option<ConnectionDescriptor>,
-    pub descriptors: Vec<ConnectionDescriptor>,
-    /// Explicit synchronous projection for CLI/offline callers and providers
-    /// whose native async slice has not migrated yet. Production live routes
-    /// with async capabilities leave this empty; the process installs its
-    /// bounded Actor proxy before accepting requests.
-    pub order_entry: Option<Box<dyn OrderEntryConnection>>,
-    pub order_query: Option<Box<dyn OrderQueryConnection>>,
-    pub execution_stream: Option<Box<dyn OrderEventSource>>,
-    pub async_order_entry: Option<ExecutionAsyncOrderEntryRoutes>,
-    pub async_order_query: Option<ExecutionAsyncOrderQueryRoutes>,
-    pub async_execution_streams: Vec<ExecutionAsyncRoute<ExecutionAsyncEventSource>>,
-}
-
-pub struct DirectExecutionConnections {
-    pub(super) order_entry: Option<Box<dyn OrderEntryConnection>>,
-    pub(super) order_query: Option<Box<dyn OrderQueryConnection>>,
-    pub(super) execution_stream: Option<Box<dyn OrderEventSource>>,
-    pub(super) runtime: DirectExecutionRuntime,
-}
-
-impl DirectExecutionConnections {
-    pub fn into_parts(
-        self,
-    ) -> (
-        Option<Box<dyn OrderEntryConnection>>,
-        Option<Box<dyn OrderQueryConnection>>,
-        Option<Box<dyn OrderEventSource>>,
-        DirectExecutionRuntime,
-    ) {
-        (
-            self.order_entry,
-            self.order_query,
-            self.execution_stream,
-            self.runtime,
-        )
-    }
-}
-
-pub struct DirectExecutionRuntime {
-    pub(super) shutdown: Option<tokio::sync::watch::Sender<bool>>,
-    pub(super) _tasks: Vec<tokio::task::JoinHandle<()>>,
-}
-
-impl DirectExecutionRuntime {
-    pub(super) fn none() -> Self {
-        Self {
-            shutdown: None,
-            _tasks: Vec::new(),
-        }
-    }
-}
-
 /// Resolve Execution-owned route candidates from configured connections and
 /// canonical Reference identity. Provider product and symbol remain owned by
 /// the configured Execution route; Reference never supplies broker coverage.
@@ -118,7 +61,7 @@ pub fn load_execution_routes_from_reference_markets(
 ) -> Result<
     Vec<(
         crate::application::ExecutionRouteCandidate,
-        ProviderInstrumentRef,
+        ParticipantInstrumentRef,
     )>,
     String,
 > {
@@ -188,7 +131,7 @@ pub fn load_execution_routes_from_reference_markets(
                 .venue_symbol
                 .as_deref()
                 .expect("filtered venue symbol");
-            let provider_instrument = provider_instrument_for_route(
+            let participant_instrument = participant_instrument_for_route(
                 &configured.participant_id,
                 &configured.product,
                 provider_symbol,
@@ -234,7 +177,7 @@ pub fn load_execution_routes_from_reference_markets(
                     ),
                     ready: true,
                 },
-                provider_instrument,
+                participant_instrument,
             ));
         }
     }
@@ -249,11 +192,11 @@ pub(super) fn candidate_for_address(
 ) -> Result<
     (
         crate::application::ExecutionRouteCandidate,
-        ProviderInstrumentRef,
+        ParticipantInstrumentRef,
     ),
     String,
 > {
-    let provider_instrument = provider_instrument_for_route(
+    let participant_instrument = participant_instrument_for_route(
         &configured.participant_id,
         &configured.product,
         provider_symbol,
@@ -297,7 +240,7 @@ pub(super) fn candidate_for_address(
             ),
             ready: true,
         },
-        provider_instrument,
+        participant_instrument,
     ))
 }
 
@@ -346,11 +289,11 @@ fn supported_order_options(participant_id: &str, product: &str) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
-pub(super) fn provider_instrument_for_route(
+pub(super) fn participant_instrument_for_route(
     provider_id: &str,
     provider_product: &str,
     provider_symbol: &str,
-) -> Result<ProviderInstrumentRef, String> {
+) -> Result<ParticipantInstrumentRef, String> {
     let participant_kind = match (provider_id, provider_product) {
         ("binance", "equity") => ParticipantKind::Broker,
         ("binance" | "okx" | "hyperliquid", _) => ParticipantKind::Exchange,
@@ -361,7 +304,7 @@ pub(super) fn provider_instrument_for_route(
             ))
         }
     };
-    ProviderInstrumentRef::new(
+    ParticipantInstrumentRef::new(
         ParticipantRef::new(participant_kind, provider_id).map_err(|error| error.to_string())?,
         Some(
             ParticipantInstrumentTypeRef::new(provider_product)
@@ -370,12 +313,4 @@ pub(super) fn provider_instrument_for_route(
         provider_symbol,
     )
     .map_err(|error| error.to_string())
-}
-
-impl Drop for DirectExecutionRuntime {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(true);
-        }
-    }
 }

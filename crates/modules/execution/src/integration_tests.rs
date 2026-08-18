@@ -1,6 +1,6 @@
 //! White-box behavior tests for dependency failure, recovery, and persistence.
 //!
-//! These tests intentionally exercise private process wiring. Keeping them in
+//! These tests intentionally exercise private application wiring. Keeping them in
 //! the crate avoids turning test doubles into a public Application API.
 
 use kairos_execution::application::RiskCommandFailure;
@@ -15,28 +15,24 @@ use kairos_execution::composition::{
     SimulatedRiskBehavior, SimulatedRiskReconciliation, SimulationConfig, SimulationOrderRequest,
     SimulationOrderStatus, SqlxExecutionStore,
 };
-use kairos_execution::ExecutionProcess;
 use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     OrderSide, OrderType, UnknownRemoteOrderResolution,
 };
 use kairos_execution::{MarketObservation, Quote};
-use kairos_integration::application::{
-    CommandOutcome, ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder,
-    ExternalOrderQuery, IndeterminateCommand, IntegrationError,
+use kairos_integration::blocking::{OrderCommand, OrderQuery};
+use kairos_integration::{
+    CommandOutcome, ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError,
 };
-use kairos_integration::application::{
-    ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState, OrderEntryEvent,
-    OrderEntryRequest, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
-    ProviderInstrumentRef,
+use kairos_integration::{
+    OrderEntryEvent, OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef,
+    ParticipantKind, ParticipantRef,
 };
-use kairos_integration::blocking::{OrderEntryConnection, OrderEventSource, OrderQueryConnection};
 use kairos_primitives::{
     AccountId, ClientOrderId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId,
     MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
 };
 use kairos_primitives::{Money, Price};
-use kairos_workspace::control::RestControlClient;
 
 fn fill_report(
     fill_id: impl Into<String>,
@@ -180,7 +176,7 @@ impl FailingOrderEntry {
     }
 }
 
-impl OrderEntryConnection for FailingOrderEntry {
+impl OrderCommand for FailingOrderEntry {
     fn submit_order(
         &mut self,
         _request: &OrderEntryRequest,
@@ -272,7 +268,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
             ],
             ready: true,
         },
-        ProviderInstrumentRef::new(
+        ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             "BTCUSDT",
@@ -310,7 +306,7 @@ fn configure_test_access(application: &mut ExecutionApplication) {
             ],
             ready: true,
         },
-        ProviderInstrumentRef::new(
+        ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             "BTCUSDT",
@@ -337,7 +333,7 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             supported_options: Vec::new(),
             ready: true,
         },
-        ProviderInstrumentRef::new(
+        ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             "BTCUSDT",
@@ -381,7 +377,7 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             supported_options: Vec::new(),
             ready: true,
         },
-        ProviderInstrumentRef::new(
+        ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("spot").unwrap()),
             "BTCUSDT",
@@ -501,84 +497,6 @@ fn recovery_risk(
     }
 }
 
-struct OneExecutionEvent {
-    event: Option<ExternalExecutionEvent>,
-    state: ConnectionState,
-}
-
-impl OneExecutionEvent {
-    fn new(event: RemoteOrderUpdate) -> Self {
-        let identity = ConnectionDescriptor::new(
-            "execution.fixture.stream",
-            ParticipantRef::new(ParticipantKind::Exchange, "fixture").unwrap(),
-            "execution-stream",
-        )
-        .unwrap();
-        Self {
-            event: Some(ExternalExecutionEvent {
-                order_id: event.order_id,
-                symbol: event.symbol,
-                status: event.status.into(),
-                side: None,
-                order_type: None,
-                quantity: None,
-                limit_price: None,
-                filled_quantity: None,
-                remaining_quantity: None,
-                fill_quantity: event.fill_quantity.map(|value| decimal(&value.to_string())),
-                fill_price: event.fill_price.map(|value| decimal(&value.to_string())),
-                execution_id: event.execution_id,
-                fee_currency: event.fee_currency,
-                fee_amount: event.fee_amount.map(|value| decimal(&value.to_string())),
-                occurred_at_unix_nanos: event.occurred_at_unix_nanos,
-                reason: event.reason,
-            }),
-            state: ConnectionState::new(identity),
-        }
-    }
-}
-
-impl OrderEventSource for OneExecutionEvent {
-    fn connect_channel(&mut self) -> Result<(), IntegrationError> {
-        self.state.lifecycle = ConnectionLifecycle::Ready;
-        Ok(())
-    }
-
-    fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        self.state.lifecycle = ConnectionLifecycle::Stopped;
-        Ok(())
-    }
-
-    fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        self.connect_channel()
-    }
-
-    fn channel_health(&self) -> ConnectionHealth {
-        ConnectionHealth {
-            lifecycle: self.state.lifecycle,
-            healthy: self.state.lifecycle == ConnectionLifecycle::Ready,
-            authenticated: true,
-            last_error: None,
-        }
-    }
-
-    fn try_next_order_event(
-        &mut self,
-    ) -> Result<Option<ExternalEventEnvelope<ExternalExecutionEvent>>, IntegrationError> {
-        Ok(self.event.take().map(|event| ExternalEventEnvelope {
-            participant: self.state.identity.participant.clone(),
-            binding_id: self.state.identity.binding_id.clone(),
-            channel_id: "execution.fixture.stream.orders".into(),
-            channel_epoch: 1,
-            provider_event_id: event.execution_id.as_ref().map(ToString::to_string),
-            provider_sequence: None,
-            observed_at_unix_nanos: event.occurred_at_unix_nanos,
-            received_at_unix_nanos: event.occurred_at_unix_nanos,
-            payload: event,
-        }))
-    }
-}
-
 struct RecoveryOrderQuery {
     orders: Vec<ExternalOrder>,
 }
@@ -589,7 +507,7 @@ impl RecoveryOrderQuery {
     }
 }
 
-impl OrderQueryConnection for RecoveryOrderQuery {
+impl OrderQuery for RecoveryOrderQuery {
     fn open_orders(
         &mut self,
         _: &ExternalOrderQuery,
@@ -614,9 +532,9 @@ impl OrderQueryConnection for RecoveryOrderQuery {
     }
 }
 
-fn decimal(value: &str) -> kairos_integration::application::DecimalValue {
+fn decimal(value: &str) -> kairos_integration::DecimalValue {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    kairos_integration::application::DecimalValue {
+    kairos_integration::DecimalValue {
         mantissa: format!("{whole}{fraction}").parse().unwrap(),
         scale: fraction.len() as u8,
     }
@@ -651,7 +569,7 @@ fn money(value: &str) -> kairos_primitives::Money {
 }
 
 #[test]
-fn execution_stream_consumption_reconciles_a_remote_fill() {
+fn normalized_remote_execution_event_reconciles_a_fill() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("execution.json");
     let connection = compose_order_entry(&ExecutionConnectionOptions {
@@ -682,22 +600,10 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         client_id: 0,
     })
     .unwrap();
-    let mut app = ExecutionApplication::assemble_for_test_with_query_and_stream(
+    let mut app = ExecutionApplication::assemble_for_test_with_query(
         "execution",
         Some(connection),
         None,
-        Some(Box::new(OneExecutionEvent::new(RemoteOrderUpdate {
-            order_id: order_id("local-1"),
-            symbol: symbol("BTCUSDT"),
-            status: ExecutionOrderStatus::Filled,
-            fill_quantity: Some(quantity("1")),
-            fill_price: Some(price("100")),
-            execution_id: Some(fill_id("exec-1")),
-            fee_currency: None,
-            fee_amount: None,
-            occurred_at_unix_nanos: 42.into(),
-            reason: String::new(),
-        }))),
         Some(Box::new(FileExecutionStore::new(&state))),
     )
     .unwrap();
@@ -714,7 +620,20 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         None,
     ))
     .unwrap();
-    let (_, order) = app.consume_remote_execution_event().unwrap().unwrap();
+    let order = app
+        .apply_remote_execution_event(RemoteOrderUpdate {
+            order_id: order_id("local-1"),
+            symbol: symbol("BTCUSDT"),
+            status: ExecutionOrderStatus::Filled,
+            fill_quantity: Some(quantity("1")),
+            fill_price: Some(price("100")),
+            execution_id: Some(fill_id("exec-1")),
+            fee_currency: None,
+            fee_amount: None,
+            occurred_at_unix_nanos: 42.into(),
+            reason: String::new(),
+        })
+        .unwrap();
     assert_eq!(order.status, ExecutionOrderStatus::Filled);
     assert_eq!(app.snapshot().fills.len(), 1);
 }
@@ -728,13 +647,13 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
         order_id: OrderId::new("exchange-unknown-1").unwrap(),
         client_order_id: None,
         symbol: Symbol::new("BTCUSDT").unwrap(),
-        side: kairos_integration::application::OrderSide::Buy,
-        order_type: kairos_integration::application::OrderType::Limit,
+        side: kairos_integration::OrderSide::Buy,
+        order_type: kairos_integration::OrderType::Limit,
         status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
-        occurred_at_unix_millis: Some(UnixNanos::from(42_000_000)),
+        occurred_at_unix_nanos: Some(UnixNanos::from(42_000_000)),
     };
     let mut app = ExecutionApplication::assemble_for_test_with_query(
         "execution",
@@ -762,13 +681,13 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         order_id: OrderId::new("exchange-recovered-fill").unwrap(),
         client_order_id: Some(ClientOrderId::new("local-recovered-fill").unwrap()),
         symbol: Symbol::new("BTCUSDT").unwrap(),
-        side: kairos_integration::application::OrderSide::Buy,
-        order_type: kairos_integration::application::OrderType::Limit,
+        side: kairos_integration::OrderSide::Buy,
+        order_type: kairos_integration::OrderType::Limit,
         status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
-        occurred_at_unix_millis: Some(UnixNanos::from(42_000_000)),
+        occurred_at_unix_nanos: Some(UnixNanos::from(42_000_000)),
     };
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
@@ -942,9 +861,8 @@ fn unknown_remote_order_can_be_linked_to_local_order_for_recovery() {
 fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
-    let mut app = ExecutionApplication::assemble_for_test_with_query_and_stream(
+    let mut app = ExecutionApplication::assemble_for_test_with_query(
         "execution",
-        None,
         None,
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -972,9 +890,8 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
         UnknownRemoteOrderResolution::Pending
     );
 
-    let restored = ExecutionApplication::assemble_for_test_with_query_and_stream(
+    let restored = ExecutionApplication::assemble_for_test_with_query(
         "execution",
-        None,
         None,
         None,
         Some(Box::new(FileExecutionStore::new(&path))),
@@ -985,131 +902,6 @@ fn unknown_remote_order_is_persisted_and_restored_for_reconciliation() {
         restored.unknown_remote_orders()[0].remote_order_id,
         "remote-unknown-1"
     );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn execution_server_control_round_trip_uses_same_application_path() {
-    let directory = tempfile::tempdir().unwrap();
-    let socket = directory.path().join("execution.sock");
-    let state = directory.path().join("execution.json");
-    let process = ExecutionProcess::new(application(&state), &socket);
-    let task = tokio::spawn(async move { process.run().await.unwrap() });
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    let client = RestControlClient::new(&socket);
-    assert_eq!(client.health().await.unwrap()["status"], "ready");
-    let submit = serde_json::to_vec(&serde_json::json!({
-        "command_id": "server-command",
-        "idempotency_key": "server-intent",
-        "intent": {
-            "intent_id": "server-intent",
-            "strategy_id": "strategy",
-            "launch_id": "launch",
-            "instance_id": "instance",
-            "intent_type": "SingleOrder",
-            "completion_policy": "AllLegsSatisfied",
-            "failure_policy": "CancelRemaining",
-            "legs": [{
-                "leg_id": "server-leg",
-                "account_id": "main",
-                "segment_key": "spot",
-                "instrument_id": "BTCUSDT",
-                "market_id": "BTCUSDT",
-                "execution_route_id": "execution-route:test",
-                "side": "buy",
-                "quantity": "1",
-                "quantity_semantics": "order_quantity",
-                "options": {}
-            }]
-        }
-    }))
-    .unwrap();
-    let response = client
-        .request_json("POST", "/v1/intents", Some(&submit))
-        .await
-        .unwrap();
-    assert_eq!(response["intent_id"], "server-intent");
-    client.request_json("POST", "/v1/stop", None).await.unwrap();
-    task.await.unwrap();
-    let restored = application(&state);
-    assert_eq!(restored.orders(Some("main")).len(), 1);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn simulated_execution_server_fills_from_market_observation() {
-    let directory = tempfile::tempdir().unwrap();
-    let socket = directory.path().join("execution.sock");
-    let state = directory.path().join("execution.json");
-    let process = ExecutionProcess::new(application(&state), &socket).with_simulator(
-        kairos_execution::composition::ExecutionSimulator::new(SimulationConfig::default())
-            .unwrap(),
-    );
-    let task = tokio::spawn(async move { process.run().await.unwrap() });
-    for _ in 0..50 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    let client = RestControlClient::new(&socket);
-    let submit = serde_json::to_vec(&serde_json::json!({
-        "command_id": "simulated-command",
-        "idempotency_key": "simulated-intent",
-        "intent": {
-            "intent_id": "simulated-intent",
-            "strategy_id": "strategy",
-            "launch_id": "launch",
-            "instance_id": "instance",
-            "intent_type": "SingleOrder",
-            "completion_policy": "AllLegsSatisfied",
-            "failure_policy": "CancelRemaining",
-            "legs": [{
-                "leg_id": "simulated-leg",
-                "account_id": "main",
-                "segment_key": "spot",
-                "instrument_id": "BTCUSDT",
-                "market_id": "binance:spot",
-                "execution_route_id": "execution-route:test",
-                "side": "buy",
-                "quantity": "2",
-                "quantity_semantics": "order_quantity",
-                "options": {}
-            }]
-        }
-    }))
-    .unwrap();
-    client
-        .request_json("POST", "/v1/intents", Some(&submit))
-        .await
-        .unwrap();
-    let market = serde_json::to_vec(&MarketObservation::Quote(Quote {
-        scope: crate::application::ObservationScope::Market {
-            market_id: "binance:spot".into(),
-        },
-        instrument_id: "BTCUSDT".into(),
-        bid_price: Some("99".into()),
-        bid_quantity: Some("10".into()),
-        ask_price: Some("100".into()),
-        ask_quantity: Some("2".into()),
-        observed_at_unix_nanos: 42,
-        source_id: "replay".into(),
-    }))
-    .unwrap();
-    let response = client
-        .request_json("POST", "/v1/backtest/market", Some(&market))
-        .await
-        .unwrap();
-    assert_eq!(response["fills"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        response["fills"][0]["order_id"].as_str(),
-        Some("simulated-intent:order:simulated-leg")
-    );
-    client.request_json("POST", "/v1/stop", None).await.unwrap();
-    task.await.unwrap();
 }
 
 #[test]
@@ -2490,7 +2282,7 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             supported_options: Vec::new(),
             ready: true,
         },
-        ProviderInstrumentRef::new(
+        ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Broker, "broker").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("smart").unwrap()),
             "BTC",

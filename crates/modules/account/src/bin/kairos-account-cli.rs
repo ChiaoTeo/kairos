@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_account::application::RefreshAccount;
 use kairos_account::composition::account::{
     compose_binance_async_account_application, compose_ibkr_async_account_application,
     compose_local_account_application_for_segments, compose_okx_async_account_application,
@@ -11,9 +10,13 @@ use kairos_account::composition::account::{
 use kairos_account::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
-use kairos_account::domain::{AccountFill, AccountId, AccountModel};
-use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
-use kairos_integration::application::ExternalAccountCredentialProfile;
+use kairos_account::domain::{AccountFill, AccountModel};
+use kairos_account_contract::{
+    AccountRestRequest, AccountRestResponse, DecimalValue, SimulatedSettlement,
+};
+use kairos_conflux::{Conflux, ConfluxConfig, ConfluxEvent, ShutdownMode};
+use kairos_integration::composition::credentials::{CredentialRecord, CredentialStore};
+use kairos_integration::ExternalAccountCredentialProfile;
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
 use kairos_transport::SharedSnapshotReader;
 use kairos_workspace::cli::{render, OutputFormat};
@@ -263,7 +266,7 @@ enum Command {
         account_id: Option<String>,
     },
     Connect,
-    #[command(name = "current", alias = "snapshot")]
+    #[command(name = "snapshot", alias = "current")]
     Snapshot {
         #[arg(long)]
         symbol: Option<String>,
@@ -396,6 +399,39 @@ impl FillArgs {
                 .transpose()
                 .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
             occurred_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
+        })
+    }
+
+    fn to_contract(&self) -> Result<SimulatedSettlement, String> {
+        let fill = self.to_domain()?;
+        Ok(SimulatedSettlement {
+            fill_id: fill.fill_id.to_string(),
+            order_id: fill.order_id.map(|value| value.to_string()),
+            segment_key: fill.segment_key.to_string(),
+            instrument_id: fill.instrument_id.to_string(),
+            quantity: DecimalValue {
+                mantissa: fill.quantity.mantissa(),
+                scale: fill.quantity.scale(),
+            },
+            price: DecimalValue {
+                mantissa: fill.price.mantissa(),
+                scale: fill.price.scale(),
+            },
+            side: match fill.side {
+                kairos_account::domain::OrderSide::Buy => "buy".into(),
+                kairos_account::domain::OrderSide::Sell => "sell".into(),
+            },
+            settlement_asset: fill.settlement_asset.map(|value| value.to_string()),
+            settlement_delta: fill.settlement_delta.map(|value| DecimalValue {
+                mantissa: value.mantissa(),
+                scale: value.scale(),
+            }),
+            fee_asset: fill.fee_asset.map(|value| value.to_string()),
+            fee_amount: fill.fee_amount.map(|value| DecimalValue {
+                mantissa: value.mantissa(),
+                scale: value.scale(),
+            }),
+            occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
         })
     }
 }
@@ -980,7 +1016,6 @@ async fn run_direct(
         })
         .ok_or("--account-id is required for a direct account command")?;
     let account_id = resolve_account_id(&registry, &account_id)?;
-    let account_id_type = AccountId::new(account_id.clone())?;
     let account_record = registry
         .accounts
         .iter()
@@ -1145,7 +1180,7 @@ async fn run_direct(
         .state_root()
         .join("integration")
         .join("provider-quota.mmap");
-    let mut composition = if native_binance_account {
+    let composition = if native_binance_account {
         compose_binance_async_account_application(
             &options,
             &configured_segments,
@@ -1168,25 +1203,48 @@ async fn run_direct(
     } else {
         compose_local_account_application_for_segments(&options, &configured_segments, Some(state))?
     };
-    let request = RefreshAccount {
-        account_id: account_id_type.clone(),
-        segments: Vec::new(),
-    };
-    let _refresh_report = if native_binance_account || native_okx_account || native_ibkr_account {
-        composition
-            .application
-            .refresh_report_async(request)
-            .await?
-    } else {
-        composition.application.refresh_report(request)?
-    };
-    if let Command::Fill { fill } = &command {
+    let settlement = if let Command::Fill { fill } = &command {
         if !paper {
             return Err("simulated fill is available only for paper/simulated Account".into());
         }
-        composition
-            .application
-            .apply_simulated_fill(fill.to_domain()?)?;
+        Some(fill.to_contract()?)
+    } else {
+        None
+    };
+    let (application, system) = composition.into_conflux(std::time::Duration::from_secs(30))?;
+    let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default())?;
+    let commands = async move {
+        let ready = handle
+            .handle(ConfluxEvent::Rest(AccountRestRequest::Health))
+            .await
+            .map_err(|_| "Account Conflux stopped during startup".to_string())?;
+        match ready {
+            Some(AccountRestResponse::Health(Ok(_))) => {}
+            Some(AccountRestResponse::Health(Err(error))) => return Err(error.message),
+            _ => return Err("Account Actor omitted its health response".into()),
+        }
+        if let Some(settlement) = settlement {
+            let response = handle
+                .handle(ConfluxEvent::Rest(
+                    AccountRestRequest::ApplySimulatedSettlement(settlement),
+                ))
+                .await
+                .map_err(|_| "Account Conflux stopped during settlement".to_string())?;
+            match response {
+                Some(AccountRestResponse::ApplySimulatedSettlement(Ok(_))) => {}
+                Some(AccountRestResponse::ApplySimulatedSettlement(Err(error))) => {
+                    return Err(error.message)
+                }
+                _ => return Err("Account Actor omitted its settlement response".into()),
+            }
+        }
+        handle.shutdown(ShutdownMode::Drain);
+        Ok::<(), String>(())
+    };
+    let (outcome, commands) = tokio::join!(conflux.run(), commands);
+    commands?;
+    outcome.map_err(|error| error.to_string())?;
+    if matches!(&command, Command::Fill { .. }) {
         print_json(serde_json::json!({
             "status": "accepted",
         }));

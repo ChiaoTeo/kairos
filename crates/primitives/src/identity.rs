@@ -124,6 +124,7 @@ text_type!(ListingId);
 text_type!(ExecutionRouteId);
 // Provider-owned symbol. It is valid only at an integration boundary.
 text_type!(ProviderSymbol);
+text_type!(ParticipantSymbol);
 // Stable provider identity shared by Reference access records and composition.
 text_type!(ProviderId);
 // Account-owned broker/custodian identity. Deliberately distinct from an

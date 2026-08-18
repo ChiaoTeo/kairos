@@ -30,21 +30,19 @@ adopted.
 | Provider fact | Kairos owner |
 |---|---|
 | REST endpoint, HMAC signing, API-key header | Integration Futures client |
-| Principal credentials and product connection | `BinanceUsdMConnection` / `BinanceFuturesPrincipalConnection` |
-| Submit/cancel delivery certainty | `BinanceFuturesOrderEntry` / `CommandOutcome` |
-| Open/history/detail query | `BinanceFuturesOrderQuery` |
-| Listen key, keepalive, bounded WebSocket queue | `BinanceFuturesOrderEvents` |
+| Product REST connection | `BinanceUsdMRestConnection` / `BinanceCoinMRestConnection` |
+| Submit/cancel delivery certainty | direct `OrderCommand` / `CommandOutcome` |
+| Open/history/detail query | direct `OrderQuery` |
+| Listen key, keepalive, bounded WebSocket queue | family-specific `UserWebSocketConnection` |
 | `ORDER_TRADE_UPDATE` normalization | Integration external execution facts |
 | Route/account/product selection and recovery target | Execution composition and Actor |
 | Canonical business order state | Execution Actor |
 
 ## Implemented behavior
 
-- Production Execution projects native async USDⓈ-M and COIN-M entry, query, and event
-  capabilities; it does not construct the blocking compatibility facade.
-- Futures projections reuse the principal's provider HTTP worker and shared
-  egress quota lane; product-specific clients no longer bypass process or
-  cross-process Binance request-weight allocation.
+- USDⓈ-M and COIN-M REST connections directly implement catalog, market, account, order command,
+  and order query capabilities. Their market WebSocket, user WebSocket, and request/response
+  WebSocket API connections remain separate real transports.
 - Submit and cancel run once with a 10-second deadline. Transport, 5xx, 408,
   409, 425, 429, response loss, and deadline expiry are `Indeterminate`, never
   transparently retried.
@@ -61,10 +59,7 @@ adopted.
 - Stop and stop-limit submission is explicitly unsupported until the public
   business request carries a trigger price; it is not silently downgraded to
   MARKET/LIMIT.
-- Account projects USD-M balance/position snapshots and the authenticated
-  private event stream through one segment-scoped bootstrap barrier. Spot or
-  USD-M reconnect/resync does not stop the other segment, and Funding remains
-  an explicit snapshot-only segment rather than a fabricated private stream.
+- Business-module composition and bootstrap-barrier migration is deliberately deferred.
 
 ## Remaining exit criteria
 
@@ -77,3 +72,33 @@ adopted.
   an explicitly supplied test account.
 - Validate COIN-M contract quantity and delivery-contract cases against the
   provider testnet; its business route/product remains distinct from USDⓈ-M.
+
+## Connection topology audit (2026-08-17)
+
+- The official USD-M user-data API creates one listen key whose stream carries the account,
+  position, order and trade update inventory for that API family. The listen key currently expires
+  after 60 minutes without keepalive. Sources:
+  <https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Keepalive-User-Data-Stream>,
+  <https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Balance-and-Position-Update>,
+  and
+  <https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Order-Update>.
+- Account-event and order-event parsers therefore do not imply two provider-required sockets. The
+  target is one `BinanceUsdMUserDataStreamConnection` per process/account/fault-domain with
+  normalized fact demultiplexing through target `AccountStream` and `ExecutionStream`; no
+  Futures-specific duplicate capability trait or subscription enum is introduced.
+- COIN-M remains a different API family and concrete connection even where its event vocabulary is
+  similar; no shared hidden `ConnectionDomain` should select the endpoint family.
+
+The official catalog also distinguishes REST, WebSocket API, and WebSocket
+market streams for both USD-M and COIN-M. The target topology therefore keeps
+`*RestConnection`, `*WebSocketApiConnection`, `*WebSocketConnection`,
+and listen-key `*UserWebSocketConnection` separate where those official
+interfaces exist. Common P0/P1 coverage includes market/reference data,
+account/balance/position, order/cancel/query/modify/batch, leverage and margin
+configuration, funding/income, and account/order user-data events.
+
+Official sources:
+
+- <https://developers.binance.com/en/docs/catalog>
+- <https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures>
+- <https://developers.binance.com/en/docs/products/derivatives-trading-coin-futures>

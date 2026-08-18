@@ -1,10 +1,9 @@
 //! Closed, typed, single-writer runtime for long-running Kairos modules.
 //!
-//! A Conflux process exposes exactly one owning [`Contract`] and receives one
-//! closed ingress type. System composition supplies the complete statically
-//! typed client and connection universe; Actors create and use named instances
-//! from that universe on demand. The runtime contains no open resource catalog
-//! and no erased dispatch path.
+//! A Conflux process exposes exactly one owning [`Contract`] and receives every
+//! source through one closed [`ConfluxEvent`] enum. [`ConfluxSystem`] contains
+//! the complete concrete client and connection universe. The runtime contains
+//! no open resource catalog and no erased dispatch path.
 
 mod actor;
 mod context;
@@ -18,13 +17,13 @@ mod system;
 pub use actor::ConfluxActor;
 pub use context::Context;
 pub use contract::{Contract, RestContract, RestRequestOf, RestResponseOf};
-pub use event::{ConfluxEvent, IntegrationEvent};
+pub use event::{ConfluxEvent, ContractEvent, IntegrationEvent, SystemEvent};
 pub use lifecycle::{ProcessPhase, ShutdownMode};
 pub use process::{
-    BuildError, Conflux, ConfluxHandle, ConfluxOutcome, HandleError, RunError, RuntimeConfig,
+    BuildError, Conflux, ConfluxConfig, ConfluxHandle, ConfluxOutcome, HandleError, RunError,
 };
 pub use resource::{
     EnsureDisposition, ManagedClient, ManagedClients, ManagedConnection, ManagedConnections,
-    ResourceError, ResourceState,
+    ManagedResource, NamedResources, ResourceError, ResourceState,
 };
 pub use system::ConfluxSystem;

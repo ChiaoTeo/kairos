@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RiskControlResponse {
     pub status: Option<String>,
     pub command_id: Option<String>,
@@ -10,7 +10,7 @@ pub struct RiskControlResponse {
     #[serde(flatten)]
     pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RiskControlError {
     pub code: String,
     pub message: String,
@@ -87,7 +87,9 @@ impl<'de> Deserialize<'de> for Amount {
 
 #[cfg(test)]
 mod amount_tests {
-    use super::Amount;
+    use super::{
+        AdvanceRiskTimeRequest, Amount, ConsumeReservationRequest, ResizeReservationRequest,
+    };
 
     #[test]
     fn json_amount_is_a_decimal_string_only() {
@@ -95,6 +97,46 @@ mod amount_tests {
         assert_eq!((amount.mantissa, amount.scale), (-1_250, 2));
         assert_eq!(serde_json::to_string(&amount).unwrap(), "\"-12.50\"");
         assert!(serde_json::from_str::<Amount>(r#"{"mantissa":-1250,"scale":2}"#).is_err());
+    }
+
+    #[test]
+    fn mutation_controls_have_typed_contract_shapes() {
+        let resize = ResizeReservationRequest {
+            reservation_id: "reservation-1".into(),
+            amount: Amount {
+                mantissa: 125,
+                scale: 2,
+            },
+            at_unix_nanos: 10,
+        };
+        assert_eq!(
+            serde_json::to_value(resize).unwrap(),
+            serde_json::json!({
+                "reservation_id": "reservation-1",
+                "amount": "1.25",
+                "at_unix_nanos": 10
+            })
+        );
+
+        let consume = ConsumeReservationRequest {
+            reservation_id: "reservation-1".into(),
+            at_unix_nanos: 11,
+        };
+        assert_eq!(
+            serde_json::to_value(consume).unwrap(),
+            serde_json::json!({
+                "reservation_id": "reservation-1",
+                "at_unix_nanos": 11
+            })
+        );
+
+        assert_eq!(
+            serde_json::to_value(AdvanceRiskTimeRequest {
+                event_time_unix_nanos: 12
+            })
+            .unwrap(),
+            serde_json::json!({"event_time_unix_nanos": 12})
+        );
     }
 }
 
@@ -222,6 +264,83 @@ pub struct OpenCircuitRequest {
 pub struct CloseCircuitRequest {
     pub scope: CircuitScope,
     pub at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishPolicyRequest {
+    pub policy: RiskPolicy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ResizeReservationRequest {
+    pub reservation_id: String,
+    pub amount: Amount,
+    pub at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReleaseReservationRequest {
+    pub reservation_id: String,
+    pub at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ConsumeReservationRequest {
+    pub reservation_id: String,
+    pub at_unix_nanos: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceRiskTimeRequest {
+    pub event_time_unix_nanos: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceRiskTimeResponse {
+    pub event_time_unix_nanos: u64,
+    pub expired: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RiskCommandStatus {
+    pub status: String,
+}
+
+/// The closed REST operation set owned by the Risk process Contract.
+///
+/// HTTP method/path selection and JSON framing are transport concerns. Once a
+/// request reaches Conflux, the Actor receives one of these typed operations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RiskRestRequest {
+    Health,
+    PublishPolicy(PublishPolicyRequest),
+    AuthorizeAndReserve(AuthorizeRequest),
+    PreTradeCheck(AuthorizeRequest),
+    PostTradeCheck(AuthorizeRequest),
+    OpenCircuit(OpenCircuitRequest),
+    CloseCircuit(CloseCircuitRequest),
+    ResizeReservation(ResizeReservationRequest),
+    ReleaseReservation(ReleaseReservationRequest),
+    ConsumeReservation(ConsumeReservationRequest),
+    AdvanceTime(AdvanceRiskTimeRequest),
+}
+
+/// Response pair for [`RiskRestRequest`]. Each variant preserves the operation
+/// identity so the Contract host cannot accidentally return one operation's
+/// payload for another request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RiskRestResponse {
+    Health(Result<crate::Health, RiskControlError>),
+    PublishPolicy(Result<RiskCommandStatus, RiskControlError>),
+    AuthorizeAndReserve(Result<RiskDecision, RiskControlError>),
+    PreTradeCheck(Result<RiskDecision, RiskControlError>),
+    PostTradeCheck(Result<RiskDecision, RiskControlError>),
+    OpenCircuit(Result<CircuitState, RiskControlError>),
+    CloseCircuit(Result<CircuitState, RiskControlError>),
+    ResizeReservation(Result<Reservation, RiskControlError>),
+    ReleaseReservation(Result<Reservation, RiskControlError>),
+    ConsumeReservation(Result<Reservation, RiskControlError>),
+    AdvanceTime(Result<AdvanceRiskTimeResponse, RiskControlError>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

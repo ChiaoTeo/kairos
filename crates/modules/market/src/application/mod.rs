@@ -1,6 +1,6 @@
+pub(crate) mod conflux;
 mod model;
 mod observations;
-mod process;
 mod queries;
 pub mod replay;
 mod sources;
@@ -30,8 +30,6 @@ pub use model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
     MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
-pub(crate) use process::MarketProcessSettings;
-pub use process::{MarketChangePublisher, MarketProcess};
 pub use replay::{load_replay_events, load_replay_events_many};
 pub(crate) use sources::source_accepts;
 pub(crate) use subscriptions::{resolve_market, resolve_option_markets};
@@ -40,4 +38,5 @@ pub use universe::ReconcileMarketUniverse;
 /// Public Market use-case facade around the sole mutable Market Actor.
 pub struct MarketApplication {
     pub(crate) actor: crate::services::actor::MarketActor,
+    pub(crate) conflux: conflux::MarketConfluxState,
 }

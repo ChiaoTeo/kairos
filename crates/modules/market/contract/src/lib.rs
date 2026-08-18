@@ -7,7 +7,13 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
-pub use control::{MarketControlClient, MarketControlResponse};
+pub use control::{
+    MarketCommandEnvelope, MarketCommandStatus, MarketControlClient, MarketControlError,
+    MarketControlResponse, MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse,
+    MarketHealthResponse, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketRestRequest,
+    MarketRestResponse, MarketSubscribePayload, MarketSubscriptionResponse,
+    MarketUnsubscribePayload,
+};
 pub use encode::{
     event_metadata, view_metadata, BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder,
     QuoteEncoder, TradeEncoder,

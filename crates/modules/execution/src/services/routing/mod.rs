@@ -6,11 +6,11 @@
 //! global registry: it is a private, typed collection with current callers in
 //! Execution composition and runtime.
 
-use kairos_integration::application::{
-    AsyncOrderEntryConnection, AsyncOrderQueryConnection, CommandOutcome, ConnectionDescriptor,
-    ExternalOrder, ExternalOrderQuery, IntegrationError, ParticipantInstrumentTypeRef,
+use kairos_integration::{
+    CommandOutcome, ConnectionDescriptor, ExternalOrder, ExternalOrderQuery, IntegrationError,
+    OrderCommand, OrderQuery, ParticipantInstrumentTypeRef,
 };
-use kairos_integration::application::{OrderEntryEvent, OrderEntryRequest};
+use kairos_integration::{OrderEntryEvent, OrderEntryRequest};
 use kairos_primitives::{AccountId, SegmentKey};
 
 mod route;
@@ -43,7 +43,9 @@ impl<C> RoutedAsyncOrderEntry<C> {
         let route = matches.next().ok_or_else(|| {
             IntegrationError::InvalidRequest(format!(
                 "no Execution route for account={}, segment={}, participant={}",
-                request.account_id, request.segment_key, request.provider_instrument.participant.id
+                request.account_id,
+                request.segment_key,
+                request.participant_instrument.participant.id
             ))
         })?;
         debug_assert!(
@@ -54,9 +56,9 @@ impl<C> RoutedAsyncOrderEntry<C> {
     }
 }
 
-impl<C> AsyncOrderEntryConnection for RoutedAsyncOrderEntry<C>
+impl<C> OrderCommand for RoutedAsyncOrderEntry<C>
 where
-    C: AsyncOrderEntryConnection,
+    C: OrderCommand,
 {
     async fn submit_order(
         &mut self,
@@ -100,21 +102,8 @@ impl<C> RoutedAsyncOrderQuery<C> {
         Ok(Self { routes })
     }
 
-    fn selected_indices(&self, query: &ExternalOrderQuery) -> Result<Vec<usize>, IntegrationError> {
-        if let Some(binding_id) = query.binding_id.as_deref() {
-            let index = self
-                .routes
-                .iter()
-                .position(|route| route.descriptor.binding_id == binding_id)
-                .ok_or_else(|| {
-                    IntegrationError::InvalidRequest(format!(
-                        "Execution query binding is not configured: {binding_id}"
-                    ))
-                })?;
-            Ok(vec![index])
-        } else {
-            Ok((0..self.routes.len()).collect())
-        }
+    fn selected_indices(&self, _query: &ExternalOrderQuery) -> Vec<usize> {
+        (0..self.routes.len()).collect()
     }
 }
 
@@ -134,15 +123,15 @@ fn stamp_orders(
     Ok(orders)
 }
 
-impl<C> AsyncOrderQueryConnection for RoutedAsyncOrderQuery<C>
+impl<C> OrderQuery for RoutedAsyncOrderQuery<C>
 where
-    C: AsyncOrderQueryConnection,
+    C: OrderQuery,
 {
     async fn open_orders(
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
+        let indices = self.selected_indices(query);
         let mut result = Vec::new();
         for index in indices {
             let route = &mut self.routes[index];
@@ -156,7 +145,7 @@ where
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
+        let indices = self.selected_indices(query);
         let mut result = Vec::new();
         for index in indices {
             let route = &mut self.routes[index];
@@ -170,7 +159,7 @@ where
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Option<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
+        let indices = self.selected_indices(query);
         let mut found: Option<ExternalOrder> = None;
         for index in indices {
             let route = &mut self.routes[index];

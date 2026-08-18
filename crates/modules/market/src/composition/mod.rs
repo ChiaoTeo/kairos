@@ -1,24 +1,20 @@
 mod config;
 mod history;
+mod host;
 mod launch;
-pub(crate) mod publication;
 mod reference;
 mod sources;
 
 pub use config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
-    HyperliquidMarketType, MarketConfig as MarketCompositionConfig, MarketProcessRequest,
+    HyperliquidMarketType, MarketConfig as MarketCompositionConfig, MarketHostRequest,
     MarketReplayClock, MarketReplayConfig, MarketRuntimeProfile, MarketRuntimeScope,
     MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType, PublicMarketTransport,
 };
+pub use host::MarketHost;
 pub use launch::{
     attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
-    build_market_process, MarketStartupError,
-};
-pub use publication::MmapMarketChangePublisher;
-pub(crate) use sources::ConfiguredMarketSourceActivator;
-pub(crate) use sources::{
-    attach_binance_snapshot, attach_binance_stream, attach_massive_source_with_id,
+    build_market_host, MarketStartupError,
 };
 pub use sources::{
     attach_hyperliquid_live_source, attach_hyperliquid_snapshot_source,

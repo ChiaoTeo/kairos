@@ -15,7 +15,7 @@ use crate::domain::{
     LegLifecycle, Money, OrderCommitment, OrderId, Quantity, RiskReservationEvidence,
     RiskReservationSagaStatus, UnixNanos,
 };
-use kairos_integration::application::OrderEntryEvent;
+use kairos_integration::OrderEntryEvent;
 
 mod events;
 mod fills;

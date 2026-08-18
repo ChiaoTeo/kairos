@@ -2,19 +2,22 @@
 
 ## 0. 文档状态
 
-- 状态：提案。
+- 状态：当前基线已实现并通过最终统一验证（2026-08-18）：Integration connection 与五个
+  业务 module 已完成 Conflux 切换。
 - 范围：`crates/platform/conflux`、五个业务 module 的主进程、各 module
   Contract crate，以及 composition 注入的 provider-native Integration
   connection。
+- Integration connection 的细粒度资源边界、命名和迁移顺序由
+  `docs/integration-session-and-operation-design.md` 定义；本文只规定 Conflux 如何持有这些
+  concrete connection，不重复定义 provider transport 模型。
 - 目标：把 Account、Market、Execution、Reference、Risk 当前重复实现的
   “输入、单写者变更、持久化、事件、当前视图、恢复、健康和关闭”闭环收归一个
   统一运行时，同时保持业务状态、Contract 词汇和 provider 语义的既有所有权。
-- 与既有文档的关系：本提案是
-  `docs/proposal/conflux-actor-runtime-framework.md` 的目标模型修订候选。在本提案被接受
-  前，既有文档仍描述当前已接受方向；接受后，应同步修订其中关于 HTTP-shaped
-  handler、`ContractCatalog`、`IntegrationCatalog`、`TypeId` 私有存储和 erased
-  dispatch 的章节，不能长期保留两套目标架构。
-- 本提案不授权一次性迁移所有 module。迁移必须逐 module 完成，新路径通过退出条件后
+- 与既有文档的关系：本文取代
+  `docs/proposal/conflux-actor-runtime-framework.md` 中关于 HTTP-shaped handler、
+  `ContractCatalog`、`IntegrationCatalog`、`TypeId` 私有存储和 erased dispatch 的旧目标。
+  旧文档只作为历史设计记录，不再作为实现依据。
+- 本轮已获得五个业务 module 的迁移授权，但仍按 module slice 推进；每个新路径形成后立即
   删除该 module 的旧 process loop、listener/task registry 和 publication plumbing。
 
 ## 1. 决策摘要
@@ -32,11 +35,11 @@
 4. Actor ingress 由其服务的 Contract、消费的 Contract event、Integration fact、内部
    completion 和 timer 在编译期组成闭合 enum。正常 Actor dispatch 不使用
    `Box<dyn Any>`、`TypeId`、downcast 或运行时 route lookup。
-5. 每个进程向外提供且只提供一个 owning module Contract。该 concrete Contract 直接进入
-   Conflux；对外暴露的是 Contract，不是 Conflux
+5. 每个进程向外提供且只提供一个 owning module Contract。`ConfluxActor` 自身实现该
+   `Contract`，二者是同一个业务边界；对外暴露的是 Contract，不是 Conflux
    route、HTTP handler 或第二套 application facade。
-6. system composition 编译期集成所有可用 module Contract client 类型和所有
-   provider-native Integration connection 类型，形成全局完整的 `Clients` 与
+6. system composition 编译期集成所有可用 module Contract client 类型和所有已经完成迁移的
+   provider-native concrete REST/WebSocket connection 类型，形成全局完整的 `Clients` 与
    `Connections` named list。Actor 不声明自己的资源子集，而是在系统全集中按需创建和使用
    命名实例。Conflux 不建立跨类型 `ContractCatalog` 或 `IntegrationCatalog`。
 7. 同一 concrete type 的动态多个实例使用同构、类型化的命名集合，例如
@@ -48,9 +51,9 @@
 9. managed client 或 connection 创建的长生命周期 stream 可以交给 Conflux 的通用 typed source
    supervision；source 只能通过同一个 bounded Actor ingress 回送拥有的消息，不能并发
    修改 Application。
-10. 每次 Actor handler 调用形成一个 turn。turn 在 handler 成功后提交 staged Contract
-   event、Contract view replacement、resource/readiness change 和通用 background work；
-   普通业务拒绝不能自动终止进程。
+10. 每个事件只调用一次 Actor `handle`。Actor 在该调用中直接更新业务状态和 owning
+    Contract；Conflux 第一版不提供 staged output 或第二阶段 `commit`。REST 分支返回 response，
+    由 runtime 自动交还调用方；普通业务拒绝编码在 response 中，不自动终止进程。
 11. Conflux 负责 bounded admission、串行 Actor authority、source/task supervision、
     readiness、fault propagation、一个绝对 shutdown deadline、drain、metrics 和确定性
     harness；它不拥有业务路由选择、provider retry 语义、业务持久化模型或业务状态。
@@ -194,18 +197,18 @@ Conflux 不定义 `ServedContract`，也不要求依赖 client 实现 `Contract`
 capability；Reference 也不是 keyed mmap view。此时提取 `ViewContract` 或 `AeronContract` 只会
 隐藏差异。system composition 直接保存这些 concrete client，Actor 调用它们当前已有的方法。
 
-每个 module 主进程只向外提供一个 owning module Contract。第一版由 `Conflux<A>` 直接持有
-`A::Contract`，不增加 managed wrapper：
+每个 module 主进程只向外提供一个 owning module Contract。第一版 Actor 自身就是 Contract，
+`Conflux<A>` 不再持有第二份 contract object，也不增加 managed wrapper：
 
 ```rust,ignore
 pub struct Conflux<A: ConfluxActor> {
-    contract: A::Contract,
+    actor: A,
     system: ConfluxSystem,
 }
 ```
 
-`A::Contract` 是本进程具体的对外 Contract 服务对象。它把 REST request 适配为 Actor 的
-own-contract ingress，并把 response 编码回 Contract transport。Conflux 不在其外层再定义
+`A: Contract` 在类型层面固定本进程的 REST request/response pair。Contract host 把 request
+送入 `ConfluxHandle<A>`，Actor 的唯一 `handle` 返回对应 response。Conflux 不在其外层再定义
 HTTP route、通用 service API 或公开 handler 目录。同一个 Contract 可以投影到
 HTTP-over-UDS、HTTP-over-TCP 或其他 framing，但这些
 transport host 共同组成一个逻辑 Contract，不构成多个业务服务。只有出现真实的 Contract
@@ -256,6 +259,13 @@ ordered event publication 遵循：
 mmap、SQLite projection 或未来其他 current-state transport 都是 Contract view 的具体实现。
 统一语义是 latest typed projection，而不是统一成 mmap API。
 
+Conflux 统一管理 transport lifecycle，但不统一业务 codec：`ConfluxSystem` 分别持有 named
+`AeronBytePublisher`/`AeronByteSubscription` 与
+`SharedSnapshotWriter`/`SharedSnapshotReader` concrete collections。module Contract 仍负责把
+domain event/view 映射成自己的 typed frame。rusteron handle 是 `!Send`，因此 owning Conflux
+loop 固定运行在 Tokio `LocalSet`；跨线程的是 bounded ingress handle 和满足 `Send` 的独立
+source task，而不是 Aeron C handle 本身。
+
 每个 view marker 关联一个准确 value type：
 
 ```rust,ignore
@@ -294,10 +304,19 @@ Contract 与 consuming module 明确声明，Conflux 不凭空假设。
 
 ### 5.1 不新增通用 Integration 协议
 
-Integration 已拥有 provider-native connection 及稳定的真实 capability，例如 order entry、
-order query、order event、account snapshot/event、market snapshot/event 和 reference
-catalog。Conflux 和业务 module 直接使用这些 owner-defined capability，不镜像第二套
-port/gateway/protocol trait。
+Integration 由 provider-native concrete connections 直接实现 Integration-owned capability
+traits。Capability trait 可以依据真实交易所协议破坏性重设；concrete struct 才使用
+`*Connection`，trait 不使用 `Async*Connection` 这类混淆命名。Conflux 不建立 capability
+handle、factory、provider subscription enum 或第二套 port/gateway/protocol trait。
+
+同一个 command capability 可以同时由 REST connection 与 request/response WebSocket
+connection 实现。例如 `OrderCommand` 可由
+`BinanceSpotPrivateRestConnection` 和 `BinanceSpotWebSocketApiConnection` 分别实现；Actor
+明确选择 named concrete connection，Conflux 不做隐式 transport routing。
+
+同理，event capability 不等于 WebSocket。REST connection 可以通过内部 polling、baseline、
+cursor/dedup 和 bounded queue 实现 `MarketDataStream`/`AccountStream`；event receipt 必须标记
+`ProviderPush` 或 `Polling` delivery mode，Conflux 不把两者视为无差别来源，也不自动 failover。
 
 禁止引入：
 
@@ -317,7 +336,7 @@ streams 的 reconnect、ordering 和 provider protocol 属于 Integration，gap 
 
 每个 Actor 的运行环境明确分成三类，不合并为一个任意资源 namespace：
 
-1. `A::Contract`：本进程唯一向外提供的 owning module Contract；
+1. `A: Contract`：本进程唯一向外提供的 owning module Contract，Actor 与 Contract 是同一实体；
 2. `ConfluxSystem` 上的 concrete client 字段：Kairos 当前集成的其他进程 Contract clients；
 3. `ConfluxSystem` 上的 concrete connection 字段：Kairos 当前集成的 Integration connections。
 
@@ -332,12 +351,26 @@ pub struct ConfluxSystem {
     pub reference_clients: ManagedClients<String, ReferenceClient>,
     pub risk_clients: ManagedClients<String, RiskClient>,
 
-    pub binance_spot_connections: ManagedConnections<String, BinanceSpotConnection>,
-    pub okx_connections: ManagedConnections<String, OkxConnection>,
-    pub ibkr_connections: ManagedConnections<String, IbkrConnection>,
-    // 其余当前 provider-native connection 同样是明确字段。
+    pub binance_spot_public_rest_connections:
+        ManagedConnections<String, BinanceSpotPublicRestConnection>,
+    pub binance_spot_websocket_api_connections:
+        ManagedConnections<String, BinanceSpotWebSocketApiConnection>,
+    pub okx_public_rest_connections:
+        ManagedConnections<String, OkxPublicRestConnection>,
+    pub okx_private_websocket_connections:
+        ManagedConnections<String, OkxPrivateWebSocketConnection>,
+    pub ibkr_account_query_connections: ManagedConnections<String, IbkrAccountQueryConnection>,
+    pub ibkr_account_stream_connections: ManagedConnections<String, IbkrAccountStreamConnection>,
+    pub ibkr_order_connections: ManagedConnections<String, IbkrOrderConnection>,
+    pub ibkr_execution_stream_connections: ManagedConnections<String, IbkrExecutionStreamConnection>,
+    pub ibkr_market_data_connections: ManagedConnections<String, IbkrMarketDataConnection>,
+    // 其余已经完成迁移的 provider-native concrete connection 同样是明确字段。
 }
 ```
+
+字段按 provider 的真实 API family、public/private 和 REST/WebSocket 边界定义；不会为了减少
+字段数量恢复 provider 大 facade。完整判定规则与迁移矩阵见
+`docs/integration-session-and-operation-design.md`。
 
 `ConfluxSystem` 是唯一具体实体，不是 trait，也不带泛型参数。每个字段的类型在编译期已知，
 但字段内部同类型实例的数量、名称、revision 和 epoch 可以在运行时变化。
@@ -348,14 +381,14 @@ Conflux 不支持在运行时向一个开放目录塞入未知类型。Actor 从
 Actor 通过 Context 直接借用：
 
 ```rust,ignore
-let outcome = context
+let connection = context
     .system()
-    .binance_spot_connections
-    .get(&execution_route_id)?
-    .connection()
-    .order_entry()
-    .submit_order(&request)
-    .await;
+    .binance_spot_private_rest_connections
+    .get_mut(&execution_route_id)?;
+let outcome = OrderCommand::submit_order(
+    connection.connection_mut(),
+    &request,
+).await;
 
 let decision = context
     .system()
@@ -451,16 +484,20 @@ latency/profile 或并发需求证明有必要时，才把具体 future 交给�
 
 ### 6.1 Actor 关联资源
 
-Actor 与它服务的 Contract 是一个不可拆开的运行时定义。Actor 只关联唯一
-`Contract`、闭合 `Ingress` 和闭合 `Output`；它不再声明 `Clients` 或 `Connections`。
+Actor 与它服务的 Contract 是一个不可拆开的运行时定义。Actor 只关联唯一 `Contract` 和
+可选的 `LocalEvent`；它不声明 Clients、Connections、Ingress 或 Output。
 资源全集由具体 `ConfluxSystem` 提供：
 
 ```rust,ignore
-pub trait ConfluxActor: Send + Sized + 'static {
+pub trait ConfluxActor: Contract + Sized {
     type FatalError: Error + Send + Sync + 'static;
-    type Contract: Contract;
-    type Ingress: Send + 'static;
-    type Output: Send + 'static;
+    type LocalEvent: Send + 'static;
+
+    async fn handle(
+        &mut self,
+        event: ConfluxEvent<Self, Self::LocalEvent>,
+        context: &mut Context<'_, Self>,
+    ) -> Result<Option<RestResponseOf<Self>>, Self::FatalError>;
 }
 ```
 
@@ -471,56 +508,38 @@ pub struct Context<'runtime, A>
 where
     A: ConfluxActor,
 {
-    contract: &'runtime mut A::Contract,
     system: &'runtime mut ConfluxSystem,
-    runtime: RuntimeAuthority<A>,
+    shutdown: &'runtime mut Option<ShutdownMode>,
 }
 ```
 
-`A::Contract` 在类型层面保证本进程只有一个对外业务 Contract，并让 Actor handler 与该
+`A: Contract` 在类型层面保证本进程只有一个对外业务 Contract，并让 Actor handler 与该
 Contract 的 REST request/response pair 一起演进。View、Aeron 或其他 concrete capability
 由 owning Contract 自己演进。`ConfluxSystem` 的明确字段是系统集成的完整资源全集；Actor
 可以看到全集，但只在业务需要时创建和使用具体命名实例。
 系统不会为每个 Actor 复制一份类型声明，也不会根据 Actor handler 构造运行时类型目录。
 
-### 6.2 闭合 ingress
+### 6.2 全局事件 enum 与唯一入口
 
-宏根据 Actor 服务和消费的协议生成普通 Rust enum：
+Conflux 定义一个覆盖当前全部事件来源的普通 Rust enum：
 
 ```rust,ignore
-enum ExecutionIngress {
-    Contract(execution_contract::ExecutionCall),
-    AccountEvent(account_contract::AccountEvent),
-    MarketEvent(market_contract::MarketEvent),
-    RiskEvent(risk_contract::RiskEvent),
-    BinanceEvent(ExternalExecutionEvent),
-    OkxEvent(ExternalExecutionEvent),
-    Completion(ExecutionCompletion),
-    Tick(ExecutionTick),
+pub enum ConfluxEvent<C: Contract, Local> {
+    Rest(RestRequestOf<C>),
+    Account(AccountEventFrame),
+    Execution(ExecutionEventFrame),
+    Market(MarketEventFrame),
+    Reference(ReferenceEventFrame),
+    Risk(RiskEventFrame),
+    Integration(IntegrationEvent),
+    Local(Local),
 }
 ```
 
-宏生成普通 `match` dispatch。每种 variant 精确携带 request、fact 或 reply port。添加、删除
-或修改 Contract operation/event 会触发编译错误，迫使 host、client、Actor binding 和测试
-同步演进。
-
-正常 ingress queue 不使用 erased dispatch。wire bytes 在 Contract/Integration 边界 decode
-为 typed value 后才进入 Conflux。
-
-Actor output 同样是宏生成或 module 显式定义的闭合 enum：
-
-```rust,ignore
-enum ExecutionOutput {
-    ContractEvent(execution_contract::ExecutionEvent),
-    ContractView(execution_contract::ExecutionViewUpdate),
-    Work(ExecutionWork),
-    Readiness(ExecutionReadinessChange),
-}
-```
-
-当前 turn 保存 `A::Output`，而不是保存任意 publisher/view callback。Conflux 通过生成的
-静态 match 把每个 output 交给准确的 Contract publisher、view publisher 或 typed work
-runner。由此，闭合输入不能通过 turn 输出路径重新退化为类型擦除。
+`ConfluxHandle::handle(event)` 是唯一事件入口，并等待 Actor 完成本次处理。Actor 对 enum
+做普通 `match`：REST variant 返回 `Some(response)`，runtime 将 response 自动返回 Handle
+调用方；其他 variant 返回 `None`。Actor 不接触 reply channel。wire bytes 以各 Contract 的
+owned frame 进入队列，Actor 可以按需 decode；Integration 使用 normalized owned facts。
 
 ### 6.3 错误分类
 
@@ -535,55 +554,21 @@ handler 的业务错误是 typed Contract/Application response，不自动失败
 Conflux 不把业务错误压成 `String` 再作为唯一 reply。panic、task cancellation、source
 exit 和 fatal error 必须分别可观测。
 
-## 7. Turn 与输出提交
+## 7. 单事件处理语义
 
-### 7.1 Turn 的目的
-
-Conflux 的价值不只是抽象一个 `select!` 循环，而是统一并强制每次单写者调用的输出协议。
-handler 中声明的跨边界动作先进入当前 turn：
-
-```text
-Contract ordered event
-Contract latest view replacement
-resource/readiness change
-generic typed background work
-shutdown request
-```
-
-handler 业务拒绝时丢弃尚未提交的 runtime action。handler 成功后，Conflux 按确定顺序
-提交。Application 内部业务 mutation 和持久化原子性仍由 owning module 保证；Conflux 不
-假装能够回滚任意已经执行的业务代码。
-
-### 7.2 输出类别
-
-Conflux 只统一三种已经被所有 module 证明存在的运行语义：
-
-1. **Ordered output**：业务 event/outbox/history；按序、成功后 ack、失败保留、Drain
-   必须处理。
-2. **Latest output**：current view/projection；保留最新 generation、失败保持 dirty、成功
-   更新 published watermark。
-3. **Typed work/completion**：后台具体 future/stream；bounded、受监督、completion 回到
-   Actor、panic 和取消可见。
-
-Conflux 不定义 AccountEvent、ExecutionSnapshot、provider order 或 persistence record。
-Application/domain model 到 Contract model 的直接类型化映射由 module composition 或
-publication adapter 拥有。
-
-### 7.3 提交顺序
-
-通用顺序是：
+Conflux 第一版只保证 bounded queue、事件串行化和单写者 Actor authority：
 
 ```text
 validate input
     -> Application/Actor 执行业务 use case
-    -> module 完成所需 durable commit / journal / transactional outbox
-    -> handler 成功
-    -> commit staged runtime actions
-    -> ordered output 尝试 publish/ack
-    -> latest output 标记并尝试 publish
-    -> 启动已接受 typed work
-    -> 完成 typed reply
+    -> Actor 直接更新 owning Contract / publisher / view
+    -> REST 时返回 Some(response)，其他事件返回 None
+    -> runtime 完成 Handle 调用
 ```
+
+没有 staged output、`CommitContext` 或第二次 `commit` 回调。需要 durable commit、outbox、
+ordered publication 或 latest view watermark 的 module，必须在自己的 Contract/Application
+实现中保证正确顺序。Conflux 不声称能够回滚 handler 已经完成的 mutation。
 
 Execution 等 may-have-been-sent command 必须先记录业务 intent/attempt/audit，再调用
 Integration，并保存 typed delivery certainty。Conflux 不能通过取消 future 假装命令未发送。
@@ -629,37 +614,29 @@ optional resource 失败可以进入 Degraded；required resource 的后果由 m
 
 ## 9. 生命周期与关闭
 
-Conflux 拥有一个绝对 shutdown deadline，phase 至少包括：
+第一版 lifecycle phase 包括：
 
 ```text
 Starting
-Running / Degraded
-Quiescing
-StoppingSources
-DrainingInputs
-FlushingOutputs
-ClosingResources
+Running
+Stopping
 Stopped / Forced / Failed
 ```
 
 Drain 顺序：
 
 1. 关闭外部 Contract command admission；
-2. 通知 Actor quiescing，禁止创建新的业务工作；
-3. 停止 Contract/Integration source runners，并允许已经形成的 terminal completion 入队；
-4. 处理已接受 input；
-5. flush ordered output 和最新 dirty view；
-6. 调用 Actor drained/stopping hook，由 Actor 直接执行 concrete Contract/Integration 的
+2. 处理已接受 event，并完成对应 Handle 调用；
+3. 调用 Actor stopping hook，由 Actor 直接执行 concrete Contract/Integration 的
    provider-specific async close/logout；
-7. 关闭 host、publisher、view、task 和 transport；
-8. 清理 Conflux-owned UDS 等资源；
-9. 仅在没有静默丢弃 accepted work 时报告 `Stopped`。
+4. 关闭 host、publisher、view、task 和 transport；
+5. 仅在没有静默丢弃 accepted event 时报告 `Stopped`。
 
 Immediate 或 deadline expiry：
 
 - 关闭 admission；
 - abort cancel-safe source/task；
-- fail pending typed reply；
+- 令被丢弃 event 的 pending Handle 返回 `ActorStopped`；
 - 丢弃 queued input 并计量；
 - 对可能已经发送的 Integration command 保留 uncertain outcome/audit；
 - best-effort close concrete resource；
@@ -702,11 +679,11 @@ kairos-integration
 | Contract client/host/codec/publisher/reader | owning module Contract |
 | provider auth/protocol/capability/normalized facts | Integration |
 | concrete endpoint/connection selection | module composition |
-| unique outward `A::Contract` | owning module Contract defines it; composition constructs it; Conflux owns it directly |
+| unique outward `A: Contract` | owning module Contract defines the protocol pair; the Actor implements it and Conflux owns that one Actor |
 | concrete dependency client fields | `ConfluxSystem` declares them; composition constructs named instances |
 | concrete Integration connection fields | `ConfluxSystem` declares them; composition constructs named instances |
 | same-type named instance key and cardinality | consuming module/composition |
-| source/task scheduling, bounded ingress, turn commit, readiness, shutdown | Conflux |
+| bounded event queue, serialized dispatch, readiness, shutdown | Conflux |
 | provider route/source selection and business consequences | consuming module Application/composition |
 | Application/domain to Contract projection | module composition/publication adapter |
 
@@ -769,11 +746,10 @@ Contract client 或 application API，不能导入对方 services/private files�
 
 ### Phase 2：闭合 ingress 与静态资源
 
-- Actor 只声明唯一 `Contract`、闭合 `Ingress` 和闭合 `Output`，不声明 client/connection
-  子集；
+- Actor 直接实现唯一 `Contract` 并声明可选 `LocalEvent`，所有来源统一进入 `ConfluxEvent`；
 - `ConfluxSystem` 明确列出全量 concrete client 与 connection 字段，并把同一实体暴露给
   Actor 按需创建和使用实例；
-- module composition 创建 `A::Contract` 并与 Actor、`ConfluxSystem` 一起移动进 Conflux；
+- module composition 创建 Actor/Contract 同一实体，并与 `ConfluxSystem` 一起移动进 Conflux；
 - 移除该 Actor 路径的 erased dispatch、`ContractCatalog` 和 `IntegrationCatalog`；
 - 为真实多个实例实现 `ManagedClients<K, C>` 与 `ManagedConnections<K, C>`；固定角色可以
   使用显式 named struct，不引入跨类型 registry。
@@ -799,6 +775,10 @@ Contract client 或 application API，不能导入对方 services/private files�
 退出：无 unmanaged source task，无第二个 Actor mutation入口。
 
 ### Phase 5：逐 module 迁移
+
+此阶段不属于当前 Integration/Conflux framework 改造。前置阶段允许删除旧 Integration API
+并使 modules 无法编译；这是预期迁移状态，不要求“暂时兼容”。只有 framework 与 concrete
+connections 稳定后，才另开 module 迁移切片，逐个恢复对应 module。
 
 建议顺序：
 
@@ -849,7 +829,11 @@ facade。
 
 ### 14.4 Repository checks
 
-除 focused tests 外，执行：
+Phase 0-4 的编译边界只有 Integration 与 Conflux，只执行其 focused checks；明确不运行
+`cargo test --workspace`，modules 不能编译不构成失败，也不得通过 compatibility facade 修复。
+
+只有进入 Phase 5 并完成相应 module migration 后，才逐步恢复该 module 的 focused tests；全部
+modules 迁移完成后再执行完整仓库检查：
 
 ```text
 cargo test --workspace
@@ -891,7 +875,7 @@ duplicate mutable state owners
 最终目标是：
 
 ```text
-每个进程以唯一 concrete A::Contract 提供本 module 的完整对外服务；
+每个进程以实现唯一 concrete Contract 的 Actor 提供本 module 的完整对外服务；
 ConfluxSystem 以明确字段全量集成其他 module clients 和 Integration connections；
 Actor 按需创建每种 client/connection 的命名实例；
 Contract 定义 Kairos module 之间的闭合类型化协议；

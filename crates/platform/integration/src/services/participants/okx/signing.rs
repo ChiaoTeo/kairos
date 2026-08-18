@@ -3,7 +3,7 @@
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::services::transport::http::ExchangeError;
+use crate::transport::http::ExchangeError;
 
 type HmacSha256 = Hmac<Sha256>;
 

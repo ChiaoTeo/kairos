@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use kairos_integration::application::{AsyncMarketEventSource, IntegrationError};
+use kairos_integration::{ConnectionLifecycleCommand, IntegrationError};
 use tokio::sync::mpsc;
 
 use super::messages::{SourceCommand, SourceInput};
@@ -21,7 +21,7 @@ pub(super) fn reconnectable(error: &IntegrationError) -> bool {
     )
 }
 
-pub(super) async fn recover_connection<C: AsyncMarketEventSource>(
+pub(super) async fn recover_connection<C: ConnectionLifecycleCommand>(
     connection: &mut C,
     commands: &mut mpsc::Receiver<SourceCommand>,
     deferred_commands: &mut VecDeque<SourceCommand>,
@@ -44,7 +44,7 @@ pub(super) async fn recover_connection<C: AsyncMarketEventSource>(
             _ = tokio::time::sleep(delay) => {}
             command = commands.recv() => match command {
                 Some(SourceCommand::Shutdown) | None => {
-                    let _ = connection.disconnect_channel().await;
+                    let _ = connection.disconnect().await;
                     let _ = status(inputs, source_id, *epoch, SourceStatus::Stopped).await;
                     return false;
                 }
@@ -54,7 +54,7 @@ pub(super) async fn recover_connection<C: AsyncMarketEventSource>(
                 }
             }
         }
-        match connection.reconnect_channel().await {
+        match connection.reconnect().await {
             Ok(()) => {
                 epoch.advance();
                 return status(inputs, source_id, *epoch, SourceStatus::Ready)

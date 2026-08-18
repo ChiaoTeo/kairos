@@ -1,23 +1,6 @@
 use super::*;
 
-pub(super) fn snapshot_root(path: impl AsRef<Path>) -> PathBuf {
-    path.as_ref()
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
-}
-
-pub(super) fn nonzero_slot_size(slot_size: usize) -> usize {
-    if slot_size == 0 {
-        DEFAULT_SLOT_SIZE
-    } else {
-        slot_size
-    }
-}
-
-pub(super) fn encode_active_orders(
+pub(crate) fn encode_active_orders(
     actor_id: &str,
     identity: &InstanceIdentity,
     generation: u64,
@@ -70,7 +53,7 @@ pub(super) fn encode_active_orders(
     Ok(builder.finished_data().to_vec())
 }
 
-pub(super) fn encode_current_execution(
+pub(crate) fn encode_current_execution(
     actor_id: &str,
     identity: &InstanceIdentity,
     generation: u64,
@@ -757,7 +740,7 @@ pub(super) fn decimal<T: DecimalValue>(
     kairos_protocol::generated::kairos::common::v_2::Decimal64::new(value.mantissa(), value.scale())
 }
 
-pub(super) fn encode_active_intents(
+pub(crate) fn encode_active_intents(
     actor_id: &str,
     identity: &InstanceIdentity,
     generation: u64,

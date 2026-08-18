@@ -4,9 +4,7 @@ use kairos_account::composition::account::{
     compose_in_memory_account_application, compose_local_account_application_for_segments,
     AccountOptions, AccountSegmentBinding,
 };
-use kairos_account::composition::{
-    empty_snapshot, FlatbuffersAccountPublisher, MmapAccountPublisher,
-};
+use kairos_account::composition::empty_snapshot;
 use kairos_account::domain::{
     Account, AccountFill, AccountObservedFill, AccountSegment, AccountSnapshot, AccountStatus,
     ApplyOutcome, AssetId, Balance, ExternalAccountIdentity, FillId, InstrumentId, Money,
@@ -45,12 +43,10 @@ fn segment_key(value: &str) -> SegmentKey {
 use kairos_account::application::AccountSegmentView;
 use kairos_account::composition::registry::AccountRegistry;
 use kairos_account::{
-    AccountApplication, AccountCurrentView, MarkToMarket, ReconcileAccount, RefreshAccount,
+    AccountApplication, AccountCurrentView, AccountRuntimeMode, MarkToMarket, ReconcileAccount,
+    RefreshAccount,
 };
-use kairos_integration::application::credential::{CredentialRecord, CredentialStore};
-use kairos_protocol::generated::kairos::account::v_2::root_as_account_current_view;
-use kairos_protocol::InstanceIdentity;
-use kairos_transport::SharedSnapshotReader;
+use kairos_integration::composition::credentials::{CredentialRecord, CredentialStore};
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {
@@ -59,6 +55,19 @@ fn segment(key: &str) -> AccountSegment {
         environment: "paper".into(),
         account_model: Some("no_margin".into()),
     }
+}
+
+#[test]
+fn simulation_business_time_is_owned_by_the_account_application() {
+    let mut application =
+        compose_in_memory_account_application(vec![segment("spot")], BTreeMap::new(), None)
+            .unwrap();
+    assert_eq!(application.runtime_mode(), AccountRuntimeMode::Simulation);
+
+    application.advance_business_time(10).unwrap();
+    assert_eq!(application.business_time_unix_nanos(), Some(10));
+    assert!(application.advance_business_time(9).is_err());
+    assert_eq!(application.business_time_unix_nanos(), Some(10));
 }
 
 #[derive(Default)]
@@ -415,82 +424,6 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
     let projection = account_projection(&app);
     assert_eq!(projection.balances[0].asset_code, "USDT");
     assert_eq!(projection.positions.len(), 1);
-}
-
-#[test]
-fn publisher_emits_current_account_snapshot() {
-    let snapshots = BTreeMap::from([
-        ("funding".into(), empty_snapshot("funding")),
-        ("spot".into(), empty_snapshot("spot")),
-    ]);
-    let mut app = compose_in_memory_account_application(
-        vec![segment("spot"), segment("funding")],
-        snapshots,
-        None,
-    )
-    .unwrap();
-    app.refresh(RefreshAccount {
-        account_id: account_id("main"),
-        segments: vec![],
-    })
-    .unwrap();
-
-    let mut publisher = FlatbuffersAccountPublisher::new_with_identity(
-        "account-1",
-        InstanceIdentity::new("demo", "btc-sma", "run-001"),
-    );
-    let snapshot = account_snapshot(&app);
-    publisher.publish(&snapshot).unwrap();
-    let payload = publisher.last_payload.as_ref().unwrap();
-    let decoded = root_as_account_current_view(payload).unwrap();
-    assert_eq!(decoded.metadata().workspace_id(), "demo");
-    assert_eq!(decoded.metadata().launch_id(), Some("btc-sma"));
-    assert_eq!(decoded.metadata().instance_id(), Some("run-001"));
-    assert_eq!(decoded.metadata().generation(), snapshot.generation.get());
-    assert_eq!(
-        decoded.metadata().applied_revision(),
-        Some(snapshot.event_sequence.get())
-    );
-    assert_eq!(decoded.account_id(), "main");
-    assert_eq!(decoded.segments().len(), 2);
-    assert_eq!(decoded.segments().get(0).segment_key(), "funding");
-    assert_eq!(decoded.segments().get(1).segment_key(), "spot");
-}
-
-#[test]
-fn mmap_publisher_writes_current_view_to_manifest_snapshot_path() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("account.snapshot");
-    let snapshots = BTreeMap::from([("spot".into(), empty_snapshot("spot"))]);
-    let mut app =
-        compose_in_memory_account_application(vec![segment("spot")], snapshots, None).unwrap();
-    app.refresh(RefreshAccount {
-        account_id: account_id("main"),
-        segments: vec![],
-    })
-    .unwrap();
-    let snapshot = account_snapshot(&app);
-    let mut publisher = MmapAccountPublisher::create(
-        &path,
-        0,
-        "account-1",
-        InstanceIdentity::new("demo", "btc-sma", "run-001"),
-    )
-    .unwrap();
-    publisher.publish(&snapshot).unwrap();
-
-    let frame = SharedSnapshotReader::open(&path)
-        .unwrap()
-        .read_payload()
-        .unwrap();
-    let decoded = root_as_account_current_view(&frame.payload).unwrap();
-    assert_eq!(frame.generation, snapshot.generation.get());
-    assert_eq!(decoded.metadata().generation(), frame.generation);
-    assert_eq!(
-        decoded.metadata().applied_revision(),
-        Some(snapshot.event_sequence.get())
-    );
-    assert_eq!(decoded.account_id(), "main");
 }
 
 #[test]

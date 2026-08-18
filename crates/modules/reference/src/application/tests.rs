@@ -1,14 +1,12 @@
-use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
-use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
-use kairos_reference::domain::{
-    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult,
-};
-use kairos_reference::services::source::ReferenceSource;
-use kairos_reference::services::sqlx_storage::SqlxCatalogStore;
-use kairos_reference::{
+use crate::composition::{build_application, ReferenceCompositionConfig};
+use crate::domain::{Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult};
+use crate::services::source::ReferenceSource;
+use crate::services::sqlx_storage::SqlxCatalogStore;
+use crate::{
     LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
     ReferenceRecord, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
 };
+use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
 struct TestSource {
     catalog: ProviderCatalog,
@@ -75,7 +73,7 @@ async fn test_store() -> SqlxCatalogStore {
 }
 
 async fn application() -> ReferenceApplication {
-    ReferenceApplication::new(
+    ReferenceApplication::new_test(
         "reference-test",
         TestSource {
             catalog: provider_catalog(),
@@ -207,7 +205,7 @@ async fn default_reference_registry_composes_without_market_configuration() {
         "version = 1\nworkspace_id = \"reference-test\"\n",
     )
     .unwrap();
-    let composition = build_application(
+    let mut composition = build_application(
         &ReferenceCompositionConfig {
             workspace: Some(root.to_path_buf()),
             database: root.join("reference.sqlite"),
@@ -219,6 +217,7 @@ async fn default_reference_registry_composes_without_market_configuration() {
     )
     .await
     .unwrap();
+    composition.activate_sources().await.unwrap();
     assert_eq!(composition.application.source_id(), "reference-default");
 }
 
@@ -344,10 +343,13 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
         ..Default::default()
     });
     catalog.instruments[0].underlying_instrument_id = Some(instrument_id("instrument:equity:SPY"));
-    let mut application =
-        ReferenceApplication::new("reference-test", TestSource { catalog }, test_store().await)
-            .await
-            .unwrap();
+    let mut application = ReferenceApplication::new_test(
+        "reference-test",
+        TestSource { catalog },
+        test_store().await,
+    )
+    .await
+    .unwrap();
     application.refresh().await.unwrap();
 
     let records = application.query(&ReferenceQuery {
@@ -361,7 +363,7 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
 
 #[tokio::test]
 async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
-    let mut application = ReferenceApplication::new(
+    let mut application = ReferenceApplication::new_test(
         "reference-test",
         SequenceSource {
             catalogs: vec![provider_catalog(), ProviderCatalog::default()],

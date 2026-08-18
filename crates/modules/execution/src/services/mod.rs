@@ -1,6 +1,5 @@
 pub mod actor;
 pub mod audit;
-pub(crate) mod control;
 pub(crate) mod dependencies;
 pub(crate) mod gateway;
 pub(crate) mod persistence;

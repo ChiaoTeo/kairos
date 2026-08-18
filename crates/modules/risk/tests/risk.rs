@@ -8,7 +8,7 @@ use kairos_risk::composition::{
 use kairos_risk::{
     Amount, AuthorizeRequest, CircuitScope, CloseCircuit, ConsumeReservation, EnforcementMode,
     Metric, OpenCircuit, PolicyScope, PublishPolicy, ReleaseReservation, ReservationStatus,
-    ResizeReservation, RiskApplication, RiskContext, RiskPolicy,
+    ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskPolicy,
 };
 
 fn policy_id(value: &str) -> kairos_primitives::PolicyId {
@@ -155,6 +155,34 @@ fn ttl_expiration_releases_capacity() {
         app.snapshot().reservations[0].status,
         ReservationStatus::Expired
     );
+}
+
+#[test]
+fn replay_clock_ignores_wall_ticks_and_advances_through_one_business_barrier() {
+    let mut app = application(100);
+    app.set_clock_mode(RiskClockMode::Replay);
+    app.authorize_and_reserve(request("replay", 40)).unwrap();
+
+    assert_eq!(app.maintenance_tick(101.into()).unwrap(), 0);
+    assert_eq!(app.snapshot().limits[0].reserved, amount(40));
+
+    assert_eq!(app.advance_business_time(101.into()).unwrap(), 1);
+    assert_eq!(app.business_time(), Some(101.into()));
+    assert_eq!(app.snapshot().limits[0].available, amount(100));
+}
+
+#[test]
+fn business_time_is_monotonic_inside_the_application_boundary() {
+    let mut app = application(100);
+    app.set_clock_mode(RiskClockMode::Replay);
+    app.advance_business_time(50.into()).unwrap();
+
+    let error = app.advance_business_time(49.into()).unwrap_err();
+    assert_eq!(
+        error,
+        kairos_risk::RiskError::Invalid("business time cannot move backwards".into())
+    );
+    assert_eq!(app.business_time(), Some(50.into()));
 }
 
 #[test]

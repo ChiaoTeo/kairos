@@ -11,6 +11,6 @@ mod services;
 
 pub use application::AccountCurrentView;
 pub use application::{
-    AccountApplication, AccountError, AccountEvent, AccountObservedFill, AccountProcess,
+    AccountApplication, AccountError, AccountEvent, AccountObservedFill, AccountRuntimeMode,
     MarkToMarket, ReconcileAccount, RefreshAccount,
 };

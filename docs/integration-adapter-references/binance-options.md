@@ -22,32 +22,31 @@ transport runtime, reconnect machinery, and public API shape were not adopted.
 
 ## Kairos mapping and behavior
 
-- `BinanceOptionsPrincipalConnection` projects native async entry, query, and
-  event capabilities from a Binance principal.
-- The projection reuses the principal's provider HTTP worker and shared egress
-  quota lane instead of creating an unaccounted product-local request lane.
+- `BinanceOptionsRestConnection` directly implements account, instrument,
+  quote/trade/bar/book/Greeks, order command, and order query capabilities.
+- `BinanceOptionsWebSocketConnection` owns public market subscriptions;
+  `BinanceOptionsUserWebSocketConnection` owns the authenticated listen-key
+  stream and directly implements the unified participant event stream.
 - Submit/cancel are sent exactly once with a 10-second deadline. Ambiguous
   transport, HTTP server, or timeout outcomes are `Indeterminate`; commands
   are never transparently retried.
 - Read-only queries recalibrate provider time and retry at most once only for
   explicit Binance timestamp rejection (`-1021`).
-- Provider symbols come from Reference-owned `ProviderInstrumentRef`.
+- Provider symbols come from Integration-owned `ParticipantInstrumentRef` values resolved by
+  business composition against Reference facts.
 - The private stream creates an `/eapi/v1/listenKey`, connects to the Options
   `/private/stream/<listenKey>` path, renews the key every 30 minutes, and
   exposes readiness only after the authenticated channel is connected.
 - `ORDER_TRADE_UPDATE` preserves partial fills, trade identity, fee, provider
   timestamps, binding, channel, and epoch. Listen-key expiry, socket loss, and
   bounded queue overflow require route-scoped reconciliation.
-- Execution production and direct CLI paths are async-only. The old public
-  blocking Options order-entry projection was removed.
+- The provider path is async-first. Synchronous capability signatures exist only under
+  `kairos_integration::blocking`; there is no hidden blocking transport or projection facade.
 - Stop and stop-limit requests are explicitly unsupported because the current
   business request has no trigger-price field; they are not silently changed
   to market or limit orders.
-- Account production composition uses the native async Options account snapshot
-  and private-event stream. Its former blocking snapshot synchronization path
-  has been removed.
-- Account, rather than Integration, owns bootstrap barriers, per-segment
-  recovery/resync, freshness, current-view replacement, and business events.
+- Business-module composition migration is deliberately deferred; Integration and Conflux are the
+  current compilation boundary.
 
 ## Remaining exit criteria
 

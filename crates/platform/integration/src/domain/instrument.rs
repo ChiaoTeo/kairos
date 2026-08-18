@@ -1,6 +1,6 @@
-//! Provider-owned instrument identity at the Integration boundary.
+//! Participant-owned instrument identity at the Integration boundary.
 
-use kairos_primitives::ProviderSymbol;
+use kairos_primitives::ParticipantSymbol;
 
 use super::ParticipantRef;
 
@@ -26,20 +26,20 @@ impl ParticipantInstrumentTypeRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct ProviderInstrumentRef {
+pub struct ParticipantInstrumentRef {
     pub participant: ParticipantRef,
     pub instrument_type: Option<ParticipantInstrumentTypeRef>,
-    pub source_symbol: ProviderSymbol,
+    pub source_symbol: ParticipantSymbol,
 }
 
-impl ProviderInstrumentRef {
+impl ParticipantInstrumentRef {
     pub fn new(
         participant: ParticipantRef,
         instrument_type: Option<ParticipantInstrumentTypeRef>,
         source_symbol: impl Into<String>,
     ) -> Result<Self, String> {
         let source_symbol =
-            ProviderSymbol::new(source_symbol.into()).map_err(|error| error.to_string())?;
+            ParticipantSymbol::new(source_symbol.into()).map_err(|error| error.to_string())?;
         Ok(Self {
             participant,
             instrument_type,

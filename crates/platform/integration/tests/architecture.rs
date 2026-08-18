@@ -7,11 +7,24 @@ fn source_root() -> PathBuf {
 #[test]
 fn integration_uses_the_target_top_level_layers() {
     let root = source_root();
-    for layer in ["application", "bin", "composition", "domain", "services"] {
+    for layer in [
+        "blocking",
+        "capabilities",
+        "composition",
+        "domain",
+        "participants",
+        "services",
+        "transport",
+    ] {
         assert!(root.join(layer).is_dir(), "missing target layer: {layer}");
     }
 
-    for obsolete in ["blocking.rs", "credentials.rs", "protocol.rs"] {
+    for obsolete in [
+        "application",
+        "blocking.rs",
+        "credentials.rs",
+        "protocol.rs",
+    ] {
         assert!(
             !root.join(obsolete).exists(),
             "obsolete root module returned: {obsolete}"
@@ -20,9 +33,9 @@ fn integration_uses_the_target_top_level_layers() {
 }
 
 #[test]
-fn services_have_only_participant_transport_and_quota_axes() {
+fn services_have_only_participant_implementation_axes() {
     let services = source_root().join("services");
-    for axis in ["participants", "transport", "quota"] {
+    for axis in ["participants"] {
         assert!(services.join(axis).is_dir(), "missing service axis: {axis}");
     }
 
@@ -32,6 +45,7 @@ fn services_have_only_participant_transport_and_quota_axes() {
         "drivers",
         "factories",
         "gateways",
+        "quota",
         "streams",
     ] {
         assert!(
@@ -42,11 +56,12 @@ fn services_have_only_participant_transport_and_quota_axes() {
 }
 
 #[test]
-fn application_capabilities_have_one_semantic_home() {
-    let application = source_root().join("application");
-    let capabilities = application.join("capabilities");
+fn capabilities_and_domain_facts_have_distinct_semantic_homes() {
+    let capabilities = source_root().join("capabilities");
     for capability in [
         "account.rs",
+        "connection.rs",
+        "event.rs",
         "execution.rs",
         "funding.rs",
         "market.rs",
@@ -58,23 +73,78 @@ fn application_capabilities_have_one_semantic_home() {
         );
     }
 
-    for obsolete in [
+    for model in ["account.rs", "execution.rs", "market.rs"] {
+        assert!(
+            source_root().join("domain").join(model).is_file(),
+            "missing Integration domain fact: {model}"
+        );
+    }
+    assert!(!source_root().join("application").exists());
+}
+
+#[test]
+fn capability_and_blocking_surfaces_have_distinct_ownership() {
+    let root = source_root();
+    let capabilities = root.join("capabilities");
+    let blocking = root.join("blocking");
+
+    for entry in std::fs::read_dir(&capabilities).expect("read capabilities") {
+        let path = entry.expect("read capability entry").path();
+        if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+            let source = std::fs::read_to_string(&path).expect("read capability source");
+            assert!(
+                !source.contains("Blocking"),
+                "async capability owns a blocking projection: {}",
+                path.display()
+            );
+            assert!(
+                !source.contains("pub struct ")
+                    && !source.contains("pub enum ")
+                    && !source.contains("pub type "),
+                "capability module owns a domain object: {}",
+                path.display()
+            );
+        }
+    }
+
+    for module in [
         "account.rs",
-        "account_inspection.rs",
         "connection.rs",
-        "earn.rs",
-        "execution_stream.rs",
-        "historical.rs",
+        "event.rs",
+        "execution.rs",
+        "funding.rs",
         "market.rs",
-        "market_stream.rs",
-        "order_query.rs",
-        "reference",
-        "transfer.rs",
+        "reference.rs",
     ] {
         assert!(
-            !application.join(obsolete).exists(),
-            "capability has a second application home: {obsolete}"
+            blocking.join(module).is_file(),
+            "missing blocking module: {module}"
         );
+        let source = std::fs::read_to_string(blocking.join(module)).expect("read blocking module");
+        assert!(
+            !source.contains("pub struct ")
+                && !source.contains("pub enum ")
+                && !source.contains("pub type "),
+            "blocking module owns a domain object: {module}"
+        );
+    }
+}
+
+#[test]
+fn stable_surface_files_use_single_word_names() {
+    let root = source_root();
+    for directory in ["capabilities", "blocking", "domain"] {
+        for entry in std::fs::read_dir(root.join(directory)).expect("read stable surface") {
+            let path = entry.expect("read stable surface entry").path();
+            if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                let stem = path.file_stem().and_then(|value| value.to_str()).unwrap();
+                assert!(
+                    !stem.contains('_'),
+                    "compound file name must become nested modules: {}",
+                    path.display()
+                );
+            }
+        }
     }
 }
 
@@ -90,78 +160,56 @@ fn stable_domain_axes_use_the_target_names() {
         assert!(domain.join(axis).is_file(), "missing domain axis: {axis}");
     }
     assert!(
-        !domain.join("reference.rs").exists(),
-        "canonical Reference types returned to Integration domain"
+        domain.join("reference.rs").is_file(),
+        "Integration-owned participant reference facts are missing"
     );
 }
 
 #[test]
 fn participant_connections_keep_context_separate_from_capability_implementations() {
-    let participants = source_root().join("application/participants");
-    for (participant, capabilities) in [
-        (
-            "binance",
-            &["account", "execution", "funding", "reference"][..],
-        ),
-        ("okx", &["account", "execution", "reference"][..]),
+    let participants = source_root().join("participants");
+    for obsolete in [
+        "okx/connection.rs",
+        "okx/types.rs",
+        "hyperliquid/connection.rs",
+        "hyperliquid/market.rs",
+        "ibkr/connection.rs",
     ] {
-        let participant = participants.join(participant);
-        let facade = participant.join("connection.rs");
-        let implementations = participant.join("connection");
-        let source = std::fs::read_to_string(&facade).expect("read participant connection facade");
-
         assert!(
-            // Binance keeps the four product-native connection constructors in
-            // one public facade so callers cannot accidentally combine an
-            // endpoint family with the wrong capability. The implementation
-            // split remains tracked by the boundary-remediation task.
-            source.lines().count() < 1_100,
-            "participant connection facade grew into a second implementation home: {}",
-            facade.display()
+            !participants.join(obsolete).exists(),
+            "obsolete participant facade returned: {obsolete}"
         );
-        for capability in capabilities {
-            assert!(
-                implementations.join(format!("{capability}.rs")).is_file(),
-                "missing participant capability implementation: {participant:?}/{capability}"
-            );
-        }
-        assert!(implementations.join("blocking.rs").is_file());
-        assert!(implementations.join("tests.rs").is_file());
+    }
 
-        for implementation in [
-            "impl AsyncAccount",
-            "impl AsyncEarn",
-            "impl AsyncInstrument",
-            "impl AsyncMarket",
-            "impl AsyncOrder",
-            "impl AsyncTransfer",
-            "pub mod blocking {",
-        ] {
-            assert!(
-                !source.contains(implementation),
-                "capability implementation returned to connection facade: {implementation}"
-            );
-        }
-        for rejected in ["manager.rs", "registry.rs"] {
-            assert!(
-                !participant.join(rejected).exists() && !implementations.join(rejected).exists(),
-                "participant introduced rejected orchestration layer: {rejected}"
-            );
-        }
+    for connection in [
+        "okx/public/rest.rs",
+        "okx/public/websocket.rs",
+        "okx/private/rest.rs",
+        "okx/private/websocket.rs",
+        "hyperliquid/info/rest.rs",
+        "hyperliquid/websocket.rs",
+        "ibkr/account.rs",
+        "ibkr/market.rs",
+        "ibkr/trading.rs",
+    ] {
+        assert!(
+            participants.join(connection).is_file(),
+            "missing concrete participant connection: {connection}"
+        );
     }
 }
 
 #[test]
-fn external_event_envelopes_preserve_provider_and_recovery_identity() {
-    let envelope = std::fs::read_to_string(source_root().join("application/external_event.rs"))
+fn external_event_envelopes_preserve_participant_and_recovery_identity() {
+    let envelope = std::fs::read_to_string(source_root().join("domain/event.rs"))
         .expect("read external event envelope");
     for field in [
         "participant: ParticipantRef",
         "binding_id: String",
         "channel_id: String",
         "channel_epoch: u64",
-        "provider_event_id: Option<String>",
-        "provider_sequence: Option<u64>",
+        "participant_event_id: Option<String>",
+        "participant_sequence: Option<u64>",
         "observed_at_unix_nanos: UnixNanos",
         "received_at_unix_nanos: UnixNanos",
     ] {
@@ -173,14 +221,13 @@ fn external_event_envelopes_preserve_provider_and_recovery_identity() {
 }
 
 #[test]
-fn blocking_http_worker_is_lazy_for_async_first_connections() {
-    let http = std::fs::read_to_string(source_root().join("services/transport/http/mod.rs"))
+fn transport_is_async_only_and_blocking_is_a_capability_namespace() {
+    let http = std::fs::read_to_string(source_root().join("transport/http/mod.rs"))
         .expect("read HTTP transport");
-    let constructor = http
-        .split("impl PublicHttpClient")
-        .nth(1)
-        .and_then(|source| source.split("fn worker(&self)").next())
-        .expect("blocking HTTP constructor");
-    assert!(!constructor.contains("std::thread::Builder"));
-    assert!(http.contains("constructing_blocking_projection_does_not_start_a_hidden_worker"));
+    let websocket = std::fs::read_to_string(source_root().join("transport/websocket/channel.rs"))
+        .expect("read WebSocket transport");
+    assert!(!http.contains("BlockingHttpClient"));
+    assert!(!http.contains("reqwest::blocking"));
+    assert!(!websocket.contains("BlockingTokioSocket"));
+    assert!(!websocket.contains("std::thread::Builder"));
 }

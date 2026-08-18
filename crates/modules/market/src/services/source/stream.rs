@@ -1,8 +1,9 @@
 //! Wake-driven driver for Integration live market capabilities.
 
-use kairos_integration::application::{
-    AsyncMarketEventSource, IntegrationError, MarketEventKind, MarketSubscription,
-    SubscriptionId as IntegrationSubscriptionId,
+use kairos_integration::{
+    ConnectionLifecycleCommand, IntegrationError, MarketDataKind, MarketDataStream,
+    MarketEventKind, MarketFeed, MarketSubscriptionCommand, MarketSubscriptionId,
+    MarketSubscriptionOutcome, MarketSubscriptionRequest,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tokio::sync::mpsc;
@@ -31,7 +32,7 @@ pub(crate) fn spawn_stream<C>(
     input_capacity: usize,
 ) -> SourceHandle
 where
-    C: AsyncMarketEventSource + 'static,
+    C: ConnectionLifecycleCommand + MarketSubscriptionCommand + MarketDataStream + 'static,
 {
     spawn_stream_with_policy(
         descriptor,
@@ -48,7 +49,7 @@ pub(crate) fn spawn_stream_with_policy<C>(
     failure_policy: StreamFailurePolicy,
 ) -> SourceHandle
 where
-    C: AsyncMarketEventSource + 'static,
+    C: ConnectionLifecycleCommand + MarketSubscriptionCommand + MarketDataStream + 'static,
 {
     let (commands, command_receiver) = mpsc::channel(COMMAND_CAPACITY);
     let (input_sender, inputs) = mpsc::channel(input_capacity);
@@ -75,12 +76,12 @@ async fn run<C>(
     inputs: mpsc::Sender<SourceInput>,
     failure_policy: StreamFailurePolicy,
 ) where
-    C: AsyncMarketEventSource,
+    C: ConnectionLifecycleCommand + MarketSubscriptionCommand + MarketDataStream,
 {
     let source_id = descriptor.id;
     let mut epoch = SourceEpoch::new(1);
     let mut deferred_commands = VecDeque::new();
-    match connection.connect_channel().await {
+    match connection.connect().await {
         Ok(()) => {
             if status(&inputs, &source_id, epoch, SourceStatus::Ready)
                 .await
@@ -114,7 +115,7 @@ async fn run<C>(
             return;
         }
     }
-    let mut markets = BTreeMap::<IntegrationSubscriptionId, ResolvedMarket>::new();
+    let mut markets = BTreeMap::<MarketSubscriptionId, ResolvedMarket>::new();
     let mut resyncing = BTreeMap::<kairos_primitives::MarketId, SourceRequestId>::new();
     let mut blocked_markets = BTreeSet::<kairos_primitives::MarketId>::new();
     loop {
@@ -148,7 +149,7 @@ async fn run<C>(
                     SourceCommand::Pause | SourceCommand::Resume => {}
                     SourceCommand::Reconnect => {
                         let _ = status(&inputs, &source_id, epoch, SourceStatus::Reconnecting).await;
-                        match connection.reconnect_channel().await {
+                        match connection.reconnect().await {
                             Ok(()) => {
                                 epoch.advance();
                                 let _ = status(&inputs, &source_id, epoch, SourceStatus::Ready).await;
@@ -160,13 +161,13 @@ async fn run<C>(
                         }
                     }
                     SourceCommand::Shutdown => {
-                        let _ = connection.disconnect_channel().await;
+                        let _ = connection.disconnect().await;
                         let _ = status(&inputs, &source_id, epoch, SourceStatus::Stopped).await;
                         return;
                     }
                 }
             }
-            result = connection.next_market_event(), if !markets.is_empty() => {
+            result = connection.next(), if !markets.is_empty() => {
                 let event = match result {
                     Ok(event) => event,
                     Err(IntegrationError::ResyncRequired(reason))
@@ -257,7 +258,7 @@ async fn run<C>(
                                 }
                                 mpsc::error::TrySendError::Full(_) => {
                                     fail(&inputs, &source_id, epoch, SourceFailureKind::Backpressure, "source observation input queue overflowed".into()).await;
-                                    let _ = connection.disconnect_channel().await;
+                                    let _ = connection.disconnect().await;
                                     return;
                                 }
                             }
@@ -283,9 +284,9 @@ async fn run<C>(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn resync<C: AsyncMarketEventSource>(
+async fn resync<C: MarketSubscriptionCommand>(
     connection: &mut C,
-    markets: &mut BTreeMap<IntegrationSubscriptionId, ResolvedMarket>,
+    markets: &mut BTreeMap<MarketSubscriptionId, ResolvedMarket>,
     resyncing: &mut BTreeMap<kairos_primitives::MarketId, SourceRequestId>,
     inputs: &mpsc::Sender<SourceInput>,
     source_id: &SourceId,
@@ -304,14 +305,10 @@ async fn resync<C: AsyncMarketEventSource>(
             connection.unsubscribe(previous).await?;
             markets.remove(&previous);
         }
-        let handle = connection
-            .subscribe(MarketSubscription::new([market
-                .route
-                .provider_symbol
-                .to_string()])?)
-            .await?;
+        let handle =
+            confirmed_subscription(connection.subscribe(subscription_request(&market)?).await?)?;
         markets.insert(handle, market.clone());
-        Ok::<_, kairos_integration::application::IntegrationError>(())
+        Ok::<_, IntegrationError>(())
     }
     .await;
     match result {
@@ -332,22 +329,22 @@ async fn resync<C: AsyncMarketEventSource>(
     }
 }
 
-async fn subscribe<C: AsyncMarketEventSource>(
+async fn subscribe<C: MarketSubscriptionCommand>(
     connection: &mut C,
-    markets: &mut BTreeMap<IntegrationSubscriptionId, ResolvedMarket>,
+    markets: &mut BTreeMap<MarketSubscriptionId, ResolvedMarket>,
     inputs: &mpsc::Sender<SourceInput>,
     source_id: &SourceId,
     epoch: SourceEpoch,
     request_id: SourceRequestId,
     market: ResolvedMarket,
 ) {
-    let provider_symbol = market.route.provider_symbol.clone();
-    let result = connection
-        .subscribe(
-            MarketSubscription::new([provider_symbol.to_string()])
-                .expect("validated market symbol"),
-        )
-        .await;
+    let result = match subscription_request(&market) {
+        Ok(request) => connection
+            .subscribe(request)
+            .await
+            .and_then(confirmed_subscription),
+        Err(error) => Err(error),
+    };
     let input = match result {
         Ok(id) => {
             markets.insert(id, market);
@@ -369,9 +366,9 @@ async fn subscribe<C: AsyncMarketEventSource>(
     let _ = inputs.send(input).await;
 }
 
-async fn unsubscribe<C: AsyncMarketEventSource>(
+async fn unsubscribe<C: MarketSubscriptionCommand>(
     connection: &mut C,
-    markets: &mut BTreeMap<IntegrationSubscriptionId, ResolvedMarket>,
+    markets: &mut BTreeMap<MarketSubscriptionId, ResolvedMarket>,
     inputs: &mpsc::Sender<SourceInput>,
     source_id: &SourceId,
     epoch: SourceEpoch,
@@ -381,12 +378,16 @@ async fn unsubscribe<C: AsyncMarketEventSource>(
     let result = handle
         .as_str()
         .parse::<u64>()
-        .map(IntegrationSubscriptionId)
+        .map(MarketSubscriptionId)
         .map_err(|error| error.to_string());
     let result = match result {
-        Ok(id) => connection.unsubscribe(id).await.map(|()| {
-            markets.remove(&id);
-        }),
+        Ok(id) => connection
+            .unsubscribe(id)
+            .await
+            .and_then(confirmed_unsubscription)
+            .map(|()| {
+                markets.remove(&id);
+            }),
         Err(error) => {
             let _ = inputs
                 .send(SourceInput::SubscriptionRejected {
@@ -413,6 +414,79 @@ async fn unsubscribe<C: AsyncMarketEventSource>(
         },
     };
     let _ = inputs.send(input).await;
+}
+
+fn subscription_request(
+    market: &ResolvedMarket,
+) -> Result<MarketSubscriptionRequest, IntegrationError> {
+    let symbol = kairos_primitives::ParticipantSymbol::new(market.route.provider_symbol.as_str())
+        .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
+    let mut feeds = Vec::new();
+    let capabilities = &market.route.observation_capabilities;
+    let mut add = |kind, interval| {
+        feeds.push(MarketFeed {
+            kind,
+            symbol: Some(symbol.clone()),
+            interval,
+            depth: (kind == MarketDataKind::OrderBook).then_some(100),
+            update_speed_millis: None,
+        });
+    };
+    for capability in capabilities {
+        match capability {
+            crate::ObservationKind::Quote => add(MarketDataKind::Quote, None),
+            crate::ObservationKind::Trade => add(MarketDataKind::Trade, None),
+            crate::ObservationKind::Bar => add(MarketDataKind::Bar, Some("1m".into())),
+            crate::ObservationKind::TradeBar => add(MarketDataKind::TradeBar, Some("1m".into())),
+            crate::ObservationKind::QuoteBar => add(MarketDataKind::QuoteBar, Some("1m".into())),
+            crate::ObservationKind::Ticker24h => add(MarketDataKind::Ticker24h, None),
+            crate::ObservationKind::OptionGreeks => add(MarketDataKind::Greeks, None),
+            crate::ObservationKind::MarkPrice => add(MarketDataKind::MarkPrice, None),
+            crate::ObservationKind::IndexPrice => add(MarketDataKind::IndexPrice, None),
+            crate::ObservationKind::FundingRate | crate::ObservationKind::Rate => {
+                add(MarketDataKind::FundingRate, None)
+            }
+            crate::ObservationKind::OpenInterest => add(MarketDataKind::OpenInterest, None),
+            crate::ObservationKind::OrderBook => add(MarketDataKind::OrderBook, None),
+        }
+    }
+    if feeds.is_empty() {
+        feeds
+            .push(MarketFeed::quote(symbol.to_string()).map_err(IntegrationError::InvalidRequest)?);
+    }
+    MarketSubscriptionRequest::new(feeds).map_err(IntegrationError::InvalidRequest)
+}
+
+fn confirmed_subscription(
+    outcome: MarketSubscriptionOutcome<kairos_integration::MarketSubscription>,
+) -> Result<MarketSubscriptionId, IntegrationError> {
+    match outcome {
+        MarketSubscriptionOutcome::Confirmed(subscription) => Ok(subscription.id),
+        MarketSubscriptionOutcome::Rejected(rejection) => {
+            Err(IntegrationError::InvalidRequest(rejection.message))
+        }
+        MarketSubscriptionOutcome::Indeterminate { reason, .. } => {
+            Err(IntegrationError::ResyncRequired(format!(
+                "market subscription outcome is indeterminate: {reason}"
+            )))
+        }
+    }
+}
+
+fn confirmed_unsubscription(
+    outcome: MarketSubscriptionOutcome<()>,
+) -> Result<(), IntegrationError> {
+    match outcome {
+        MarketSubscriptionOutcome::Confirmed(()) => Ok(()),
+        MarketSubscriptionOutcome::Rejected(rejection) => {
+            Err(IntegrationError::InvalidRequest(rejection.message))
+        }
+        MarketSubscriptionOutcome::Indeterminate { reason, .. } => {
+            Err(IntegrationError::ResyncRequired(format!(
+                "market unsubscription outcome is indeterminate: {reason}"
+            )))
+        }
+    }
 }
 
 pub(super) async fn status(
@@ -472,18 +546,16 @@ mod tests {
     use super::{normalize, recover_connection, Normalized};
     use crate::domain::market::{MarketDataRoute, ResolvedMarket};
     use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceId, SourceStatus};
-    use kairos_integration::application::{
-        AsyncMarketEventSource, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
-        SubscriptionId,
+    use kairos_integration::{
+        ConnectionLifecycleCommand, IntegrationError, MarketEvent, MarketEventKind,
     };
-    use kairos_integration::domain::{ConnectionHealth, ConnectionLifecycle};
-    use kairos_primitives::{Sequence, Symbol, UnixNanos};
+    use kairos_primitives::{ParticipantSymbol, Sequence, UnixNanos};
     use std::collections::VecDeque;
     use tokio::sync::mpsc;
 
     fn event(kind: MarketEventKind) -> MarketEvent {
         MarketEvent {
-            symbol: Symbol::new("BTCUSDT").unwrap(),
+            symbol: ParticipantSymbol::new("BTCUSDT").unwrap(),
             kind,
             price: Some("100".parse().unwrap()),
             quantity: Some("2".parse().unwrap()),
@@ -555,36 +627,16 @@ mod tests {
         reconnects: usize,
     }
 
-    impl AsyncMarketEventSource for RecoveringSource {
-        async fn connect_channel(&mut self) -> Result<(), IntegrationError> {
+    impl ConnectionLifecycleCommand for RecoveringSource {
+        async fn connect(&mut self) -> Result<(), IntegrationError> {
             Ok(())
         }
-        async fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
+        async fn disconnect(&mut self) -> Result<(), IntegrationError> {
             Ok(())
         }
-        async fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
+        async fn reconnect(&mut self) -> Result<(), IntegrationError> {
             self.reconnects += 1;
             Ok(())
-        }
-        fn channel_health(&self) -> ConnectionHealth {
-            ConnectionHealth {
-                lifecycle: ConnectionLifecycle::Ready,
-                healthy: true,
-                authenticated: false,
-                last_error: None,
-            }
-        }
-        async fn subscribe(
-            &mut self,
-            _: MarketSubscription,
-        ) -> Result<SubscriptionId, IntegrationError> {
-            Ok(SubscriptionId(1))
-        }
-        async fn unsubscribe(&mut self, _: SubscriptionId) -> Result<(), IntegrationError> {
-            Ok(())
-        }
-        async fn next_market_event(&mut self) -> Result<MarketEvent, IntegrationError> {
-            std::future::pending().await
         }
     }
 

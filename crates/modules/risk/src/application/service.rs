@@ -7,6 +7,7 @@ use kairos_primitives::{
     ActorId, DecisionId, Generation, RequestId, ReservationId, Sequence, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct PublishPolicy {
@@ -139,13 +140,86 @@ pub enum RiskError {
     Busy,
 }
 
+/// Selects how process time is allowed to advance Risk business state.
+///
+/// Conflux (or the legacy process host during migration) owns timer scheduling.
+/// Risk owns whether a timer is authoritative and the monotonic replay-time
+/// invariant.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RiskClockMode {
+    #[default]
+    Wall,
+    Replay,
+}
+
 pub struct RiskApplication {
     pub(crate) actor: RiskActor,
+    clock_mode: RiskClockMode,
+    business_time_unix_nanos: Option<UnixNanos>,
+    maintenance_interval: Duration,
 }
 
 impl RiskApplication {
     pub(crate) fn new(actor: RiskActor) -> Self {
-        Self { actor }
+        Self {
+            actor,
+            clock_mode: RiskClockMode::Wall,
+            business_time_unix_nanos: None,
+            maintenance_interval: Duration::from_secs(1),
+        }
+    }
+
+    pub fn set_clock_mode(&mut self, mode: RiskClockMode) {
+        self.clock_mode = mode;
+    }
+
+    pub const fn clock_mode(&self) -> RiskClockMode {
+        self.clock_mode
+    }
+
+    pub const fn business_time(&self) -> Option<UnixNanos> {
+        self.business_time_unix_nanos
+    }
+
+    pub fn set_maintenance_interval(&mut self, interval: Duration) -> Result<(), RiskError> {
+        if interval.is_zero() {
+            return Err(RiskError::Invalid(
+                "maintenance interval must be positive".into(),
+            ));
+        }
+        self.maintenance_interval = interval;
+        Ok(())
+    }
+
+    pub const fn maintenance_interval(&self) -> Duration {
+        self.maintenance_interval
+    }
+
+    /// Apply a scheduled maintenance tick.
+    ///
+    /// Replay mode deliberately ignores wall-clock ticks. Its business time is
+    /// advanced only through [`Self::advance_business_time`].
+    pub fn maintenance_tick(&mut self, at_unix_nanos: UnixNanos) -> Result<usize, RiskError> {
+        match self.clock_mode {
+            RiskClockMode::Wall => self.expire(ExpireReservations { at_unix_nanos }),
+            RiskClockMode::Replay => Ok(0),
+        }
+    }
+
+    /// Advance the authoritative replay/business-time barrier and expire all
+    /// reservations atomically at that timestamp.
+    pub fn advance_business_time(&mut self, at_unix_nanos: UnixNanos) -> Result<usize, RiskError> {
+        if self
+            .business_time_unix_nanos
+            .is_some_and(|current| at_unix_nanos < current)
+        {
+            return Err(RiskError::Invalid(
+                "business time cannot move backwards".into(),
+            ));
+        }
+        let expired = self.expire(ExpireReservations { at_unix_nanos })?;
+        self.business_time_unix_nanos = Some(at_unix_nanos);
+        Ok(expired)
     }
 
     pub fn publish_policy(&mut self, request: PublishPolicy) -> Result<(), RiskError> {

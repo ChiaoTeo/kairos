@@ -7,24 +7,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use crate::domain::{
     AccountEvent, AccountModel, AccountObservedFill, AccountOrderObservation, AccountSegment,
     AccountSnapshot, AccountStatus, AssetId, Balance, FillId, InstrumentId, MarginMode, Money,
     OpenOrder, Position, PositionMode, SegmentKey, SignedQuantity,
 };
-use kairos_integration::application::{
-    AsyncAccountEventSource, AsyncAccountReadConnection, IntegrationError,
-};
-
-use futures_util::{stream::FuturesUnordered, StreamExt};
-
-use crate::services::refresh::RefreshFetch;
-
-const ASYNC_ACCOUNT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-const ASYNC_ACCOUNT_CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
-const ASYNC_ACCOUNT_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
@@ -60,7 +48,7 @@ impl AccountInstrumentResolver {
 
     fn resolve(
         &self,
-        provider: &kairos_integration::application::ProviderInstrumentRef,
+        provider: &kairos_integration::ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let key = format!(
             "{}|{}|{}",
@@ -112,7 +100,7 @@ impl AccountInstrumentResolver {
 
     fn resolve_uncached(
         &self,
-        provider: &kairos_integration::application::ProviderInstrumentRef,
+        provider: &kairos_integration::ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let symbol = provider.source_symbol.as_str();
         let (markets, instruments) = self.identity_snapshot()?;
@@ -225,7 +213,7 @@ fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
 }
 
 fn identity_resolution_error(
-    provider: &kairos_integration::application::ProviderInstrumentRef,
+    provider: &kairos_integration::ParticipantInstrumentRef,
     matches: usize,
 ) -> String {
     format!(
@@ -286,34 +274,32 @@ fn reference_market(
 /// provider capability trait.
 pub(crate) enum AccountAsyncEventSource {
     BinanceSpot {
-        binding_id: String,
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::BinanceSpotAccountEvents,
+        source: kairos_integration::participants::binance::spot::BinanceSpotUserWebSocketConnection,
     },
-    BinanceFutures {
-        binding_id: String,
+    BinanceUsdM {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::BinanceFuturesAccountEvents,
+        source: kairos_integration::participants::binance::usdm::BinanceUsdMUserWebSocketConnection,
+    },
+    BinanceCoinM {
+        segment_key: SegmentKey,
+        source: kairos_integration::participants::binance::coinm::BinanceCoinMUserWebSocketConnection,
     },
     BinanceOptions {
-        binding_id: String,
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::BinanceOptionsAccountEvents,
+        source: kairos_integration::participants::binance::options::BinanceOptionsUserWebSocketConnection,
     },
     BinanceMargin {
-        binding_id: String,
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::BinanceMarginAccountEvents,
+        source: kairos_integration::participants::binance::margin::BinanceMarginUserWebSocketConnection,
     },
     Ibkr {
-        binding_id: String,
         segment_key: SegmentKey,
-        source: kairos_integration::participants::ibkr::IbkrAccountEvents,
+        source: kairos_integration::participants::ibkr::IbkrAccountStreamConnection,
     },
     OkxTrading {
-        binding_id: String,
         segment_key: SegmentKey,
-        source: kairos_integration::participants::okx::OkxTradingAccountEvents,
+        source: kairos_integration::participants::okx::private::OkxPrivateWebSocketConnection,
     },
 }
 
@@ -321,257 +307,117 @@ pub(crate) enum AccountAsyncEventSource {
 /// This enum is deliberately private: it keeps heterogeneous provider handles
 /// without publishing a second Account-owned provider protocol.
 pub(crate) enum AccountAsyncSnapshotConnection {
-    BinanceSpot(kairos_integration::participants::binance::BinanceSpotAccountRead),
-    BinanceFunding(kairos_integration::participants::binance::BinanceFundingAccountRead),
-    BinanceMargin(kairos_integration::participants::binance::BinanceMarginAccountRead),
-    BinanceFutures(kairos_integration::participants::binance::BinanceFuturesAccountRead),
-    BinanceOptions(kairos_integration::participants::binance::BinanceOptionsAccountRead),
-    Ibkr(kairos_integration::participants::ibkr::IbkrAccountRead),
-    OkxTrading(kairos_integration::participants::okx::OkxTradingAccountRead),
+    BinanceSpot(kairos_integration::participants::binance::spot::BinanceSpotRestConnection),
+    BinanceFunding(
+        kairos_integration::participants::binance::funding::BinanceFundingRestConnection,
+    ),
+    BinanceMargin(kairos_integration::participants::binance::margin::BinanceMarginRestConnection),
+    BinanceUsdM(kairos_integration::participants::binance::usdm::BinanceUsdMRestConnection),
+    BinanceCoinM(kairos_integration::participants::binance::coinm::BinanceCoinMRestConnection),
+    BinanceOptions(
+        kairos_integration::participants::binance::options::BinanceOptionsRestConnection,
+    ),
+    Ibkr(kairos_integration::participants::ibkr::IbkrAccountQueryConnection),
+    OkxTrading(kairos_integration::participants::okx::private::OkxPrivateRestConnection),
 }
 
 impl AccountAsyncSnapshotConnection {
-    async fn fetch_account(
-        &mut self,
-        segment: &ExternalAccountSegment,
-    ) -> Result<
-        kairos_integration::application::capabilities::account_facts::ExternalAccountSnapshot,
-        IntegrationError,
-    > {
+    pub(crate) fn into_conflux(
+        self,
+        key: String,
+        system: &mut kairos_conflux::ConfluxSystem,
+    ) -> Result<(), String> {
         match self {
-            Self::BinanceSpot(connection) => connection.fetch_account(segment).await,
-            Self::BinanceFunding(connection) => connection.fetch_account(segment).await,
-            Self::BinanceMargin(connection) => connection.fetch_account(segment).await,
-            Self::BinanceFutures(connection) => connection.fetch_account(segment).await,
-            Self::BinanceOptions(connection) => connection.fetch_account(segment).await,
-            Self::Ibkr(connection) => connection.fetch_account(segment).await,
-            Self::OkxTrading(connection) => connection.fetch_account(segment).await,
-        }
-    }
-}
-
-struct AsyncSnapshotSlot {
-    connection: AccountAsyncSnapshotConnection,
-    consecutive_failures: u32,
-    circuit_open_until: Option<Instant>,
-}
-
-/// Account-owned async snapshot bindings. Network futures run directly on the
-/// caller's Tokio runtime and unrelated segments are fetched concurrently.
-pub(crate) struct AccountAsyncSnapshotGateway {
-    connections: BTreeMap<String, AsyncSnapshotSlot>,
-    resolver: AccountInstrumentResolver,
-}
-
-impl AccountAsyncSnapshotGateway {
-    pub(crate) fn new(
-        connections: BTreeMap<String, AccountAsyncSnapshotConnection>,
-        resolver: AccountInstrumentResolver,
-    ) -> Self {
-        Self {
-            connections: connections
-                .into_iter()
-                .map(|(key, connection)| {
-                    (
-                        key,
-                        AsyncSnapshotSlot {
-                            connection,
-                            consecutive_failures: 0,
-                            circuit_open_until: None,
-                        },
-                    )
-                })
-                .collect(),
-            resolver,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.connections.len()
-    }
-
-    pub(crate) async fn fetch(&mut self, segments: Vec<AccountSegment>) -> Vec<RefreshFetch> {
-        self.fetch_results(segments, None).await
-    }
-
-    pub(crate) async fn fetch_incremental(
-        &mut self,
-        segments: Vec<AccountSegment>,
-        sender: tokio::sync::mpsc::Sender<RefreshFetch>,
-    ) {
-        let _ = self.fetch_results(segments, Some(sender)).await;
-    }
-
-    async fn fetch_results(
-        &mut self,
-        segments: Vec<AccountSegment>,
-        sender: Option<tokio::sync::mpsc::Sender<RefreshFetch>>,
-    ) -> Vec<RefreshFetch> {
-        let mut selected = segments
-            .into_iter()
-            .map(|segment| (segment.segment_key.to_string(), segment))
-            .collect::<BTreeMap<_, _>>();
-        let mut futures = FuturesUnordered::new();
-        let resolver = self.resolver.clone();
-
-        for (key, slot) in &mut self.connections {
-            let Some(segment) = selected.remove(key) else {
-                continue;
-            };
-            let resolver = resolver.clone();
-            futures.push(async move {
-                let started = Instant::now();
-                if slot
-                    .circuit_open_until
-                    .is_some_and(|until| Instant::now() < until)
-                {
-                    return RefreshFetch {
-                        segment,
-                        result: Err("account refresh circuit is open".into()),
-                        elapsed_ms: 0,
-                    };
-                }
-                slot.circuit_open_until = None;
-                let external = external_segment(&segment);
-                let result = match tokio::time::timeout(
-                    ASYNC_ACCOUNT_QUERY_TIMEOUT,
-                    slot.connection.fetch_account(&external),
-                )
-                .await
-                {
-                    Ok(result) => result
-                        .map_err(|error| error.to_string())
-                        .and_then(|value| map_snapshot(value, &resolver)),
-                    Err(_) => Err(format!(
-                        "account segment refresh timed out after {}ms",
-                        ASYNC_ACCOUNT_QUERY_TIMEOUT.as_millis()
-                    )),
-                };
-                if result.is_err() {
-                    slot.consecutive_failures = slot.consecutive_failures.saturating_add(1);
-                    if slot.consecutive_failures >= ASYNC_ACCOUNT_CIRCUIT_FAILURE_THRESHOLD {
-                        slot.circuit_open_until =
-                            Some(Instant::now() + ASYNC_ACCOUNT_CIRCUIT_COOLDOWN);
-                    }
-                } else {
-                    slot.consecutive_failures = 0;
-                }
-                RefreshFetch {
-                    segment,
-                    result,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                }
-            });
-        }
-
-        let mut fetches = Vec::new();
-        while let Some(fetch) = futures.next().await {
-            if let Some(sender) = &sender {
-                let _ = sender.send(fetch.clone()).await;
+            Self::BinanceSpot(connection) => {
+                system
+                    .binance_spot_rest_connections
+                    .ensure_with(key, 1, || connection)
             }
-            fetches.push(fetch);
-        }
-        for segment in selected.into_values() {
-            let fetch = RefreshFetch {
-                result: Err(format!(
-                    "account segment is not configured: {}",
-                    segment.segment_key
-                )),
-                segment,
-                elapsed_ms: 0,
-            };
-            if let Some(sender) = &sender {
-                let _ = sender.send(fetch.clone()).await;
+            Self::BinanceFunding(connection) => system
+                .binance_funding_rest_connections
+                .ensure_with(key, 1, || connection),
+            Self::BinanceMargin(connection) => {
+                system
+                    .binance_margin_rest_connections
+                    .ensure_with(key, 1, || connection)
             }
-            fetches.push(fetch);
+            Self::BinanceUsdM(connection) => {
+                system
+                    .binance_usdm_rest_connections
+                    .ensure_with(key, 1, || connection)
+            }
+            Self::BinanceCoinM(connection) => {
+                system
+                    .binance_coinm_rest_connections
+                    .ensure_with(key, 1, || connection)
+            }
+            Self::BinanceOptions(connection) => system
+                .binance_options_rest_connections
+                .ensure_with(key, 1, || connection),
+            Self::Ibkr(connection) => {
+                system
+                    .ibkr_account_query_connections
+                    .ensure_with(key, 1, || connection)
+            }
+            Self::OkxTrading(connection) => {
+                system
+                    .okx_private_rest_connections
+                    .ensure_with(key, 1, || connection)
+            }
         }
-        fetches
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 }
 
 impl AccountAsyncEventSource {
-    pub(crate) fn binding_id(&self) -> &str {
+    pub(crate) fn into_conflux(
+        self,
+        system: &mut kairos_conflux::ConfluxSystem,
+    ) -> Result<(), String> {
+        let key = self.segment_key().to_string();
         match self {
-            Self::BinanceSpot { binding_id, .. }
-            | Self::BinanceFutures { binding_id, .. }
-            | Self::BinanceOptions { binding_id, .. }
-            | Self::BinanceMargin { binding_id, .. }
-            | Self::Ibkr { binding_id, .. }
-            | Self::OkxTrading { binding_id, .. } => binding_id,
+            Self::BinanceSpot { source, .. } => system
+                .binance_spot_user_websocket_connections
+                .ensure_with(key, 1, || source),
+            Self::BinanceUsdM { source, .. } => system
+                .binance_usdm_user_websocket_connections
+                .ensure_with(key, 1, || source),
+            Self::BinanceCoinM { source, .. } => system
+                .binance_coinm_user_websocket_connections
+                .ensure_with(key, 1, || source),
+            Self::BinanceOptions { source, .. } => system
+                .binance_options_user_websocket_connections
+                .ensure_with(key, 1, || source),
+            Self::BinanceMargin { source, .. } => system
+                .binance_margin_user_websocket_connections
+                .ensure_with(key, 1, || source),
+            Self::Ibkr { source, .. } => {
+                system
+                    .ibkr_account_stream_connections
+                    .ensure_with(key, 1, || source)
+            }
+            Self::OkxTrading { source, .. } => system
+                .okx_private_websocket_connections
+                .ensure_with(key, 1, || source),
         }
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     pub(crate) fn segment_key(&self) -> &SegmentKey {
         match self {
             Self::BinanceSpot { segment_key, .. }
-            | Self::BinanceFutures { segment_key, .. }
+            | Self::BinanceUsdM { segment_key, .. }
+            | Self::BinanceCoinM { segment_key, .. }
             | Self::BinanceOptions { segment_key, .. }
             | Self::BinanceMargin { segment_key, .. }
             | Self::Ibkr { segment_key, .. }
             | Self::OkxTrading { segment_key, .. } => segment_key,
         }
     }
-
-    pub(crate) async fn connect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot { source, .. } => source.connect_channel().await,
-            Self::BinanceFutures { source, .. } => source.connect_channel().await,
-            Self::BinanceOptions { source, .. } => source.connect_channel().await,
-            Self::BinanceMargin { source, .. } => source.connect_channel().await,
-            Self::Ibkr { source, .. } => source.connect_channel().await,
-            Self::OkxTrading { source, .. } => source.connect_channel().await,
-        }
-    }
-
-    pub(crate) fn channel_health(&self) -> kairos_integration::application::ConnectionHealth {
-        match self {
-            Self::BinanceSpot { source, .. } => source.channel_health(),
-            Self::BinanceFutures { source, .. } => source.channel_health(),
-            Self::BinanceOptions { source, .. } => source.channel_health(),
-            Self::BinanceMargin { source, .. } => source.channel_health(),
-            Self::Ibkr { source, .. } => source.channel_health(),
-            Self::OkxTrading { source, .. } => source.channel_health(),
-        }
-    }
-
-    pub(crate) async fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot { source, .. } => source.disconnect_channel().await,
-            Self::BinanceFutures { source, .. } => source.disconnect_channel().await,
-            Self::BinanceOptions { source, .. } => source.disconnect_channel().await,
-            Self::BinanceMargin { source, .. } => source.disconnect_channel().await,
-            Self::Ibkr { source, .. } => source.disconnect_channel().await,
-            Self::OkxTrading { source, .. } => source.disconnect_channel().await,
-        }
-    }
-
-    pub(crate) async fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        match self {
-            Self::BinanceSpot { source, .. } => source.reconnect_channel().await,
-            Self::BinanceFutures { source, .. } => source.reconnect_channel().await,
-            Self::BinanceOptions { source, .. } => source.reconnect_channel().await,
-            Self::BinanceMargin { source, .. } => source.reconnect_channel().await,
-            Self::Ibkr { source, .. } => source.reconnect_channel().await,
-            Self::OkxTrading { source, .. } => source.reconnect_channel().await,
-        }
-    }
-
-    pub(crate) async fn next_account_event(
-        &mut self,
-    ) -> Result<kairos_integration::application::ExternalAccountEventEnvelope, IntegrationError>
-    {
-        match self {
-            Self::BinanceSpot { source, .. } => source.next_account_event().await,
-            Self::BinanceFutures { source, .. } => source.next_account_event().await,
-            Self::BinanceOptions { source, .. } => source.next_account_event().await,
-            Self::BinanceMargin { source, .. } => source.next_account_event().await,
-            Self::Ibkr { source, .. } => source.next_account_event().await,
-            Self::OkxTrading { source, .. } => source.next_account_event().await,
-        }
-    }
 }
-use kairos_integration::application::{
+use kairos_integration::{
     ExternalAccountEvent, ExternalAccountModel, ExternalAccountSegment, ExternalAccountStatus,
     ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalOrderStatus,
     ExternalPositionMode,
@@ -607,13 +453,12 @@ impl AccountSnapshotGateway {
     }
 }
 
-fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
+pub(crate) fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
     ExternalAccountSegment {
-        identity:
-            kairos_integration::application::capabilities::account_facts::ExternalAccountIdentity {
-                broker: segment.identity.broker.to_string(),
-                account_id: segment.identity.account_id.clone(),
-            },
+        identity: kairos_integration::ExternalAccountIdentity {
+            broker: segment.identity.broker.to_string(),
+            account_id: segment.identity.account_id.clone(),
+        },
         segment_key: kairos_primitives::SegmentKey::new(segment.segment_key.to_string())
             .expect("validated account segment key"),
         environment: segment.environment.clone(),
@@ -650,10 +495,10 @@ fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
 }
 
 fn map_position(
-    value: kairos_integration::application::ExternalPosition,
+    value: kairos_integration::ExternalPosition,
     resolver: &AccountInstrumentResolver,
 ) -> Result<Position, String> {
-    let (instrument_id, market_id) = resolver.resolve(&value.provider_instrument)?;
+    let (instrument_id, market_id) = resolver.resolve(&value.participant_instrument)?;
     Ok(Position {
         instrument_id,
         market_id,
@@ -667,8 +512,8 @@ fn map_position(
     })
 }
 
-fn map_snapshot(
-    value: kairos_integration::application::ExternalAccountSnapshot,
+pub(crate) fn map_snapshot(
+    value: kairos_integration::ExternalAccountSnapshot,
     resolver: &AccountInstrumentResolver,
 ) -> Result<AccountSnapshot, String> {
     Ok(AccountSnapshot {
@@ -711,10 +556,10 @@ fn map_snapshot(
 }
 
 fn map_open_order(
-    value: kairos_integration::application::ExternalOpenOrder,
+    value: kairos_integration::ExternalOpenOrder,
     resolver: &AccountInstrumentResolver,
 ) -> Result<OpenOrder, String> {
-    let (instrument_id, market_id) = resolver.resolve(&value.provider_instrument)?;
+    let (instrument_id, market_id) = resolver.resolve(&value.participant_instrument)?;
     Ok(OpenOrder {
         order_id: value.order_id,
         remote_order_id: value.remote_order_id,
@@ -809,7 +654,7 @@ pub(crate) fn map_event(
             })
         }
         ExternalAccountEvent::Fill(value) => {
-            let (instrument_id, _) = resolver.resolve(&value.provider_instrument)?;
+            let (instrument_id, _) = resolver.resolve(&value.participant_instrument)?;
             AccountEvent::ObservedFill(AccountObservedFill {
                 fill_id: FillId::new(value.fill_id.to_string()).expect("validated fill id"),
                 order_id: Some(value.order_id),
@@ -833,8 +678,8 @@ pub(crate) fn map_event(
 #[cfg(test)]
 mod identity_tests {
     use super::AccountInstrumentResolver;
-    use kairos_integration::application::{
-        ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef, ProviderInstrumentRef,
+    use kairos_integration::{
+        ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     };
 
     #[test]
@@ -864,7 +709,7 @@ mod identity_tests {
             }],
             Vec::new(),
         );
-        let provider = ProviderInstrumentRef::new(
+        let provider = ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("binance-spot").unwrap()),
             "BTCUSDT",
@@ -891,7 +736,7 @@ mod identity_tests {
                 ..Default::default()
             }],
         );
-        let provider = ProviderInstrumentRef::new(
+        let provider = ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Broker, "ibkr").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("equity").unwrap()),
             "AAPL",
@@ -906,7 +751,7 @@ mod identity_tests {
     #[test]
     fn refuses_missing_or_ambiguous_reference_identity() {
         let resolver = AccountInstrumentResolver::default();
-        let provider = ProviderInstrumentRef::new(
+        let provider = ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
             Some(ParticipantInstrumentTypeRef::new("binance-spot").unwrap()),
             "BTCUSDT",

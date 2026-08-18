@@ -22,3 +22,19 @@ pub struct MarkToMarket {
     pub mark_price: Price,
     pub observed_at_unix_nanos: UnixNanos,
 }
+
+impl TryFrom<kairos_account_contract::MarkToMarketRequest> for MarkToMarket {
+    type Error = String;
+
+    fn try_from(value: kairos_account_contract::MarkToMarketRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            segment_key: SegmentKey::new(value.segment_key).map_err(|error| error.to_string())?,
+            instrument_id: InstrumentId::new(value.instrument_id)
+                .map_err(|error| error.to_string())?,
+            quote_asset: Currency::new(value.quote_asset).map_err(|error| error.to_string())?,
+            mark_price: Price::new(value.mark_price.mantissa, value.mark_price.scale)
+                .map_err(|error| error.to_string())?,
+            observed_at_unix_nanos: value.observed_at_unix_nanos.into(),
+        })
+    }
+}

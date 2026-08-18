@@ -9,6 +9,9 @@ pub enum ReferenceError {
         record_kind: String,
         record_id: String,
     },
+    SyncInProgress {
+        providers: Vec<String>,
+    },
     Provider(String),
     Persistence(String),
     Publication(String),
@@ -25,6 +28,11 @@ impl std::fmt::Display for ReferenceError {
                 f,
                 "invalid reference data: duplicate {record_kind} id: {record_id}"
             ),
+            Self::SyncInProgress { providers } => write!(
+                f,
+                "reference synchronization in progress: providers without last-known-good facts: {}",
+                providers.join(", ")
+            ),
             Self::Provider(value) => write!(f, "reference provider failed: {value}"),
             Self::Persistence(value) => write!(f, "reference persistence failed: {value}"),
             Self::Publication(value) => write!(f, "reference publication failed: {value}"),
@@ -37,6 +45,7 @@ impl ReferenceError {
         match self {
             Self::Invalid(_) => "reference.invalid_data",
             Self::DuplicateId { .. } => "reference.duplicate_id",
+            Self::SyncInProgress { .. } => "reference.sync_in_progress",
             Self::Provider(_) => "reference.provider_failed",
             Self::Persistence(_) => "reference.persistence_failed",
             Self::Publication(_) => "reference.publication_failed",
@@ -46,8 +55,15 @@ impl ReferenceError {
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::Provider(_) | Self::Persistence(_) | Self::Publication(_)
+            Self::SyncInProgress { .. }
+                | Self::Provider(_)
+                | Self::Persistence(_)
+                | Self::Publication(_)
         )
+    }
+
+    pub fn is_sync_in_progress(&self) -> bool {
+        matches!(self, Self::SyncInProgress { .. })
     }
 
     pub fn record_identity(&self) -> Option<(&str, &str)> {

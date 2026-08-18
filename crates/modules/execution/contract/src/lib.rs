@@ -8,8 +8,11 @@ pub mod transport;
 pub mod view;
 
 pub use control::{
-    ExecutionControlClient, ExecutionControlResponse, ExecutionRouteCandidateResponse,
-    ExecutionRoutesResponse,
+    CancelOrderRequest, CommandEnvelope, ExecutionCommandStatus, ExecutionControlClient,
+    ExecutionControlError, ExecutionControlResponse, ExecutionHealthResponse,
+    ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
+    ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesQuery,
+    ExecutionRoutesResponse, ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
 };
 pub use encode::{event_metadata, view_metadata, EncodeContext};
 pub use error::{ContractError, ContractResult};

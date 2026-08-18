@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use kairos_integration::application::{
-    ConnectionHealth, ConnectionLifecycle, ExternalAccountEventEnvelope,
-};
+use kairos_integration::{ConnectionHealth, ConnectionLifecycle, ExternalAccountEventEnvelope};
 
 use crate::domain::SegmentKey;
 
@@ -33,7 +31,6 @@ pub(crate) enum SegmentSyncLifecycle {
 /// exclusively by `AccountActor`; this state only records provider delivery,
 /// recovery, and freshness evidence for one configured segment.
 pub(crate) struct SegmentSyncState {
-    pub(crate) segment_key: SegmentKey,
     pub(crate) mode: SegmentSyncMode,
     pub(crate) lifecycle: SegmentSyncLifecycle,
     pub(crate) initial_snapshot_complete: bool,
@@ -44,7 +41,6 @@ pub(crate) struct SegmentSyncState {
     pub(crate) last_success_at_unix_nanos: Option<u64>,
     pub(crate) last_refresh_duration_ms: Option<u64>,
     pub(crate) last_error: Option<String>,
-    pub(crate) reconnect_attempts: u64,
     pub(crate) channel_health: BTreeMap<String, ConnectionHealth>,
     pub(crate) resync_required_bindings: BTreeSet<String>,
     pub(crate) event_watermarks: BTreeMap<(String, String), (u64, Option<u64>)>,
@@ -55,9 +51,8 @@ pub(crate) struct SegmentSyncState {
 }
 
 impl SegmentSyncState {
-    pub(crate) fn new(segment_key: SegmentKey) -> Self {
+    pub(crate) fn new(_segment_key: SegmentKey) -> Self {
         Self {
-            segment_key,
             mode: SegmentSyncMode::SnapshotOnly,
             lifecycle: SegmentSyncLifecycle::Configured,
             initial_snapshot_complete: false,
@@ -68,7 +63,6 @@ impl SegmentSyncState {
             last_success_at_unix_nanos: None,
             last_refresh_duration_ms: None,
             last_error: None,
-            reconnect_attempts: 0,
             channel_health: BTreeMap::new(),
             resync_required_bindings: BTreeSet::new(),
             event_watermarks: BTreeMap::new(),
@@ -90,6 +84,33 @@ impl SegmentSyncState {
                 last_error: None,
             },
         );
+    }
+
+    pub(crate) fn mark_stream_ready(&mut self, binding_id: &str) {
+        self.channel_health.insert(
+            binding_id.to_owned(),
+            ConnectionHealth {
+                lifecycle: ConnectionLifecycle::Ready,
+                healthy: true,
+                authenticated: true,
+                last_error: None,
+            },
+        );
+        self.complete_resync();
+    }
+
+    pub(crate) fn mark_stream_failed(&mut self, binding_id: &str, error: String) {
+        self.channel_health.insert(
+            binding_id.to_owned(),
+            ConnectionHealth {
+                lifecycle: ConnectionLifecycle::Failed,
+                healthy: false,
+                authenticated: false,
+                last_error: Some(error.clone()),
+            },
+        );
+        self.resync_required_bindings.insert(binding_id.to_owned());
+        self.mark_resync(error);
     }
 
     pub(crate) fn begin_refresh(&mut self) {
@@ -151,45 +172,6 @@ impl SegmentSyncState {
         self.lifecycle = SegmentSyncLifecycle::Resyncing;
         self.last_error = Some(error.into());
         self.refresh_requested = true;
-    }
-
-    pub(crate) fn update_channel_health(
-        &mut self,
-        binding_id: String,
-        mut health: ConnectionHealth,
-    ) {
-        if matches!(
-            health.lifecycle,
-            ConnectionLifecycle::Degraded | ConnectionLifecycle::Failed
-        ) {
-            self.resync_required_bindings.insert(binding_id.clone());
-            self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
-            self.mark_resync(
-                health
-                    .last_error
-                    .clone()
-                    .unwrap_or_else(|| "provider channel degraded; resync required".into()),
-            );
-        }
-        if health.lifecycle == ConnectionLifecycle::Ready
-            && self.resync_required_bindings.contains(&binding_id)
-        {
-            health.lifecycle = ConnectionLifecycle::Degraded;
-            health.healthy = false;
-            health.last_error =
-                Some("channel reconnected; awaiting segment snapshot resync".into());
-        }
-        self.channel_health.insert(binding_id, health);
-        if self.initial_snapshot_complete
-            && self.resync_required_bindings.is_empty()
-            && self
-                .channel_health
-                .values()
-                .all(|health| health.healthy && health.authenticated)
-        {
-            self.lifecycle = SegmentSyncLifecycle::Live;
-            self.last_error = None;
-        }
     }
 
     pub(crate) fn complete_resync(&mut self) {
