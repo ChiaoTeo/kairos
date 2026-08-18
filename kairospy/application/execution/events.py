@@ -5,7 +5,7 @@ from typing import Literal, TypeAlias
 
 from kairospy.domain_types import DataEvent
 
-from .models import ExecutionIntent, Fill, Order
+from .models import ExecutionIntent, Fill, IntentStatus, Order
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,7 @@ class ExecutionEventRecord:
 
 @dataclass(frozen=True, slots=True)
 class IntentUpdateEvent(DataEvent[ExecutionIntent]):
+    previous_status: "IntentStatus | None" = None
     kind: Literal["intent_update"] = field(init=False, default="intent_update")
 
 

@@ -35,7 +35,7 @@ pub(crate) fn parse_event(segment_key: &str, text: &str) -> Result<Option<Accoun
 }
 
 pub(crate) fn parse_execution_events(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     channel_id: &str,
     channel_epoch: u64,
     trading_mode: &str,
@@ -94,11 +94,12 @@ pub(crate) fn parse_execution_events(
                     "okx",
                 )
                 .expect("static OKX participant is valid"),
-                binding_id: binding_id.into(),
+                connection_key: connection_key.clone(),
                 channel_id: channel_id.into(),
                 channel_epoch,
                 participant_event_id,
                 participant_sequence: value.get("seqId").and_then(Value::as_u64),
+                delivery: crate::ExternalEventDelivery::Incremental,
                 observed_at_unix_nanos,
                 received_at_unix_nanos,
                 payload: ExternalExecutionEvent {
@@ -452,7 +453,7 @@ mod tests {
     #[test]
     fn parses_all_matching_execution_rows_into_stable_envelopes() {
         let events = parse_execution_events(
-            "execution.okx.swap.trading.swap.cross",
+            &crate::ConnectionKey::new("execution.okx.swap.trading.swap.cross").unwrap(),
             "execution.okx.swap.trading.swap.cross.order-events",
             4,
             "cross",

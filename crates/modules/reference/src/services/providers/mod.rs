@@ -3,28 +3,33 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use futures_util::future::join_all;
-use kairos_integration::participants::binance::{
-    advanced::stocks::BinanceStocksRestConnection, coinm::BinanceCoinMRestConnection,
-    options::BinanceOptionsRestConnection, spot::BinanceSpotRestConnection,
-    usdm::BinanceUsdMRestConnection,
+use kairos_conflux::{
+    BinanceCoinMRestConnection, BinanceOptionsRestConnection, BinanceSpotRestConnection,
+    BinanceStocksRestConnection, BinanceUsdMRestConnection, ExternalInstrument,
+    ExternalInstrumentCatalog, ExternalInstrumentKind, HyperliquidInfoRestConnection,
+    InstrumentCatalogQuery, MassiveInstrumentQuery, MassiveRestConfig, MassiveRestConnection,
+    OkxPublicRestConnection, ParticipantKind,
 };
 #[cfg(test)]
-use kairos_integration::participants::binance::{BinanceCredential, BinanceRestConfig};
-use kairos_integration::participants::hyperliquid::info::HyperliquidInfoRestConnection;
-#[cfg(test)]
-use kairos_integration::participants::hyperliquid::HyperliquidRestConfig;
-use kairos_integration::participants::massive::{
-    InstrumentQuery as MassiveInstrumentQuery, MassiveRestConfig, MassiveRestConnection,
-};
-use kairos_integration::participants::okx::public::OkxPublicRestConnection;
-#[cfg(test)]
-use kairos_integration::participants::okx::OkxRestConfig;
-use kairos_integration::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, InstrumentCatalogQuery,
-    ParticipantKind,
-};
+use kairos_conflux::{BinanceCredential, BinanceRestConfig, HyperliquidRestConfig, OkxRestConfig};
 use kairos_primitives::{AssetClass, InstrumentKind};
+
+enum ConnectionRef<C> {
+    Managed(
+        kairos_conflux::ConnectionKey,
+        std::marker::PhantomData<fn() -> C>,
+    ),
+    #[cfg(test)]
+    Owned(C),
+}
+
+impl<C> ConnectionRef<C> {
+    fn managed(key: kairos_conflux::ConnectionKey) -> Self {
+        Self::Managed(key, std::marker::PhantomData)
+    }
+}
 
 mod binance;
 mod fan_in;

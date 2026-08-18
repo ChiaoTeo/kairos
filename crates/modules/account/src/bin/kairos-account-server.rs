@@ -21,15 +21,14 @@ use kairos_account::composition::account::{
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account::AccountApplication;
 use kairos_account_contract::{
-    AccountRestRequest, AccountRestResponse, AccountSegmentsRequest, AccountViewKey,
-    AccountViewKind,
+    AccountEventPublisher, AccountRestRequest, AccountRestResponse, AccountSegmentsRequest,
+    AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
 };
 use kairos_conflux::{
-    Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
+    Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, CredentialStore,
+    ShutdownMode,
 };
-use kairos_integration::composition::credentials::CredentialStore;
 use kairos_protocol::InstanceIdentity;
-use kairos_transport::{AeronBytePublisher, SharedSnapshotWriter};
 use kairos_workspace::Workspace;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -63,7 +62,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let health = instance.service_health(socket_name)?;
     tracing::info!(event = "workspace_ready", component = "account", workspace = %workspace.root().display(), socket = %socket.display(), "workspace and instance resources resolved");
     let state = instance.state(&["account", &format!("{socket_name}-state.json")])?;
-    let snapshot = instance.service_snapshot(socket_name)?;
+    let view_root = instance.snapshot(&[])?;
     let registry = AccountRegistry::load(workspace.existing_path(
         &["config", "accounts", "accounts.toml"],
         &["accounts", "accounts.toml"],
@@ -233,7 +232,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     configure_publication(
         &mut system,
         &args.account_id,
-        &snapshot,
+        &view_root,
         args.aeron_dir.as_deref(),
         &args.aeron_channel,
         args.account_events_stream_id,
@@ -252,29 +251,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn configure_publication(
     system: &mut ConfluxSystem,
     account_id: &str,
-    snapshot: &Path,
+    view_root: &Path,
     aeron_dir: Option<&str>,
     aeron_channel: &str,
     event_stream_id: i32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const SLOT_SIZE: usize = 1024 * 1024;
-    system
-        .mmap_writers
-        .ensure_with("account-current".to_owned(), 1, || {
-            SharedSnapshotWriter::create(snapshot, SLOT_SIZE).expect("validated snapshot writer")
-        })?;
     let runtime_id = format!("account:{account_id}");
-    let key = AccountViewKey::new(&runtime_id, account_id, AccountViewKind::ObservedOrders)?;
-    let root = snapshot.parent().unwrap_or(snapshot).join("views");
+    for (resource, kind) in [
+        ("account-current", AccountViewKind::Current),
+        ("account-observed-orders", AccountViewKind::ObservedOrders),
+    ] {
+        let key = AccountViewKey::new(&runtime_id, account_id, kind)?;
+        let publisher = AccountViewPublisher::create(view_root, key, SLOT_SIZE)?;
+        system
+            .account_view_publishers
+            .ensure_with(resource.to_owned(), 1, || publisher)?;
+    }
+    let endpoint = AeronEndpoint::from_parts(aeron_dir, aeron_channel, event_stream_id)?;
+    let publisher = AccountEventPublisher::connect(&endpoint)?;
     system
-        .account_view_publishers
-        .ensure_with("account-observed-orders".to_owned(), 1, || {
-            kairos_account_contract::AccountViewPublisher::create(&root, key, SLOT_SIZE)
-                .expect("validated Account view publisher")
-        })?;
-    let publisher = AeronBytePublisher::connect(aeron_dir, aeron_channel, event_stream_id)?;
-    system
-        .aeron_publishers
+        .account_event_publishers
         .ensure_with("account-events".to_owned(), 1, || publisher)?;
     Ok(())
 }

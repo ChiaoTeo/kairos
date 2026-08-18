@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use kairos_integration::{ConnectionHealth, ConnectionLifecycle, ExternalAccountEventEnvelope};
+use kairos_conflux::{ConnectionHealth, ConnectionLifecycle, ExternalAccountEventEnvelope};
 
 use crate::domain::SegmentKey;
 

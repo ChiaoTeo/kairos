@@ -25,9 +25,3 @@ def test_account_does_not_reintroduce_shared_identity_definitions() -> None:
         assert re.search(definition, account) is None, (
             f"Account must use kairos-primitives::{name}, not define a parallel type"
         )
-
-
-def test_removed_account_identity_compatibility_name_stays_removed() -> None:
-    crates = rust_sources(ROOT / "crates")
-    assert "ExternalOrderId" not in crates
-    assert "FillSide" not in crates

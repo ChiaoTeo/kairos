@@ -15,6 +15,7 @@ from kairospy.strategy.clock import StrategyClock
 from kairospy.application.account import AccountApplication
 from kairospy.application.execution import ExecutionApplication
 from kairospy.application.market import MarketApplication
+from kairospy.application.notification import NotificationApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
 
@@ -31,6 +32,7 @@ class StrategyContext(StrategyContextContract):
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        notifications: NotificationApplication | None = None,
         launch_id: str = "",
         instance_id: str = "",
         params: Mapping[str, object] | None = None,
@@ -62,14 +64,24 @@ class StrategyContext(StrategyContextContract):
         self.account = account
         self.risk = risk
         self.execution = execution
+        if notifications is None:
+            notifications = NotificationApplication.disabled(
+                strategy_id=strategy_id,
+                launch_id=launch_id,
+                instance_id=instance_id,
+            )
+        self.notifications = notifications
+        self.decisions = None
 
     def _bind(self, event: object | None) -> StrategyContext:
         self._event = event
         metadata = getattr(event, "metadata", None)
         sequence = getattr(metadata, "sequence", None)
         occurred_at_unix_nanos = getattr(metadata, "occurred_at_unix_nanos", None)
+        occurred_at = getattr(metadata, "occurred_at", None)
         self.market.bind_event(sequence)
         self.execution.bind_event(sequence, occurred_at_unix_nanos)
+        self.notifications.bind_event(occurred_at)
         return self
 
     @property

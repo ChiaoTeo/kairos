@@ -1,39 +1,27 @@
 //! WebSocket channels driven either by the caller runtime or an explicit blocking facade.
 
 mod asynchronous {
-    //! Async WebSocket transport driven by a business-owned Tokio runtime.
-    //!
-    //! Unlike the legacy blocking facade, this type never creates a thread or a
-    //! runtime. The async caller's current runtime owns task scheduling and
-    //! shutdown, like reqwest's default async client.
+    //! Async WebSocket transport directly owned and polled by its concrete
+    //! Integration connection.
 
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
-
-    use futures_util::{SinkExt, StreamExt};
-    use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
+    use futures_util::{Sink, SinkExt, Stream, StreamExt};
+    use std::collections::VecDeque;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::net::TcpStream;
     use tokio_tungstenite::tungstenite::Message;
-
-    enum Command {
-        Text(String),
-        Pong(Vec<u8>),
-        Close,
-    }
+    use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
     pub(crate) enum SocketEvent {
         Message(Message),
         Error(String),
-        Backpressure,
     }
 
     pub(crate) struct TokioSocket {
-        commands: mpsc::Sender<Command>,
-        events: mpsc::Receiver<SocketEvent>,
-        overflowed: Arc<AtomicBool>,
-        worker: Option<JoinHandle<()>>,
+        stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        pending_control: VecDeque<Message>,
+        control_capacity: usize,
+        last_activity: tokio::time::Instant,
     }
 
     impl TokioSocket {
@@ -41,105 +29,117 @@ mod asynchronous {
             if event_capacity == 0 {
                 return Err("WebSocket event queue capacity must be positive".into());
             }
-            let socket = tokio_tungstenite::connect_async(endpoint)
+            let stream = tokio_tungstenite::connect_async(endpoint)
                 .await
                 .map_err(|error| error.to_string())?
                 .0;
-            let (commands, mut command_receiver) = mpsc::channel(32);
-            let (events_sender, events) = mpsc::channel(event_capacity);
-            let overflowed = Arc::new(AtomicBool::new(false));
-            let worker_overflowed = Arc::clone(&overflowed);
-            let worker = tokio::spawn(async move {
-                let (mut sink, mut stream) = socket.split();
-                loop {
-                    tokio::select! {
-                        command = command_receiver.recv() => match command {
-                            Some(Command::Text(text)) => {
-                                if let Err(error) = sink.send(Message::Text(text.into())).await {
-                                    let _ = events_sender.try_send(SocketEvent::Error(error.to_string()));
-                                    break;
-                                }
-                            }
-                            Some(Command::Pong(payload)) => {
-                                if let Err(error) = sink.send(Message::Pong(payload.into())).await {
-                                    let _ = events_sender.try_send(SocketEvent::Error(error.to_string()));
-                                    break;
-                                }
-                            }
-                            Some(Command::Close) | None => {
-                                let _ = sink.send(Message::Close(None)).await;
-                                break;
-                            }
-                        },
-                        message = stream.next() => match message {
-                            Some(Ok(message)) => match events_sender.try_send(SocketEvent::Message(message)) {
-                                Ok(()) => {}
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    worker_overflowed.store(true, Ordering::Release);
-                                    break;
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => break,
-                            },
-                            Some(Err(error)) => {
-                                let _ = events_sender.try_send(SocketEvent::Error(error.to_string()));
-                                break;
-                            }
-                            None => break,
-                        },
-                    }
-                }
-            });
             Ok(Self {
-                commands,
-                events,
-                overflowed,
-                worker: Some(worker),
+                stream,
+                pending_control: VecDeque::new(),
+                control_capacity: event_capacity,
+                last_activity: tokio::time::Instant::now(),
             })
         }
 
-        pub(crate) async fn send_text(&self, text: String) -> Result<(), String> {
-            self.commands
-                .send(Command::Text(text))
+        pub(crate) async fn send_text(&mut self, text: String) -> Result<(), String> {
+            let result = self
+                .stream
+                .send(Message::Text(text.into()))
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string());
+            if result.is_ok() {
+                self.last_activity = tokio::time::Instant::now();
+            }
+            result
         }
 
-        pub(crate) async fn send_pong(&self, payload: Vec<u8>) -> Result<(), String> {
-            self.commands
-                .send(Command::Pong(payload))
+        pub(crate) async fn send_pong(&mut self, payload: Vec<u8>) -> Result<(), String> {
+            let result = self
+                .stream
+                .send(Message::Pong(payload.into()))
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string());
+            if result.is_ok() {
+                self.last_activity = tokio::time::Instant::now();
+            }
+            result
+        }
+
+        pub(crate) fn poll_next_event(&mut self, cx: &mut Context<'_>) -> Poll<SocketEvent> {
+            loop {
+                while let Some(message) = self.pending_control.pop_front() {
+                    match Pin::new(&mut self.stream).poll_ready(cx) {
+                        Poll::Ready(Ok(())) => {}
+                        Poll::Ready(Err(error)) => {
+                            return Poll::Ready(SocketEvent::Error(error.to_string()))
+                        }
+                        Poll::Pending => {
+                            self.pending_control.push_front(message);
+                            return Poll::Pending;
+                        }
+                    }
+                    if let Err(error) = Pin::new(&mut self.stream).start_send(message) {
+                        return Poll::Ready(SocketEvent::Error(error.to_string()));
+                    }
+                }
+                match Pin::new(&mut self.stream).poll_flush(cx) {
+                    Poll::Ready(Ok(())) => {}
+                    Poll::Ready(Err(error)) => {
+                        return Poll::Ready(SocketEvent::Error(error.to_string()))
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+
+                match Pin::new(&mut self.stream).poll_next(cx) {
+                    Poll::Ready(Some(Ok(Message::Ping(payload)))) => {
+                        self.last_activity = tokio::time::Instant::now();
+                        if self.pending_control.len() == self.control_capacity {
+                            return Poll::Ready(SocketEvent::Error(
+                                "WebSocket control queue overflowed".into(),
+                            ));
+                        }
+                        self.pending_control.push_back(Message::Pong(payload));
+                    }
+                    Poll::Ready(Some(Ok(message))) => {
+                        self.last_activity = tokio::time::Instant::now();
+                        return Poll::Ready(SocketEvent::Message(message));
+                    }
+                    Poll::Ready(Some(Err(error))) => {
+                        return Poll::Ready(SocketEvent::Error(error.to_string()))
+                    }
+                    Poll::Ready(None) => {
+                        return Poll::Ready(SocketEvent::Error("WebSocket stream closed".into()))
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
         }
 
         pub(crate) async fn next_event(&mut self) -> SocketEvent {
-            self.events
-                .recv()
-                .await
-                .unwrap_or_else(|| self.disconnected_event())
+            loop {
+                match self.stream.next().await {
+                    Some(Ok(Message::Ping(payload))) => {
+                        self.last_activity = tokio::time::Instant::now();
+                        if let Err(error) = self.stream.send(Message::Pong(payload)).await {
+                            return SocketEvent::Error(error.to_string());
+                        }
+                    }
+                    Some(Ok(message)) => {
+                        self.last_activity = tokio::time::Instant::now();
+                        return SocketEvent::Message(message);
+                    }
+                    Some(Err(error)) => return SocketEvent::Error(error.to_string()),
+                    None => return SocketEvent::Error("WebSocket stream closed".into()),
+                }
+            }
         }
 
         pub(crate) async fn close(&mut self) {
-            let _ = self.commands.send(Command::Close).await;
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.await;
-            }
+            let _ = self.stream.close(None).await;
         }
 
-        fn disconnected_event(&self) -> SocketEvent {
-            if self.overflowed.swap(false, Ordering::AcqRel) {
-                SocketEvent::Backpressure
-            } else {
-                SocketEvent::Error("WebSocket worker disconnected".into())
-            }
-        }
-    }
-
-    impl Drop for TokioSocket {
-        fn drop(&mut self) {
-            let _ = self.commands.try_send(Command::Close);
-            if let Some(worker) = self.worker.take() {
-                worker.abort();
-            }
+        pub(crate) fn last_activity(&self) -> tokio::time::Instant {
+            self.last_activity
         }
     }
 
@@ -178,7 +178,7 @@ mod asynchronous {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn queue_overflow_is_reported_after_buffered_events_are_drained() {
+        async fn direct_owner_reads_all_events_without_an_intermediate_queue() {
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let address = listener.local_addr().unwrap();
             tokio::spawn(async move {
@@ -192,12 +192,9 @@ mod asynchronous {
             let mut socket = TokioSocket::connect(&format!("ws://{address}"), 1)
                 .await
                 .unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            assert!(matches!(socket.next_event().await, SocketEvent::Message(_)));
-            assert!(matches!(
-                socket.next_event().await,
-                SocketEvent::Backpressure
-            ));
+            for _ in 0..3 {
+                assert!(matches!(socket.next_event().await, SocketEvent::Message(_)));
+            }
         }
     }
 }

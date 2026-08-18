@@ -68,12 +68,6 @@ pub(crate) enum SourceInput {
         request_id: SourceRequestId,
         handle: ProviderSubscriptionId,
     },
-    SubscriptionRejected {
-        source_id: SourceId,
-        epoch: SourceEpoch,
-        request_id: SourceRequestId,
-        error: String,
-    },
     Unsubscribed {
         source_id: SourceId,
         epoch: SourceEpoch,
@@ -95,18 +89,6 @@ pub(crate) enum SourceInput {
         source_id: SourceId,
         epoch: SourceEpoch,
         update: SourceOrderBookUpdate,
-    },
-    ResyncRequired {
-        source_id: SourceId,
-        epoch: SourceEpoch,
-        market: Box<ResolvedMarket>,
-        reason: String,
-    },
-    ResyncCompleted {
-        source_id: SourceId,
-        epoch: SourceEpoch,
-        request_id: SourceRequestId,
-        market_id: MarketId,
     },
     ResyncRejected {
         source_id: SourceId,

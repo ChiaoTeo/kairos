@@ -1,8 +1,8 @@
 [package]
 name = "kairos-workspace"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Generic workspace resources, process lifecycle and control transport"
 
 [features]
@@ -15,23 +15,23 @@ otel = [
 ]
 
 [dependencies]
-axum = "0.8"
-http-body-util = "0.1"
-hyper = { version = "1", features = ["client", "http1"] }
-hyperlocal-next = "0.9"
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "io-util", "signal", "time"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-sha2 = "0.10"
-libc = "0.2"
+axum.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyperlocal-next.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+libc.workspace = true
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+toml.workspace = true
+tracing.workspace = true
 tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

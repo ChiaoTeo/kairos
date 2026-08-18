@@ -393,6 +393,25 @@ def strategy_status(
     )
 
 
+@strategy_app.command("decision")
+def strategy_decision(
+    launch_id: str,
+    strategy_decision_id: str,
+    instance: str | None = typer.Option(None, "--instance"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Show one end-to-end Strategy decision trace."""
+
+    owner = WorkspaceApplication().open(workspace)
+    resolved_instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    target = _target(launch_id, resolved_instance, mode, workspace)
+    _emit(
+        LaunchControlApplication(owner).decision(target, strategy_decision_id),
+        output,
+    )
+
+
 def _strategy_action(action: str):
     def command(
         launch_id: str,

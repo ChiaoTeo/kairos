@@ -17,9 +17,12 @@ pub struct HyperliquidInfoRestConnection {
 }
 
 impl HyperliquidInfoRestConnection {
-    pub fn new(config: HyperliquidRestConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: HyperliquidRestConfig,
+    ) -> Result<Self, IntegrationError> {
         Ok(Self {
-            service: RestService::new(config, "info.rest", None)?,
+            service: RestService::new(connection_key, config, "info.rest", None)?,
         })
     }
 

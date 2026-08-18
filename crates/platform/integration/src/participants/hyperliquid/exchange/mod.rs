@@ -1,3 +1,5 @@
 mod rest;
 
-pub use rest::HyperliquidExchangeRestConnection;
+pub use rest::{
+    HyperliquidAmendOrderRequest, HyperliquidCancelOrderRequest, HyperliquidExchangeRestConnection,
+};

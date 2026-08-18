@@ -25,11 +25,12 @@ pub use encode::{
     PositionEncoder, StatusEncoder, ValuationEncoder,
 };
 pub use error::{ContractError, ContractResult};
-pub use event::{AccountEvent, AccountEventFrame, AccountEventStream};
+pub use event::{AccountEvent, AccountEventFrame, AccountEventPublisher, AccountEventStream};
+pub use kairos_transport::AeronEndpoint;
 pub use transport::AccountUdsTransport;
 pub use view::{
-    decode_account_current, AccountViewKey, AccountViewKind, AccountViewPublisher, ViewFrame,
-    ViewMetadata,
+    account_view_path, decode_account_current, AccountViewKey, AccountViewKind,
+    AccountViewPublisher, ViewFrame, ViewMetadata,
 };
 
 use std::path::PathBuf;
@@ -40,17 +41,13 @@ pub struct AccountClient {
     control: AccountControlClient,
     control_socket: PathBuf,
     view_root: PathBuf,
-    aeron_dir: Option<String>,
-    aeron_channel: String,
-    event_stream_id: i32,
+    events: AeronEndpoint,
 }
 
 pub struct AccountEndpoint {
     pub control_socket: PathBuf,
     pub view_root: PathBuf,
-    pub aeron_dir: Option<String>,
-    pub aeron_channel: String,
-    pub event_stream_id: i32,
+    pub events: AeronEndpoint,
 }
 
 impl AccountClient {
@@ -59,9 +56,7 @@ impl AccountClient {
             control: AccountControlClient::connect(endpoint.control_socket.clone()),
             control_socket: endpoint.control_socket,
             view_root: endpoint.view_root,
-            aeron_dir: endpoint.aeron_dir,
-            aeron_channel: endpoint.aeron_channel,
-            event_stream_id: endpoint.event_stream_id,
+            events: endpoint.events,
         }
     }
 
@@ -70,12 +65,7 @@ impl AccountClient {
     }
 
     pub fn events(&self, capacity: usize) -> ContractResult<AccountEventStream> {
-        AccountEventStream::connect(
-            self.aeron_dir.as_deref(),
-            &self.aeron_channel,
-            self.event_stream_id,
-            capacity,
-        )
+        AccountEventStream::connect(&self.events, capacity)
     }
 
     pub fn view(&self, key: AccountViewKey) -> ContractResult<view::AccountViewReader> {

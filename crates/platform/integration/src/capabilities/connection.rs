@@ -1,6 +1,8 @@
 //! Transport-independent connection observations.
 
 use std::future::Future;
+use std::task::{Context, Poll};
+use tokio::time::Instant;
 
 use crate::domain::ConnectionHealth;
 use crate::IntegrationError;
@@ -17,4 +19,22 @@ pub trait ConnectionLifecycleCommand: Send {
     fn connect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
     fn disconnect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
     fn reconnect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaintenanceOutcome {
+    Healthy,
+    Progressed,
+    ReconnectRequired { reason: String },
+}
+
+/// Persistent, cancellation-safe maintenance for a stateful connection.
+pub trait ConnectionMaintenance: Send {
+    fn next_maintenance_at(&self) -> Option<Instant>;
+
+    fn poll_maintenance(
+        &mut self,
+        cx: &mut Context<'_>,
+        now: Instant,
+    ) -> Poll<Result<MaintenanceOutcome, IntegrationError>>;
 }

@@ -1,20 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use kairos_integration::composition::credentials::load_workspace_credential;
-use kairos_integration::participants::binance::{
-    spot::BinanceSpotRestConnection, BinanceRestConfig,
-};
-use kairos_integration::participants::massive::{
-    InstrumentQuery, MassiveRestConfig, MassiveRestConnection,
-};
-use kairos_integration::{
-    HistoricalBarQuery, HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery,
-    HistoricalWindow, MarketEvent, MarketEventKind,
+use kairos_conflux::{
+    load_workspace_credential, BinanceRestConfig, ConfluxSystem, ConnectionKey, HistoricalBarQuery,
+    HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow,
+    MarketEvent, MarketEventKind, MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig,
 };
 use kairos_market::composition::{
-    attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
-    attach_replay_source, default_endpoint, MarketProduct,
+    attach_replay_source, default_endpoint, run_diagnostic_once, DiagnosticProvider,
 };
 use kairos_market::{
     load_replay_events_many, MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId,
@@ -114,26 +107,38 @@ async fn download(
                 .ok_or("Massive workspace credential does not exist")?
                 .api_key
             };
-            let mut provider = MassiveRestConnection::new(MassiveRestConfig {
-                binding_id: "market-history".into(),
-                environment: "public".into(),
-                endpoint,
-                api_key: secrecy::SecretString::new(api_key.into()),
-                instrument_query: match command.market_type {
-                    HistoricalMarketType::Equity => InstrumentQuery::equities(),
-                    HistoricalMarketType::Option => InstrumentQuery::options(None),
+            let key = ConnectionKey::new("market-history")?;
+            let mut system = ConfluxSystem::new();
+            system.connections().massive_rest.create(
+                key.clone(),
+                MassiveRestConfig {
+                    environment: "public".into(),
+                    endpoint,
+                    api_key: secrecy::SecretString::new(api_key.into()),
+                    instrument_query: match command.market_type {
+                        HistoricalMarketType::Equity => InstrumentQuery::equities(),
+                        HistoricalMarketType::Option => InstrumentQuery::options(None),
+                    },
                 },
-            })?;
-            fetch_historical(&mut provider, command.data_kind, &window, &bar_request).await?
+            )?;
+            let mut connections = system.connections();
+            let provider = connections.massive_rest.get(&key)?;
+            fetch_historical(provider, command.data_kind, &window, &bar_request).await?
         }
         HistoricalProvider::Binance => {
-            let mut provider = BinanceSpotRestConnection::new(BinanceRestConfig {
-                binding_id: "market-history".into(),
-                environment: "public".into(),
-                endpoint,
-                credential: None,
-            })?;
-            fetch_historical(&mut provider, command.data_kind, &window, &bar_request).await?
+            let key = ConnectionKey::new("market-history")?;
+            let mut system = ConfluxSystem::new();
+            system.connections().binance_spot_rest.create(
+                key.clone(),
+                BinanceRestConfig {
+                    environment: "public".into(),
+                    endpoint,
+                    credential: None,
+                },
+            )?;
+            let mut connections = system.connections();
+            let provider = connections.binance_spot_rest.get(&key)?;
+            fetch_historical(provider, command.data_kind, &window, &bar_request).await?
         }
     };
     let instrument_id = command
@@ -261,11 +266,11 @@ async fn fetch_historical<C>(
     kind: HistoricalDataKind,
     window: &HistoricalWindow,
     bar_request: &HistoricalBarRequest,
-) -> Result<Vec<MarketEvent>, kairos_integration::IntegrationError>
+) -> Result<Vec<MarketEvent>, kairos_conflux::IntegrationError>
 where
     C: HistoricalBarQuery + HistoricalQuoteQuery + HistoricalTradeQuery,
 {
-    let venue = kairos_integration::MarketVenueEvidence::default();
+    let venue = kairos_conflux::MarketVenueEvidence::default();
     match kind {
         HistoricalDataKind::Bar => Ok(connection
             .fetch_bars(bar_request)
@@ -281,7 +286,7 @@ where
                 ask_quantity: None,
                 bids: Vec::new(),
                 asks: Vec::new(),
-                bar: Some(kairos_integration::Bar {
+                bar: Some(kairos_conflux::Bar {
                     timeframe: bar.interval,
                     open: bar.open,
                     high: bar.high,
@@ -439,19 +444,13 @@ async fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>>
         .endpoint
         .unwrap_or_else(|| default_endpoint(command.provider.as_str()).to_string());
     let mut runtime = MarketApplication::new(actor_id, 10_000)?;
-    match command.provider {
-        Provider::BinanceSpotRest => attach_binance_spot_rest_source(&mut runtime, endpoint)?,
-        Provider::BinanceSpotWebsocket => attach_binance_spot_source(&mut runtime, endpoint)?,
-        Provider::BinanceOptionsRest => attach_binance_derivatives_source(
-            &mut runtime,
-            MarketProduct::Options,
-            endpoint,
-            "/eapi/v1/ticker",
-        )?,
-    }
     runtime.subscribe_static(SubscriptionId::new("cli-once")?, "cli", market)?;
-    runtime.sync_source_subscriptions().await?;
-    while runtime.drive_next_source_input().await? == 0 {}
+    let provider = match command.provider {
+        Provider::BinanceSpotRest => DiagnosticProvider::BinanceSpotRest,
+        Provider::BinanceSpotWebsocket => DiagnosticProvider::BinanceSpotWebsocket,
+        Provider::BinanceOptionsRest => DiagnosticProvider::BinanceOptionsRest,
+    };
+    let runtime = run_diagnostic_once(runtime, provider, endpoint).await?;
     Ok(serde_json::to_value(runtime.current_view())?)
 }
 

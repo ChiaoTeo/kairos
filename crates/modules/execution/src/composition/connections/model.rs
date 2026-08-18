@@ -68,9 +68,12 @@ pub fn load_execution_routes_from_reference_markets(
     let endpoint = kairos_reference_contract::ReferenceEndpoint {
         database: database.to_path_buf(),
         actor_id: "reference-actor".into(),
-        aeron_dir: None,
-        aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-        event_stream_id: kairos_transport::stream_ids::REFERENCE_CHANGES,
+        events: kairos_transport::AeronEndpoint::from_parts(
+            None,
+            kairos_transport::DEFAULT_CHANNEL,
+            kairos_transport::stream_ids::REFERENCE_CHANGES,
+        )
+        .map_err(|error| error.to_string())?,
     };
     let snapshot = kairos_reference_contract::ReferenceClient::connect(endpoint)
         .execution_snapshot()

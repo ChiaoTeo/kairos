@@ -74,6 +74,34 @@ impl MarketApplication {
         Ok(())
     }
 
+    /// Registers a provider source whose connection remains owned and polled by
+    /// Conflux. The command sender is deliberately never used; keeping the
+    /// existing attached-source shape lets replay/test workers coexist during
+    /// the migration without transferring a production connection to a task.
+    pub(crate) fn attach_managed_source(
+        &mut self,
+        descriptor: crate::domain::source::SourceDescriptor,
+    ) -> Result<(), String> {
+        self.actor.register_source(descriptor.clone())?;
+        let id = descriptor.id.clone();
+        if self.actor.attached_sources.contains_key(&id) {
+            return Err(format!("market source already attached: {id}"));
+        }
+        let (commands, receiver) = tokio::sync::mpsc::channel(1);
+        drop(receiver);
+        self.actor.attached_sources.insert(
+            id,
+            AttachedSource {
+                descriptor,
+                commands,
+                inputs: None,
+                task: None,
+                confirmed: BTreeMap::new(),
+            },
+        );
+        Ok(())
+    }
+
     pub(crate) async fn next_source_input(&mut self) -> Option<SourceInput> {
         std::future::poll_fn(|context| {
             let source_ids = self

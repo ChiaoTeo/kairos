@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_primitives::{
-    ActorId, Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, Money, OrderId, Price,
-    Quantity, RemoteOrderId, StrategyId, UnixNanos,
+    ActorId, Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, LegId, Money, OrderId,
+    Price, Quantity, RemoteOrderId, StrategyId, UnixNanos,
 };
 
 use super::model::*;
@@ -100,15 +100,12 @@ fn planned_risk_reservation(
     }
 }
 use crate::services::persistence::{ExecutionOutboxEntry, ExecutionStateStore};
-use kairos_integration::blocking::{
-    OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
+use kairos_conflux::{BlockingOrderCommand, BlockingOrderQuery, ExternalOrderQuery};
+use kairos_conflux::{
+    CommandOutcome, DecimalValue as ConnectionDecimalValue, IntegrationError, OrderEntryEvent,
+    OrderEntryRequest, OrderEntryStatus,
 };
-use kairos_integration::ExternalOrderQuery;
-use kairos_integration::{
-    CommandOutcome, DecimalValue as ConnectionDecimalValue, OrderEntryEvent, OrderEntryRequest,
-    OrderEntryStatus,
-};
-use kairos_integration::{
+use kairos_conflux::{
     OrderEntryOptions as ConnectionOrderEntryOptions, OrderSide as ConnectionOrderSide,
     OrderType as ConnectionOrderType, TimeInForce,
 };
@@ -141,7 +138,7 @@ pub struct ExecutionApplication {
 
 struct ConfiguredExecutionRoute {
     candidate: ExecutionRouteCandidate,
-    participant_instrument: kairos_integration::ParticipantInstrumentRef,
+    participant_instrument: kairos_conflux::ParticipantInstrumentRef,
 }
 
 /// Concrete process wiring selected by Execution composition.
@@ -278,7 +275,7 @@ impl ExecutionApplication {
     pub(crate) fn configure_execution_route(
         &mut self,
         candidate: ExecutionRouteCandidate,
-        participant_instrument: kairos_integration::ParticipantInstrumentRef,
+        participant_instrument: kairos_conflux::ParticipantInstrumentRef,
     ) {
         self.execution_routes.insert(
             candidate.route_id.clone(),
@@ -745,18 +742,18 @@ fn now_nanos() -> u64 {
         .as_nanos() as u64
 }
 
-fn remote_order(order: kairos_integration::ExternalOrder) -> RemoteOrder {
+fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
     RemoteOrder {
-        binding_id: order.binding_id,
+        binding_id: order.connection_key.to_string(),
         order_id: order.order_id,
         client_order_id: order.client_order_id,
         symbol: order.symbol,
         side: match order.side {
-            kairos_integration::OrderSide::Buy => OrderSide::Buy,
-            kairos_integration::OrderSide::Sell => OrderSide::Sell,
+            kairos_conflux::OrderSide::Buy => OrderSide::Buy,
+            kairos_conflux::OrderSide::Sell => OrderSide::Sell,
         },
         order_type: match order.order_type {
-            kairos_integration::OrderType::Market => OrderType::Market,
+            kairos_conflux::OrderType::Market => OrderType::Market,
             _ => OrderType::Limit,
         },
         status: remote_status(&format!("{:?}", order.status)),

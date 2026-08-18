@@ -81,6 +81,7 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Execution | command | `ReconcileExecution` | `control.openapi.yaml` | operations/Execution application | Execution application | UDS HTTP/JSON / bounded retry |
 | DRAFT | Execution | event | `IntentAccepted` | `EIA2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
 | DRAFT | Execution | event | `IntentRejected` | `EIR2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
+| DRAFT | Execution | event | `IntentLifecycleChanged` | `EIL2` | Execution Actor | Strategy Execution application, audit | Execution event stream / retained target |
 | DRAFT | Execution | event | `PlanCreated` | `EPV2` | Execution Actor | Strategy Execution application, audit | Execution event stream / retained target |
 | DRAFT | Execution | event | `OrderSubmitted` | `EOS2` | Execution Actor | Strategy, audit | Execution event stream / retained target |
 | DRAFT | Execution | event | `OrderAccepted` | `EOA2` | Execution Actor | Strategy, Account correlation | Execution event stream / retained target |

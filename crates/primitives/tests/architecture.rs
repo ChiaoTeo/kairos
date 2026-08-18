@@ -55,11 +55,13 @@ fn manifest_keeps_the_production_dependency_allowlist_small() {
         .split("[dev-dependencies]")
         .next()
         .unwrap();
-    let dependencies: Vec<_> = production
+    let mut dependencies: Vec<_> = production
         .lines()
         .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
         .filter(|name| !name.is_empty())
+        .map(|name| name.strip_suffix(".workspace").unwrap_or(name))
         .collect();
+    dependencies.sort_unstable();
 
-    assert_eq!(dependencies, ["serde", "rust_decimal"]);
+    assert_eq!(dependencies, ["rust_decimal", "serde"]);
 }

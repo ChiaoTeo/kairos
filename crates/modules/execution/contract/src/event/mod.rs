@@ -1,8 +1,10 @@
 mod decode;
 mod frame;
+mod publisher;
 mod stream;
 mod view;
 pub use decode::decode_event;
 pub use frame::ExecutionEventFrame;
+pub use publisher::ExecutionEventPublisher;
 pub use stream::ExecutionEventStream;
 pub use view::ExecutionEvent;

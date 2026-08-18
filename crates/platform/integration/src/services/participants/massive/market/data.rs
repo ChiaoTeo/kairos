@@ -2,6 +2,7 @@
 
 use kairos_primitives::{ParticipantSymbol, Price, Quantity, Sequence};
 use serde_json::{json, Value};
+use std::task::{Context, Poll};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::transport::websocket::{SocketEvent, TokioSocket};
@@ -10,6 +11,8 @@ use crate::{
     MarketEventKind, MarketQuote, MarketTrade, MarketVenueEvidence,
 };
 use crate::{ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState};
+
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Massive-native market family. This private service type deliberately does
 /// not reuse the legacy cross-participant product taxonomy.
@@ -164,9 +167,9 @@ impl SocketService {
         })
     }
 
-    pub(crate) async fn send(&self, value: Value) -> Result<(), IntegrationError> {
+    pub(crate) async fn send(&mut self, value: Value) -> Result<(), IntegrationError> {
         self.socket
-            .as_ref()
+            .as_mut()
             .ok_or(IntegrationError::NotReady)?
             .send_text(value.to_string())
             .await
@@ -184,11 +187,6 @@ impl SocketService {
             let message = match event {
                 SocketEvent::Message(message) => message,
                 SocketEvent::Error(error) => return Err(IntegrationError::Transport(error)),
-                SocketEvent::Backpressure => {
-                    return Err(IntegrationError::Backpressure(
-                        "Massive market event queue overflowed".into(),
-                    ))
-                }
             };
             match message {
                 Message::Text(text) => {
@@ -198,7 +196,7 @@ impl SocketService {
                 }
                 Message::Ping(payload) => {
                     self.socket
-                        .as_ref()
+                        .as_mut()
                         .expect("connected Massive socket")
                         .send_pong(payload.to_vec())
                         .await
@@ -208,6 +206,48 @@ impl SocketService {
                     return Err(IntegrationError::Transport(
                         "Massive market WebSocket closed".into(),
                     ))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn poll_next_rows(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Vec<Value>, IntegrationError>> {
+        loop {
+            let socket = match self.socket.as_mut() {
+                Some(socket) => socket,
+                None => return Poll::Ready(Err(IntegrationError::NotReady)),
+            };
+            let message = match socket.poll_next_event(cx) {
+                Poll::Ready(SocketEvent::Message(message)) => message,
+                Poll::Ready(SocketEvent::Error(error)) => {
+                    return Poll::Ready(Err(IntegrationError::Transport(error)))
+                }
+                Poll::Pending => return Poll::Pending,
+            };
+            match message {
+                Message::Text(text) => {
+                    let value: Value = match serde_json::from_str(text.as_ref()) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return Poll::Ready(Err(IntegrationError::InvalidPayload(
+                                error.to_string(),
+                            )))
+                        }
+                    };
+                    return Poll::Ready(Ok(value
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_else(|| vec![value])));
+                }
+                Message::Ping(_) => continue,
+                Message::Close(_) => {
+                    return Poll::Ready(Err(IntegrationError::Transport(
+                        "Massive market WebSocket closed".into(),
+                    )))
                 }
                 _ => {}
             }
@@ -260,6 +300,26 @@ impl SocketService {
     pub(crate) fn descriptor(&self) -> &ConnectionDescriptor {
         &self.state.identity
     }
+
+    pub(crate) fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+        self.socket
+            .as_ref()
+            .map(|socket| socket.last_activity() + IDLE_TIMEOUT)
+    }
+
+    pub(crate) fn poll_maintenance(
+        &self,
+        now: tokio::time::Instant,
+    ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
+        match self.next_maintenance_at() {
+            Some(deadline) if deadline <= now => {
+                Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
+                    reason: "Massive WebSocket idle deadline elapsed".into(),
+                }))
+            }
+            _ => Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy)),
+        }
+    }
 }
 
 fn websocket_endpoint(endpoint: String) -> Result<String, IntegrationError> {
@@ -287,6 +347,9 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
     }
     let symbol = value
         .get("sym")
+        .or_else(|| value.get("T"))
+        .or_else(|| value.get("pair"))
+        .or_else(|| value.get("p").filter(|value| value.is_string()))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_ascii_uppercase();
@@ -303,16 +366,38 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
         timestamp
     };
     match event {
-        "Q" => Ok(Some(MarketEvent {
+        "V" => Ok(Some(MarketEvent {
+            symbol: ParticipantSymbol::new(symbol)
+                .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+            kind: MarketEventKind::IndexPrice,
+            price: Some(parse_required::<Price>(scalar_text(value, "val"))?),
+            quantity: None,
+            rate: None,
+            ask_price: None,
+            ask_quantity: None,
+            bids: Vec::new(),
+            asks: Vec::new(),
+            bar: None,
+            greeks: None,
+            first_sequence: None,
+            last_sequence: None,
+            sequence: None,
+            observed_at_unix_nanos: timestamp.into(),
+            venue: MarketVenueEvidence::default(),
+        })),
+        "Q" | "C" | "XQ" => Ok(Some(MarketEvent {
             symbol: ParticipantSymbol::new(symbol)
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             kind: MarketEventKind::Quote,
             price: parse_optional::<Price>(
-                scalar_text(value, "bp").or_else(|| scalar_text(value, "ap")),
+                scalar_text(value, "bp")
+                    .or_else(|| scalar_text(value, "b").or_else(|| scalar_text(value, "ap"))),
             )?,
             quantity: parse_optional::<Quantity>(scalar_text(value, "bs"))?,
             rate: None,
-            ask_price: parse_optional::<Price>(scalar_text(value, "ap"))?,
+            ask_price: parse_optional::<Price>(
+                scalar_text(value, "ap").or_else(|| scalar_text(value, "a")),
+            )?,
             ask_quantity: parse_optional::<Quantity>(scalar_text(value, "as"))?,
             bids: Vec::new(),
             asks: Vec::new(),
@@ -323,8 +408,8 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
             sequence: value.get("q").and_then(Value::as_u64).map(Sequence::new),
             observed_at_unix_nanos: timestamp.into(),
             venue: MarketVenueEvidence {
-                bid_exchange: scalar_text(value, "bx"),
-                ask_exchange: scalar_text(value, "ax"),
+                bid_exchange: scalar_text(value, "bx").or_else(|| scalar_text(value, "x")),
+                ask_exchange: scalar_text(value, "ax").or_else(|| scalar_text(value, "x")),
                 tape: value
                     .get("z")
                     .and_then(Value::as_u64)
@@ -332,7 +417,7 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
                 ..Default::default()
             },
         })),
-        "T" => Ok(Some(MarketEvent {
+        "T" | "XT" => Ok(Some(MarketEvent {
             symbol: ParticipantSymbol::new(symbol)
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             kind: MarketEventKind::Trade,
@@ -347,7 +432,11 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
             greeks: None,
             first_sequence: None,
             last_sequence: None,
-            sequence: value.get("q").and_then(Value::as_u64).map(Sequence::new),
+            sequence: value
+                .get("q")
+                .or_else(|| value.get("i"))
+                .and_then(Value::as_u64)
+                .map(Sequence::new),
             observed_at_unix_nanos: timestamp.into(),
             venue: MarketVenueEvidence {
                 trade_exchange: scalar_text(value, "x"),
@@ -363,7 +452,7 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
                 ..Default::default()
             },
         })),
-        "A" | "AM" => Ok(Some(MarketEvent {
+        "A" | "AM" | "CA" | "CAS" | "XA" | "XAS" => Ok(Some(MarketEvent {
             symbol: ParticipantSymbol::new(symbol)
                 .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
             kind: MarketEventKind::Bar,
@@ -375,7 +464,12 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
             bids: Vec::new(),
             asks: Vec::new(),
             bar: Some(Bar {
-                timeframe: if event == "A" { "1s" } else { "1m" }.into(),
+                timeframe: if matches!(event, "A" | "CAS" | "XAS") {
+                    "1s"
+                } else {
+                    "1m"
+                }
+                .into(),
                 open: parse_required::<Price>(scalar_text(value, "o"))?,
                 high: parse_required::<Price>(scalar_text(value, "h"))?,
                 low: parse_required::<Price>(scalar_text(value, "l"))?,
@@ -387,7 +481,12 @@ pub(crate) fn normalize(value: &Value) -> Result<Option<MarketEvent>, Integratio
             first_sequence: None,
             last_sequence: None,
             sequence: value.get("q").and_then(Value::as_u64).map(Sequence::new),
-            observed_at_unix_nanos: timestamp.into(),
+            observed_at_unix_nanos: value
+                .get("s")
+                .and_then(Value::as_u64)
+                .map(|value| value.saturating_mul(1_000_000))
+                .unwrap_or(timestamp)
+                .into(),
             venue: MarketVenueEvidence::default(),
         })),
         _ => Ok(None),
@@ -494,6 +593,83 @@ mod tests {
                 .trf_timestamp_unix_nanos
                 .map(|value| value.get()),
             Some(1_536_036_818_780)
+        );
+    }
+
+    #[test]
+    fn futures_quote_uses_contract_sizes_and_millisecond_timestamp() {
+        let event = normalize(&serde_json::json!({
+            "ev":"Q","sym":"ESZ4","bp":114.125,"bs":100,
+            "ap":114.128,"as":160,"t":1536036818784_u64
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.symbol.as_str(), "ESZ4");
+        assert_eq!(event.kind, MarketEventKind::Quote);
+        assert_eq!(
+            event.observed_at_unix_nanos.get(),
+            1_536_036_818_784_000_000
+        );
+        assert!(event.quantity.is_some());
+        assert!(event.ask_quantity.is_some());
+    }
+
+    #[test]
+    fn index_value_uses_index_price_semantics() {
+        let event = normalize(&serde_json::json!({
+            "ev":"V","T":"I:SPX","val":3988.5,"t":1678220675805_u64
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.symbol.as_str(), "I:SPX");
+        assert_eq!(event.kind, MarketEventKind::IndexPrice);
+        assert_eq!(event.price.unwrap().to_string(), "3988.5");
+        assert_eq!(
+            event.observed_at_unix_nanos.get(),
+            1_678_220_675_805_000_000
+        );
+    }
+
+    #[test]
+    fn forex_quote_and_crypto_trade_keep_native_symbols() {
+        let forex = normalize(&serde_json::json!({
+            "ev":"C","p":"USD/CNH","x":44,"a":6.83366,"b":6.83363,
+            "t":1536036818784_u64
+        }))
+        .unwrap()
+        .unwrap();
+        let crypto = normalize(&serde_json::json!({
+            "ev":"XT","pair":"BTC-USD","p":33021.9,"s":0.01616617,
+            "i":14272084,"x":3,"t":1610462007425_u64
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(forex.symbol.as_str(), "USD/CNH");
+        assert_eq!(forex.kind, MarketEventKind::Quote);
+        assert_eq!(forex.ask_price.unwrap().to_string(), "6.83366");
+        assert_eq!(crypto.symbol.as_str(), "BTC-USD");
+        assert_eq!(crypto.kind, MarketEventKind::Trade);
+        assert_eq!(crypto.sequence.unwrap().get(), 14_272_084);
+    }
+
+    #[test]
+    fn crypto_aggregate_uses_window_start_and_volume() {
+        let event = normalize(&serde_json::json!({
+            "ev":"XA","pair":"BCD-USD","v":951.6112,"o":0.772,
+            "c":0.784,"h":0.784,"l":0.771,"s":1610463240000_u64,
+            "e":1610463300000_u64
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(event.kind, MarketEventKind::Bar);
+        assert_eq!(event.bar.unwrap().timeframe, "1m");
+        assert_eq!(
+            event.observed_at_unix_nanos.get(),
+            1_610_463_240_000_000_000
         );
     }
 }

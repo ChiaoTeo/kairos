@@ -1,6 +1,7 @@
 //! Async account read, inspection, profile, and private-event capabilities.
 
 use std::future::Future;
+use std::task::{Context, Poll};
 
 use crate::domain::account::{
     ExternalAccountCredentialProfile, ExternalAccountEventEnvelope, ExternalAccountSegment,
@@ -29,7 +30,8 @@ pub trait AccountCredentialQuery: Send {
 }
 
 pub trait AccountStream: Send {
-    fn next(
+    fn poll_next(
         &mut self,
-    ) -> impl Future<Output = Result<ExternalAccountEventEnvelope, IntegrationError>> + Send;
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalAccountEventEnvelope, IntegrationError>>;
 }

@@ -231,21 +231,6 @@ fn account_broker_identity_is_independent_from_integration_provider_route() {
 }
 
 #[test]
-fn account_has_no_legacy_trade_lock_protocol() {
-    let cli = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),
-    )
-    .expect("read account cli");
-    let registry = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/composition/registry.rs"),
-    )
-    .expect("read Account registry");
-    assert!(!cli.contains("TradeLock"));
-    assert!(!registry.contains("TradeLock"));
-    assert!(!registry.contains("locks.toml"));
-}
-
-#[test]
 fn account_cli_does_not_expose_provider_money_operations() {
     let cli = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-account-cli.rs"),

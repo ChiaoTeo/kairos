@@ -287,6 +287,8 @@ pub mod kairos {
             pub use intent_leg_generated::*;
             mod intent_lifecycle_generated;
             pub use intent_lifecycle_generated::*;
+            mod intent_lifecycle_changed_generated;
+            pub use intent_lifecycle_changed_generated::*;
             mod intent_lifecycle_event_state_generated;
             pub use intent_lifecycle_event_state_generated::*;
             mod intent_rejected_generated;

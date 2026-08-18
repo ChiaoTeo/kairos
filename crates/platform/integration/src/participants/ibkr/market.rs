@@ -4,7 +4,8 @@ use crate::services::participants::ibkr::{
 };
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionLifecycle,
-    ConnectionLifecycleCommand, ConnectionState, IntegrationError, MarketQuote, MarketQuoteQuery,
+    ConnectionLifecycleCommand, ConnectionMaintenance, ConnectionState, IntegrationError,
+    MaintenanceOutcome, MarketQuote, MarketQuoteQuery,
 };
 use kairos_primitives::ParticipantSymbol;
 
@@ -15,7 +16,10 @@ pub struct IbkrMarketDataConnection {
 }
 
 impl IbkrMarketDataConnection {
-    pub fn new(config: IbkrMarketDataConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: IbkrMarketDataConfig,
+    ) -> Result<Self, IntegrationError> {
         if config.exchange.trim().is_empty() || config.currency.trim().is_empty() {
             return Err(IntegrationError::InvalidRequest(
                 "IBKR exchange and currency are required".into(),
@@ -24,7 +28,7 @@ impl IbkrMarketDataConnection {
         let options = IbkrOptions::new(config.host, config.port, config.client_id)
             .map_err(IntegrationError::InvalidRequest)?;
         let descriptor = descriptor(
-            config.binding_id,
+            connection_key,
             config.environment,
             config.client_id,
             "market-data",
@@ -69,6 +73,19 @@ impl ConnectionLifecycleCommand for IbkrMarketDataConnection {
         self.connect().await?;
         self.state.reconnect_count = self.state.reconnect_count.saturating_add(1);
         Ok(())
+    }
+}
+impl ConnectionMaintenance for IbkrMarketDataConnection {
+    fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+        None
+    }
+
+    fn poll_maintenance(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+        _now: tokio::time::Instant,
+    ) -> std::task::Poll<Result<MaintenanceOutcome, IntegrationError>> {
+        std::task::Poll::Ready(Ok(MaintenanceOutcome::Healthy))
     }
 }
 impl MarketQuoteQuery for IbkrMarketDataConnection {

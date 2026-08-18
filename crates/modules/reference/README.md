@@ -148,9 +148,33 @@ adapts process transport; it is not a second catalog state owner.
 - catalog, markets, lifecycle, and change-event publication;
 - one-shot CLI and workspace-managed Unix-socket server.
 
-Provider-specific implementation details and current delivery status are
-tracked in the Reference service code, tests, and migration notes under
-`docs/integration-migration-status.md`.
+Provider-specific implementation details are tracked in the Reference service
+code, tests, and adapter provenance under
+`docs/integrations/adapter-provenance/`.
+
+## Query boundary
+
+Reference owns the canonical catalog and the Rust `ReferenceActor` remains its
+only mutable state owner. The Python query surface is read-only:
+`ReferenceClient` owns knowledge of the SQLite projection, while
+`ReferenceApplication` maps contract records into strategy-safe business
+models. Strategy code and CLI commands do not import table names or issue
+arbitrary SQL.
+
+`ReferenceReadSession` holds one read-only SQLite transaction and pins its
+catalog generation and event sequence. `ReferenceApplication.snapshot()`
+scopes that session for a strategy decision so related entity, asset,
+instrument, listing, market, execution-access, and market-data-access queries
+cannot accidentally combine different catalog generations. One-shot queries
+use the same indexed filters and typed results.
+
+The CLI exposes that typed query inventory, including batch IDs, pagination,
+market-data access and option-chain filters. It intentionally does not expose
+arbitrary SQL because the table layout is a contract implementation detail.
+
+Coverage includes catalogs larger than 10,000 markets, WAL-backed concurrent
+read/write generations, batch lookup, pagination, option-chain filters,
+not-found behavior, and SQLite query-plan checks for production indexes.
 
 ## Verification
 

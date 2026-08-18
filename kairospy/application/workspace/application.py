@@ -64,11 +64,15 @@ class WorkspaceApplication:
             workspace.paths.launch_index().parent,
             workspace.paths.account_config().parent,
             workspace.paths.credential_config().parent,
+            workspace.paths.notification_config().parent,
             workspace.paths.account_state().parent,
             workspace.paths.account_log().parent,
             workspace.paths.account_leases(),
         ):
             directory.mkdir(parents=True, exist_ok=True)
+        workspace.paths.notification_config().write_text(
+            "version = 1\n\n[destinations]\n", encoding="utf-8"
+        )
         return workspace
 
     def init_project(
@@ -121,11 +125,15 @@ class WorkspaceApplication:
             workspace.paths.orders_root(),
             workspace.paths.account_config().parent,
             workspace.paths.credential_config().parent,
+            workspace.paths.notification_config().parent,
             workspace.paths.account_state().parent,
             workspace.paths.account_log().parent,
             workspace.paths.account_leases(),
         ):
             directory.mkdir(parents=True, exist_ok=True)
+        workspace.paths.notification_config().write_text(
+            "version = 1\n\n[destinations]\n", encoding="utf-8"
+        )
         install_project_template(workspace, template)
         return workspace
 

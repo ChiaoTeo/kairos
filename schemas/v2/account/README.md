@@ -15,9 +15,10 @@ multiple Account roots.
 
 Account v2 does not define provider-specific control messages as FlatBuffers
 roots. Provider connection, refresh, reconciliation, and control semantics
-remain outside this business wire contract. Account runtime/resource
-isolation is defined by [`isolation.md`](./isolation.md), and the migration
-hand-off is defined by [`migration.md`](./migration.md).
+remain outside this business wire contract. Account runtime/resource isolation
+is defined by [`isolation.md`](./isolation.md). Runtime adoption is evidenced
+by the owning module's contract, publication and architecture tests; generated
+bindings alone do not prove that the running Account process publishes v2.
 
 ## Account v2 surface
 

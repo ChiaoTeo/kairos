@@ -4,6 +4,65 @@ use crate::composition::config::MarketSourceBinding;
 use crate::composition::sources::{binding_provider_product, binding_supports_canonical_market};
 use crate::{MarketDataRoute, ReconcileMarketUniverse, ResolvedMarket};
 
+pub(crate) fn build_reference_projection(
+    sources: &BTreeMap<String, MarketSourceBinding>,
+) -> crate::services::reference_projection::ReferenceUniverseProjection {
+    use crate::composition::config::{
+        BinanceDerivativeProduct, HyperliquidMarketType, OkxInstrumentType,
+    };
+    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+
+    let sources = sources
+        .iter()
+        .filter(|(_, binding)| binding.enabled())
+        .filter_map(|(source_id, binding)| {
+            let (exchange_id, instrument_kinds) = match binding {
+                MarketSourceBinding::BinanceSpot { .. } => ("exchange:binance", vec![Spot]),
+                MarketSourceBinding::BinanceDerivatives { product, .. } => (
+                    "exchange:binance",
+                    match product {
+                        BinanceDerivativeProduct::Options => vec![Option],
+                        BinanceDerivativeProduct::UsdMFutures
+                        | BinanceDerivativeProduct::CoinMFutures => vec![Future, Perpetual],
+                    },
+                ),
+                MarketSourceBinding::Okx {
+                    instrument_type, ..
+                } => (
+                    "exchange:okx",
+                    vec![match instrument_type {
+                        OkxInstrumentType::Spot => Spot,
+                        OkxInstrumentType::Swap => Perpetual,
+                        OkxInstrumentType::Futures => Future,
+                        OkxInstrumentType::Options => Option,
+                    }],
+                ),
+                MarketSourceBinding::Hyperliquid { market_type, .. } => (
+                    "exchange:hyperliquid",
+                    vec![match market_type {
+                        HyperliquidMarketType::Spot => Spot,
+                        HyperliquidMarketType::Perpetual => Perpetual,
+                    }],
+                ),
+                MarketSourceBinding::BinanceEquity { .. }
+                | MarketSourceBinding::Massive { .. }
+                | MarketSourceBinding::Ibkr { .. } => return None,
+            };
+            let (provider_id, provider_product) = binding_provider_product(binding);
+            Some(
+                crate::services::reference_projection::ReferenceSourceProjection {
+                    source_id: source_id.clone(),
+                    provider_id: provider_id.into(),
+                    provider_product: provider_product.into(),
+                    exchange_id: exchange_id.into(),
+                    instrument_kinds,
+                },
+            )
+        })
+        .collect();
+    crate::services::reference_projection::ReferenceUniverseProjection::new(sources)
+}
+
 pub(crate) fn project_market_universe(
     snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
     sources: &BTreeMap<String, MarketSourceBinding>,
@@ -124,6 +183,7 @@ pub(crate) fn adapter_observation_capabilities(
     }
 }
 
+#[cfg(test)]
 pub(super) fn project_market_universe_at_sequence(
     snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
     required_sequence: u64,

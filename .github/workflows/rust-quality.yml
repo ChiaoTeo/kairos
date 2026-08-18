@@ -21,6 +21,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set up Node for OpenAPI validation
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -53,8 +58,14 @@ jobs:
       - name: Check crate layout
         run: python3 scripts/check/check_crate_layout.py
 
+      - name: Check workspace dependency declarations
+        run: python3 scripts/check/check_workspace_dependencies.py
+
       - name: Check async HTTP boundaries
         run: python3 scripts/check/check_async_boundaries.py
+
+      - name: Check documentation and schemas
+        run: make docs-check
 
   observability:
     name: Cross-language OpenTelemetry verification

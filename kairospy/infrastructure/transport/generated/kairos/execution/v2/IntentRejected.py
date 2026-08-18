@@ -93,8 +93,26 @@ class IntentRejected(object):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         return o == 0
 
+    # IntentRejected
+    def Lifecycle(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 8
+
+    # IntentRejected
+    def Intent(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.execution.v2.ExecutionIntent import ExecutionIntent
+            obj = ExecutionIntent()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
 def IntentRejectedStart(builder):
-    builder.StartObject(4)
+    builder.StartObject(6)
 
 def Start(builder):
     IntentRejectedStart(builder)
@@ -134,6 +152,18 @@ def IntentRejectedStartDetailsVector(builder, numElems):
 
 def StartDetailsVector(builder, numElems):
     return IntentRejectedStartDetailsVector(builder, numElems)
+
+def IntentRejectedAddLifecycle(builder, lifecycle):
+    builder.PrependUint8Slot(4, lifecycle, 8)
+
+def AddLifecycle(builder, lifecycle):
+    IntentRejectedAddLifecycle(builder, lifecycle)
+
+def IntentRejectedAddIntent(builder, intent):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(intent), 0)
+
+def AddIntent(builder, intent):
+    IntentRejectedAddIntent(builder, intent)
 
 def IntentRejectedEnd(builder):
     return builder.EndObject()

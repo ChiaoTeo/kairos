@@ -2,6 +2,12 @@
 
 use super::super::*;
 
+pub(crate) struct DueIntentOrder {
+    pub(crate) intent_id: IntentId,
+    pub(crate) leg_id: String,
+    pub(crate) request: SubmitOrder,
+}
+
 impl ExecutionApplication {
     /// Submit due child orders from durable Intent scheduling state.  The
     /// state loop calls this frequently; command submission therefore never
@@ -13,106 +19,19 @@ impl ExecutionApplication {
     ) -> Result<usize, ExecutionError> {
         let mut submitted = 0;
         while submitted < limit {
-            let next = self
-                .actor
-                .intents()
-                .filter_map(|state| {
-                    state
-                        .pending_orders
-                        .iter()
-                        .filter_map(|order| {
-                            let due = state
-                                .pending_order_due_unix_nanos
-                                .get(&order.order_id)
-                                .copied()
-                                .unwrap_or_else(|| now_unix_nanos.into());
-                            (due.get() <= now_unix_nanos)
-                                .then(|| (due, state.intent.intent_id.clone(), order.clone()))
-                        })
-                        .min_by_key(|(due, _, _)| *due)
-                })
-                .min_by_key(|(due, _, _)| *due);
-            let Some((_, intent_id, request)) = next else {
+            let Some(due) = self.take_due_intent_order(now_unix_nanos)? else {
                 break;
             };
-            let leg_id = intent_leg_id(
-                &self
-                    .actor
-                    .intent(intent_id.as_str())
-                    .ok_or_else(|| ExecutionError::Invalid("scheduled intent disappeared".into()))?
-                    .intent,
-                &request,
-            );
-            self.actor
-                .remove_pending_order(intent_id.as_str(), &request.order_id);
-            match self.submit(request.clone()) {
+            match self.submit(due.request.clone()) {
                 Ok(order) => {
-                    self.attach_plan_order(&intent_id, &leg_id, &order.order_id)?;
-                    let state =
-                        self.actor
-                            .intent(intent_id.as_str())
-                            .cloned()
-                            .ok_or_else(|| {
-                                ExecutionError::Invalid("scheduled intent disappeared".into())
-                            })?;
-                    self.commit_intent(IntentEvent {
-                        intent_id: intent_id.clone(),
-                        event_sequence: 0.into(),
-                        status: IntentStatus::Executing,
-                        order_ids: vec![order.order_id.clone()],
-                        completed_quantity: state.completed_quantity,
-                        occurred_at_unix_nanos: now_unix_nanos.into(),
-                        reason: "child order created".into(),
-                        dependency_watermarks: state.dependency_watermarks,
-                    })?;
+                    self.complete_due_intent_order(&due, &order, now_unix_nanos)?;
                     submitted += 1;
                 }
                 Err(error) => {
-                    warn!(event = "scheduled_child_order_failed", component = "execution", intent_id = %intent_id, error = %error, "scheduled child order failed");
-                    let failure_policy = self
-                        .actor
-                        .intent(intent_id.as_str())
-                        .map(|state| state.intent.failure_policy)
-                        .unwrap_or(FailurePolicy::CancelRemaining);
-                    let cancel_siblings = matches!(failure_policy, FailurePolicy::CancelRemaining)
-                        || self.actor.intent(intent_id.as_str()).is_some_and(|state| {
-                            state.intent.intent_type == IntentType::PairArbitrage
-                        });
-                    if cancel_siblings {
-                        let siblings = self
-                            .actor
-                            .intent(intent_id.as_str())
-                            .map(|state| state.order_ids.clone())
-                            .unwrap_or_default();
-                        for order_id in siblings {
-                            if self
-                                .actor
-                                .order_map()
-                                .get(order_id.as_str())
-                                .is_some_and(|order| !order.status.terminal())
-                            {
-                                let _ = self.cancel(CancelOrder {
-                                    order_id,
-                                    reason: "pair leg submission failed".into(),
-                                });
-                            }
-                        }
+                    let cancellations = self.fail_due_intent_order(&due, &error, now_unix_nanos)?;
+                    for cancellation in cancellations {
+                        let _ = self.cancel(cancellation);
                     }
-                    let completed_quantity = self
-                        .actor
-                        .intent(intent_id.as_str())
-                        .map(|state| state.completed_quantity)
-                        .unwrap_or_default();
-                    self.commit_intent(IntentEvent {
-                        intent_id,
-                        event_sequence: 0.into(),
-                        status: IntentStatus::Failed,
-                        order_ids: Vec::new(),
-                        completed_quantity,
-                        occurred_at_unix_nanos: now_unix_nanos.into(),
-                        reason: error.to_string(),
-                        dependency_watermarks: self.dependency_watermarks(),
-                    })?;
                     return Err(error);
                 }
             }
@@ -121,6 +40,124 @@ impl ExecutionApplication {
             self.persist_snapshot()?;
         }
         Ok(submitted)
+    }
+
+    pub(crate) fn take_due_intent_order(
+        &mut self,
+        now_unix_nanos: u64,
+    ) -> Result<Option<DueIntentOrder>, ExecutionError> {
+        let next = self
+            .actor
+            .intents()
+            .filter_map(|state| {
+                state
+                    .pending_orders
+                    .iter()
+                    .filter_map(|order| {
+                        let due = state
+                            .pending_order_due_unix_nanos
+                            .get(&order.order_id)
+                            .copied()
+                            .unwrap_or_else(|| now_unix_nanos.into());
+                        (due.get() <= now_unix_nanos)
+                            .then(|| (due, state.intent.intent_id.clone(), order.clone()))
+                    })
+                    .min_by_key(|(due, _, _)| *due)
+            })
+            .min_by_key(|(due, _, _)| *due);
+        let Some((_, intent_id, request)) = next else {
+            return Ok(None);
+        };
+        let leg_id = intent_leg_id(
+            &self
+                .actor
+                .intent(intent_id.as_str())
+                .ok_or_else(|| ExecutionError::Invalid("scheduled intent disappeared".into()))?
+                .intent,
+            &request,
+        );
+        self.actor
+            .remove_pending_order(intent_id.as_str(), &request.order_id);
+        Ok(Some(DueIntentOrder {
+            intent_id,
+            leg_id,
+            request,
+        }))
+    }
+
+    pub(crate) fn complete_due_intent_order(
+        &mut self,
+        due: &DueIntentOrder,
+        order: &ExecutionOrder,
+        now_unix_nanos: u64,
+    ) -> Result<(), ExecutionError> {
+        self.attach_plan_order(&due.intent_id, &due.leg_id, &order.order_id)?;
+        let state = self
+            .actor
+            .intent(due.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("scheduled intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: due.intent_id.clone(),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::Executing,
+            order_ids: vec![order.order_id.clone()],
+            completed_quantity: state.completed_quantity,
+            occurred_at_unix_nanos: now_unix_nanos.into(),
+            reason: "child order created".into(),
+            dependency_watermarks: state.dependency_watermarks,
+        })
+    }
+
+    pub(crate) fn fail_due_intent_order(
+        &mut self,
+        due: &DueIntentOrder,
+        error: &ExecutionError,
+        now_unix_nanos: u64,
+    ) -> Result<Vec<CancelOrder>, ExecutionError> {
+        warn!(event = "scheduled_child_order_failed", component = "execution", intent_id = %due.intent_id, error = %error, "scheduled child order failed");
+        let state = self.actor.intent(due.intent_id.as_str());
+        let cancel_siblings = state.is_none_or(|state| {
+            matches!(state.intent.failure_policy, FailurePolicy::CancelRemaining)
+                || state.intent.intent_type == IntentType::PairArbitrage
+        });
+        let cancellations = if cancel_siblings {
+            state
+                .map(|state| state.order_ids.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|order_id| {
+                    self.actor
+                        .order_map()
+                        .get(order_id.as_str())
+                        .is_some_and(|order| !order.status.terminal())
+                })
+                .map(|order_id| CancelOrder {
+                    order_id,
+                    reason: "pair leg submission failed".into(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let completed_quantity = state
+            .map(|state| state.completed_quantity)
+            .unwrap_or_default();
+        self.commit_intent(IntentEvent {
+            intent_id: due.intent_id.clone(),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::Failed,
+            order_ids: Vec::new(),
+            completed_quantity,
+            occurred_at_unix_nanos: now_unix_nanos.into(),
+            reason: error.to_string(),
+            dependency_watermarks: self.dependency_watermarks(),
+        })?;
+        Ok(cancellations)
     }
 
     pub fn cancel_intent(&mut self, request: CancelIntent) -> Result<IntentState, ExecutionError> {
@@ -143,7 +180,9 @@ impl ExecutionApplication {
         self.actor.clear_pending_orders(request.intent_id.as_str());
         self.commit_intent(IntentEvent {
             intent_id: request.intent_id.clone(),
+            strategy_decision_id: None,
             event_sequence: 0.into(),
+            previous_status: None,
             status: IntentStatus::CancelRequested,
             order_ids: state.order_ids.clone(),
             completed_quantity: state.completed_quantity,
@@ -192,7 +231,9 @@ impl ExecutionApplication {
                 })?;
             self.commit_intent(IntentEvent {
                 intent_id: request.intent_id.clone(),
+                strategy_decision_id: None,
                 event_sequence: 0.into(),
+                previous_status: None,
                 status: IntentStatus::Canceled,
                 order_ids: Vec::new(),
                 completed_quantity: current.completed_quantity,
@@ -208,6 +249,17 @@ impl ExecutionApplication {
     }
 
     pub fn expire_intent(&mut self, request: ExpireIntent) -> Result<IntentState, ExecutionError> {
+        let cancellations = self.begin_intent_expiration(&request)?;
+        for cancellation in cancellations {
+            let _ = self.cancel(cancellation);
+        }
+        self.complete_intent_expiration(&request)
+    }
+
+    pub(crate) fn begin_intent_expiration(
+        &mut self,
+        request: &ExpireIntent,
+    ) -> Result<Vec<CancelOrder>, ExecutionError> {
         let state = self
             .actor
             .intent(request.intent_id.as_str())
@@ -227,7 +279,9 @@ impl ExecutionApplication {
         self.actor.clear_pending_orders(request.intent_id.as_str());
         self.commit_intent(IntentEvent {
             intent_id: request.intent_id.clone(),
+            strategy_decision_id: None,
             event_sequence: 0.into(),
+            previous_status: None,
             status: IntentStatus::Expired,
             order_ids: state.order_ids.clone(),
             completed_quantity: state.completed_quantity,
@@ -235,29 +289,38 @@ impl ExecutionApplication {
             reason: if request.reason.trim().is_empty() {
                 "intent expired".into()
             } else {
-                request.reason
+                request.reason.clone()
             },
             dependency_watermarks: state.dependency_watermarks,
         })?;
-        for order_id in state.order_ids {
-            if self
-                .actor
-                .order_map()
-                .get(order_id.as_str())
-                .is_some_and(|order| !order.status.terminal())
-            {
-                let _ = self.cancel(CancelOrder {
-                    order_id,
-                    reason: "parent intent expired".into(),
-                });
-            }
-        }
+        Ok(state
+            .order_ids
+            .into_iter()
+            .filter(|order_id| {
+                self.actor
+                    .order_map()
+                    .get(order_id.as_str())
+                    .is_some_and(|order| !order.status.terminal())
+            })
+            .map(|order_id| CancelOrder {
+                order_id,
+                reason: "parent intent expired".into(),
+            })
+            .collect())
+    }
+
+    pub(crate) fn complete_intent_expiration(
+        &mut self,
+        request: &ExpireIntent,
+    ) -> Result<IntentState, ExecutionError> {
         // Child cancellation refreshes the parent intent. Re-assert the
         // deadline outcome after those child lifecycle events so expiration
         // remains the authoritative terminal reason.
         self.commit_intent(IntentEvent {
             intent_id: request.intent_id.clone(),
+            strategy_decision_id: None,
             event_sequence: 0.into(),
+            previous_status: None,
             status: IntentStatus::Expired,
             order_ids: Vec::new(),
             completed_quantity: self
@@ -279,9 +342,8 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("intent disappeared during expiration".into()))
     }
 
-    pub fn expire_due_intents(&mut self, now_unix_nanos: u64) -> Result<usize, ExecutionError> {
-        let due = self
-            .actor
+    pub(crate) fn due_intent_expirations(&self, now_unix_nanos: u64) -> Vec<ExpireIntent> {
+        self.actor
             .intents()
             .filter(|state| {
                 !matches!(
@@ -297,14 +359,18 @@ impl ExecutionApplication {
                     .deadline_unix_nanos
                     .is_some_and(|deadline| deadline <= now_unix_nanos.into())
             })
-            .map(|state| state.intent.intent_id.clone())
-            .collect::<Vec<_>>();
-        let count = due.len();
-        for intent_id in due {
-            self.expire_intent(ExpireIntent {
-                intent_id,
+            .map(|state| ExpireIntent {
+                intent_id: state.intent.intent_id.clone(),
                 reason: "intent deadline reached".into(),
-            })?;
+            })
+            .collect()
+    }
+
+    pub fn expire_due_intents(&mut self, now_unix_nanos: u64) -> Result<usize, ExecutionError> {
+        let due = self.due_intent_expirations(now_unix_nanos);
+        let count = due.len();
+        for request in due {
+            self.expire_intent(request)?;
         }
         Ok(count)
     }
@@ -324,7 +390,7 @@ impl ExecutionApplication {
             .push_back(ExecutionBusinessEvent {
                 sequence: event.event_sequence,
                 occurred_at_unix_nanos: event.occurred_at_unix_nanos,
-                changes: vec![ExecutionBusinessChange::Intent(state)],
+                changes: vec![ExecutionBusinessChange::Intent { state, event }],
             });
         Ok(())
     }
@@ -451,7 +517,9 @@ impl ExecutionApplication {
         }
         self.commit_intent(IntentEvent {
             intent_id: typed_intent_id(intent_id),
+            strategy_decision_id: None,
             event_sequence: 0.into(),
+            previous_status: None,
             status,
             order_ids: state.order_ids,
             completed_quantity: completed,

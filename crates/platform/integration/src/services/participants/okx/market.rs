@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use crate::{
     Bar, Greeks, IntegrationError, MarketBar, MarketDataKind, MarketEvent, MarketEventKind,
-    MarketFeed, MarketOrderBook, MarketQuote, MarketTrade, MarketVenueEvidence,
+    MarketFeed, MarketFundingRate, MarketGreeks, MarketIndexPrice, MarketMarkPrice,
+    MarketOpenInterest, MarketOrderBook, MarketQuote, MarketTrade, MarketVenueEvidence,
 };
 
 pub(crate) fn quote(
@@ -86,6 +87,87 @@ pub(crate) fn book(
             .map(Into::into),
         observed_at_unix_nanos: timestamp(row.get("ts")),
     })
+}
+
+pub(crate) fn mark_price(
+    symbol: &ParticipantSymbol,
+    value: &Value,
+) -> Result<MarketMarkPrice, IntegrationError> {
+    let row = first_row(value, "mark price")?;
+    Ok(MarketMarkPrice {
+        symbol: symbol.clone(),
+        price: required(row, "markPx")?,
+        observed_at_unix_nanos: timestamp(row.get("ts")),
+    })
+}
+
+pub(crate) fn index_price(
+    symbol: &ParticipantSymbol,
+    value: &Value,
+) -> Result<MarketIndexPrice, IntegrationError> {
+    let row = first_row(value, "index price")?;
+    Ok(MarketIndexPrice {
+        symbol: symbol.clone(),
+        price: required(row, "idxPx")?,
+        observed_at_unix_nanos: timestamp(row.get("ts")),
+    })
+}
+
+pub(crate) fn funding_rate(
+    symbol: &ParticipantSymbol,
+    value: &Value,
+) -> Result<MarketFundingRate, IntegrationError> {
+    let row = first_row(value, "funding rate")?;
+    Ok(MarketFundingRate {
+        symbol: symbol.clone(),
+        rate: required(row, "fundingRate")?,
+        next_funding_at_unix_nanos: text(row, "nextFundingTime")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|value| UnixNanos::from(value.saturating_mul(1_000_000))),
+        observed_at_unix_nanos: timestamp(row.get("ts").or_else(|| row.get("fundingTime"))),
+    })
+}
+
+pub(crate) fn open_interest(
+    symbol: &ParticipantSymbol,
+    value: &Value,
+) -> Result<MarketOpenInterest, IntegrationError> {
+    let row = first_row(value, "open interest")?;
+    Ok(MarketOpenInterest {
+        symbol: symbol.clone(),
+        quantity: required(row, "oi")?,
+        observed_at_unix_nanos: timestamp(row.get("ts")),
+    })
+}
+
+pub(crate) fn greeks(
+    symbol: &ParticipantSymbol,
+    value: &Value,
+) -> Result<MarketGreeks, IntegrationError> {
+    let row = rows(value)?
+        .iter()
+        .find(|row| text(row, "instId") == Some(symbol.as_str()))
+        .ok_or_else(|| IntegrationError::InvalidPayload("OKX option summary is missing".into()))?;
+    Ok(MarketGreeks {
+        symbol: symbol.clone(),
+        values: Greeks {
+            expiry_unix_nanos: None,
+            strike: optional(row, "stk")?,
+            delta: optional(row, "delta")?,
+            gamma: optional(row, "gamma")?,
+            vega: optional(row, "vega")?,
+            theta: optional(row, "theta")?,
+            implied_volatility: optional(row, "markVol")?,
+            derivation: "participant".into(),
+        },
+        observed_at_unix_nanos: timestamp(row.get("ts")),
+    })
+}
+
+fn first_row<'a>(value: &'a Value, label: &str) -> Result<&'a Value, IntegrationError> {
+    rows(value)?
+        .first()
+        .ok_or_else(|| IntegrationError::InvalidPayload(format!("OKX {label} data is missing")))
 }
 
 pub(crate) fn feed_argument(feed: &MarketFeed) -> Result<Value, IntegrationError> {
@@ -406,5 +488,48 @@ mod tests {
         assert_eq!(event.kind, MarketEventKind::Bar);
         assert_eq!(event.bar.as_ref().unwrap().timeframe, "1m");
         assert_eq!(event.observed_at_unix_nanos.get(), 1_000_000_000);
+    }
+
+    #[test]
+    fn rest_derivative_normalizers_preserve_typed_values() {
+        let symbol = ParticipantSymbol::new("BTC-USDT-SWAP").unwrap();
+        let mark =
+            mark_price(&symbol, &json!({"data":[{"markPx":"42000.5","ts":"1000"}]})).unwrap();
+        let funding = funding_rate(
+            &symbol,
+            &json!({"data":[{
+                "fundingRate":"0.0001",
+                "fundingTime":"1000",
+                "nextFundingTime":"2000"
+            }]}),
+        )
+        .unwrap();
+        let interest =
+            open_interest(&symbol, &json!({"data":[{"oi":"125.5","ts":"1000"}]})).unwrap();
+
+        assert_eq!(mark.symbol, symbol);
+        assert_eq!(mark.observed_at_unix_nanos.get(), 1_000_000_000);
+        assert_eq!(
+            funding.next_funding_at_unix_nanos.unwrap().get(),
+            2_000_000_000
+        );
+        assert_eq!(interest.observed_at_unix_nanos.get(), 1_000_000_000);
+    }
+
+    #[test]
+    fn option_summary_selects_the_requested_contract() {
+        let symbol = ParticipantSymbol::new("BTC-USD-260925-100000-C").unwrap();
+        let result = greeks(
+            &symbol,
+            &json!({"data":[
+                {"instId":"BTC-USD-260925-90000-C","delta":"0.8","ts":"1000"},
+                {"instId":"BTC-USD-260925-100000-C","delta":"0.5","gamma":"0.1","ts":"2000"}
+            ]}),
+        )
+        .unwrap();
+
+        assert_eq!(result.symbol, symbol);
+        assert_eq!(result.observed_at_unix_nanos.get(), 2_000_000_000);
+        assert!(result.values.delta.is_some());
     }
 }

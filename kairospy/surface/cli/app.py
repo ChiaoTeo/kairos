@@ -20,6 +20,7 @@ from .commands.market import market_passthrough
 from .commands.order import order_passthrough
 from .commands.root import (
     config_app,
+    notifications_app,
     project_app,
     system_app,
 )
@@ -105,6 +106,12 @@ app.command(
     help="Submit and inspect execution orders.",
     rich_help_panel="Operations",
 )(order_passthrough)
+app.add_typer(
+    notifications_app,
+    name="notifications",
+    help="Validate and test outbound notification destinations.",
+    rich_help_panel="Operations",
+)
 app.add_typer(
     system_app,
     name="system",

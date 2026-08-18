@@ -12,7 +12,14 @@ use crate::{ContractError, ContractResult};
 use kairos_transport::{
     ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub fn account_view_path(
+    root: impl AsRef<Path>,
+    key: &AccountViewKey,
+) -> ContractResult<PathBuf> {
+    Ok(key.resource_path(root))
+}
 
 pub struct ViewFrame {
     metadata: SnapshotEnvelopeMetadata,
@@ -44,8 +51,15 @@ pub struct AccountViewReader {
     reader: SharedSnapshotReader,
 }
 impl AccountViewReader {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &AccountViewKey,
+    ) -> ContractResult<PathBuf> {
+        account_view_path(root, key)
+    }
+
     pub fn open(root: impl AsRef<Path>, key: AccountViewKey) -> ContractResult<Self> {
-        let reader = SharedSnapshotReader::open(key.resource_path(root))
+        let reader = SharedSnapshotReader::open(account_view_path(root, &key)?)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, reader })
     }
@@ -75,12 +89,19 @@ pub struct AccountViewPublisher {
     writer: ReplacementSnapshotStorage,
 }
 impl AccountViewPublisher {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &AccountViewKey,
+    ) -> ContractResult<PathBuf> {
+        account_view_path(root, key)
+    }
+
     pub fn create(
         root: impl AsRef<Path>,
         key: AccountViewKey,
         slot_size: usize,
     ) -> ContractResult<Self> {
-        let writer = ReplacementSnapshotStorage::create(key.resource_path(root), slot_size)
+        let writer = ReplacementSnapshotStorage::create(account_view_path(root, &key)?, slot_size)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, writer })
     }

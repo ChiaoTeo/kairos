@@ -1,6 +1,8 @@
 use crate::participants::hyperliquid::HyperliquidRestConfig;
 use crate::transport::http::HttpClient;
-use crate::{ConnectionDescriptor, IntegrationError, ParticipantKind, ParticipantRef};
+use crate::{
+    ConnectionDescriptor, ConnectionKey, IntegrationError, ParticipantKind, ParticipantRef,
+};
 
 pub(crate) struct RestService {
     descriptor: ConnectionDescriptor,
@@ -10,6 +12,7 @@ pub(crate) struct RestService {
 
 impl RestService {
     pub(crate) fn new(
+        connection_key: ConnectionKey,
         config: HyperliquidRestConfig,
         domain: &str,
         principal_id: Option<String>,
@@ -21,7 +24,7 @@ impl RestService {
             ));
         }
         let mut descriptor = ConnectionDescriptor::new(
-            config.binding_id,
+            connection_key,
             ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid")
                 .map_err(IntegrationError::InvalidRequest)?,
             domain,

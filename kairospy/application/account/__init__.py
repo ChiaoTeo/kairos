@@ -372,11 +372,12 @@ class CredentialApplication:
     def environment(self, credential_id: str) -> dict[str, str]:
         entry = self.show(credential_id)
         provider = str(entry.get("provider", "")).lower()
-        fields = (
-            ("api_key", "api_secret", "passphrase")
-            if provider in {"okx", "okex"}
-            else ("api_key", "api_secret")
-        )
+        fields = {
+            "feishu": ("webhook_url", "signing_secret", "api_key", "api_secret"),
+            "telegram": ("bot_token", "api_key"),
+            "okx": ("api_key", "api_secret", "passphrase"),
+            "okex": ("api_key", "api_secret", "passphrase"),
+        }.get(provider, ("api_key", "api_secret"))
         prefix = "KAIROS_CREDENTIAL_" + "".join(
             c if c.isalnum() else "_" for c in credential_id.upper()
         )

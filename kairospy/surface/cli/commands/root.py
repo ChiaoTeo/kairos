@@ -28,6 +28,10 @@ from kairospy.application.account import (
     TradeLeaseApplication,
 )
 from kairospy.application.market import MarketCliApplication, MarketDataApplication
+from kairospy.application.notification.composition import (
+    test_notification_destination,
+    validate_workspace_notifications,
+)
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
@@ -178,6 +182,29 @@ account_app = typer.Typer(no_args_is_help=True, help="Private account command re
 market_app = typer.Typer(no_args_is_help=True, help="Private market command registry")
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
 system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
+notifications_app = typer.Typer(no_args_is_help=True, help="Notification commands")
+
+
+@notifications_app.command("validate")
+def notifications_validate(
+    mode: str = typer.Option("paper", "--mode"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    owner = WorkspaceApplication().open(workspace)
+    _emit(validate_workspace_notifications(owner, mode=mode), output)
+
+
+@notifications_app.command("test")
+def notifications_test(
+    destination_id: str,
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    import asyncio
+
+    owner = WorkspaceApplication().open(workspace)
+    _emit(asyncio.run(test_notification_destination(owner, destination_id)), output)
 
 
 @project_app.command(

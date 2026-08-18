@@ -1,3 +1,4 @@
+use crate::{ContractError, ContractResult};
 use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RiskViewKind {
@@ -15,10 +16,27 @@ impl RiskViewKey {
             kind: RiskViewKind::Latest,
         }
     }
-    pub fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref()
+    pub(crate) fn resource_path(&self, root: impl AsRef<Path>) -> ContractResult<PathBuf> {
+        if self.actor_id.trim().is_empty() {
+            return Err(ContractError::Invalid("Risk view actor id is empty".into()));
+        }
+        Ok(root.as_ref()
             .join("risk")
-            .join(&self.actor_id)
-            .join("latest/current.snapshot")
+            .join(component(&self.actor_id))
+            .join("latest/current.snapshot"))
     }
+}
+
+fn component(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                format!("{}", *byte as char)
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
 }

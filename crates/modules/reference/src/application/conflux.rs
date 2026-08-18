@@ -31,9 +31,12 @@ impl ConfluxActor for ReferenceApplication {
     type LocalEvent = Infallible;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
-        self.activate_sources(context.system()).await?;
+        self.activate_sources(&mut context.connections()).await?;
         if self.initial_refresh() {
-            if let Err(error) = self.refresh().await {
+            if let Err(error) = self
+                .refresh_with_connections(&mut context.connections())
+                .await
+            {
                 tracing::warn!(
                     event = "reference_initial_refresh_deferred",
                     component = "reference",
@@ -55,7 +58,10 @@ impl ConfluxActor for ReferenceApplication {
         let response = match event {
             ConfluxEvent::Rest(request) => Some(self.handle_rest(request, context).await),
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
-                if let Err(error) = self.refresh().await {
+                if let Err(error) = self
+                    .refresh_with_connections(&mut context.connections())
+                    .await
+                {
                     tracing::warn!(
                         event = "reference_refresh_failed",
                         component = "reference",
@@ -85,8 +91,14 @@ impl ReferenceApplication {
             }
             ReferenceRestRequest::Refresh { source_id } => {
                 let result = match source_id.as_deref() {
-                    Some(source_id) => self.refresh_source(source_id).await,
-                    None => self.refresh().await,
+                    Some(source_id) => {
+                        self.refresh_source_with_connections(source_id, &mut context.connections())
+                            .await
+                    }
+                    None => {
+                        self.refresh_with_connections(&mut context.connections())
+                            .await
+                    }
                 };
                 let response = match result {
                     Ok(result) => {
@@ -201,37 +213,47 @@ impl ReferenceApplication {
     ) -> Result<ReferenceOptionCoverageResponse, ReferenceControlError> {
         #[cfg(not(test))]
         let result = {
-            let connection = if enabled && !self.option_underlyings().contains(&underlying) {
-                let connection = self
-                    .massive_option_connection(&underlying)
-                    .map_err(control_error)?;
-                let key = crate::services::providers::MassiveOptionsCoverageSource::connection_key(
+            let key = kairos_conflux::ConnectionKey::new(
+                crate::services::providers::MassiveOptionsCoverageSource::connection_key(
                     &underlying,
                 )
-                .map_err(control_error)?;
+                .map_err(control_error)?,
+            )
+            .map_err(|error| control_error(ReferenceError::Provider(error)))?;
+            let created = if enabled && !self.option_underlyings().contains(&underlying) {
+                let (planned_key, parameters) = self
+                    .massive_option_connection_plan(&underlying)
+                    .map_err(control_error)?;
                 context
-                    .system()
-                    .massive_rest_connections
-                    .ensure_with(key.clone(), 1, || connection)
+                    .connections()
+                    .massive_rest
+                    .create(planned_key.clone(), parameters)
                     .map_err(|error| control_error(ReferenceError::Provider(error.to_string())))?;
-                Some(
-                    context
-                        .system()
-                        .massive_rest_connections
-                        .remove(&key)
-                        .expect("managed Massive options connection was just ensured")
-                        .into_connection(),
-                )
+                Some(planned_key)
             } else {
                 None
             };
-            self.set_managed_option_underlying(&underlying, enabled, connection)
+            let result = self
+                .set_managed_option_underlying(
+                    &underlying,
+                    enabled,
+                    created.clone(),
+                    &mut context.connections(),
+                )
                 .await
-                .map_err(control_error)?
+                .map_err(control_error);
+            if result.is_err() {
+                if let Some(created) = &created {
+                    let _ = context.connections().massive_rest.remove(created);
+                }
+            } else if !enabled {
+                let _ = context.connections().massive_rest.remove(&key);
+            }
+            result?
         };
         #[cfg(test)]
         let result = self
-            .set_option_underlying(&underlying, enabled)
+            .set_option_underlying(&underlying, enabled, &mut context.connections())
             .await
             .map_err(control_error)?;
         let _ = self.publish_pending(context).await;

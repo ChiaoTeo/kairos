@@ -32,7 +32,10 @@ pub struct ExecutionBusinessEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionBusinessChange {
-    Intent(IntentState),
+    Intent {
+        state: IntentState,
+        event: IntentEvent,
+    },
     Order {
         strategy_id: String,
         order: ExecutionOrder,
@@ -52,7 +55,11 @@ pub enum ExecutionBusinessChange {
 pub struct IntentEvent {
     pub intent_id: IntentId,
     #[serde(default)]
+    pub strategy_decision_id: Option<String>,
+    #[serde(default)]
     pub event_sequence: Sequence,
+    #[serde(default)]
+    pub previous_status: Option<IntentStatus>,
     pub status: IntentStatus,
     pub order_ids: Vec<OrderId>,
     pub completed_quantity: Quantity,

@@ -6,11 +6,27 @@ use crate::services::participants::okx::{
 use crate::{
     ConnectionDescriptor, ExternalInstrument, ExternalInstrumentCatalog,
     ExternalInstrumentCatalogPage, ExternalInstrumentKind, InstrumentCatalogQuery,
-    IntegrationError, MarketBar, MarketBarQuery, MarketBarRequest, MarketOrderBook,
-    MarketOrderBookQuery, MarketOrderBookRequest, MarketQuote, MarketQuoteQuery, MarketTrade,
-    MarketTradeQuery, ParticipantKind, ParticipantRef,
+    IntegrationError, MarketBar, MarketBarQuery, MarketBarRequest, MarketFundingRate,
+    MarketFundingRateQuery, MarketGreeks, MarketGreeksQuery, MarketIndexPrice,
+    MarketIndexPriceQuery, MarketMarkPrice, MarketMarkPriceQuery, MarketOpenInterest,
+    MarketOpenInterestQuery, MarketOrderBook, MarketOrderBookQuery, MarketOrderBookRequest,
+    MarketQuote, MarketQuoteQuery, MarketTrade, MarketTradeQuery, ParticipantKind, ParticipantRef,
 };
 use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OkxSystemStatus {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub service_type: String,
+    pub begin_unix_nanos: UnixNanos,
+    pub end_unix_nanos: Option<UnixNanos>,
+    pub href: Option<String>,
+    pub scheduled: bool,
+    pub schedule_description: Option<String>,
+    pub environment: Option<String>,
+}
 
 pub struct OkxPublicRestConnection {
     service: RestService,
@@ -159,6 +175,151 @@ impl MarketOrderBookQuery for OkxPublicRestConnection {
     }
 }
 
+impl MarketMarkPriceQuery for OkxPublicRestConnection {
+    async fn fetch_mark_prices(
+        &mut self,
+        symbols: &[ParticipantSymbol],
+    ) -> Result<Vec<MarketMarkPrice>, IntegrationError> {
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let value = self
+                .service
+                .public_get(
+                    "/api/v5/public/mark-price",
+                    &[
+                        ("instType", derivative_instrument_type(symbol)?.into()),
+                        ("instId", symbol.as_str().into()),
+                    ],
+                )
+                .await?;
+            values.push(market::mark_price(symbol, &value)?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketIndexPriceQuery for OkxPublicRestConnection {
+    async fn fetch_index_prices(
+        &mut self,
+        symbols: &[ParticipantSymbol],
+    ) -> Result<Vec<MarketIndexPrice>, IntegrationError> {
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let value = self
+                .service
+                .public_get(
+                    "/api/v5/market/index-tickers",
+                    &[("instId", index_symbol(symbol)?)],
+                )
+                .await?;
+            values.push(market::index_price(symbol, &value)?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketFundingRateQuery for OkxPublicRestConnection {
+    async fn fetch_funding_rates(
+        &mut self,
+        symbols: &[ParticipantSymbol],
+    ) -> Result<Vec<MarketFundingRate>, IntegrationError> {
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            if derivative_instrument_type(symbol)? != "SWAP" {
+                return Err(IntegrationError::InvalidRequest(format!(
+                    "OKX funding rate requires a SWAP instrument: {symbol}"
+                )));
+            }
+            let value = self
+                .service
+                .public_get(
+                    "/api/v5/public/funding-rate",
+                    &[("instId", symbol.as_str().into())],
+                )
+                .await?;
+            values.push(market::funding_rate(symbol, &value)?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketOpenInterestQuery for OkxPublicRestConnection {
+    async fn fetch_open_interest(
+        &mut self,
+        symbols: &[ParticipantSymbol],
+    ) -> Result<Vec<MarketOpenInterest>, IntegrationError> {
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let value = self
+                .service
+                .public_get(
+                    "/api/v5/public/open-interest",
+                    &[
+                        ("instType", derivative_instrument_type(symbol)?.into()),
+                        ("instId", symbol.as_str().into()),
+                    ],
+                )
+                .await?;
+            values.push(market::open_interest(symbol, &value)?);
+        }
+        Ok(values)
+    }
+}
+
+impl MarketGreeksQuery for OkxPublicRestConnection {
+    async fn fetch_greeks(
+        &mut self,
+        symbols: &[ParticipantSymbol],
+    ) -> Result<Vec<MarketGreeks>, IntegrationError> {
+        let mut values = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            if derivative_instrument_type(symbol)? != "OPTION" {
+                return Err(IntegrationError::InvalidRequest(format!(
+                    "OKX Greeks require an OPTION instrument: {symbol}"
+                )));
+            }
+            let value = self
+                .service
+                .public_get(
+                    "/api/v5/public/opt-summary",
+                    &[("instFamily", index_symbol(symbol)?)],
+                )
+                .await?;
+            values.push(market::greeks(symbol, &value)?);
+        }
+        Ok(values)
+    }
+}
+
+fn derivative_instrument_type(
+    symbol: &ParticipantSymbol,
+) -> Result<&'static str, IntegrationError> {
+    let parts = symbol.as_str().split('-').collect::<Vec<_>>();
+    if parts.last() == Some(&"SWAP") {
+        Ok("SWAP")
+    } else if matches!(parts.last(), Some(&"C") | Some(&"P")) && parts.len() >= 5 {
+        Ok("OPTION")
+    } else if parts.len() >= 3 {
+        Ok("FUTURES")
+    } else {
+        Err(IntegrationError::InvalidRequest(format!(
+            "OKX derivative instrument is required: {symbol}"
+        )))
+    }
+}
+
+fn index_symbol(symbol: &ParticipantSymbol) -> Result<String, IntegrationError> {
+    let mut parts = symbol.as_str().split('-');
+    let base = parts.next().unwrap_or_default();
+    let quote = parts.next().unwrap_or_default();
+    if base.is_empty() || quote.is_empty() {
+        return Err(IntegrationError::InvalidRequest(format!(
+            "OKX instrument does not identify an index family: {symbol}"
+        )));
+    }
+    Ok(format!("{base}-{quote}"))
+}
+
 fn normalize_instrument(
     instrument_type: &str,
     row: &serde_json::Value,
@@ -221,9 +382,12 @@ fn currency(value: Option<&str>) -> Result<Option<Currency>, IntegrationError> {
 }
 
 impl OkxPublicRestConnection {
-    pub fn new(config: OkxRestConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: OkxRestConfig,
+    ) -> Result<Self, IntegrationError> {
         Ok(Self {
-            service: RestService::new(config, "public.rest", None)?,
+            service: RestService::new(connection_key, config, "public.rest", None)?,
         })
     }
 
@@ -231,8 +395,31 @@ impl OkxPublicRestConnection {
         self.service.descriptor()
     }
 
+    pub fn rate_limit_headers(&self) -> std::collections::BTreeMap<String, String> {
+        self.service.rate_limit_headers()
+    }
+
+    pub fn clock_health(&self) -> Result<crate::ProviderClockHealth, IntegrationError> {
+        self.service.clock_health()
+    }
+
     pub fn endpoint(&self) -> &str {
         self.service.endpoint()
+    }
+
+    pub async fn fetch_system_status(
+        &mut self,
+        state: Option<&str>,
+    ) -> Result<Vec<OkxSystemStatus>, IntegrationError> {
+        let query = state
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| vec![("state", value.to_owned())])
+            .unwrap_or_default();
+        let value = self
+            .service
+            .public_get("/api/v5/system/status", &query)
+            .await?;
+        okx_system_statuses(&value)
     }
 
     /// Provider-native bounded catalog query used when composition enables a
@@ -274,5 +461,95 @@ impl OkxPublicRestConnection {
                 .map(|row| normalize_instrument(&instrument_type, row))
                 .collect::<Result<Vec<_>, _>>()?,
         })
+    }
+}
+
+fn okx_system_statuses(
+    value: &serde_json::Value,
+) -> Result<Vec<OkxSystemStatus>, IntegrationError> {
+    value
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            IntegrationError::InvalidPayload("OKX system status data is missing".into())
+        })?
+        .iter()
+        .map(|row| {
+            let text = |field: &str| {
+                row.get(field)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+            };
+            let required = |field: &str| {
+                text(field).ok_or_else(|| {
+                    IntegrationError::InvalidPayload(format!(
+                        "OKX system status {field} is missing"
+                    ))
+                })
+            };
+            let millis = |field: &str| -> Result<Option<UnixNanos>, IntegrationError> {
+                text(field)
+                    .map(|value| {
+                        value
+                            .parse::<u64>()
+                            .map(|value| UnixNanos::from(value.saturating_mul(1_000_000)))
+                            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))
+                    })
+                    .transpose()
+            };
+            Ok(OkxSystemStatus {
+                id: required("id")?.to_owned(),
+                title: required("title")?.to_owned(),
+                state: required("state")?.to_owned(),
+                service_type: required("serviceType")?.to_owned(),
+                begin_unix_nanos: millis("begin")?.ok_or_else(|| {
+                    IntegrationError::InvalidPayload("OKX system status begin is missing".into())
+                })?,
+                end_unix_nanos: millis("end")?,
+                href: text("href").map(str::to_owned),
+                scheduled: required("state")?.eq_ignore_ascii_case("scheduled"),
+                schedule_description: text("scheDesc").map(str::to_owned),
+                environment: text("env").map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derivative_routing_is_explicit_by_okx_symbol_family() {
+        let swap = ParticipantSymbol::new("BTC-USDT-SWAP").unwrap();
+        let future = ParticipantSymbol::new("BTC-USDT-260925").unwrap();
+        let option = ParticipantSymbol::new("BTC-USD-260925-100000-C").unwrap();
+        let spot = ParticipantSymbol::new("BTC-USDT").unwrap();
+
+        assert_eq!(derivative_instrument_type(&swap).unwrap(), "SWAP");
+        assert_eq!(derivative_instrument_type(&future).unwrap(), "FUTURES");
+        assert_eq!(derivative_instrument_type(&option).unwrap(), "OPTION");
+        assert!(derivative_instrument_type(&spot).is_err());
+        assert_eq!(index_symbol(&option).unwrap(), "BTC-USD");
+    }
+
+    #[test]
+    fn system_status_fixture_preserves_global_maintenance_window() {
+        let status = okx_system_statuses(&serde_json::json!({"data":[{
+            "id":"1","title":"Trading maintenance","state":"scheduled",
+            "serviceType":"1","begin":"1720000000000","end":"1720003600000",
+            "href":"https://www.okx.com/support/notice","scheDesc":"scheduled upgrade",
+            "env":"1"
+        }]}))
+        .unwrap()
+        .remove(0);
+
+        assert!(status.scheduled);
+        assert_eq!(status.service_type, "1");
+        assert_eq!(
+            status.schedule_description.as_deref(),
+            Some("scheduled upgrade")
+        );
+        assert_eq!(status.begin_unix_nanos.get(), 1_720_000_000_000_000_000);
     }
 }

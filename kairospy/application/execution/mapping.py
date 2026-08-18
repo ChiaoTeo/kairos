@@ -48,6 +48,13 @@ def map_execution_event(record: ExecutionEventRecord) -> tuple[ExecutionEvent, .
                         _strategy_payload(change.payload, change.strategy_id)
                     ),
                     metadata,
+                    _enum(
+                        IntentStatus,
+                        _mapping(change.payload, "Execution intent event").get(
+                            "previous_status"
+                        ),
+                        None,
+                    ),
                 )
             )
         elif change.kind == "order_update":
@@ -97,6 +104,12 @@ def map_execution_intent(value: object) -> ExecutionIntent:
             if isinstance(source_event_sequence, int) and source_event_sequence > 0
             else None
         ),
+        strategy_decision_id=(
+            str(intent["strategy_decision_id"])
+            if isinstance(intent.get("strategy_decision_id"), str)
+            and str(intent["strategy_decision_id"]).strip()
+            else None
+        ),
     )
 
 
@@ -140,6 +153,11 @@ def map_execution_fill(value: object) -> Fill:
         quantity=_decimal(row.get("quantity")) or Decimal("0"),
         price=_decimal(row.get("price")) or Decimal("0"),
         occurred_at=datetime_from_unix_nanos(nanos),
+        intent_id=(
+            IntentId(str(row["intent_id"]))
+            if isinstance(row.get("intent_id"), str) and str(row["intent_id"]).strip()
+            else None
+        ),
     )
 
 

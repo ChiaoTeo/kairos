@@ -16,7 +16,7 @@ pub(crate) struct ProviderUpdate {
 
 /// Internal seam over the Integration-owned catalog capabilities.
 /// Concrete provider selection and mapping live in composition.
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 pub(crate) trait ReferenceSource: Send {
     fn source_id(&self) -> &str;
 
@@ -25,6 +25,13 @@ pub(crate) trait ReferenceSource: Send {
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog>;
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        self.fetch_catalog().await
+    }
 
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         Ok(ProviderUpdate {
@@ -35,6 +42,13 @@ pub(crate) trait ReferenceSource: Send {
         })
     }
 
+    async fn fetch_catalog_step_with_connections(
+        &mut self,
+        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderUpdate> {
+        self.fetch_catalog_step().await
+    }
+
     async fn advance_source(
         &mut self,
         source_id: &str,
@@ -42,6 +56,14 @@ pub(crate) trait ReferenceSource: Send {
         Err(ReferenceError::Invalid(format!(
             "reference source does not support targeted refresh: {source_id}"
         )))
+    }
+
+    async fn advance_source_with_connections(
+        &mut self,
+        source_id: &str,
+        _connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        self.advance_source(source_id).await
     }
 
     async fn set_source_paused(&mut self, source_id: &str, _paused: bool) -> ReferenceResult<()> {
@@ -87,7 +109,7 @@ pub(crate) enum ConfiguredProviderSource {
     MassiveOptions(MassiveOptionsCoverageSource),
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for ConfiguredProviderSource {
     fn source_id(&self) -> &str {
         match self {
@@ -115,6 +137,28 @@ impl ReferenceSource for ConfiguredProviderSource {
         }
     }
 
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<crate::domain::ProviderCatalog> {
+        match self {
+            Self::BinanceSpot(source) => source.fetch_catalog_with_connections(connections).await,
+            Self::BinanceDerivatives(source) => {
+                source.fetch_catalog_with_connections(connections).await
+            }
+            Self::BinanceOptions(source) => {
+                source.fetch_catalog_with_connections(connections).await
+            }
+            Self::BinanceEquity(source) => source.fetch_catalog_with_connections(connections).await,
+            Self::Okx(source) => source.fetch_catalog_with_connections(connections).await,
+            Self::Hyperliquid(source) => source.fetch_catalog_with_connections(connections).await,
+            Self::MassiveEquity(source) => source.fetch_catalog_with_connections(connections).await,
+            Self::MassiveOptions(source) => {
+                source.fetch_catalog_with_connections(connections).await
+            }
+        }
+    }
+
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         match self {
             Self::BinanceSpot(source) => source.fetch_catalog_step().await,
@@ -125,6 +169,54 @@ impl ReferenceSource for ConfiguredProviderSource {
             Self::Hyperliquid(source) => source.fetch_catalog_step().await,
             Self::MassiveEquity(source) => source.fetch_catalog_step().await,
             Self::MassiveOptions(source) => source.fetch_catalog_step().await,
+        }
+    }
+
+    async fn fetch_catalog_step_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderUpdate> {
+        match self {
+            Self::BinanceSpot(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::BinanceDerivatives(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::BinanceOptions(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::BinanceEquity(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::Okx(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::Hyperliquid(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::MassiveEquity(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
+            Self::MassiveOptions(source) => {
+                source
+                    .fetch_catalog_step_with_connections(connections)
+                    .await
+            }
         }
     }
 
@@ -153,12 +245,15 @@ impl ReferenceSource for ConfiguredProviderSource {
 
 #[cfg(not(test))]
 impl ConfiguredProviderSource {
-    pub(crate) fn massive_option_connection(
+    pub(crate) fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
         match self {
-            Self::MassiveOptions(source) => source.connection_for(underlying),
+            Self::MassiveOptions(source) => source.connection_plan(underlying),
             _ => Err(ReferenceError::Invalid(format!(
                 "{} does not support option coverage",
                 self.source_id()
@@ -170,12 +265,12 @@ impl ConfiguredProviderSource {
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
     ) -> ReferenceResult<()> {
         match self {
             Self::MassiveOptions(source) => {
                 source
-                    .set_option_underlying_with_connection(underlying, enabled, connection)
+                    .set_option_underlying_with_key(underlying, enabled, connection_key)
                     .await
             }
             _ => Err(ReferenceError::Invalid(format!(
@@ -186,7 +281,7 @@ impl ConfiguredProviderSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for ConfiguredReferenceSource {
     fn source_id(&self) -> &str {
         self.inner.source_id()
@@ -200,8 +295,24 @@ impl ReferenceSource for ConfiguredReferenceSource {
         self.inner.fetch_catalog().await
     }
 
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<crate::domain::ProviderCatalog> {
+        self.inner.fetch_catalog_with_connections(connections).await
+    }
+
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         self.inner.fetch_catalog_step().await
+    }
+
+    async fn fetch_catalog_step_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderUpdate> {
+        self.inner
+            .fetch_catalog_step_with_connections(connections)
+            .await
     }
 
     async fn advance_source(
@@ -209,6 +320,16 @@ impl ReferenceSource for ConfiguredReferenceSource {
         source_id: &str,
     ) -> ReferenceResult<Option<crate::domain::ProviderCatalog>> {
         self.inner.advance_source(source_id).await
+    }
+
+    async fn advance_source_with_connections(
+        &mut self,
+        source_id: &str,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<Option<crate::domain::ProviderCatalog>> {
+        self.inner
+            .advance_source_with_connections(source_id, connections)
+            .await
     }
 
     async fn set_source_paused(&mut self, source_id: &str, paused: bool) -> ReferenceResult<()> {
@@ -239,11 +360,14 @@ impl ConfiguredReferenceSource {
     }
 
     #[cfg(not(test))]
-    pub(crate) fn massive_option_connection(
+    pub(crate) fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
-        self.inner.massive_option_connection(underlying)
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
+        self.inner.massive_option_connection_plan(underlying)
     }
 
     #[cfg(not(test))]
@@ -251,10 +375,10 @@ impl ConfiguredReferenceSource {
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
     ) -> ReferenceResult<()> {
         self.inner
-            .set_managed_option_underlying(underlying, enabled, connection)
+            .set_managed_option_underlying(underlying, enabled, connection_key)
             .await
     }
 }

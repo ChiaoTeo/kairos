@@ -22,8 +22,52 @@ members = [
     "crates/modules/risk/contract",
 ]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
 [workspace.dependencies]
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4", features = ["derive", "env"] }
+crc32fast = "1"
 criterion = "0.8"
+ethers = { version = "2.0.14", default-features = false }
+flatbuffers = "25.12.19"
+fs2 = "0.4"
+futures-core = "0.3"
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+http-body-util = "0.1"
+hyper = "1"
+hyperliquid_rust_sdk = "0.6"
+hyperlocal-next = "0.9"
+hyper-util = "0.1"
+ibapi = { version = "3.3", default-features = false, features = ["async"] }
+kairos-account = { path = "crates/modules/account" }
+kairos-account-contract = { path = "crates/modules/account/contract" }
+kairos-conflux = { path = "crates/platform/conflux" }
+kairos-execution = { path = "crates/modules/execution" }
+kairos-execution-contract = { path = "crates/modules/execution/contract" }
+kairos-integration = { path = "crates/platform/integration" }
+kairos-market = { path = "crates/modules/market" }
+kairos-market-contract = { path = "crates/modules/market/contract" }
+kairos-network = { path = "crates/platform/network" }
+kairos-primitives = { path = "crates/primitives" }
+kairos-protocol = { path = "crates/platform/protocol" }
+kairos-python-transport = { path = "crates/platform/python-transport" }
+kairos-reference = { path = "crates/modules/reference" }
+kairos-reference-contract = { path = "crates/modules/reference/contract" }
+kairos-risk = { path = "crates/modules/risk" }
+kairos-risk-contract = { path = "crates/modules/risk/contract" }
+kairos-transport = { path = "crates/platform/transport" }
+kairos-workspace = { path = "crates/platform/workspace" }
+libc = "0.2"
+memmap2 = "0.9"
 opentelemetry = { version = "0.31", default-features = false, features = [
     "trace",
     "metrics",
@@ -37,24 +81,40 @@ opentelemetry_sdk = { version = "0.31", default-features = false, features = [
     "trace",
     "metrics",
 ] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311"] }
 proptest = "1.11"
-reqwest = { version = "0.13.4", default-features = false, features = [
-    "blocking",
-    "json",
-    "query",
-    "gzip",
-    "rustls",
-] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "query"] }
 rusqlite = { version = "0.39", default-features = false }
+rust_decimal = { version = "1.42", default-features = false }
+rusteron-client = { version = "0.2.4", default-features = false, features = [
+    "static",
+    "precompile-rustls",
+] }
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = [
+    "static",
+    "precompile-rustls",
+] }
 secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
     "sqlite",
     "time",
 ] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tokio-stream = "0.1"
 tokio-tungstenite = { version = "0.30", default-features = false, features = [
     "connect",
     "native-tls",
 ] }
+toml = "0.8"
+tracing = "0.1"
 tracing-opentelemetry = "0.32"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+uuid = { version = "1", features = ["v5"] }

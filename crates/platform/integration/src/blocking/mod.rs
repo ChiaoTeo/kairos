@@ -5,16 +5,16 @@
 
 pub mod account;
 pub mod connection;
-pub mod event;
+pub mod earn;
 pub mod execution;
-pub mod funding;
 pub mod market;
 pub mod reference;
+pub mod transfer;
 
 pub use account::*;
 pub use connection::*;
-pub use event::*;
+pub use earn::*;
 pub use execution::*;
-pub use funding::*;
 pub use market::*;
 pub use reference::*;
+pub use transfer::*;

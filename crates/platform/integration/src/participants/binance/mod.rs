@@ -8,9 +8,10 @@ macro_rules! rest_connection {
 
         impl $name {
             pub fn new(
+                connection_key: crate::ConnectionKey,
                 config: crate::participants::binance::BinanceRestConfig,
             ) -> Result<Self, crate::IntegrationError> {
-                let descriptor = config.descriptor($domain)?;
+                let descriptor = config.descriptor(connection_key, $domain)?;
                 let credential = config.credential;
                 Ok(Self {
                     service: crate::services::participants::binance::rest::RestService::new(
@@ -28,6 +29,14 @@ macro_rules! rest_connection {
             pub fn endpoint(&self) -> &str {
                 self.service.endpoint()
             }
+
+            pub fn rate_limit_headers(&self) -> std::collections::BTreeMap<String, String> {
+                self.service.rate_limit_headers()
+            }
+
+            pub fn clock_health(&self) -> crate::ProviderClockHealth {
+                self.service.clock_health()
+            }
         }
     };
 }
@@ -42,15 +51,17 @@ macro_rules! websocket_connection {
             >,
             pending_market_events:
                 crate::transport::websocket::InboundDispatcher<crate::MarketEvent>,
+            order_book_sequences: crate::services::sequence::OrderBookSequenceTracker,
             next_subscription_id: u64,
             next_request_id: u64,
         }
 
         impl $name {
             pub fn new(
+                connection_key: crate::ConnectionKey,
                 config: crate::participants::binance::BinanceWebSocketConfig,
             ) -> Result<Self, crate::IntegrationError> {
-                let descriptor = config.descriptor($domain)?;
+                let descriptor = config.descriptor(connection_key, $domain)?;
                 Ok(Self {
                     service: crate::services::participants::binance::socket::SocketService::new(
                         descriptor,
@@ -62,6 +73,7 @@ macro_rules! websocket_connection {
                         crate::transport::websocket::InboundDispatcher::new(
                             config.event_capacity,
                         )?,
+                    order_book_sequences: Default::default(),
                     next_subscription_id: 1,
                     next_request_id: 1,
                 })
@@ -69,6 +81,32 @@ macro_rules! websocket_connection {
 
             pub fn descriptor(&self) -> &crate::ConnectionDescriptor {
                 self.service.descriptor()
+            }
+
+            /// Seed the last update id from a REST depth snapshot before
+            /// draining buffered Binance depth events.
+            pub fn seed_order_book_sequence(
+                &mut self,
+                symbol: &kairos_primitives::ParticipantSymbol,
+                last_update_id: u64,
+            ) {
+                self.order_book_sequences
+                    .seed(symbol.as_str(), last_update_id);
+            }
+
+            fn queue_market_events(
+                &mut self,
+                events: impl IntoIterator<Item = crate::MarketEvent>,
+            ) -> Result<(), crate::IntegrationError> {
+                for event in events {
+                    match self.order_book_sequences.validate_binance(&event)? {
+                        crate::services::sequence::SequenceDisposition::Accept => {
+                            self.pending_market_events.buffer(event)?;
+                        }
+                        crate::services::sequence::SequenceDisposition::Duplicate => {}
+                    }
+                }
+                Ok(())
             }
 
             async fn next_value(&mut self) -> Result<serde_json::Value, crate::IntegrationError> {
@@ -83,6 +121,38 @@ macro_rules! websocket_connection {
                             return Err(crate::IntegrationError::Transport(
                                 "Binance WebSocket closed".into(),
                             ));
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+
+            fn poll_next_value(
+                &mut self,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<serde_json::Value, crate::IntegrationError>> {
+                loop {
+                    let message = match self.service.poll_next(cx) {
+                        std::task::Poll::Ready(Ok(message)) => message,
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error))
+                        }
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    };
+                    match message {
+                        tokio_tungstenite::tungstenite::Message::Text(text) => {
+                            return std::task::Poll::Ready(
+                                serde_json::from_str(&text).map_err(|error| {
+                                    crate::IntegrationError::InvalidPayload(error.to_string())
+                                }),
+                            )
+                        }
+                        tokio_tungstenite::tungstenite::Message::Close(_) => {
+                            return std::task::Poll::Ready(Err(
+                                crate::IntegrationError::Transport(
+                                    "Binance WebSocket closed".into(),
+                                ),
+                            ))
                         }
                         _ => continue,
                     }
@@ -113,7 +183,7 @@ macro_rules! websocket_connection {
                         }
                         return Ok(());
                     }
-                    self.pending_market_events.extend(
+                    self.queue_market_events(
                         crate::services::participants::binance::stream::normalize(&value)?,
                     )?;
                 }
@@ -146,6 +216,7 @@ macro_rules! websocket_connection {
 
             async fn disconnect(&mut self) -> Result<(), crate::IntegrationError> {
                 self.pending_market_events.clear();
+                self.order_book_sequences.clear();
                 self.service.disconnect().await
             }
 
@@ -243,20 +314,47 @@ macro_rules! market_websocket_capabilities {
         }
 
         impl crate::MarketDataStream for $name {
-            async fn next(&mut self) -> Result<crate::MarketEvent, crate::IntegrationError> {
+            fn poll_next(
+                &mut self,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<crate::MarketEvent, crate::IntegrationError>> {
                 if let Some(event) = self.pending_market_events.pop() {
-                    return Ok(event);
+                    return std::task::Poll::Ready(Ok(event));
                 }
                 loop {
-                    let value = self.next_value().await?;
-                    let mut events =
-                        crate::services::participants::binance::stream::normalize(&value)?;
-                    let Some(first) = events.pop_front() else {
-                        continue;
+                    let value = match self.poll_next_value(cx) {
+                        std::task::Poll::Ready(Ok(value)) => value,
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error))
+                        }
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
                     };
-                    self.pending_market_events.extend(events)?;
-                    return Ok(first);
+                    let mut events =
+                        match crate::services::participants::binance::stream::normalize(&value) {
+                            Ok(events) => events,
+                            Err(error) => return std::task::Poll::Ready(Err(error)),
+                        };
+                    if let Err(error) = self.queue_market_events(events.drain(..)) {
+                        return std::task::Poll::Ready(Err(error));
+                    }
+                    if let Some(event) = self.pending_market_events.pop() {
+                        return std::task::Poll::Ready(Ok(event));
+                    }
                 }
+            }
+        }
+
+        impl crate::ConnectionMaintenance for $name {
+            fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+                self.service.next_maintenance_at()
+            }
+
+            fn poll_maintenance(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+                now: tokio::time::Instant,
+            ) -> std::task::Poll<Result<crate::MaintenanceOutcome, crate::IntegrationError>> {
+                self.service.poll_maintenance(now)
             }
         }
     };
@@ -273,6 +371,15 @@ macro_rules! user_websocket_connection {
             event_capacity: usize,
             listen_key: Option<String>,
             keep_alive_at: Option<tokio::time::Instant>,
+            maintenance_future: Option<
+                std::pin::Pin<
+                    Box<
+                        dyn std::future::Future<
+                                Output = Result<(), crate::IntegrationError>,
+                            > + Send,
+                    >,
+                >,
+            >,
             channel_epoch: u64,
             pending_accounts: std::collections::VecDeque<crate::ExternalAccountEventEnvelope>,
             pending_executions: std::collections::VecDeque<
@@ -282,6 +389,7 @@ macro_rules! user_websocket_connection {
 
         impl $name {
             pub fn new(
+                connection_key: crate::ConnectionKey,
                 config: crate::participants::binance::BinanceUserWebSocketConfig,
             ) -> Result<Self, crate::IntegrationError> {
                 if config.segment_key.trim().is_empty() {
@@ -289,10 +397,10 @@ macro_rules! user_websocket_connection {
                         "Binance user stream segment key is required".into(),
                     ));
                 }
-                let descriptor = config.descriptor($domain)?;
+                let descriptor = config.descriptor(connection_key, $domain)?;
                 let rest = crate::services::participants::binance::rest::RestService::new(
                     crate::ConnectionDescriptor::new(
-                        format!("{}.listen-key", descriptor.binding_id),
+                        format!("{}.listen-key", descriptor.connection_key),
                         descriptor.participant.clone(),
                         concat!($domain, ".listen-key"),
                     )
@@ -314,6 +422,7 @@ macro_rules! user_websocket_connection {
                     event_capacity: config.event_capacity,
                     listen_key: None,
                     keep_alive_at: None,
+                    maintenance_future: None,
                     channel_epoch: 0,
                     pending_accounts: std::collections::VecDeque::new(),
                     pending_executions: std::collections::VecDeque::new(),
@@ -324,77 +433,64 @@ macro_rules! user_websocket_connection {
                 &self.descriptor
             }
 
-            fn socket_mut(
+            fn poll_receive(
                 &mut self,
-            ) -> Result<
-                &mut crate::services::participants::binance::socket::SocketService,
-                crate::IntegrationError,
-            > {
-                self.socket
-                    .as_mut()
-                    .ok_or(crate::IntegrationError::NotReady)
-            }
-
-            async fn receive(&mut self) -> Result<(), crate::IntegrationError> {
-                enum Received {
-                    Message(tokio_tungstenite::tungstenite::Message),
-                    KeepAlive,
-                }
-                let received = if let Some(deadline) = self.keep_alive_at {
-                    let socket = self
-                        .socket
-                        .as_mut()
-                        .ok_or(crate::IntegrationError::NotReady)?;
-                    tokio::select! {
-                        message = socket.next() => Received::Message(message?),
-                        () = tokio::time::sleep_until(deadline) => Received::KeepAlive,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), crate::IntegrationError>> {
+                let socket = match self.socket.as_mut() {
+                    Some(socket) => socket,
+                    None => {
+                        return std::task::Poll::Ready(Err(
+                            crate::IntegrationError::NotReady,
+                        ))
                     }
-                } else {
-                    Received::Message(self.socket_mut()?.next().await?)
                 };
-                let message = match received {
-                    Received::Message(message) => message,
-                    Received::KeepAlive => {
-                        let listen_key = self
-                            .listen_key
-                            .as_deref()
-                            .ok_or(crate::IntegrationError::NotReady)?;
-                        self.rest
-                            .keep_alive_listen_key($listen_key_path, listen_key)
-                            .await?;
-                        self.keep_alive_at = Some(
-                            tokio::time::Instant::now() + std::time::Duration::from_secs(30 * 60),
-                        );
-                        return Ok(());
+                let message = match socket.poll_next(cx) {
+                    std::task::Poll::Ready(Ok(message)) => message,
+                    std::task::Poll::Ready(Err(error)) => {
+                        return std::task::Poll::Ready(Err(error))
                     }
+                    std::task::Poll::Pending => return std::task::Poll::Pending,
                 };
                 let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
-                    return Ok(());
+                    return std::task::Poll::Ready(Ok(()));
                 };
-                let value: serde_json::Value = serde_json::from_str(&text)
-                    .map_err(|error| crate::IntegrationError::InvalidPayload(error.to_string()))?;
-                let account = crate::services::participants::binance::user::account_event(
-                    &self.descriptor.binding_id,
+                let value: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return std::task::Poll::Ready(Err(
+                            crate::IntegrationError::InvalidPayload(error.to_string()),
+                        ))
+                    }
+                };
+                let account = match crate::services::participants::binance::user::account_event(
+                    &self.descriptor.connection_key,
                     &self.segment_key,
                     self.channel_epoch,
                     &value,
-                )?;
-                let execution = crate::services::participants::binance::user::execution_event(
-                    &self.descriptor.binding_id,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => return std::task::Poll::Ready(Err(error)),
+                };
+                let execution = match crate::services::participants::binance::user::execution_event(
+                    &self.descriptor.connection_key,
                     self.channel_epoch,
                     &value,
-                )?;
+                ) {
+                    Ok(value) => value,
+                    Err(error) => return std::task::Poll::Ready(Err(error)),
+                };
                 let additions = usize::from(account.is_some()) + usize::from(execution.is_some());
                 if self.pending_accounts.len() + self.pending_executions.len() + additions
                     > self.event_capacity
                 {
-                    return Err(crate::IntegrationError::Backpressure(
+                    return std::task::Poll::Ready(Err(crate::IntegrationError::Backpressure(
                         "Binance user-data event buffer overflowed".into(),
-                    ));
+                    )));
                 }
                 self.pending_accounts.extend(account);
                 self.pending_executions.extend(execution);
-                Ok(())
+                std::task::Poll::Ready(Ok(()))
             }
         }
 
@@ -450,6 +546,7 @@ macro_rules! user_websocket_connection {
                 self.pending_executions.clear();
                 self.listen_key = None;
                 self.keep_alive_at = None;
+                self.maintenance_future = None;
                 if let Some(mut socket) = self.socket.take() {
                     socket.disconnect().await?;
                 }
@@ -462,47 +559,132 @@ macro_rules! user_websocket_connection {
             }
         }
 
-        impl crate::AccountStream for $name {
-            async fn next(
+        impl crate::ConnectionMaintenance for $name {
+            fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+                [
+                    self.keep_alive_at,
+                    self.socket.as_ref().and_then(|socket| socket.next_maintenance_at()),
+                ]
+                .into_iter()
+                .flatten()
+                .min()
+            }
+
+            fn poll_maintenance(
                 &mut self,
-            ) -> Result<crate::ExternalAccountEventEnvelope, crate::IntegrationError> {
+                cx: &mut std::task::Context<'_>,
+                now: tokio::time::Instant,
+            ) -> std::task::Poll<
+                Result<crate::MaintenanceOutcome, crate::IntegrationError>,
+            > {
+                if let Some(socket) = self.socket.as_ref() {
+                    if socket.next_maintenance_at().is_some_and(|deadline| deadline <= now) {
+                        return socket.poll_maintenance(now);
+                    }
+                }
+                let Some(deadline) = self.keep_alive_at else {
+                    return std::task::Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy));
+                };
+                if now < deadline && self.maintenance_future.is_none() {
+                    return std::task::Poll::Pending;
+                }
+                if self.maintenance_future.is_none() {
+                    let listen_key = match self.listen_key.clone() {
+                        Some(listen_key) => listen_key,
+                        None => {
+                            return std::task::Poll::Ready(Err(
+                                crate::IntegrationError::NotReady,
+                            ))
+                        }
+                    };
+                    self.maintenance_future = Some(
+                        self.rest
+                            .keep_alive_listen_key_future($listen_key_path, listen_key)?,
+                    );
+                }
+                let future = self
+                    .maintenance_future
+                    .as_mut()
+                    .expect("maintenance future initialized");
+                match std::future::Future::poll(future.as_mut(), cx) {
+                    std::task::Poll::Ready(Ok(())) => {
+                        self.maintenance_future = None;
+                        self.keep_alive_at = Some(
+                            now + std::time::Duration::from_secs(30 * 60),
+                        );
+                        std::task::Poll::Ready(Ok(crate::MaintenanceOutcome::Progressed))
+                    }
+                    std::task::Poll::Ready(Err(error)) => {
+                        self.maintenance_future = None;
+                        std::task::Poll::Ready(Err(error))
+                    }
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            }
+        }
+
+        impl crate::AccountStream for $name {
+            fn poll_next(
+                &mut self,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<crate::ExternalAccountEventEnvelope, crate::IntegrationError>> {
                 loop {
                     if let Some(event) = self.pending_accounts.pop_front() {
-                        return Ok(event);
+                        return std::task::Poll::Ready(Ok(event));
                     }
-                    self.receive().await?;
+                    match self.poll_receive(cx) {
+                        std::task::Poll::Ready(Ok(())) => {}
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error))
+                        }
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    }
                 }
             }
         }
 
         impl crate::ExecutionStream for $name {
-            async fn next(
+            fn poll_next(
                 &mut self,
-            ) -> Result<
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<
                 crate::ExternalEventEnvelope<crate::ExternalExecutionEvent>,
                 crate::IntegrationError,
-            > {
+            >> {
                 loop {
                     if let Some(event) = self.pending_executions.pop_front() {
-                        return Ok(event);
+                        return std::task::Poll::Ready(Ok(event));
                     }
-                    self.receive().await?;
+                    match self.poll_receive(cx) {
+                        std::task::Poll::Ready(Ok(())) => {}
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error))
+                        }
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    }
                 }
             }
         }
 
         impl crate::ParticipantEventStream for $name {
-            async fn next(
+            fn poll_next(
                 &mut self,
-            ) -> Result<crate::ExternalParticipantEvent, crate::IntegrationError> {
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<crate::ExternalParticipantEvent, crate::IntegrationError>> {
                 loop {
                     if let Some(event) = self.pending_accounts.pop_front() {
-                        return Ok(crate::ExternalParticipantEvent::Account(event));
+                        return std::task::Poll::Ready(Ok(crate::ExternalParticipantEvent::Account(event)));
                     }
                     if let Some(event) = self.pending_executions.pop_front() {
-                        return Ok(crate::ExternalParticipantEvent::Execution(event));
+                        return std::task::Poll::Ready(Ok(crate::ExternalParticipantEvent::Execution(event)));
                     }
-                    self.receive().await?;
+                    match self.poll_receive(cx) {
+                        std::task::Poll::Ready(Ok(())) => {}
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error))
+                        }
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                    }
                 }
             }
         }
@@ -517,11 +699,14 @@ macro_rules! websocket_api_connection {
 
         impl $name {
             pub fn new(
+                connection_key: crate::ConnectionKey,
                 config: crate::participants::binance::BinanceWebSocketConfig,
             ) -> Result<Self, crate::IntegrationError> {
                 Ok(Self {
                     service: crate::services::participants::binance::api::ApiService::new(
-                        config, $domain,
+                        connection_key,
+                        config,
+                        $domain,
                     )?,
                 })
             }
@@ -924,7 +1109,7 @@ macro_rules! futures_rest_capabilities {
                     .signed_get(concat!($prefix, "/openOrders"), &params)
                     .await?;
                 crate::services::participants::binance::execution::orders(
-                    &self.descriptor().binding_id,
+                    &self.descriptor().connection_key,
                     &value,
                 )
             }
@@ -938,7 +1123,7 @@ macro_rules! futures_rest_capabilities {
                     .signed_get(concat!($prefix, "/allOrders"), &params)
                     .await?;
                 crate::services::participants::binance::execution::orders(
-                    &self.descriptor().binding_id,
+                    &self.descriptor().connection_key,
                     &value,
                 )
             }
@@ -952,11 +1137,137 @@ macro_rules! futures_rest_capabilities {
                     .signed_get(concat!($prefix, "/order"), &params)
                     .await?;
                 Ok(crate::services::participants::binance::execution::orders(
-                    &self.descriptor().binding_id,
+                    &self.descriptor().connection_key,
                     &value,
                 )?
                 .into_iter()
                 .next())
+            }
+        }
+    };
+}
+
+macro_rules! futures_native_order_extensions {
+    ($name:ident, $prefix:literal) => {
+        impl $name {
+            pub async fn amend_order(
+                &mut self,
+                request: &crate::participants::binance::BinanceAmendOrderRequest,
+            ) -> crate::CommandResult<crate::OrderEntryEvent> {
+                let params =
+                    crate::services::participants::binance::execution::amend_params(request)?;
+                let outcome = self
+                    .service
+                    .signed_put_command(concat!($prefix, "/order"), &params)
+                    .await?;
+                crate::services::participants::binance::execution::submitted_outcome(
+                    &request.replacement,
+                    outcome,
+                )
+            }
+
+            pub async fn submit_orders(
+                &mut self,
+                requests: &[crate::OrderEntryRequest],
+            ) -> crate::CommandResult<Vec<crate::CommandOutcome<crate::OrderEntryEvent>>> {
+                let batch =
+                    crate::services::participants::binance::execution::batch_order_parameter(
+                        requests,
+                    )?;
+                let outcome = self
+                    .service
+                    .signed_post_command(
+                        concat!($prefix, "/batchOrders"),
+                        &[("batchOrders", batch)],
+                    )
+                    .await?;
+                crate::services::participants::binance::execution::submitted_batch_outcome(
+                    requests, outcome,
+                )
+            }
+
+            pub async fn cancel_orders(
+                &mut self,
+                requests: &[crate::participants::binance::BinanceCancelOrderRequest],
+            ) -> crate::CommandResult<Vec<crate::CommandOutcome<crate::OrderEntryEvent>>> {
+                let first = requests.first().ok_or_else(|| {
+                    crate::IntegrationError::InvalidRequest(
+                        "Binance Futures cancel batch cannot be empty".into(),
+                    )
+                })?;
+                let symbol = first.order.participant_instrument.source_symbol.as_str();
+                if requests.iter().any(|request| {
+                    request.order.participant_instrument.source_symbol.as_str() != symbol
+                }) {
+                    return Err(crate::IntegrationError::InvalidRequest(
+                        "Binance Futures cancel batch must use one symbol".into(),
+                    ));
+                }
+                let ids = crate::services::participants::binance::execution::cancel_id_parameter(
+                    requests,
+                )?;
+                let outcome = self
+                    .service
+                    .signed_delete_command(
+                        concat!($prefix, "/batchOrders"),
+                        &[("symbol", symbol.into()), ("orderIdList", ids)],
+                    )
+                    .await?;
+                crate::services::participants::binance::execution::canceled_batch_outcome(
+                    requests, outcome,
+                )
+            }
+
+            pub async fn cancel_all_open_orders(
+                &mut self,
+                scope: &crate::participants::binance::BinanceCancelAllScope,
+            ) -> crate::CommandResult<crate::participants::binance::BinanceCancelAllScope> {
+                match self
+                    .service
+                    .signed_delete_command(
+                        concat!($prefix, "/allOpenOrders"),
+                        &[("symbol", scope.symbol.to_string())],
+                    )
+                    .await?
+                {
+                    crate::CommandOutcome::Confirmed(_) => {
+                        Ok(crate::CommandOutcome::Confirmed(scope.clone()))
+                    }
+                    crate::CommandOutcome::Rejected(error) => {
+                        Ok(crate::CommandOutcome::Rejected(error))
+                    }
+                    crate::CommandOutcome::Indeterminate(error) => {
+                        Ok(crate::CommandOutcome::Indeterminate(error))
+                    }
+                }
+            }
+
+            pub async fn fetch_account_trades(
+                &mut self,
+                query: &crate::participants::binance::BinanceHistoryQuery,
+            ) -> Result<
+                Vec<crate::participants::binance::BinanceTradeRecord>,
+                crate::IntegrationError,
+            > {
+                let payload = self
+                    .service
+                    .signed_get(concat!($prefix, "/userTrades"), &query.params(true, false)?)
+                    .await?;
+                crate::participants::binance::history::trades(&payload)
+            }
+
+            pub async fn fetch_income_history(
+                &mut self,
+                query: &crate::participants::binance::BinanceHistoryQuery,
+            ) -> Result<
+                Vec<crate::participants::binance::BinanceIncomeRecord>,
+                crate::IntegrationError,
+            > {
+                let payload = self
+                    .service
+                    .signed_get(concat!($prefix, "/income"), &query.params(false, true)?)
+                    .await?;
+                crate::participants::binance::history::income(&payload)
             }
         }
     };
@@ -993,11 +1304,15 @@ pub mod advanced;
 pub mod coinm;
 mod config;
 pub mod funding;
+mod history;
 pub mod margin;
 pub mod options;
+mod order;
 pub mod spot;
 pub mod usdm;
 
 pub use config::{
     BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig, BinanceWebSocketConfig,
 };
+pub use history::{BinanceHistoryQuery, BinanceIncomeRecord, BinanceTradeRecord};
+pub use order::{BinanceAmendOrderRequest, BinanceCancelAllScope, BinanceCancelOrderRequest};

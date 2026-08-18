@@ -117,6 +117,9 @@ pub struct ExecutionRouteHealth {
 pub struct ExecutionHealthResponse {
     pub status: String,
     pub writer_recovery_ready: bool,
+    pub outbox_backlog: usize,
+    pub oldest_outbox_event_age_ms: Option<u64>,
+    pub outbox_error: Option<String>,
     pub routes: Vec<ExecutionRouteHealth>,
 }
 

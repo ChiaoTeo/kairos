@@ -11,6 +11,7 @@ pub enum ResourceState {
     Degraded,
     Failed,
     Stopping,
+    Retiring,
     Stopped,
 }
 
@@ -27,6 +28,16 @@ pub enum ResourceError {
     StaleRevision { current: u64, received: u64 },
     #[error("resource epoch is exhausted")]
     EpochExhausted,
+    #[error("connection generation is exhausted")]
+    GenerationExhausted,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ResourceOperationError<E> {
+    #[error("named resource does not exist")]
+    NotFound,
+    #[error("resource operation failed: {0}")]
+    Operation(E),
 }
 
 pub struct ManagedClient<C> {
@@ -158,15 +169,17 @@ pub struct ManagedConnection<C> {
     connection: C,
     revision: u64,
     epoch: u64,
+    generation: u64,
     state: ResourceState,
 }
 
 impl<C> ManagedConnection<C> {
-    fn new(connection: C, revision: u64) -> Self {
+    fn new(connection: C, revision: u64, generation: u64) -> Self {
         Self {
             connection,
             revision,
             epoch: 0,
+            generation,
             state: ResourceState::Created,
         }
     }
@@ -179,16 +192,16 @@ impl<C> ManagedConnection<C> {
         &mut self.connection
     }
 
-    pub fn into_connection(self) -> C {
-        self.connection
-    }
-
     pub const fn revision(&self) -> u64 {
         self.revision
     }
 
     pub const fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub const fn state(&self) -> ResourceState {
@@ -199,10 +212,16 @@ impl<C> ManagedConnection<C> {
         self.state = state;
     }
 
-    fn replace(&mut self, revision: u64, connection: C) -> Result<(), ResourceError> {
+    fn replace(
+        &mut self,
+        revision: u64,
+        generation: u64,
+        connection: C,
+    ) -> Result<(), ResourceError> {
         validate_new_revision(self.revision, revision)?;
         self.epoch = next_epoch(self.epoch)?;
         self.revision = revision;
+        self.generation = generation;
         self.connection = connection;
         self.state = ResourceState::Created;
         Ok(())
@@ -211,6 +230,7 @@ impl<C> ManagedConnection<C> {
 
 pub struct ManagedConnections<K, C> {
     entries: HashMap<K, ManagedConnection<C>>,
+    generations: HashMap<K, u64>,
 }
 
 /// One named, concrete transport resource such as a typed Aeron stream or
@@ -322,6 +342,29 @@ where
         self.entries.get_mut(key)
     }
 
+    /// Runs one operation against a named resource and records operational
+    /// readiness consistently for every concrete mmap/Aeron Contract type.
+    pub fn try_with<T, E>(
+        &mut self,
+        key: &K,
+        operation: impl FnOnce(&mut R) -> Result<T, E>,
+    ) -> Result<T, ResourceOperationError<E>> {
+        let resource = self
+            .entries
+            .get_mut(key)
+            .ok_or(ResourceOperationError::NotFound)?;
+        match operation(resource.resource_mut()) {
+            Ok(value) => {
+                resource.set_state(ResourceState::Ready);
+                Ok(value)
+            }
+            Err(error) => {
+                resource.set_state(ResourceState::Degraded);
+                Err(ResourceOperationError::Operation(error))
+            }
+        }
+    }
+
     pub fn remove(&mut self, key: &K) -> Option<ManagedResource<R>> {
         self.entries.remove(key)
     }
@@ -347,13 +390,14 @@ impl<K, C> Default for ManagedConnections<K, C> {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
+            generations: HashMap::new(),
         }
     }
 }
 
 impl<K, C> ManagedConnections<K, C>
 where
-    K: Eq + Hash,
+    K: Clone + Eq + Hash,
 {
     pub fn new() -> Self {
         Self::default()
@@ -375,13 +419,28 @@ where
             if revision == entry.revision {
                 return Ok(EnsureDisposition::Existing);
             }
-            entry.replace(revision, create())?;
+            let generation = next_generation(self.generations.get(&key).copied())?;
+            self.generations.insert(key.clone(), generation);
+            entry.replace(revision, generation, create())?;
             return Ok(EnsureDisposition::Replaced);
         }
 
+        let generation = next_generation(self.generations.get(&key).copied())?;
+        self.generations.insert(key.clone(), generation);
         self.entries
-            .insert(key, ManagedConnection::new(create(), revision));
+            .insert(key, ManagedConnection::new(create(), revision, generation));
         Ok(EnsureDisposition::Created)
+    }
+
+    pub(crate) fn insert_new(&mut self, key: K, connection: C) -> Result<bool, ResourceError> {
+        if self.entries.contains_key(&key) {
+            return Ok(false);
+        }
+        let generation = next_generation(self.generations.get(&key).copied())?;
+        self.generations.insert(key.clone(), generation);
+        self.entries
+            .insert(key, ManagedConnection::new(connection, 0, generation));
+        Ok(true)
     }
 
     pub fn get(&self, key: &K) -> Option<&ManagedConnection<C>> {
@@ -422,6 +481,13 @@ fn validate_new_revision(current: u64, received: u64) -> Result<(), ResourceErro
 
 fn next_epoch(current: u64) -> Result<u64, ResourceError> {
     current.checked_add(1).ok_or(ResourceError::EpochExhausted)
+}
+
+fn next_generation(current: Option<u64>) -> Result<u64, ResourceError> {
+    current
+        .unwrap_or_default()
+        .checked_add(1)
+        .ok_or(ResourceError::GenerationExhausted)
 }
 
 #[cfg(test)]
@@ -466,5 +532,46 @@ mod tests {
                 received: 2,
             })
         );
+    }
+
+    #[test]
+    fn named_resource_operation_updates_readiness() {
+        let mut resources = NamedResources::new();
+        let key = "market-events".to_owned();
+        resources.ensure_with(key.clone(), 1, || 10_u64).unwrap();
+
+        let value = resources
+            .try_with(&key, |resource| -> Result<u64, &'static str> {
+                *resource += 1;
+                Ok(*resource)
+            })
+            .unwrap();
+        assert_eq!(value, 11);
+        assert_eq!(resources.get(&key).unwrap().state(), ResourceState::Ready);
+
+        assert_eq!(
+            resources.try_with(&key, |_resource| Err::<(), _>("publish failed")),
+            Err(ResourceOperationError::Operation("publish failed"))
+        );
+        assert_eq!(
+            resources.get(&key).unwrap().state(),
+            ResourceState::Degraded
+        );
+        assert_eq!(
+            resources.try_with(&"missing".to_owned(), |_resource| Ok::<(), ()>(())),
+            Err(ResourceOperationError::NotFound)
+        );
+    }
+
+    #[test]
+    fn connection_generation_survives_remove_and_recreate() {
+        let mut connections = ManagedConnections::new();
+        let key = "execution-main".to_owned();
+        assert!(connections.insert_new(key.clone(), 10).unwrap());
+        assert_eq!(connections.get(&key).unwrap().generation(), 1);
+
+        drop(connections.remove(&key));
+        assert!(connections.insert_new(key.clone(), 20).unwrap());
+        assert_eq!(connections.get(&key).unwrap().generation(), 2);
     }
 }

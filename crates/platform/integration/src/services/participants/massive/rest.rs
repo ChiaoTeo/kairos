@@ -66,6 +66,22 @@ pub(crate) struct MassiveCashDividendRow {
     pub(crate) frequency: Option<u32>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MassiveOptionSnapshotRow {
+    pub(crate) ticker: String,
+    pub(crate) expiration_date: Option<String>,
+    pub(crate) strike_price: Option<String>,
+    pub(crate) break_even_price: Option<String>,
+    pub(crate) open_interest: Option<String>,
+    pub(crate) delta: Option<String>,
+    pub(crate) gamma: Option<String>,
+    pub(crate) theta: Option<String>,
+    pub(crate) vega: Option<String>,
+    pub(crate) implied_volatility: Option<String>,
+    pub(crate) market_status: Option<String>,
+    pub(crate) observed_at_unix_nanos: Option<u64>,
+}
+
 #[derive(Clone)]
 pub(crate) struct RestService {
     http: HttpClient,
@@ -399,6 +415,32 @@ impl RestService {
         ))
     }
 
+    pub(crate) async fn option_snapshot(
+        &self,
+        underlying: &str,
+        ticker: &str,
+    ) -> Result<MassiveOptionSnapshotRow, ExchangeError> {
+        if underlying.trim().is_empty() || ticker.trim().is_empty() {
+            return Err(ExchangeError::InvalidRequest(
+                "Massive option snapshot requires underlying and contract symbols".into(),
+            ));
+        }
+        let endpoint = format!(
+            "{}/v3/snapshot/options/{underlying}/{ticker}",
+            self.base_url
+        );
+        let payload = self
+            .http
+            .get_json_response_with_headers_and_query(
+                &endpoint,
+                &[],
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
+            .await?
+            .body;
+        massive_option_snapshot(&payload).map_err(ExchangeError::InvalidRequest)
+    }
+
     async fn historical_ticks(
         &self,
         resource: &str,
@@ -451,6 +493,57 @@ impl RestService {
             "Massive historical {resource} pagination exceeded safety limit"
         )))
     }
+}
+
+fn massive_option_snapshot(payload: &Value) -> Result<MassiveOptionSnapshotRow, String> {
+    let value = payload
+        .get("results")
+        .ok_or_else(|| "Massive option snapshot response has no results object".to_string())?;
+    let details = value.get("details").unwrap_or(&Value::Null);
+    let greeks = value.get("greeks").unwrap_or(&Value::Null);
+    let ticker = details
+        .get("ticker")
+        .or_else(|| value.get("ticker"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Massive option snapshot has no contract ticker".to_string())?;
+    let timestamp = [
+        value.get("fmv_last_updated").and_then(Value::as_u64),
+        value
+            .get("last_quote")
+            .and_then(|quote| quote.get("last_updated"))
+            .and_then(Value::as_u64),
+        value
+            .get("last_trade")
+            .and_then(|trade| trade.get("sip_timestamp"))
+            .and_then(Value::as_u64),
+        value
+            .get("day")
+            .and_then(|day| day.get("last_updated"))
+            .and_then(Value::as_u64),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    Ok(MassiveOptionSnapshotRow {
+        ticker: ticker.into(),
+        expiration_date: details
+            .get("expiration_date")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        strike_price: value_text(details, "strike_price"),
+        break_even_price: value_text(value, "break_even_price"),
+        open_interest: value_text(value, "open_interest"),
+        delta: value_text(greeks, "delta"),
+        gamma: value_text(greeks, "gamma"),
+        theta: value_text(greeks, "theta"),
+        vega: value_text(greeks, "vega"),
+        implied_volatility: value_text(value, "implied_volatility"),
+        market_status: value
+            .get("market_status")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        observed_at_unix_nanos: timestamp,
+    })
 }
 
 fn private_next_url(next_url: &str, base_url: &str) -> String {

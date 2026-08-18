@@ -4,3 +4,4 @@ futures_rest_capabilities!(
     "/fapi/v1",
     crate::ExternalInstrumentKind::Perpetual
 );
+futures_native_order_extensions!(BinanceUsdMRestConnection, "/fapi/v1");

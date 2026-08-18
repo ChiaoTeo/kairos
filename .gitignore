@@ -24,3 +24,6 @@ view/tsconfig.tsbuildinfo
 /legacy/
 .hypothesis/
 /target*
+
+# Temporary Agent analysis, plans, and generated working artifacts.
+/.agent-work/

@@ -36,7 +36,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket = instance.socket("risk")?;
     let health = instance.health("risk")?;
     let state = instance.state(&["risk", "risk-state.json"])?;
-    let snapshot = instance.service_snapshot("risk")?;
+    let snapshot = instance.snapshot(&[])?;
     let normalized_path = instance.normalized_config()?;
     let policies = load_risk_policies(&workspace, &normalized_path, &args.launch_mode)?;
     let host = build_risk_host(RiskHostConfig {

@@ -4,14 +4,12 @@ use secrecy::SecretString;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OkxRestConfig {
-    pub binding_id: String,
     pub environment: String,
     pub endpoint: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OkxWebSocketConfig {
-    pub binding_id: String,
     pub environment: String,
     pub endpoint: String,
     pub event_capacity: usize,
@@ -34,6 +32,7 @@ pub struct OkxPrivateRestConfig {
 #[derive(Clone)]
 pub struct OkxPrivateWebSocketConfig {
     pub connection: OkxWebSocketConfig,
+    pub rest_endpoint: String,
     pub credential: OkxCredential,
     pub segment_key: String,
     pub trading_mode: String,

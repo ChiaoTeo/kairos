@@ -1,0 +1,21 @@
+include "../../../common/metadata.fbs";
+include "../../types/intent.fbs";
+
+namespace kairos.execution.v2;
+
+// One durable post-admission Intent transition. The full Intent is included
+// so consumers can enforce Strategy and Account scope without an extra view
+// read. UNSPECIFIED previous_lifecycle is reserved for migrated legacy facts.
+table IntentLifecycleChanged {
+  metadata:kairos.common.v2.EventMetadata (required);
+  intent:ExecutionIntent (required);
+  previous_lifecycle:IntentLifecycle = UNSPECIFIED;
+  lifecycle:IntentLifecycle = UNSPECIFIED;
+  order_ids:[string] (required);
+  completed_quantity:kairos.common.v2.Decimal64 (required);
+  reason:string;
+  dependency_evidence:[kairos.common.v2.EvidenceRef] (required);
+}
+
+root_type IntentLifecycleChanged;
+file_identifier "EIL2";

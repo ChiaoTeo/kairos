@@ -119,7 +119,7 @@ impl ReferenceActor {
 
     pub async fn activate_sources(
         &mut self,
-        system: &mut kairos_conflux::ConfluxSystem,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<()> {
         if self.source.is_some() {
             return Ok(());
@@ -127,7 +127,7 @@ impl ReferenceActor {
         let plan = self.source_plan.take().ok_or_else(|| {
             crate::domain::ReferenceError::Provider("Reference source plan is unavailable".into())
         })?;
-        let source = plan.activate(system).await?;
+        let source = plan.activate(connections).await?;
         #[cfg(not(test))]
         {
             self.source = Some(source);
@@ -145,20 +145,41 @@ impl ReferenceActor {
         })
     }
 
-    pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
+    pub async fn refresh_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
         let normalized = self.source_mut()?.normalized_facts_authoritative();
-        let incoming = self.source_mut()?.fetch_catalog().await?;
+        let incoming = self
+            .source_mut()?
+            .fetch_catalog_with_connections(connections)
+            .await?;
         if normalized {
             return self.reconcile_normalized(incoming, started).await;
         }
         self.reconcile(incoming, started).await
     }
 
-    pub async fn refresh_source(&mut self, source_id: &str) -> ReferenceResult<RefreshResult> {
+    #[cfg(test)]
+    pub async fn refresh(&mut self) -> ReferenceResult<RefreshResult> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.refresh_with_connections(&mut system.connections())
+            .await
+    }
+
+    pub async fn refresh_source_with_connections(
+        &mut self,
+        source_id: &str,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<RefreshResult> {
         let started = std::time::Instant::now();
         let normalized = self.source_mut()?.normalized_facts_authoritative();
-        match self.source_mut()?.advance_source(source_id).await? {
+        match self
+            .source_mut()?
+            .advance_source_with_connections(source_id, connections)
+            .await?
+        {
             Some(incoming) if normalized => self.reconcile_normalized(incoming, started).await,
             Some(incoming) => self.reconcile(incoming, started).await,
             None => Ok(RefreshResult {
@@ -169,6 +190,13 @@ impl ReferenceActor {
                 events: Vec::new(),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub async fn refresh_source(&mut self, source_id: &str) -> ReferenceResult<RefreshResult> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.refresh_source_with_connections(source_id, &mut system.connections())
+            .await
     }
 
     async fn reconcile_normalized(
@@ -207,18 +235,23 @@ impl ReferenceActor {
         &mut self,
         underlying: &str,
         enabled: bool,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<RefreshResult> {
         self.source_mut()?
             .set_option_underlying(underlying, enabled)
             .await?;
-        self.refresh_source("massive-options").await
+        self.refresh_source_with_connections("massive-options", connections)
+            .await
     }
 
     #[cfg(not(test))]
-    pub fn massive_option_connection(
+    pub fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
         self.source
             .as_ref()
             .ok_or_else(|| {
@@ -226,7 +259,7 @@ impl ReferenceActor {
                     "Reference provider connections have not been activated".into(),
                 )
             })?
-            .massive_option_connection(underlying)
+            .massive_option_connection_plan(underlying)
     }
 
     #[cfg(not(test))]
@@ -234,12 +267,14 @@ impl ReferenceActor {
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<RefreshResult> {
         self.source_mut()?
-            .set_managed_option_underlying(underlying, enabled, connection)
+            .set_managed_option_underlying(underlying, enabled, connection_key)
             .await?;
-        self.refresh_source("massive-options").await
+        self.refresh_source_with_connections("massive-options", connections)
+            .await
     }
 
     async fn reconcile(

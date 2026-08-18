@@ -23,7 +23,6 @@ pub struct MarketHost {
     socket: PathBuf,
     health: Option<PathBuf>,
     _process_lock: kairos_workspace::workspace::WorkspaceProcessLock,
-    _watcher: Option<super::reference::ReferenceWatcherGuard>,
 }
 
 impl MarketHost {
@@ -33,7 +32,6 @@ impl MarketHost {
         socket: PathBuf,
         health: Option<PathBuf>,
         process_lock: kairos_workspace::workspace::WorkspaceProcessLock,
-        watcher: Option<super::reference::ReferenceWatcherGuard>,
     ) -> Self {
         Self {
             application,
@@ -41,7 +39,6 @@ impl MarketHost {
             socket,
             health,
             _process_lock: process_lock,
-            _watcher: watcher,
         }
     }
 

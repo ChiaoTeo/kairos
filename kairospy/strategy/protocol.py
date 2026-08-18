@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Protocol, TypeAlias, assert_never
+from typing import TYPE_CHECKING, Protocol, TypeAlias, assert_never
 
 from kairospy.application.account import AccountApplication, AccountEvent
 from kairospy.application.execution import ExecutionApplication, ExecutionEvent
@@ -13,6 +13,7 @@ from kairospy.application.market import (
     QuoteEvent,
     TradeEvent,
 )
+from kairospy.application.notification import NotificationApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication, RiskEvent
 
@@ -23,6 +24,11 @@ from .identity import StrategyIdentity
 from .logging import StrategyLogger
 from .results import CommandResult
 from .state import StrategyState
+
+if TYPE_CHECKING:
+    from kairospy.application.strategy.application.decisions import (
+        StrategyDecisionApplication,
+    )
 
 
 StrategyEvent: TypeAlias = (
@@ -46,6 +52,8 @@ class StrategyContext(Protocol):
     risk: RiskApplication
     execution: ExecutionApplication
     clock: StrategyClock
+    notifications: NotificationApplication
+    decisions: "StrategyDecisionApplication"
 
     @property
     def event(self) -> StrategyEvent | None: ...

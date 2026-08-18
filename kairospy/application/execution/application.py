@@ -42,6 +42,7 @@ from .models import (
     SubmissionStatus,
     TimeInForce,
 )
+from .services import ExecutionEventCursorCheckpoint
 
 
 class ExecutionApplication:
@@ -58,6 +59,7 @@ class ExecutionApplication:
         launch_id: str | None = None,
         account_ids: tuple[AccountId, ...] = (),
         disabled_reason: str = "execution is disabled for this launch",
+        cursor_checkpoint: ExecutionEventCursorCheckpoint | None = None,
     ) -> None:
         if not strategy_id.strip() or not instance_id.strip():
             raise ValueError("strategy_id and instance_id are required")
@@ -68,12 +70,27 @@ class ExecutionApplication:
         self._instance_id = instance_id
         self._launch_id = launch_id
         self._account_ids = frozenset(account_ids)
-        self._event_cursor = 0
+        self._cursor_checkpoint = cursor_checkpoint
+        self._event_cursor = (
+            0 if cursor_checkpoint is None else cursor_checkpoint.load()
+        )
+        self._durable_event_cursor = self._event_cursor
+        self._event_head_sequence = self._event_cursor
         self._event_source_ready = event_source is None
+        self._event_gap_count = 0
+        self._event_scope_error_count = 0
+        self._event_recovery_count = 0
+        self._event_recovery_incomplete = False
         self._disabled_reason = disabled_reason
         self._event_sequence: int | None = None
         self._event_time_unix_nanos: int | None = None
         self._request_counter = 0
+        self._decision_application: Any | None = None
+
+    def bind_decisions(self, decisions: Any) -> None:
+        """Bind the Strategy-owned decision tracker for this process instance."""
+
+        self._decision_application = decisions
 
     def check_event_source_ready(self) -> None:
         """Validate the configured Execution event source without reading mmap."""
@@ -83,6 +100,7 @@ class ExecutionApplication:
         check_ready = getattr(self._event_source, "check_ready", None)
         if callable(check_ready):
             check_ready()
+        self._recover_from_current_view()
         self._event_source_ready = True
 
     def commitments(self) -> tuple[OrderCommitment, ...]:
@@ -97,16 +115,42 @@ class ExecutionApplication:
             return ()
         return tuple(self._projection.risk_reservations())
 
+    def diagnostic_intent(self, intent_id: IntentId | str) -> dict[str, object] | None:
+        """Read one authoritative Execution trace from the current v2 view."""
+
+        if self._projection is None:
+            return None
+        query = getattr(self._projection, "diagnostic_intent", None)
+        if not callable(query):
+            return None
+        value = query(str(intent_id))
+        if value is None:
+            return None
+        intent = value.get("intent")
+        if not isinstance(intent, Mapping):
+            raise ValueError("Execution diagnostic intent payload is invalid")
+        if intent.get("strategy_id") != self._strategy_id:
+            return None
+        account_ids = intent.get("account_ids")
+        if self._account_ids:
+            if not isinstance(account_ids, list) or not set(
+                AccountId(str(item)) for item in account_ids
+            ).issubset(self._account_ids):
+                return None
+        return value
+
     async def events(self) -> AsyncIterator[ExecutionEvent]:
         if self._event_source is None:
             return
         cursor = self._event_cursor
         async for record in self._event_source.subscribe_live():
             if record.stream_id != "execution.events":
+                self._event_scope_error_count += 1
                 raise RuntimeError(
                     f"Execution event stream identity is invalid: {record.stream_id}"
                 )
             if self._launch_id is not None and record.launch_id != self._launch_id:
+                self._event_scope_error_count += 1
                 raise RuntimeError("Execution event belongs to another launch")
             if cursor == 0:
                 cursor = record.sequence - 1
@@ -114,14 +158,17 @@ class ExecutionApplication:
                 continue
             expected = cursor + 1
             if record.sequence != expected:
+                self._event_gap_count += 1
                 raise RuntimeError(
                     "Execution event stream is not contiguous: "
                     f"expected {expected}, received {record.sequence}"
                 )
             if record.instance_id != self._instance_id:
+                self._event_scope_error_count += 1
                 raise RuntimeError("Execution event belongs to another launch instance")
             cursor = record.sequence
             self._event_cursor = cursor
+            self._event_head_sequence = max(self._event_head_sequence, cursor)
             scoped = tuple(
                 change
                 for change in record.changes
@@ -129,6 +176,7 @@ class ExecutionApplication:
                 and self._change_belongs_to_accounts(change)
             )
             if not scoped:
+                self._checkpoint_cursor(cursor)
                 continue
             for event in map_execution_event(
                 type(record)(
@@ -142,6 +190,76 @@ class ExecutionApplication:
                 )
             ):
                 yield event
+            self._checkpoint_cursor(cursor)
+
+    def health(self) -> dict[str, object]:
+        """Return process-local event consumption diagnostics."""
+
+        return {
+            "event_source_ready": self._event_source_ready,
+            "event_cursor": self._durable_event_cursor,
+            "processing_event_cursor": self._event_cursor,
+            "event_lag": max(0, self._event_head_sequence - self._durable_event_cursor),
+            "event_gap_count": self._event_gap_count,
+            "event_scope_error_count": self._event_scope_error_count,
+            "event_recovery_count": self._event_recovery_count,
+            "event_recovery_incomplete": self._event_recovery_incomplete,
+        }
+
+    def _checkpoint_cursor(self, sequence: int) -> None:
+        if self._cursor_checkpoint is not None:
+            self._cursor_checkpoint.save(sequence)
+        self._durable_event_cursor = sequence
+
+    def _recover_from_current_view(self) -> None:
+        if self._projection is None:
+            return
+        recovery_snapshot = getattr(self._projection, "recovery_snapshot", None)
+        if not callable(recovery_snapshot):
+            return
+        try:
+            snapshot = tuple(recovery_snapshot())
+            if len(snapshot) == 2:
+                head, intents = snapshot
+                fills: tuple[object, ...] = ()
+                fill_history_truncated = False
+            elif len(snapshot) == 4:
+                head, intents, fills, fill_history_truncated = snapshot
+            else:
+                raise ValueError("Execution recovery snapshot shape is invalid")
+            head = int(head)
+            intents = tuple(intents)
+            fills = tuple(fills)
+        except FileNotFoundError:
+            return
+        if head <= self._event_cursor:
+            self._event_head_sequence = max(self._event_head_sequence, head)
+            return
+        if self._decision_application is not None:
+            scoped_intent_ids: set[str] = set()
+            for intent in intents:
+                if intent.strategy_id != self._strategy_id:
+                    continue
+                if self._account_ids and not set(intent.account_ids).issubset(
+                    self._account_ids
+                ):
+                    continue
+                scoped_intent_ids.add(str(intent.id))
+                self._decision_application.reconcile_execution_snapshot(
+                    intent, source_event_sequence=head
+                )
+            for fill in fills:
+                intent_id = getattr(fill, "intent_id", None)
+                if intent_id is None or str(intent_id) not in scoped_intent_ids:
+                    continue
+                self._decision_application.reconcile_execution_fill(
+                    fill, source_event_sequence=head
+                )
+        self._event_recovery_incomplete = bool(fill_history_truncated)
+        self._event_cursor = head
+        self._event_head_sequence = head
+        self._checkpoint_cursor(head)
+        self._event_recovery_count += 1
 
     def _change_belongs_to_accounts(self, change: object) -> bool:
         if not self._account_ids:
@@ -184,15 +302,19 @@ class ExecutionApplication:
         limit_price: Decimal | None = None,
         reason: str = "",
         intent_id: IntentId | None = None,
+        strategy_decision_id: str | None = None,
         split: SplitOrderPolicy | None = None,
         maker: MakerExecutionPolicy | None = None,
     ) -> IntentReceipt:
         request_id = self._request_id("intent.target_position")
+        if self._commands is None:
+            return self._rejected_intent(request_id)
+        decision_error = self._decision_error(strategy_decision_id)
+        if decision_error is not None:
+            return self._rejected_intent(request_id, decision_error)
         scope_error = self._account_scope_error((account,))
         if scope_error is not None:
             return self._rejected_intent(request_id, scope_error)
-        if self._commands is None:
-            return self._rejected_intent(request_id)
         request = TargetPositionRequest(
             instrument_id=str(_instrument_id(instrument)),
             quantity=quantity,
@@ -201,14 +323,17 @@ class ExecutionApplication:
             limit_price=limit_price,
             reason=reason,
             intent_id=None if intent_id is None else str(intent_id),
+            strategy_decision_id=strategy_decision_id,
             source_event_sequence=self._event_sequence,
             source_event_time_unix_nanos=self._event_time_unix_nanos,
             split=split,
             maker=maker,
         )
-        return _intent_receipt(
+        receipt = _intent_receipt(
             self._commands.target_position(request, **self._identity(request_id))
         )
+        self._attach_decision(receipt, strategy_decision_id)
+        return receipt
 
     def close_position(
         self,
@@ -218,6 +343,7 @@ class ExecutionApplication:
         segment: SegmentKey | str = "spot",
         reason: str = "",
         intent_id: IntentId | None = None,
+        strategy_decision_id: str | None = None,
         split: SplitOrderPolicy | None = None,
         maker: MakerExecutionPolicy | None = None,
     ) -> IntentReceipt:
@@ -228,6 +354,7 @@ class ExecutionApplication:
             segment=segment,
             reason=reason,
             intent_id=intent_id,
+            strategy_decision_id=strategy_decision_id,
             split=split,
             maker=maker,
         )
@@ -354,10 +481,15 @@ class ExecutionApplication:
         )
         if rejected is not None:
             return rejected
+        decision_error = self._decision_error(request.strategy_decision_id)
+        if decision_error is not None:
+            return self._rejected_intent(request_id, decision_error)
         assert self._commands is not None
-        return _intent_receipt(
+        receipt = _intent_receipt(
             self._commands.pair_arbitrage(request, **self._identity(request_id))
         )
+        self._attach_decision(receipt, request.strategy_decision_id)
+        return receipt
 
     def portfolio_rebalance(self, request: PortfolioRebalanceRequest) -> IntentReceipt:
         request_id, rejected = self._prepare_advanced_intent(
@@ -366,10 +498,15 @@ class ExecutionApplication:
         )
         if rejected is not None:
             return rejected
+        decision_error = self._decision_error(request.strategy_decision_id)
+        if decision_error is not None:
+            return self._rejected_intent(request_id, decision_error)
         assert self._commands is not None
-        return _intent_receipt(
+        receipt = _intent_receipt(
             self._commands.portfolio_rebalance(request, **self._identity(request_id))
         )
+        self._attach_decision(receipt, request.strategy_decision_id)
+        return receipt
 
     def quote_provisioning(self, request: QuoteProvisioningRequest) -> IntentReceipt:
         request_id, rejected = self._prepare_advanced_intent(
@@ -378,10 +515,15 @@ class ExecutionApplication:
         )
         if rejected is not None:
             return rejected
+        decision_error = self._decision_error(request.strategy_decision_id)
+        if decision_error is not None:
+            return self._rejected_intent(request_id, decision_error)
         assert self._commands is not None
-        return _intent_receipt(
+        receipt = _intent_receipt(
             self._commands.quote_provisioning(request, **self._identity(request_id))
         )
+        self._attach_decision(receipt, request.strategy_decision_id)
+        return receipt
 
     def option_spread(self, request: OptionSpreadRequest) -> IntentReceipt:
         """Submit one fixed-risk, all-or-nothing option spread Intent.
@@ -396,10 +538,15 @@ class ExecutionApplication:
         )
         if rejected is not None:
             return rejected
+        decision_error = self._decision_error(request.strategy_decision_id)
+        if decision_error is not None:
+            return self._rejected_intent(request_id, decision_error)
         assert self._commands is not None
-        return _intent_receipt(
+        receipt = _intent_receipt(
             self._commands.option_spread(request, **self._identity(request_id))
         )
+        self._attach_decision(receipt, request.strategy_decision_id)
+        return receipt
 
     def refresh_quote(self, request: QuoteRefreshRequest) -> IntentReceipt:
         request_id = self._request_id("intent.refresh_quote")
@@ -607,6 +754,28 @@ class ExecutionApplication:
             "request_id": request_id,
         }
 
+    def _decision_error(self, strategy_decision_id: str | None) -> str | None:
+        if self._decision_application is None:
+            return None
+        if strategy_decision_id is None or not strategy_decision_id.strip():
+            return "Strategy Intent requires strategy_decision_id"
+        if self._decision_application.decision(strategy_decision_id) is None:
+            return f"Strategy decision not found: {strategy_decision_id}"
+        return None
+
+    def _attach_decision(
+        self, receipt: IntentReceipt, strategy_decision_id: str | None
+    ) -> None:
+        if (
+            self._decision_application is not None
+            and strategy_decision_id is not None
+            and receipt.accepted
+            and receipt.intent_id is not None
+        ):
+            self._decision_application.attach_intent(
+                strategy_decision_id, str(receipt.intent_id)
+            )
+
     def _rejected_intent(
         self, request_id: str, error: str | None = None
     ) -> IntentReceipt:
@@ -647,6 +816,7 @@ class AccountExecution:
         limit_price: Decimal | None = None,
         reason: str = "",
         intent_id: IntentId | None = None,
+        strategy_decision_id: str | None = None,
         split: SplitOrderPolicy | None = None,
         maker: MakerExecutionPolicy | None = None,
     ) -> IntentReceipt:
@@ -658,6 +828,7 @@ class AccountExecution:
             limit_price=limit_price,
             reason=reason,
             intent_id=intent_id,
+            strategy_decision_id=strategy_decision_id,
             split=split,
             maker=maker,
         )
@@ -668,6 +839,7 @@ class AccountExecution:
         *,
         reason: str = "",
         intent_id: IntentId | None = None,
+        strategy_decision_id: str | None = None,
         split: SplitOrderPolicy | None = None,
         maker: MakerExecutionPolicy | None = None,
     ) -> IntentReceipt:
@@ -677,6 +849,7 @@ class AccountExecution:
             segment=self.segment_key,
             reason=reason,
             intent_id=intent_id,
+            strategy_decision_id=strategy_decision_id,
             split=split,
             maker=maker,
         )

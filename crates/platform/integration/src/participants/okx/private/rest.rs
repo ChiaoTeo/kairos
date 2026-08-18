@@ -6,12 +6,18 @@ use crate::services::participants::okx::{
     normalize_order_submission, order_request_body,
 };
 use crate::{
-    AccountCredentialQuery, AccountMarketProfileQuery, AccountQuery, CommandResult,
-    ConnectionDescriptor, ExternalAccountCredentialProfile, ExternalAccountSegment,
+    AccountCredentialQuery, AccountMarketProfileQuery, AccountQuery, CommandOutcome, CommandResult,
+    ConnectionDescriptor, ConnectionKey, ExternalAccountCredentialProfile, ExternalAccountSegment,
     ExternalAccountSnapshot, ExternalMarketProfile, ExternalMarketProfileRequest, ExternalOrder,
-    ExternalOrderQuery, IntegrationError, OrderCommand, OrderEntryEvent, OrderEntryRequest,
-    OrderQuery,
+    ExternalOrderQuery, IndeterminateCommand, IntegrationError, OrderCommand, OrderEntryEvent,
+    OrderEntryRequest, OrderQuery,
 };
+
+use super::order::{
+    amend_body, batch_acks, cancel_body, one_ack, validate_batch, OkxAmendOrderRequest,
+    OkxOrderIdentity, OkxOrderOperationAck,
+};
+use super::{history, OkxBillRecord, OkxFillRecord, OkxHistoryQuery};
 
 pub struct OkxPrivateRestConnection {
     service: RestService,
@@ -19,10 +25,18 @@ pub struct OkxPrivateRestConnection {
 }
 
 impl OkxPrivateRestConnection {
-    pub fn new(config: OkxPrivateRestConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: ConnectionKey,
+        config: OkxPrivateRestConfig,
+    ) -> Result<Self, IntegrationError> {
         let principal_id = config.credential.principal_id.clone();
         Ok(Self {
-            service: RestService::new(config.connection, "private.rest", Some(principal_id))?,
+            service: RestService::new(
+                connection_key,
+                config.connection,
+                "private.rest",
+                Some(principal_id),
+            )?,
             credential: config.credential,
         })
     }
@@ -33,6 +47,14 @@ impl OkxPrivateRestConnection {
 
     pub fn endpoint(&self) -> &str {
         self.service.endpoint()
+    }
+
+    pub fn rate_limit_headers(&self) -> std::collections::BTreeMap<String, String> {
+        self.service.rate_limit_headers()
+    }
+
+    pub fn clock_health(&self) -> Result<crate::ProviderClockHealth, IntegrationError> {
+        self.service.clock_health()
     }
 
     async fn get(
@@ -49,6 +71,126 @@ impl OkxPrivateRestConnection {
         self.service
             .private_post_command(&self.credential, path, body)
             .await
+    }
+
+    pub async fn amend_order(
+        &self,
+        request: &OkxAmendOrderRequest,
+    ) -> CommandResult<OkxOrderOperationAck> {
+        let body = amend_body(request)?;
+        match self.post("/api/v5/trade/amend-order", &body).await? {
+            CommandOutcome::Confirmed(payload) => one_ack(&payload, "amend order"),
+            CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+            CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        }
+    }
+
+    pub async fn amend_orders(
+        &self,
+        requests: &[OkxAmendOrderRequest],
+    ) -> CommandResult<Vec<CommandOutcome<OkxOrderOperationAck>>> {
+        validate_batch(requests.len(), "amend")?;
+        let body = serde_json::Value::Array(
+            requests
+                .iter()
+                .map(amend_body)
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        match self.post("/api/v5/trade/amend-batch-orders", &body).await? {
+            CommandOutcome::Confirmed(payload) => Ok(CommandOutcome::Confirmed(batch_acks(
+                &payload,
+                requests.len(),
+                "batch amend",
+            )?)),
+            CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+            CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        }
+    }
+
+    pub async fn cancel_orders(
+        &self,
+        requests: &[OkxOrderIdentity],
+    ) -> CommandResult<Vec<CommandOutcome<OkxOrderOperationAck>>> {
+        validate_batch(requests.len(), "cancel")?;
+        let body = serde_json::Value::Array(
+            requests
+                .iter()
+                .map(cancel_body)
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        match self
+            .post("/api/v5/trade/cancel-batch-orders", &body)
+            .await?
+        {
+            CommandOutcome::Confirmed(payload) => Ok(CommandOutcome::Confirmed(batch_acks(
+                &payload,
+                requests.len(),
+                "batch cancel",
+            )?)),
+            CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+            CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        }
+    }
+
+    pub async fn submit_orders(
+        &self,
+        requests: &[OrderEntryRequest],
+    ) -> CommandResult<Vec<CommandOutcome<OrderEntryEvent>>> {
+        validate_batch(requests.len(), "submit")?;
+        let body = serde_json::Value::Array(
+            requests
+                .iter()
+                .map(|request| {
+                    let instrument_type = instrument_type_from_order(request);
+                    order_request_body(request, trading_mode(request, &instrument_type))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        match self.post("/api/v5/trade/batch-orders", &body).await? {
+            CommandOutcome::Confirmed(payload) => {
+                let rows = payload.get("data").and_then(serde_json::Value::as_array);
+                let outcomes = requests
+                    .iter()
+                    .enumerate()
+                    .map(|(index, request)| {
+                        let Some(row) = rows.and_then(|rows| rows.get(index)) else {
+                            return Ok(CommandOutcome::Indeterminate(
+                                IndeterminateCommand::may_have_been_sent(format!(
+                                    "OKX batch submit response item {index} is missing"
+                                )),
+                            ));
+                        };
+                        normalize_order_submission(
+                            request,
+                            &serde_json::json!({"data":[row.clone()]}),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, IntegrationError>>()?;
+                Ok(CommandOutcome::Confirmed(outcomes))
+            }
+            CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+            CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        }
+    }
+
+    pub async fn fetch_fills(
+        &self,
+        query: &OkxHistoryQuery,
+    ) -> Result<Vec<OkxFillRecord>, IntegrationError> {
+        let payload = self
+            .get("/api/v5/trade/fills-history", &query.params()?)
+            .await?;
+        history::fills(&payload)
+    }
+
+    pub async fn fetch_bills(
+        &self,
+        query: &OkxHistoryQuery,
+    ) -> Result<Vec<OkxBillRecord>, IntegrationError> {
+        let payload = self
+            .get("/api/v5/account/bills-archive", &query.params()?)
+            .await?;
+        history::bills(&payload)
     }
 }
 
@@ -139,7 +281,8 @@ impl OrderQuery for OkxPrivateRestConnection {
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
         let params = order_query_params(query, false)?;
         let payload = self.get("/api/v5/trade/orders-pending", &params).await?;
-        bind_orders(self.descriptor(), normalize_okx_orders(&payload))
+        normalize_okx_orders(&self.descriptor().connection_key, &payload)
+            .map_err(IntegrationError::InvalidPayload)
     }
 
     async fn order_history(
@@ -148,7 +291,8 @@ impl OrderQuery for OkxPrivateRestConnection {
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
         let params = order_query_params(query, false)?;
         let payload = self.get("/api/v5/trade/orders-history", &params).await?;
-        bind_orders(self.descriptor(), normalize_okx_orders(&payload))
+        normalize_okx_orders(&self.descriptor().connection_key, &payload)
+            .map_err(IntegrationError::InvalidPayload)
     }
 
     async fn order_detail(
@@ -164,9 +308,9 @@ impl OrderQuery for OkxPrivateRestConnection {
         else {
             return Ok(None);
         };
-        let mut order = normalize_okx_order(row).map_err(IntegrationError::InvalidPayload)?;
-        order.binding_id = self.descriptor().binding_id.clone();
-        Ok(Some(order))
+        normalize_okx_order(&self.descriptor().connection_key, row)
+            .map(Some)
+            .map_err(IntegrationError::InvalidPayload)
     }
 }
 
@@ -229,22 +373,4 @@ fn trading_mode<'a>(request: &'a OrderEntryRequest, instrument_type: &str) -> &'
         } else {
             "cross"
         })
-}
-
-fn bind_orders(
-    descriptor: &ConnectionDescriptor,
-    orders: Result<Vec<ExternalOrder>, String>,
-) -> Result<Vec<ExternalOrder>, IntegrationError> {
-    let binding_id = descriptor.binding_id.clone();
-    orders
-        .map(|orders| {
-            orders
-                .into_iter()
-                .map(|mut order| {
-                    order.binding_id = binding_id.clone();
-                    order
-                })
-                .collect()
-        })
-        .map_err(IntegrationError::InvalidPayload)
 }

@@ -248,6 +248,8 @@ class ExecutionIntent:
     reason: str
     order_ids: tuple[OrderId, ...]
     source_event_sequence: int | None = None
+    strategy_decision_id: str | None = None
+    updated_at_unix_nanos: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +305,7 @@ class Fill:
     quantity: Decimal
     price: Decimal
     occurred_at: datetime
+    intent_id: IntentId | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -108,26 +108,29 @@ impl<S> ParticipantAugmentedSource<S> {
 
 #[cfg(not(test))]
 impl ParticipantAugmentedSource<CompositeSource<ConfiguredProviderSource>> {
-    pub(crate) fn massive_option_connection(
+    pub(crate) fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<MassiveRestConnection> {
-        self.inner.massive_option_connection(underlying)
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
+        self.inner.massive_option_connection_plan(underlying)
     }
 
     pub(crate) async fn set_managed_option_underlying(
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
     ) -> ReferenceResult<()> {
         self.inner
-            .set_managed_option_underlying(underlying, enabled, connection)
+            .set_managed_option_underlying(underlying, enabled, connection_key)
             .await
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl<S: ReferenceSource> ReferenceSource for ParticipantAugmentedSource<S> {
     fn source_id(&self) -> &str {
         self.inner.source_id()
@@ -143,8 +146,35 @@ impl<S: ReferenceSource> ReferenceSource for ParticipantAugmentedSource<S> {
         Ok(catalog)
     }
 
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let mut catalog = self
+            .inner
+            .fetch_catalog_with_connections(connections)
+            .await?;
+        catalog.entities.extend(self.participants.iter().cloned());
+        Ok(catalog)
+    }
+
     async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         let mut update = self.inner.fetch_catalog_step().await?;
+        update
+            .catalog
+            .entities
+            .extend(self.participants.iter().cloned());
+        Ok(update)
+    }
+
+    async fn fetch_catalog_step_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderUpdate> {
+        let mut update = self
+            .inner
+            .fetch_catalog_step_with_connections(connections)
+            .await?;
         update
             .catalog
             .entities
@@ -157,6 +187,16 @@ impl<S: ReferenceSource> ReferenceSource for ParticipantAugmentedSource<S> {
         source_id: &str,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
         self.inner.advance_source(source_id).await
+    }
+
+    async fn advance_source_with_connections(
+        &mut self,
+        source_id: &str,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        self.inner
+            .advance_source_with_connections(source_id, connections)
+            .await
     }
 
     async fn set_source_paused(&mut self, source_id: &str, paused: bool) -> ReferenceResult<()> {
@@ -196,10 +236,13 @@ pub struct CompositeSource<S> {
 
 #[cfg(not(test))]
 impl CompositeSource<ConfiguredProviderSource> {
-    pub(crate) fn massive_option_connection(
+    pub(crate) fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<MassiveRestConnection> {
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
         self.workers
             .iter()
             .find(|worker| worker.source_id == "massive-options")
@@ -207,14 +250,14 @@ impl CompositeSource<ConfiguredProviderSource> {
                 ReferenceError::Invalid("Massive options source is not configured".into())
             })?
             .source
-            .massive_option_connection(underlying)
+            .massive_option_connection_plan(underlying)
     }
 
     pub(crate) async fn set_managed_option_underlying(
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
     ) -> ReferenceResult<()> {
         let worker = self
             .workers
@@ -225,7 +268,7 @@ impl CompositeSource<ConfiguredProviderSource> {
             })?;
         worker
             .source
-            .set_managed_option_underlying(underlying, enabled, connection)
+            .set_managed_option_underlying(underlying, enabled, connection_key)
             .await
     }
 }
@@ -333,7 +376,10 @@ where
         merge_provider_catalog_views(self.last_good.values()).map(Some)
     }
 
-    async fn fetch_normalized_facts(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_normalized_facts(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
         let mut requests = Vec::new();
         let mut skipped = Vec::new();
         for worker in &mut self.workers {
@@ -346,18 +392,18 @@ where
                 continue;
             }
             let source_id = worker.source_id.clone();
-            let source = &mut worker.source;
-            requests.push(async move {
-                let result =
-                    tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step())
-                        .await
-                        .map_err(|error| {
-                            ReferenceError::Provider(format!("provider fetch timed out: {error}"))
-                        })?;
-                Ok::<_, ReferenceError>((source_id, result))
-            });
+            let result = tokio::time::timeout(
+                PROVIDER_FETCH_TIMEOUT,
+                worker
+                    .source
+                    .fetch_catalog_step_with_connections(connections),
+            )
+            .await
+            .map_err(|error| {
+                ReferenceError::Provider(format!("provider fetch timed out: {error}"))
+            })?;
+            requests.push(Ok::<_, ReferenceError>((source_id, result)));
         }
-        let requests = join_all(requests).await;
         if self.sync_store.is_none() {
             return Err(ReferenceError::Persistence(
                 "normalized provider store is unavailable".into(),
@@ -470,7 +516,7 @@ impl<S: ReferenceSource> CompositeSource<S> {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl<S> ReferenceSource for CompositeSource<S>
 where
     S: ReferenceSource,
@@ -490,8 +536,17 @@ where
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
+            .await
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
         if self.normalized_facts_authoritative() {
-            return self.fetch_normalized_facts().await;
+            return self.fetch_normalized_facts(connections).await;
         }
         #[cfg(not(test))]
         return Err(ReferenceError::Persistence(
@@ -745,6 +800,16 @@ where
         &mut self,
         source_id: &str,
     ) -> ReferenceResult<Option<ProviderCatalog>> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.advance_source_with_connections(source_id, &mut system.connections())
+            .await
+    }
+
+    async fn advance_source_with_connections(
+        &mut self,
+        source_id: &str,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
         let Some(index) = self
             .workers
             .iter()
@@ -769,7 +834,9 @@ where
         if self.normalized_facts_authoritative() {
             let result = tokio::time::timeout(
                 PROVIDER_FETCH_TIMEOUT,
-                self.workers[index].source.fetch_catalog_step(),
+                self.workers[index]
+                    .source
+                    .fetch_catalog_step_with_connections(connections),
             )
             .await
             .map_err(|error| {

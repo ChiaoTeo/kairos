@@ -12,6 +12,66 @@ use kairos_primitives::ParticipantSymbol;
 
 rest_connection!(BinanceSpotRestConnection, "spot.rest");
 
+impl BinanceSpotRestConnection {
+    /// Reduces an order quantity without losing queue priority. Binance Spot
+    /// does not expose a general price/quantity modify operation here.
+    pub async fn amend_order_keep_priority(
+        &mut self,
+        request: &crate::participants::binance::BinanceAmendOrderRequest,
+    ) -> CommandResult<OrderEntryEvent> {
+        let params = [
+            (
+                "symbol",
+                request
+                    .replacement
+                    .participant_instrument
+                    .source_symbol
+                    .to_string(),
+            ),
+            ("orderId", request.remote_order_id.clone()),
+            ("newQty", execution::decimal(request.replacement.quantity)),
+        ];
+        let outcome = self
+            .service
+            .signed_put_command("/api/v3/order/amend/keepPriority", &params)
+            .await?;
+        execution::submitted_outcome(&request.replacement, outcome)
+    }
+
+    pub async fn cancel_all_open_orders(
+        &mut self,
+        scope: &crate::participants::binance::BinanceCancelAllScope,
+    ) -> CommandResult<crate::participants::binance::BinanceCancelAllScope> {
+        match self
+            .service
+            .signed_delete_command(
+                "/api/v3/openOrders",
+                &[("symbol", scope.symbol.to_string())],
+            )
+            .await?
+        {
+            crate::CommandOutcome::Confirmed(_) => {
+                Ok(crate::CommandOutcome::Confirmed(scope.clone()))
+            }
+            crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
+            crate::CommandOutcome::Indeterminate(error) => {
+                Ok(crate::CommandOutcome::Indeterminate(error))
+            }
+        }
+    }
+
+    pub async fn fetch_account_trades(
+        &mut self,
+        query: &crate::participants::binance::BinanceHistoryQuery,
+    ) -> Result<Vec<crate::participants::binance::BinanceTradeRecord>, IntegrationError> {
+        let payload = self
+            .service
+            .signed_get("/api/v3/myTrades", &query.params(true, false)?)
+            .await?;
+        crate::participants::binance::history::trades(&payload)
+    }
+}
+
 impl InstrumentCatalogQuery for BinanceSpotRestConnection {
     async fn fetch_instruments(&mut self) -> Result<ExternalInstrumentCatalog, IntegrationError> {
         let value = self.service.public_get("/api/v3/exchangeInfo", &[]).await?;
@@ -288,7 +348,7 @@ impl OrderQuery for BinanceSpotRestConnection {
             .service
             .signed_get("/api/v3/openOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
     async fn order_history(
         &mut self,
@@ -299,7 +359,7 @@ impl OrderQuery for BinanceSpotRestConnection {
             .service
             .signed_get("/api/v3/allOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
     async fn order_detail(
         &mut self,
@@ -307,9 +367,11 @@ impl OrderQuery for BinanceSpotRestConnection {
     ) -> Result<Option<ExternalOrder>, IntegrationError> {
         let params = query_params(query, true)?;
         let value = self.service.signed_get("/api/v3/order", &params).await?;
-        Ok(execution::orders(&self.descriptor().binding_id, &value)?
-            .into_iter()
-            .next())
+        Ok(
+            execution::orders(&self.descriptor().connection_key, &value)?
+                .into_iter()
+                .next(),
+        )
     }
 }
 fn query_params(

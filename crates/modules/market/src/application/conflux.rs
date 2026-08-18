@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SystemEvent};
+use kairos_conflux::{
+    ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, ExternalParticipantEvent,
+    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, RestContract, SystemEvent,
+};
 use kairos_market_contract::{
     MarketCommandStatus, MarketControlError, MarketDataSource, MarketDataSourcesResponse,
     MarketHealthResponse, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
@@ -11,12 +14,17 @@ use kairos_protocol::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{resolve_market, resolve_option_markets, MarketApplication, MarketError};
-use crate::domain::source::{SourceDescriptor, SourceRouteKey};
+use crate::domain::source::{
+    SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceStatus,
+};
+use crate::services::actor::BusinessSubscriptionKey;
 use crate::services::publication::contract::{encode_change_view, encode_event};
 use crate::services::publication::HistoryQueue;
+use crate::services::source::messages::ProviderSubscriptionId;
 use crate::services::source::messages::SourceInput;
 use crate::services::source::{
-    spawn_snapshot, spawn_stream, spawn_stream_with_policy, SourceHandle, StreamFailurePolicy,
+    confirmed_subscription, confirmed_unsubscription, normalize, quote_event, subscription_request,
+    with_epoch,
 };
 use crate::{ObservationSelector, SubscriptionId};
 
@@ -53,7 +61,18 @@ pub(crate) struct MarketSourcePlan {
 
 enum MarketConfluxEventKind {
     Source(SourceInput),
-    Universe(super::ReconcileMarketUniverse),
+}
+
+pub(crate) struct ReferenceProjectionConfig {
+    pub(crate) client_key: String,
+    pub(crate) interval: Duration,
+    pub(crate) projection: crate::services::reference_projection::ReferenceUniverseProjection,
+}
+
+struct ReferenceProjectionState {
+    config: ReferenceProjectionConfig,
+    required_sequence: u64,
+    published_sequence: Option<u64>,
 }
 
 impl RestContract for MarketRest {
@@ -75,7 +94,7 @@ pub(crate) struct MarketConfluxState {
     producer_incarnation: u64,
     source_plans: BTreeMap<String, MarketSourcePlan>,
     history: Option<HistoryQueue>,
-    universe_updates: Option<tokio::sync::mpsc::Receiver<super::ReconcileMarketUniverse>>,
+    reference_projection: Option<ReferenceProjectionState>,
     command_results: BTreeMap<String, (MarketRestRequest, MarketRestResponse)>,
 }
 
@@ -91,7 +110,7 @@ impl Default for MarketConfluxState {
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             source_plans: BTreeMap::new(),
             history: None,
-            universe_updates: None,
+            reference_projection: None,
             command_results: BTreeMap::new(),
         }
     }
@@ -108,7 +127,7 @@ impl MarketApplication {
         identity: InstanceIdentity,
         source_plans: Vec<MarketSourcePlan>,
         history: Option<HistoryQueue>,
-        universe_updates: Option<tokio::sync::mpsc::Receiver<super::ReconcileMarketUniverse>>,
+        reference_projection: Option<ReferenceProjectionConfig>,
     ) -> Result<(), String> {
         if freshness_interval.is_zero() || freshness_max_age.is_zero() || view_slot_size == 0 {
             return Err("Market Conflux intervals and view slot size must be positive".into());
@@ -124,7 +143,12 @@ impl MarketApplication {
             .map(|plan| (plan.descriptor.id.to_string(), plan))
             .collect();
         self.conflux.history = history;
-        self.conflux.universe_updates = universe_updates;
+        self.conflux.reference_projection =
+            reference_projection.map(|config| ReferenceProjectionState {
+                config,
+                required_sequence: 0,
+                published_sequence: None,
+            });
         Ok(())
     }
 
@@ -178,18 +202,80 @@ impl MarketApplication {
                     )
                 }));
             };
-            let handle = take_managed_source(context.system(), plan, self.source_input_capacity())?
-                .ok_or_else(|| {
-                    MarketError::SourceUnavailable(format!(
-                        "managed Market connection is missing: {}",
-                        plan.descriptor.id
-                    ))
-                })?;
-            self.attach_source(handle)
+            if !managed_connection_exists(context, plan) {
+                return Err(MarketError::SourceUnavailable(format!(
+                    "managed Market connection is missing: {}",
+                    plan.descriptor.id
+                )));
+            }
+            self.attach_managed_source(plan.descriptor.clone())
                 .map_err(MarketError::SourceUnavailable)?;
+            if let MarketSourceMode::Snapshot(interval) = plan.mode {
+                self.actor
+                    .apply_source_status(
+                        &plan.descriptor.id,
+                        SourceEpoch::new(1),
+                        SourceStatus::Ready,
+                        None,
+                    )
+                    .map_err(MarketError::Invalid)?;
+                context.spawn_timer(snapshot_timer_name(&plan.descriptor.id), interval);
+            }
         }
         self.spawn_source_inputs(context);
         Ok(())
+    }
+
+    async fn refresh_reference_universe(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), MarketError> {
+        let Some(reference) = self.conflux.reference_projection.as_ref() else {
+            return Ok(());
+        };
+        let client_key = reference.config.client_key.clone();
+        let required_sequence = reference.required_sequence;
+        let published_sequence = reference.published_sequence;
+        let projection = reference.config.projection.clone();
+        let snapshot = context
+            .reference_client(&client_key)
+            .ok_or_else(|| {
+                MarketError::SourceUnavailable(format!(
+                    "managed Reference client is missing: {client_key}"
+                ))
+            })?
+            .market_snapshot()
+            .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+        let update = projection
+            .project(&snapshot, required_sequence)
+            .map_err(MarketError::SourceUnavailable)?;
+        if published_sequence.is_some_and(|sequence| sequence >= update.event_sequence.get()) {
+            return Ok(());
+        }
+        if let Some(reference) = self.conflux.reference_projection.as_mut() {
+            reference.published_sequence = Some(update.event_sequence.get());
+        }
+        self.reconcile_market_universe(update)?;
+        self.activate_managed_sources(context)?;
+        self.sync_all_source_subscriptions(context).await?;
+        self.spawn_source_inputs(context);
+        Ok(())
+    }
+}
+
+fn reference_event_sequence(event: &kairos_reference_contract::ReferenceEvent<'_>) -> u64 {
+    use kairos_reference_contract::ReferenceEvent;
+    match event {
+        ReferenceEvent::EntityUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::EntityUpdated(value) => value.metadata().sequence(),
+        ReferenceEvent::AssetUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::AssetUpdated(value) => value.metadata().sequence(),
+        ReferenceEvent::InstrumentUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::InstrumentUpdated(value) => value.metadata().sequence(),
+        ReferenceEvent::ListingUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::ListingUpdated(value) => value.metadata().sequence(),
+        ReferenceEvent::MarketUpserted(value) => value.metadata().sequence(),
+        ReferenceEvent::MarketUpdated(value) => value.metadata().sequence(),
     }
 }
 
@@ -200,12 +286,10 @@ impl ConfluxActor for MarketApplication {
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
         self.activate_managed_sources(context)?;
         self.spawn_source_inputs(context);
-        if let Some(updates) = self.conflux.universe_updates.take() {
-            context.spawn_local_receiver_map("reference-universe", updates, |update| {
-                MarketConfluxEvent(MarketConfluxEventKind::Universe(update))
-            });
+        if let Some(reference) = self.conflux.reference_projection.as_ref() {
+            context.spawn_timer("reference-universe", reference.config.interval);
         }
-        self.sync_source_subscriptions().await?;
+        self.sync_all_source_subscriptions(context).await?;
         context.spawn_timer("freshness", self.conflux.freshness_interval);
         self.publish(context).await?;
         Ok(())
@@ -222,14 +306,24 @@ impl ConfluxActor for MarketApplication {
             }
             ConfluxEvent::Local(MarketConfluxEvent(MarketConfluxEventKind::Source(input))) => {
                 self.apply_source_input(input).await?;
-                self.sync_source_subscriptions().await?;
+                self.sync_all_source_subscriptions(context).await?;
                 None
             }
-            ConfluxEvent::Local(MarketConfluxEvent(MarketConfluxEventKind::Universe(update))) => {
-                self.reconcile_market_universe(update)?;
-                self.activate_managed_sources(context)?;
-                self.sync_source_subscriptions().await?;
-                self.spawn_source_inputs(context);
+            ConfluxEvent::Reference(reference) => {
+                if self
+                    .conflux
+                    .reference_projection
+                    .as_ref()
+                    .is_some_and(|state| state.config.client_key == reference.client)
+                {
+                    if let Ok(event) = reference.frame.decode() {
+                        let sequence = reference_event_sequence(&event);
+                        if let Some(state) = self.conflux.reference_projection.as_mut() {
+                            state.required_sequence = state.required_sequence.max(sequence);
+                        }
+                    }
+                    self.refresh_reference_universe(context).await?;
+                }
                 None
             }
             ConfluxEvent::System(SystemEvent::Timer {
@@ -242,6 +336,36 @@ impl ConfluxActor for MarketApplication {
                     .as_nanos()
                     .min(u128::from(u64::MAX)) as u64;
                 self.evaluate_freshness(fired_at_unix_nanos, max_age);
+                None
+            }
+            ConfluxEvent::System(SystemEvent::Timer { name, .. })
+                if name.starts_with("market-snapshot:") =>
+            {
+                self.poll_managed_snapshot(&name["market-snapshot:".len()..], context)
+                    .await?;
+                None
+            }
+            ConfluxEvent::System(SystemEvent::Timer { name, .. })
+                if name == "reference-universe" =>
+            {
+                self.refresh_reference_universe(context).await?;
+                None
+            }
+            ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
+                if let Some(source_id) = managed_source_id_from_system_event(&source) {
+                    self.mark_managed_source_ready(source_id)?;
+                }
+                None
+            }
+            ConfluxEvent::Integration(integration) => {
+                if let ExternalParticipantEvent::Market(event) = integration.event {
+                    self.apply_managed_market_event(
+                        integration.identity.descriptor.connection_key.as_str(),
+                        integration.identity.generation,
+                        event,
+                    )
+                    .await?;
+                }
                 None
             }
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
@@ -331,7 +455,7 @@ impl MarketApplication {
                     if let Err(error) = self.activate_managed_sources(context) {
                         return MarketRestResponse::Subscribe(Err(control_error(error)));
                     }
-                    if let Err(error) = self.sync_source_subscriptions().await {
+                    if let Err(error) = self.sync_all_source_subscriptions(context).await {
                         return MarketRestResponse::Subscribe(Err(control_error(error)));
                     }
                     self.spawn_source_inputs(context);
@@ -355,7 +479,7 @@ impl MarketApplication {
                             .ok_or_else(|| MarketError::NotFound("subscription not found".into()))
                     });
                 if result.is_ok() {
-                    if let Err(error) = self.sync_source_subscriptions().await {
+                    if let Err(error) = self.sync_all_source_subscriptions(context).await {
                         return MarketRestResponse::Unsubscribe(Err(control_error(error)));
                     }
                 }
@@ -368,15 +492,11 @@ impl MarketApplication {
                     &command.strategy_id,
                 );
                 let removed = self.release_subscription_owner(&owner);
-                let result =
-                    self.sync_source_subscriptions()
-                        .await
-                        .map(|()| MarketReleaseOwnerResponse {
-                            released_subscriptions: removed
-                                .into_iter()
-                                .map(|value| value.0)
-                                .collect(),
-                        });
+                let result = self.sync_all_source_subscriptions(context).await.map(|()| {
+                    MarketReleaseOwnerResponse {
+                        released_subscriptions: removed.into_iter().map(|value| value.0).collect(),
+                    }
+                });
                 MarketRestResponse::ReleaseOwner(result.map_err(control_error))
             }
             MarketRestRequest::Recover => MarketRestResponse::Recover(
@@ -651,66 +771,336 @@ fn idempotency_conflict(request: &MarketRestRequest) -> MarketRestResponse {
     }
 }
 
-fn take_managed_source(
-    system: &mut kairos_conflux::ConfluxSystem,
+fn snapshot_timer_name(source_id: &SourceId) -> String {
+    format!("market-snapshot:{source_id}")
+}
+
+fn managed_source_id_from_system_event(source: &str) -> Option<&str> {
+    source.strip_prefix("integration:")
+}
+
+fn managed_connection_exists(
+    context: &mut Context<'_, MarketApplication>,
     plan: &MarketSourcePlan,
-    input_capacity: usize,
-) -> Result<Option<SourceHandle>, MarketError> {
-    let key = plan.descriptor.id.to_string();
-    macro_rules! snapshot {
-        ($connections:expr, $interval:expr) => {
-            if let Some(connection) = $connections.remove(&key) {
-                return Ok(Some(spawn_snapshot(
-                    plan.descriptor.clone(),
-                    connection.into_connection(),
-                    $interval,
-                    input_capacity,
-                )));
-            }
-        };
-    }
-    macro_rules! stream {
-        ($connections:expr, $scoped:expr) => {
-            if let Some(connection) = $connections.remove(&key) {
-                let connection = connection.into_connection();
-                return Ok(Some(if $scoped {
-                    spawn_stream_with_policy(
-                        plan.descriptor.clone(),
-                        connection,
-                        input_capacity,
-                        StreamFailurePolicy::MarketScopedResync,
-                    )
-                } else {
-                    spawn_stream(plan.descriptor.clone(), connection, input_capacity)
-                }));
-            }
-        };
-    }
+) -> bool {
+    let key = ConnectionKey::new(plan.descriptor.id.to_string()).expect("valid source id");
+    let connections = context.connections();
+    let contains = |keys: Vec<ConnectionKey>| keys.contains(&key);
     match plan.mode {
-        MarketSourceMode::Snapshot(interval) => {
-            snapshot!(system.binance_spot_rest_connections, interval);
-            snapshot!(system.binance_usdm_rest_connections, interval);
-            snapshot!(system.binance_coinm_rest_connections, interval);
-            snapshot!(system.binance_options_rest_connections, interval);
-            snapshot!(system.binance_stocks_rest_connections, interval);
-            snapshot!(system.okx_public_rest_connections, interval);
-            snapshot!(system.hyperliquid_info_rest_connections, interval);
-            snapshot!(system.ibkr_market_data_connections, interval);
+        MarketSourceMode::Snapshot(_) => {
+            contains(connections.binance_spot_rest.keys())
+                || contains(connections.binance_usdm_rest.keys())
+                || contains(connections.binance_coinm_rest.keys())
+                || contains(connections.binance_options_rest.keys())
+                || contains(connections.binance_stocks_rest.keys())
+                || contains(connections.okx_public_rest.keys())
+                || contains(connections.hyperliquid_info_rest.keys())
+                || contains(connections.ibkr_market_data.keys())
         }
         MarketSourceMode::Stream | MarketSourceMode::MarketScopedStream => {
-            let scoped = matches!(plan.mode, MarketSourceMode::MarketScopedStream);
-            stream!(system.binance_spot_websocket_connections, scoped);
-            stream!(system.binance_usdm_websocket_connections, scoped);
-            stream!(system.binance_coinm_websocket_connections, scoped);
-            stream!(system.binance_options_websocket_connections, scoped);
-            stream!(system.binance_stocks_websocket_connections, scoped);
-            stream!(system.okx_public_websocket_connections, scoped);
-            stream!(system.hyperliquid_websocket_connections, scoped);
-            stream!(system.massive_stocks_websocket_connections, scoped);
-            stream!(system.massive_options_websocket_connections, scoped);
+            contains(connections.binance_spot_websocket.keys())
+                || contains(connections.binance_usdm_websocket.keys())
+                || contains(connections.binance_coinm_websocket.keys())
+                || contains(connections.binance_options_websocket.keys())
+                || contains(connections.binance_stocks_websocket.keys())
+                || contains(connections.okx_public_websocket.keys())
+                || contains(connections.hyperliquid_websocket.keys())
+                || contains(connections.massive_stocks_websocket.keys())
+                || contains(connections.massive_options_websocket.keys())
         }
     }
-    Ok(None)
+}
+
+impl MarketApplication {
+    async fn sync_all_source_subscriptions(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), MarketError> {
+        self.sync_source_subscriptions().await?;
+        self.sync_managed_source_subscriptions(context).await
+    }
+
+    fn desired_managed_markets(
+        &self,
+        source_id: &SourceId,
+    ) -> BTreeMap<BusinessSubscriptionKey, crate::ResolvedMarket> {
+        let Some(source) = self.actor.attached_sources.get(source_id) else {
+            return BTreeMap::new();
+        };
+        let mut desired = BTreeMap::new();
+        for subscription in self.current_view().subscriptions {
+            if !super::sources::source_supports_selectors(
+                &source.descriptor,
+                &subscription.selectors,
+            ) {
+                continue;
+            }
+            for (market_key, market) in subscription.members {
+                if super::source_accepts(&source.descriptor, &market) {
+                    desired.insert((subscription.id.clone(), market_key), market);
+                }
+            }
+        }
+        desired
+    }
+
+    async fn sync_managed_source_subscriptions(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), MarketError> {
+        let source_ids = self
+            .actor
+            .attached_sources
+            .iter()
+            .filter(|(_, source)| source.inputs.is_none() && source.task.is_none())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for source_id in source_ids {
+            let wanted = self.desired_managed_markets(&source_id);
+            let confirmed = self.actor.attached_sources[&source_id].confirmed.clone();
+            let plan = self
+                .conflux
+                .source_plans
+                .get(source_id.as_str())
+                .expect("attached managed source has a plan")
+                .clone();
+            for (key, handle) in confirmed
+                .iter()
+                .filter(|(key, _)| !wanted.contains_key(*key))
+            {
+                if !matches!(plan.mode, MarketSourceMode::Snapshot(_)) {
+                    managed_unsubscribe(
+                        context,
+                        &ConnectionKey::new(source_id.to_string()).expect("valid source id"),
+                        handle,
+                    )
+                    .await
+                    .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+                }
+                self.actor
+                    .attached_sources
+                    .get_mut(&source_id)
+                    .expect("source remains attached")
+                    .confirmed
+                    .remove(key);
+            }
+            for (key, market) in wanted {
+                if confirmed.contains_key(&key) {
+                    continue;
+                }
+                let handle = if matches!(plan.mode, MarketSourceMode::Snapshot(_)) {
+                    ProviderSubscriptionId::new(format!(
+                        "snapshot:{}:{}",
+                        source_id,
+                        self.actor.attached_sources[&source_id].confirmed.len() + 1
+                    ))
+                    .map_err(MarketError::Invalid)?
+                } else {
+                    let request = subscription_request(&market)
+                        .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+                    let id = managed_subscribe(
+                        context,
+                        &ConnectionKey::new(source_id.to_string()).expect("valid source id"),
+                        request,
+                    )
+                    .await
+                    .map_err(|error| MarketError::SourceUnavailable(error.to_string()))?;
+                    ProviderSubscriptionId::new(id.0.to_string()).map_err(MarketError::Invalid)?
+                };
+                self.actor
+                    .attached_sources
+                    .get_mut(&source_id)
+                    .expect("source remains attached")
+                    .confirmed
+                    .insert(key, handle);
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_managed_source_ready(&mut self, value: &str) -> Result<(), MarketError> {
+        let Ok(source_id) = SourceId::new(value) else {
+            return Ok(());
+        };
+        if self
+            .actor
+            .attached_sources
+            .get(&source_id)
+            .is_some_and(|source| source.inputs.is_none() && source.task.is_none())
+        {
+            self.actor
+                .apply_source_status(&source_id, SourceEpoch::new(1), SourceStatus::Ready, None)
+                .map_err(MarketError::Invalid)?;
+        }
+        Ok(())
+    }
+
+    async fn apply_managed_market_event(
+        &mut self,
+        connection_key: &str,
+        generation: u64,
+        event: kairos_conflux::MarketEvent,
+    ) -> Result<(), MarketError> {
+        let source_id = SourceId::new(connection_key).map_err(MarketError::Invalid)?;
+        if !self.actor.attached_sources.contains_key(&source_id) {
+            return Ok(());
+        }
+        let mut markets = self
+            .desired_managed_markets(&source_id)
+            .into_values()
+            .filter(|market| {
+                market
+                    .route
+                    .provider_symbol
+                    .eq_ignore_ascii_case(event.symbol.as_str())
+            })
+            .map(|market| (SourceRouteKey::from_market(&market), market))
+            .collect::<BTreeMap<_, _>>()
+            .into_values();
+        let Some(market) = markets.next() else {
+            return Ok(());
+        };
+        if let Some(input) = normalize(&source_id, &market, event)
+            .map_err(MarketError::Invalid)?
+            .map(|value| with_epoch(value, source_id, SourceEpoch::new(generation.max(1))))
+        {
+            self.apply_source_input(input).await?;
+        }
+        Ok(())
+    }
+
+    async fn poll_managed_snapshot(
+        &mut self,
+        value: &str,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), MarketError> {
+        let source_id = SourceId::new(value).map_err(MarketError::Invalid)?;
+        let markets = self
+            .desired_managed_markets(&source_id)
+            .into_values()
+            .map(|market| (SourceRouteKey::from_market(&market), market))
+            .collect::<BTreeMap<_, _>>();
+        if markets.is_empty() {
+            return Ok(());
+        }
+        let symbols = markets
+            .values()
+            .map(|market| {
+                kairos_primitives::ParticipantSymbol::new(market.route.provider_symbol.as_str())
+                    .expect("resolved provider symbol is valid")
+            })
+            .collect::<Vec<_>>();
+        match managed_fetch_quotes(
+            context,
+            &ConnectionKey::new(source_id.to_string()).expect("valid source id"),
+            &symbols,
+        )
+        .await
+        {
+            Ok(quotes) => {
+                for quote in quotes {
+                    self.apply_managed_market_event(source_id.as_str(), 1, quote_event(quote))
+                        .await?;
+                }
+            }
+            Err(error) => {
+                self.actor
+                    .apply_source_failure(
+                        &source_id,
+                        SourceEpoch::new(1),
+                        SourceFailureKind::Transport,
+                        error.to_string(),
+                    )
+                    .map_err(MarketError::Invalid)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn managed_subscribe(
+    context: &mut Context<'_, MarketApplication>,
+    key: &ConnectionKey,
+    request: kairos_conflux::MarketSubscriptionRequest,
+) -> Result<kairos_conflux::MarketSubscriptionId, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return confirmed_subscription(connection.subscribe(request).await?);
+            }
+        }};
+    }
+    try_family!(binance_spot_websocket);
+    try_family!(binance_usdm_websocket);
+    try_family!(binance_coinm_websocket);
+    try_family!(binance_options_websocket);
+    try_family!(binance_stocks_websocket);
+    try_family!(okx_public_websocket);
+    try_family!(hyperliquid_websocket);
+    try_family!(massive_stocks_websocket);
+    try_family!(massive_options_websocket);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Market stream connection is missing: {key}"
+    )))
+}
+
+async fn managed_unsubscribe(
+    context: &mut Context<'_, MarketApplication>,
+    key: &ConnectionKey,
+    handle: &ProviderSubscriptionId,
+) -> Result<(), IntegrationError> {
+    let subscription = handle
+        .as_str()
+        .parse::<u64>()
+        .map(kairos_conflux::MarketSubscriptionId)
+        .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return confirmed_unsubscription(connection.unsubscribe(subscription).await?);
+            }
+        }};
+    }
+    try_family!(binance_spot_websocket);
+    try_family!(binance_usdm_websocket);
+    try_family!(binance_coinm_websocket);
+    try_family!(binance_options_websocket);
+    try_family!(binance_stocks_websocket);
+    try_family!(okx_public_websocket);
+    try_family!(hyperliquid_websocket);
+    try_family!(massive_stocks_websocket);
+    try_family!(massive_options_websocket);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Market stream connection is missing: {key}"
+    )))
+}
+
+async fn managed_fetch_quotes(
+    context: &mut Context<'_, MarketApplication>,
+    key: &ConnectionKey,
+    symbols: &[kairos_primitives::ParticipantSymbol],
+) -> Result<Vec<kairos_conflux::MarketQuote>, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return connection.fetch_quotes(symbols).await;
+            }
+        }};
+    }
+    try_family!(binance_spot_rest);
+    try_family!(binance_usdm_rest);
+    try_family!(binance_coinm_rest);
+    try_family!(binance_options_rest);
+    try_family!(binance_stocks_rest);
+    try_family!(okx_public_rest);
+    try_family!(hyperliquid_info_rest);
+    try_family!(ibkr_market_data);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Market quote connection is missing: {key}"
+    )))
 }
 
 fn control_error(error: MarketError) -> MarketControlError {

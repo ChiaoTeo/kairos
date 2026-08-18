@@ -48,12 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut composition = build_application(&config, args.command.requires_publication()).await?;
     composition.activate_sources().await?;
-    let value = execute(
-        &mut composition.application,
-        composition.event_writer.as_mut(),
-        args.command,
-    )
-    .await?;
+    let (application, system, writer) = composition.split_mut();
+    let value = execute(application, system, writer, args.command).await?;
     println!("{}", render(&value, output));
     Ok(())
 }
@@ -326,13 +322,16 @@ fn matches_field(value: &Value, field: &str, expected: Option<&str>) -> bool {
 
 async fn execute(
     application: &mut ComposedReferenceApplication,
+    system: &mut kairos_conflux::ConfluxSystem,
     writer: Option<&mut ReferenceEventWriter>,
     command: Command,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let value = match command {
         Command::Status | Command::Snapshot => unreachable!("read command routed to SQLite"),
         Command::Refresh | Command::Sync => {
-            let result = application.refresh().await?;
+            let result = application
+                .refresh_with_connections(&mut system.connections())
+                .await?;
             publish_pending(writer, application).await?;
             json!({
                 "generation": result.generation,
@@ -399,7 +398,9 @@ async fn execute(
         }
         Command::Events(args) => match args.action {
             Some(EventAction::Sync(sync)) => {
-                let result = application.refresh().await?;
+                let result = application
+                    .refresh_with_connections(&mut system.connections())
+                    .await?;
                 publish_pending(writer, application).await?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result

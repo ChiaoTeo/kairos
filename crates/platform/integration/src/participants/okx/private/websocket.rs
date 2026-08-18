@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use secrecy::ExposeSecret;
@@ -6,6 +7,7 @@ use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::okx::{OkxCredential, OkxPrivateWebSocketConfig};
+use crate::services::clock::{unix_millis, ServerClock};
 use crate::services::participants::okx::{
     signing::okx_signature,
     socket::SocketService,
@@ -28,10 +30,16 @@ pub struct OkxPrivateWebSocketConnection {
     pending_accounts: VecDeque<ExternalAccountEventEnvelope>,
     pending_executions: VecDeque<ExternalEventEnvelope<ExternalExecutionEvent>>,
     event_capacity: usize,
+    rest_endpoint: String,
+    clock_client: crate::transport::http::HttpClient,
+    clock: ServerClock,
 }
 
 impl OkxPrivateWebSocketConnection {
-    pub fn new(config: OkxPrivateWebSocketConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: OkxPrivateWebSocketConfig,
+    ) -> Result<Self, IntegrationError> {
         if config.segment_key.trim().is_empty() || config.trading_mode.trim().is_empty() {
             return Err(IntegrationError::InvalidRequest(
                 "OKX private stream segment key and trading mode are required".into(),
@@ -39,8 +47,15 @@ impl OkxPrivateWebSocketConnection {
         }
         let principal_id = config.credential.principal_id.clone();
         let event_capacity = config.connection.event_capacity;
+        let rest_endpoint = config.rest_endpoint.trim_end_matches('/').to_owned();
+        if !(rest_endpoint.starts_with("http://") || rest_endpoint.starts_with("https://")) {
+            return Err(IntegrationError::InvalidRequest(
+                "OKX private stream REST endpoint must start with http:// or https://".into(),
+            ));
+        }
         Ok(Self {
             service: SocketService::new(
+                connection_key,
                 config.connection,
                 "private.websocket",
                 Some(principal_id),
@@ -52,6 +67,12 @@ impl OkxPrivateWebSocketConnection {
             pending_accounts: VecDeque::new(),
             pending_executions: VecDeque::new(),
             event_capacity,
+            rest_endpoint,
+            clock_client: crate::transport::http::HttpClient::new(
+                "kairos-integration/okx-private-clock",
+            )
+            .map_err(|error| IntegrationError::Transport(error.to_string()))?,
+            clock: ServerClock::default(),
         })
     }
 
@@ -60,11 +81,8 @@ impl OkxPrivateWebSocketConnection {
     }
 
     async fn login(&mut self) -> Result<(), IntegrationError> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| IntegrationError::Unavailable(error.to_string()))?
-            .as_secs()
-            .to_string();
+        self.sync_clock().await?;
+        let timestamp = (self.clock.adjusted_unix_millis()? / 1_000).to_string();
         let signature = okx_signature(
             self.credential.secret.expose_secret(),
             &timestamp,
@@ -104,6 +122,27 @@ impl OkxPrivateWebSocketConnection {
             }
             self.demultiplex(&value)?;
         }
+    }
+
+    async fn sync_clock(&mut self) -> Result<(), IntegrationError> {
+        let started = unix_millis()?;
+        let response = self
+            .clock_client
+            .get_json_response_with_headers_and_query(
+                &format!("{}/api/v5/public/time", self.rest_endpoint),
+                &[],
+                &[],
+            )
+            .await
+            .map_err(crate::services::participants::okx::rest::map_error)?;
+        let received = unix_millis()?;
+        let provider = response
+            .body
+            .pointer("/data/0/ts")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| IntegrationError::InvalidPayload("OKX server time is missing".into()))?;
+        self.clock.observe(provider, started, received)
     }
 
     async fn subscribe_channels(&mut self) -> Result<(), IntegrationError> {
@@ -164,6 +203,31 @@ impl OkxPrivateWebSocketConnection {
         }
     }
 
+    fn poll_next_value(&mut self, cx: &mut Context<'_>) -> Poll<Result<Value, IntegrationError>> {
+        loop {
+            let message = match self.service.poll_next(cx) {
+                Poll::Ready(Ok(message)) => message,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            };
+            match message {
+                Message::Text(text) if text.as_str() == "pong" => continue,
+                Message::Text(text) => {
+                    return Poll::Ready(
+                        serde_json::from_str(&text)
+                            .map_err(|error| IntegrationError::InvalidPayload(error.to_string())),
+                    )
+                }
+                Message::Close(_) => {
+                    return Poll::Ready(Err(IntegrationError::Transport(
+                        "OKX private WebSocket closed".into(),
+                    )))
+                }
+                _ => continue,
+            }
+        }
+    }
+
     fn demultiplex(&mut self, value: &Value) -> Result<(), IntegrationError> {
         if value.get("event").and_then(Value::as_str) == Some("error") {
             return Err(IntegrationError::InvalidPayload(
@@ -177,22 +241,23 @@ impl OkxPrivateWebSocketConnection {
         let text = value.to_string();
         let received = now_nanos();
         let descriptor = self.descriptor().clone();
-        let channel_id = format!("{}.private", descriptor.binding_id);
+        let channel_id = format!("{}.private", descriptor.connection_key);
         let account = parse_event(&self.segment_key, &text)
             .map_err(IntegrationError::InvalidPayload)?
             .map(|payload| ExternalEventEnvelope {
                 participant: descriptor.participant.clone(),
-                binding_id: descriptor.binding_id.clone(),
+                connection_key: descriptor.connection_key.clone(),
                 channel_id: channel_id.clone(),
                 channel_epoch: self.channel_epoch,
                 participant_event_id: None,
                 participant_sequence: value.get("seqId").and_then(Value::as_u64),
+                delivery: crate::ExternalEventDelivery::Incremental,
                 observed_at_unix_nanos: received,
                 received_at_unix_nanos: received,
                 payload,
             });
         let executions = parse_execution_events(
-            &descriptor.binding_id,
+            &descriptor.connection_key,
             &channel_id,
             self.channel_epoch,
             &self.trading_mode,
@@ -215,9 +280,12 @@ impl OkxPrivateWebSocketConnection {
         Ok(())
     }
 
-    async fn receive(&mut self) -> Result<(), IntegrationError> {
-        let value = self.next_value().await?;
-        self.demultiplex(&value)
+    fn poll_receive(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), IntegrationError>> {
+        match self.poll_next_value(cx) {
+            Poll::Ready(Ok(value)) => Poll::Ready(self.demultiplex(&value)),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -247,40 +315,73 @@ impl ConnectionLifecycleCommand for OkxPrivateWebSocketConnection {
     }
 }
 
+impl crate::ConnectionMaintenance for OkxPrivateWebSocketConnection {
+    fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+        self.service.next_maintenance_at()
+    }
+
+    fn poll_maintenance(
+        &mut self,
+        _cx: &mut Context<'_>,
+        now: tokio::time::Instant,
+    ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
+        self.service.poll_maintenance(now)
+    }
+}
+
 impl AccountStream for OkxPrivateWebSocketConnection {
-    async fn next(&mut self) -> Result<ExternalAccountEventEnvelope, IntegrationError> {
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalAccountEventEnvelope, IntegrationError>> {
         loop {
             if let Some(event) = self.pending_accounts.pop_front() {
-                return Ok(event);
+                return Poll::Ready(Ok(event));
             }
-            self.receive().await?;
+            match self.poll_receive(cx) {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }
 
 impl ExecutionStream for OkxPrivateWebSocketConnection {
-    async fn next(
+    fn poll_next(
         &mut self,
-    ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError>> {
         loop {
             if let Some(event) = self.pending_executions.pop_front() {
-                return Ok(event);
+                return Poll::Ready(Ok(event));
             }
-            self.receive().await?;
+            match self.poll_receive(cx) {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }
 
 impl ParticipantEventStream for OkxPrivateWebSocketConnection {
-    async fn next(&mut self) -> Result<ExternalParticipantEvent, IntegrationError> {
+    fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalParticipantEvent, IntegrationError>> {
         loop {
             if let Some(event) = self.pending_accounts.pop_front() {
-                return Ok(ExternalParticipantEvent::Account(event));
+                return Poll::Ready(Ok(ExternalParticipantEvent::Account(event)));
             }
             if let Some(event) = self.pending_executions.pop_front() {
-                return Ok(ExternalParticipantEvent::Execution(event));
+                return Poll::Ready(Ok(ExternalParticipantEvent::Execution(event)));
             }
-            self.receive().await?;
+            match self.poll_receive(cx) {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }

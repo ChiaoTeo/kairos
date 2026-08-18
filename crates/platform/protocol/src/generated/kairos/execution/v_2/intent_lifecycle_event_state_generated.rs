@@ -27,6 +27,8 @@ impl<'a> IntentLifecycleEventState<'a> {
     pub const VT_COMPLETED_QUANTITY: ::flatbuffers::VOffsetT = 12;
     pub const VT_OCCURRED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 14;
     pub const VT_REASON: ::flatbuffers::VOffsetT = 16;
+    pub const VT_STRATEGY_DECISION_ID: ::flatbuffers::VOffsetT = 18;
+    pub const VT_PREVIOUS_LIFECYCLE: ::flatbuffers::VOffsetT = 20;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -45,6 +47,9 @@ impl<'a> IntentLifecycleEventState<'a> {
         let mut builder = IntentLifecycleEventStateBuilder::new(_fbb);
         builder.add_occurred_at_unix_nanos(args.occurred_at_unix_nanos);
         builder.add_event_sequence(args.event_sequence);
+        if let Some(x) = args.strategy_decision_id {
+            builder.add_strategy_decision_id(x);
+        }
         if let Some(x) = args.reason {
             builder.add_reason(x);
         }
@@ -57,6 +62,7 @@ impl<'a> IntentLifecycleEventState<'a> {
         if let Some(x) = args.intent_id {
             builder.add_intent_id(x);
         }
+        builder.add_previous_lifecycle(args.previous_lifecycle);
         builder.add_lifecycle(args.lifecycle);
         builder.finish()
     }
@@ -153,6 +159,32 @@ impl<'a> IntentLifecycleEventState<'a> {
             )
         }
     }
+    #[inline]
+    pub fn strategy_decision_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                IntentLifecycleEventState::VT_STRATEGY_DECISION_ID,
+                None,
+            )
+        }
+    }
+    #[inline]
+    pub fn previous_lifecycle(&self) -> IntentLifecycle {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<IntentLifecycle>(
+                    IntentLifecycleEventState::VT_PREVIOUS_LIFECYCLE,
+                    Some(IntentLifecycle::UNSPECIFIED),
+                )
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for IntentLifecycleEventState<'_> {
@@ -183,6 +215,16 @@ impl ::flatbuffers::Verifiable for IntentLifecycleEventState<'_> {
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("reason", Self::VT_REASON, false)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "strategy_decision_id",
+                Self::VT_STRATEGY_DECISION_ID,
+                false,
+            )?
+            .visit_field::<IntentLifecycle>(
+                "previous_lifecycle",
+                Self::VT_PREVIOUS_LIFECYCLE,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -199,6 +241,8 @@ pub struct IntentLifecycleEventStateArgs<'a> {
     pub completed_quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub occurred_at_unix_nanos: u64,
     pub reason: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub strategy_decision_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub previous_lifecycle: IntentLifecycle,
 }
 impl<'a> Default for IntentLifecycleEventStateArgs<'a> {
     #[inline]
@@ -211,6 +255,8 @@ impl<'a> Default for IntentLifecycleEventStateArgs<'a> {
             completed_quantity: None, // required field
             occurred_at_unix_nanos: 0,
             reason: None,
+            strategy_decision_id: None,
+            previous_lifecycle: IntentLifecycle::UNSPECIFIED,
         }
     }
 }
@@ -282,6 +328,24 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentLifecycleEventStateBuil
         );
     }
     #[inline]
+    pub fn add_strategy_decision_id(
+        &mut self,
+        strategy_decision_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            IntentLifecycleEventState::VT_STRATEGY_DECISION_ID,
+            strategy_decision_id,
+        );
+    }
+    #[inline]
+    pub fn add_previous_lifecycle(&mut self, previous_lifecycle: IntentLifecycle) {
+        self.fbb_.push_slot::<IntentLifecycle>(
+            IntentLifecycleEventState::VT_PREVIOUS_LIFECYCLE,
+            previous_lifecycle,
+            IntentLifecycle::UNSPECIFIED,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> IntentLifecycleEventStateBuilder<'a, 'b, A> {
@@ -317,6 +381,8 @@ impl ::core::fmt::Debug for IntentLifecycleEventState<'_> {
         ds.field("completed_quantity", &self.completed_quantity());
         ds.field("occurred_at_unix_nanos", &self.occurred_at_unix_nanos());
         ds.field("reason", &self.reason());
+        ds.field("strategy_decision_id", &self.strategy_decision_id());
+        ds.field("previous_lifecycle", &self.previous_lifecycle());
         ds.finish()
     }
 }

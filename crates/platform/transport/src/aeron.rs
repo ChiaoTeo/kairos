@@ -14,6 +14,7 @@ use rusteron_client::{
 };
 use std::collections::VecDeque;
 use std::ffi::CString;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,87 @@ pub enum AeronTransportError {
     Operation(String),
 }
 
+/// Complete address of one Aeron stream.
+///
+/// Publishers and subscribers receive the same value object so a module
+/// Contract cannot accidentally pair different driver directories, channels,
+/// or stream identifiers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AeronEndpoint {
+    directory: Option<PathBuf>,
+    channel: String,
+    stream_id: i32,
+}
+
+impl AeronEndpoint {
+    pub fn new(
+        directory: Option<PathBuf>,
+        channel: impl Into<String>,
+        stream_id: i32,
+    ) -> Result<Self, AeronTransportError> {
+        let channel = channel.into();
+        if channel.trim().is_empty() {
+            return Err(AeronTransportError::Configuration(
+                "Aeron channel must not be empty".into(),
+            ));
+        }
+        if channel.as_bytes().contains(&0) {
+            return Err(AeronTransportError::Configuration(
+                "Aeron channel must not contain NUL".into(),
+            ));
+        }
+        if stream_id <= 0 {
+            return Err(AeronTransportError::Configuration(
+                "Aeron stream id must be positive".into(),
+            ));
+        }
+        if directory
+            .as_deref()
+            .is_some_and(|value| value.as_os_str().is_empty())
+        {
+            return Err(AeronTransportError::Configuration(
+                "Aeron directory must not be empty".into(),
+            ));
+        }
+        Ok(Self {
+            directory,
+            channel,
+            stream_id,
+        })
+    }
+
+    pub fn from_parts(
+        directory: Option<&str>,
+        channel: impl Into<String>,
+        stream_id: i32,
+    ) -> Result<Self, AeronTransportError> {
+        Self::new(directory.map(PathBuf::from), channel, stream_id)
+    }
+
+    pub fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
+    }
+
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
+    pub const fn stream_id(&self) -> i32 {
+        self.stream_id
+    }
+
+    fn directory_str(&self) -> Result<Option<&str>, AeronTransportError> {
+        self.directory
+            .as_deref()
+            .map(|value| {
+                value.to_str().ok_or_else(|| {
+                    AeronTransportError::Configuration("Aeron directory must be valid UTF-8".into())
+                })
+            })
+            .transpose()
+    }
+}
+
 pub struct AeronBytePublisher {
     _aeron: Aeron,
     publication: Arc<Mutex<AeronPublication>>,
@@ -52,6 +134,14 @@ pub struct AeronBytePublisher {
 }
 
 impl AeronBytePublisher {
+    pub fn connect_endpoint(endpoint: &AeronEndpoint) -> Result<Self, AeronTransportError> {
+        Self::connect(
+            endpoint.directory_str()?,
+            endpoint.channel(),
+            endpoint.stream_id(),
+        )
+    }
+
     pub fn connect(
         aeron_dir: Option<&str>,
         channel: &str,
@@ -170,6 +260,14 @@ pub struct AeronByteSubscription {
 }
 
 impl AeronByteSubscription {
+    pub fn connect_endpoint(endpoint: &AeronEndpoint) -> Result<Self, AeronTransportError> {
+        Self::connect(
+            endpoint.directory_str()?,
+            endpoint.channel(),
+            endpoint.stream_id(),
+        )
+    }
+
     pub fn connect(
         aeron_dir: Option<&str>,
         channel: &str,
@@ -284,4 +382,26 @@ fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, AeronTransportError>
         AeronTransportError::DriverUnavailable(format!("start client: {error:?}"))
     })?;
     Ok(aeron)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AeronEndpoint;
+    use std::path::Path;
+
+    #[test]
+    fn endpoint_keeps_one_complete_stream_address() {
+        let endpoint =
+            AeronEndpoint::from_parts(Some("/tmp/kairos-aeron"), "aeron:ipc", 1_301).unwrap();
+        assert_eq!(endpoint.directory(), Some(Path::new("/tmp/kairos-aeron")));
+        assert_eq!(endpoint.channel(), "aeron:ipc");
+        assert_eq!(endpoint.stream_id(), 1_301);
+    }
+
+    #[test]
+    fn endpoint_rejects_incomplete_addresses() {
+        assert!(AeronEndpoint::from_parts(None, "", 1).is_err());
+        assert!(AeronEndpoint::from_parts(None, "aeron:ipc", 0).is_err());
+        assert!(AeronEndpoint::from_parts(Some(""), "aeron:ipc", 1).is_err());
+    }
 }

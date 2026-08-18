@@ -317,9 +317,12 @@ pub(super) fn read_reference_projection(
         kairos_reference_contract::ReferenceEndpoint {
             database: database.to_path_buf(),
             actor_id: actor_id.to_owned(),
-            aeron_dir: None,
-            aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-            event_stream_id: kairos_transport::stream_ids::REFERENCE_CHANGES,
+            events: kairos_transport::AeronEndpoint::from_parts(
+                None,
+                kairos_transport::DEFAULT_CHANNEL,
+                kairos_transport::stream_ids::REFERENCE_CHANGES,
+            )
+            .map_err(|error| error.to_string())?,
         },
     );
     let snapshot = client

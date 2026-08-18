@@ -16,6 +16,7 @@ from kairospy.strategy import StrategyIdentity
 
 from .application import ExecutionApplication
 from .config import ExecutionPolicy
+from .services import ExecutionEventCursorCheckpoint
 
 
 def build_strategy_access(
@@ -28,6 +29,10 @@ def build_strategy_access(
 ) -> ExecutionApplication:
     """Build Execution commands and projections for one Strategy identity."""
 
+    cursor_checkpoint = ExecutionEventCursorCheckpoint(
+        instance.state("strategy", "execution-event-cursor.json"),
+        instance_id=identity.instance_id,
+    )
     if endpoint is None:
         return ExecutionApplication(
             None,
@@ -37,6 +42,7 @@ def build_strategy_access(
             instance_id=identity.instance_id,
             launch_id=identity.launch_id,
             account_ids=account_ids,
+            cursor_checkpoint=cursor_checkpoint,
         )
     commands = ExecutionCommandClient(
         UnixJsonCommandClient(endpoint),
@@ -56,4 +62,5 @@ def build_strategy_access(
         instance_id=identity.instance_id,
         launch_id=identity.launch_id,
         account_ids=account_ids,
+        cursor_checkpoint=cursor_checkpoint,
     )

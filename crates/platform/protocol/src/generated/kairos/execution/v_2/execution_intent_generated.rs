@@ -35,6 +35,7 @@ impl<'a> ExecutionIntent<'a> {
     pub const VT_ESTIMATED_FEE_BPS: ::flatbuffers::VOffsetT = 28;
     pub const VT_EVIDENCE: ::flatbuffers::VOffsetT = 30;
     pub const VT_REASON: ::flatbuffers::VOffsetT = 32;
+    pub const VT_STRATEGY_DECISION_ID: ::flatbuffers::VOffsetT = 34;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -53,6 +54,9 @@ impl<'a> ExecutionIntent<'a> {
         let mut builder = ExecutionIntentBuilder::new(_fbb);
         if let Some(x) = args.deadline_unix_nanos {
             builder.add_deadline_unix_nanos(x);
+        }
+        if let Some(x) = args.strategy_decision_id {
+            builder.add_strategy_decision_id(x);
         }
         if let Some(x) = args.reason {
             builder.add_reason(x);
@@ -273,6 +277,18 @@ impl<'a> ExecutionIntent<'a> {
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(ExecutionIntent::VT_REASON, None)
         }
     }
+    #[inline]
+    pub fn strategy_decision_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(
+                ExecutionIntent::VT_STRATEGY_DECISION_ID,
+                None,
+            )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
@@ -328,6 +344,11 @@ impl ::flatbuffers::Verifiable for ExecutionIntent<'_> {
                 >,
             >>("evidence", Self::VT_EVIDENCE, true)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("reason", Self::VT_REASON, false)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "strategy_decision_id",
+                Self::VT_STRATEGY_DECISION_ID,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -359,6 +380,7 @@ pub struct ExecutionIntentArgs<'a> {
         >,
     >,
     pub reason: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub strategy_decision_id: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for ExecutionIntentArgs<'a> {
     #[inline]
@@ -379,6 +401,7 @@ impl<'a> Default for ExecutionIntentArgs<'a> {
             estimated_fee_bps: None,
             evidence: None, // required field
             reason: None,
+            strategy_decision_id: None,
         }
     }
 }
@@ -499,6 +522,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ExecutionIntentBuilder<'a, 'b
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(ExecutionIntent::VT_REASON, reason);
     }
     #[inline]
+    pub fn add_strategy_decision_id(
+        &mut self,
+        strategy_decision_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            ExecutionIntent::VT_STRATEGY_DECISION_ID,
+            strategy_decision_id,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> ExecutionIntentBuilder<'a, 'b, A> {
@@ -544,6 +577,7 @@ impl ::core::fmt::Debug for ExecutionIntent<'_> {
         ds.field("estimated_fee_bps", &self.estimated_fee_bps());
         ds.field("evidence", &self.evidence());
         ds.field("reason", &self.reason());
+        ds.field("strategy_decision_id", &self.strategy_decision_id());
         ds.finish()
     }
 }

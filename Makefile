@@ -1,12 +1,11 @@
-.PHONY: docs docs-check schema-check
+.PHONY: docs docs-check
 
-schema-check:
-	python3 scripts/check/check_no_schema_v1.py
-
-docs: docs-check
+docs:
+	python3 scripts/generate/validate_v2_schemas.py
+	python3 scripts/check/check_documentation.py
 	./scripts/docs/build_all_scalar_docs.sh
 
 docs-check:
-	$(MAKE) schema-check
 	python3 scripts/generate/validate_v2_schemas.py
 	./scripts/docs/build_all_scalar_docs.sh --check
+	python3 scripts/check/check_documentation.py

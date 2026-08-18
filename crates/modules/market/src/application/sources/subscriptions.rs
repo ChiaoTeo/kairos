@@ -73,6 +73,11 @@ impl MarketApplication {
             .cloned()
             .collect::<Vec<_>>();
         for source_id in source_ids {
+            let managed = self.actor.attached_sources[&source_id].inputs.is_none()
+                && self.actor.attached_sources[&source_id].task.is_none();
+            if managed {
+                continue;
+            }
             if self.actor.source_is_stopped(&source_id)
                 || self.actor.source_command_closed(&source_id)
             {
@@ -166,7 +171,7 @@ pub(crate) fn source_accepts(source: &SourceDescriptor, market: &ResolvedMarket)
         })
 }
 
-fn source_supports_selectors(
+pub(crate) fn source_supports_selectors(
     source: &SourceDescriptor,
     selectors: &[crate::domain::subscription::ObservationSelector],
 ) -> bool {

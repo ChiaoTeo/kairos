@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from collections.abc import MutableMapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -118,7 +120,7 @@ def configure_telemetry(
             AioHttpClientInstrumentor,
         )
 
-        AioHttpClientInstrumentor().instrument()
+        AioHttpClientInstrumentor().instrument(url_filter=redact_http_url)
     except ImportError:
         # HTTP instrumentation is optional for minimal command-line installs.
         pass
@@ -265,6 +267,36 @@ def record_gauge(name: str, value: int | float) -> None:
         _gauge(name).set(value)
 
 
+_TELEGRAM_BOT_TOKEN = re.compile(r"/bot[^/]+(?=/)", re.IGNORECASE)
+_FEISHU_WEBHOOK_TOKEN = re.compile(
+    r"(/open-apis/bot/v2/hook/)[^/?#]+", re.IGNORECASE
+)
+_SECRET_QUERY_KEYS = frozenset(
+    {"api_key", "apikey", "key", "token", "access_token", "secret", "signature"}
+)
+
+
+def redact_http_url(value: object) -> str:
+    """Remove credential material before an HTTP URL enters telemetry."""
+
+    try:
+        parsed = urlsplit(str(value))
+    except ValueError:
+        return "[REDACTED_URL]"
+    hostname = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    netloc = f"{hostname}{port}"
+    path = _TELEGRAM_BOT_TOKEN.sub("/bot[REDACTED]", parsed.path)
+    path = _FEISHU_WEBHOOK_TOKEN.sub(r"\1[REDACTED]", path)
+    query = urlencode(
+        [
+            (key, "[REDACTED]" if key.lower() in _SECRET_QUERY_KEYS else item)
+            for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        ]
+    )
+    return urlunsplit((parsed.scheme, netloc, path, query, ""))
+
+
 __all__ = [
     "configure_from_environment",
     "configure_telemetry",
@@ -272,6 +304,7 @@ __all__ = [
     "record_counter",
     "record_duration_ms",
     "record_gauge",
+    "redact_http_url",
     "resolve_otlp_endpoint",
     "start_span",
     "telemetry_enabled",

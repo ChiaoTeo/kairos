@@ -1,4 +1,4 @@
-use kairos_integration::{IntegrationError, OrderEntryRequest};
+use kairos_conflux::{IntegrationError, OrderEntryRequest};
 
 #[derive(Debug)]
 pub struct ExecutionWriterFence {

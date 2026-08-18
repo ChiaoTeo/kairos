@@ -1,4 +1,5 @@
 pub(crate) mod conflux;
+pub(crate) use conflux::ReferenceProjectionConfig;
 mod model;
 mod observations;
 mod queries;

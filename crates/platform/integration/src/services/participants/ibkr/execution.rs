@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use ibapi::contracts::Contract;
 use ibapi::orders::{OrderData, OrderUpdate, Orders};
 use ibapi::subscriptions::{Subscription, SubscriptionItemStreamExt};
@@ -12,7 +13,7 @@ use ibapi::Client;
 use kairos_primitives::{
     ClientOrderId, Currency, FillId, OrderId, RemoteOrderId, Symbol, UnixNanos,
 };
-use tokio::sync::{watch, Mutex};
+use tokio::sync::Mutex;
 
 use crate::domain::ConnectionLifecycle;
 use crate::{
@@ -34,19 +35,16 @@ pub(crate) struct SessionService {
     options: IbkrOptions,
     account_id: String,
     client: Mutex<Option<Arc<Client>>>,
-    notices: watch::Sender<Option<ibapi::Notice>>,
     next_order_id: Mutex<Option<i32>>,
     order_metadata: Mutex<HashMap<i32, (String, String)>>,
 }
 
 impl SessionService {
     pub(crate) fn new(options: IbkrOptions, account_id: String) -> Arc<Self> {
-        let (notices, _) = watch::channel(None);
         Arc::new(Self {
             options,
             account_id,
             client: Mutex::new(None),
-            notices,
             next_order_id: Mutex::new(None),
             order_metadata: Mutex::new(HashMap::new()),
         })
@@ -58,29 +56,16 @@ impl SessionService {
             return Ok(client.clone());
         }
         let address = format!("{}:{}", self.options.host, self.options.port);
-        let (client, mut notices) = tokio::time::timeout(
+        let client = tokio::time::timeout(
             CONNECTION_TIMEOUT,
             Client::builder()
                 .address(address)
                 .client_id(self.options.client_id)
-                .connect_with_notice_stream(),
+                .connect(),
         )
         .await
         .map_err(|_| IntegrationError::Transport("IBKR connection timed out".into()))?
         .map_err(|error| IntegrationError::Transport(error.to_string()))?;
-        self.notices.send_replace(None);
-        let notice_sender = self.notices.clone();
-        tokio::spawn(async move {
-            while let Some(notice) = notices.next().await {
-                observe_notice(&notice, "session");
-                notice_sender.send_replace(Some(notice));
-            }
-            tracing::warn!(
-                event = "ibkr_notice_stream_ended",
-                component = "integration",
-                "IBKR global notice stream ended"
-            );
-        });
         let client = Arc::new(client);
         tokio::time::timeout(QUERY_TIMEOUT, async {
             if !self.account_id.is_empty() {
@@ -116,10 +101,6 @@ impl SessionService {
         self.order_metadata.lock().await.clear();
     }
 
-    pub(super) fn notice_receiver(&self) -> watch::Receiver<Option<ibapi::Notice>> {
-        self.notices.subscribe()
-    }
-
     async fn allocate_order_id(&self, client: &Client) -> Result<i32, IntegrationError> {
         let mut next = self.next_order_id.lock().await;
         if next.is_none() {
@@ -153,6 +134,7 @@ impl SessionService {
             .insert(order_id, (symbol, account_id));
     }
 
+    #[cfg(test)]
     async fn order_metadata(&self, order_id: i32) -> Option<(String, String)> {
         self.order_metadata.lock().await.get(&order_id).cloned()
     }
@@ -282,7 +264,12 @@ impl OrderQueryService {
         })
         .await
         .map_err(|_| IntegrationError::Unavailable("IBKR open-orders query timed out".into()))??;
-        normalize_orders(rows, &self.descriptor.binding_id, &self.account_id, query)
+        normalize_orders(
+            rows,
+            &self.descriptor.connection_key,
+            &self.account_id,
+            query,
+        )
     }
 
     pub(crate) async fn history(
@@ -297,7 +284,12 @@ impl OrderQueryService {
         .map_err(|_| {
             IntegrationError::Unavailable("IBKR order-history query timed out".into())
         })??;
-        normalize_orders(rows, &self.descriptor.binding_id, &self.account_id, query)
+        normalize_orders(
+            rows,
+            &self.descriptor.connection_key,
+            &self.account_id,
+            query,
+        )
     }
 }
 
@@ -307,7 +299,6 @@ pub(crate) struct ExecutionStreamService {
     pub(crate) account_id: String,
     pub(crate) symbol: Option<String>,
     subscription: Option<Subscription<OrderUpdate>>,
-    notices: watch::Receiver<Option<ibapi::Notice>>,
     lifecycle: ConnectionLifecycle,
     last_error: Option<String>,
     channel_epoch: u64,
@@ -323,14 +314,12 @@ impl ExecutionStreamService {
         account_id: String,
         symbol: Option<String>,
     ) -> Self {
-        let notices = session.notice_receiver();
         Self {
             session,
             descriptor,
             account_id,
             symbol,
             subscription: None,
-            notices,
             lifecycle: ConnectionLifecycle::Created,
             last_error: None,
             channel_epoch: 0,
@@ -376,72 +365,53 @@ impl ExecutionStreamService {
         self.lifecycle = ConnectionLifecycle::Stopped;
     }
 
-    pub(crate) async fn next_event(
+    pub(crate) fn poll_next_event(
         &mut self,
-    ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
-        self.connect().await?;
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError>> {
         loop {
-            let update = {
-                let subscription = self
-                    .subscription
-                    .as_mut()
-                    .ok_or(IntegrationError::NotReady)?;
-                tokio::select! {
-                    changed = self.notices.changed() => {
-                        if changed.is_err() {
-                            return Err(IntegrationError::ResyncRequired(
-                                "IBKR global notice stream ended".into(),
-                            ));
-                        }
-                        let notice = self.notices.borrow_and_update().clone();
-                        if let Some(notice) = notice.as_ref() {
-                            if let Some(error) = notice_error(notice) {
-                                return Err(error);
-                            }
-                        }
-                        continue;
-                    }
-                    update = subscription.next() => update
-                        .ok_or_else(|| IntegrationError::ResyncRequired(
-                            "IBKR order stream ended".into(),
-                        ))?
-                        .map_err(transport)?,
+            let subscription = match self.subscription.as_mut() {
+                Some(subscription) => subscription,
+                None => return Poll::Ready(Err(IntegrationError::NotReady)),
+            };
+            let update = match std::pin::Pin::new(subscription).poll_next(cx) {
+                Poll::Ready(Some(Ok(update))) => update,
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Err(transport(error))),
+                Poll::Ready(None) => {
+                    return Poll::Ready(Err(IntegrationError::ResyncRequired(
+                        "IBKR order stream ended".into(),
+                    )))
                 }
+                Poll::Pending => return Poll::Pending,
             };
             let ibapi::subscriptions::SubscriptionItem::Data(update) = update else {
                 if let ibapi::subscriptions::SubscriptionItem::Notice(notice) = update {
                     observe_notice(&notice, "order-events");
                     if let Some(error) = notice_error(&notice) {
-                        return Err(error);
+                        return Poll::Ready(Err(error));
                     }
                 }
                 continue;
             };
-            if let OrderUpdate::OrderStatus(status) = &update {
-                if !self.order_symbols.contains_key(&status.order_id) {
-                    if let Some((symbol, account)) =
-                        self.session.order_metadata(status.order_id).await
-                    {
-                        self.order_symbols.insert(status.order_id, symbol);
-                        self.execution_accounts.insert(status.order_id, account);
-                    }
-                }
-            }
-            if let Some(payload) = self.normalize_update(update)? {
-                let observed = payload.occurred_at_unix_nanos;
-                let participant_event_id = ibkr_event_id(&payload);
-                return Ok(ExternalEventEnvelope {
-                    participant: self.descriptor.participant.clone(),
-                    binding_id: self.descriptor.binding_id.clone(),
-                    channel_id: "ibkr.order-updates".into(),
-                    channel_epoch: self.channel_epoch,
-                    participant_event_id: Some(participant_event_id),
-                    participant_sequence: None,
-                    observed_at_unix_nanos: observed,
-                    received_at_unix_nanos: UnixNanos::from(now_nanos()),
-                    payload,
-                });
-            }
+            let payload = match self.normalize_update(update) {
+                Ok(Some(payload)) => payload,
+                Ok(None) => continue,
+                Err(error) => return Poll::Ready(Err(error)),
+            };
+            let observed = payload.occurred_at_unix_nanos;
+            let participant_event_id = ibkr_event_id(&payload);
+            return Poll::Ready(Ok(ExternalEventEnvelope {
+                participant: self.descriptor.participant.clone(),
+                connection_key: self.descriptor.connection_key.clone(),
+                channel_id: "ibkr.order-updates".into(),
+                channel_epoch: self.channel_epoch,
+                participant_event_id: Some(participant_event_id),
+                participant_sequence: None,
+                delivery: crate::ExternalEventDelivery::Incremental,
+                observed_at_unix_nanos: observed,
+                received_at_unix_nanos: UnixNanos::from(now_nanos()),
+                payload,
+            }));
         }
     }
 
@@ -627,14 +597,14 @@ pub(super) async fn collect_orders(
 
 fn normalize_orders(
     rows: Vec<OrderData>,
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     account_id: &str,
     query: &ExternalOrderQuery,
 ) -> Result<Vec<ExternalOrder>, IntegrationError> {
     let mut orders = rows
         .into_iter()
         .filter(|row| matches_filter(row, account_id, query.symbol.as_ref().map(Symbol::as_str)))
-        .map(|row| normalize_order(row, binding_id))
+        .map(|row| normalize_order(row, connection_key))
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(order_id) = &query.order_id {
         orders.retain(|order| &order.order_id == order_id);
@@ -645,12 +615,15 @@ fn normalize_orders(
     Ok(orders)
 }
 
-fn normalize_order(data: OrderData, binding_id: &str) -> Result<ExternalOrder, IntegrationError> {
+fn normalize_order(
+    data: OrderData,
+    connection_key: &crate::ConnectionKey,
+) -> Result<ExternalOrder, IntegrationError> {
     let order_ref = data.order.order_ref.trim();
     let status = normalize_ibkr_order_status(data.order_state.status, None, None);
     let quantity = decimal_f64_value(data.order.total_quantity);
     Ok(ExternalOrder {
-        binding_id: binding_id.into(),
+        connection_key: connection_key.clone(),
         order_id: typed_order_id(data.order_id)?,
         client_order_id: (!order_ref.is_empty())
             .then(|| ClientOrderId::new(order_ref))
@@ -796,7 +769,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn order_normalization_preserves_binding_and_canonical_remote_identity() {
+    fn order_normalization_preserves_connection_and_canonical_remote_identity() {
         let mut data = OrderData {
             order_id: 42,
             contract: Contract::stock("AAPL").build(),
@@ -807,9 +780,13 @@ mod tests {
         data.order.order_type = "LMT".into();
         data.order.order_ref = "local-order-7".into();
 
-        let order = normalize_order(data, "ibkr.principal.test").unwrap();
+        let order = normalize_order(
+            data,
+            &crate::ConnectionKey::new("ibkr.principal.test").unwrap(),
+        )
+        .unwrap();
 
-        assert_eq!(order.binding_id, "ibkr.principal.test");
+        assert_eq!(order.connection_key.as_str(), "ibkr.principal.test");
         assert_eq!(order.order_id.as_str(), "ibkr:42");
         assert_eq!(
             order.client_order_id.as_ref().map(ClientOrderId::as_str),

@@ -12,15 +12,8 @@ pub use config::{
     MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType, PublicMarketTransport,
 };
 pub use host::MarketHost;
-pub use launch::{
-    attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
-    build_market_host, MarketStartupError,
-};
-pub use sources::{
-    attach_hyperliquid_live_source, attach_hyperliquid_snapshot_source,
-    attach_massive_market_source, attach_okx_live_source, attach_okx_snapshot_source,
-    default_endpoint, MarketProduct,
-};
+pub use launch::{build_market_host, run_diagnostic_once, DiagnosticProvider, MarketStartupError};
+pub use sources::default_endpoint;
 pub use sources::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
 };

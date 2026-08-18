@@ -74,7 +74,7 @@ impl MarketViewKey {
         )
     }
 
-    pub fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
+    pub(crate) fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
         root.as_ref()
             .join(format!("{}.e1.mmap", self.resource_id()))
     }

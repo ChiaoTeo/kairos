@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::task::{Context, Poll};
 
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
@@ -17,17 +18,22 @@ pub struct OkxPublicWebSocketConnection {
     service: SocketService,
     subscriptions: BTreeMap<MarketSubscriptionId, (Vec<MarketFeed>, Vec<Value>)>,
     pending: InboundDispatcher<MarketEvent>,
+    order_book_sequences: crate::services::sequence::OrderBookSequenceTracker,
     next_subscription_id: u64,
     next_request_id: u64,
 }
 
 impl OkxPublicWebSocketConnection {
-    pub fn new(config: OkxWebSocketConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: OkxWebSocketConfig,
+    ) -> Result<Self, IntegrationError> {
         let event_capacity = config.event_capacity;
         Ok(Self {
-            service: SocketService::new(config, "public.websocket", None)?,
+            service: SocketService::new(connection_key, config, "public.websocket", None)?,
             subscriptions: BTreeMap::new(),
             pending: InboundDispatcher::new(event_capacity)?,
+            order_book_sequences: Default::default(),
             next_subscription_id: 1,
             next_request_id: 1,
         })
@@ -35,6 +41,21 @@ impl OkxPublicWebSocketConnection {
 
     pub fn descriptor(&self) -> &ConnectionDescriptor {
         self.service.descriptor()
+    }
+
+    fn queue_market_events(
+        &mut self,
+        events: impl IntoIterator<Item = MarketEvent>,
+    ) -> Result<(), IntegrationError> {
+        for event in events {
+            match self.order_book_sequences.validate_okx(&event)? {
+                crate::services::sequence::SequenceDisposition::Accept => {
+                    self.pending.buffer(event)?;
+                }
+                crate::services::sequence::SequenceDisposition::Duplicate => {}
+            }
+        }
+        Ok(())
     }
 
     async fn send_and_confirm(
@@ -75,7 +96,7 @@ impl OkxPublicWebSocketConnection {
                 }
                 continue;
             }
-            self.pending.extend(market::stream_events(&value)?)?;
+            self.queue_market_events(market::stream_events(&value)?)?;
         }
         Ok(rejections)
     }
@@ -92,6 +113,31 @@ impl OkxPublicWebSocketConnection {
                     return Err(IntegrationError::Transport(
                         "OKX public WebSocket closed".into(),
                     ))
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    fn poll_next_value(&mut self, cx: &mut Context<'_>) -> Poll<Result<Value, IntegrationError>> {
+        loop {
+            let message = match self.service.poll_next(cx) {
+                Poll::Ready(Ok(message)) => message,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            };
+            match message {
+                Message::Text(text) if text.as_str() == "pong" => continue,
+                Message::Text(text) => {
+                    return Poll::Ready(
+                        serde_json::from_str(&text)
+                            .map_err(|error| IntegrationError::InvalidPayload(error.to_string())),
+                    )
+                }
+                Message::Close(_) => {
+                    return Poll::Ready(Err(IntegrationError::Transport(
+                        "OKX public WebSocket closed".into(),
+                    )))
                 }
                 _ => continue,
             }
@@ -131,6 +177,7 @@ impl ConnectionLifecycleCommand for OkxPublicWebSocketConnection {
 
     async fn disconnect(&mut self) -> Result<(), IntegrationError> {
         self.pending.clear();
+        self.order_book_sequences.clear();
         self.service.disconnect().await
     }
 
@@ -225,18 +272,40 @@ impl MarketSubscriptionCommand for OkxPublicWebSocketConnection {
 }
 
 impl MarketDataStream for OkxPublicWebSocketConnection {
-    async fn next(&mut self) -> Result<MarketEvent, IntegrationError> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<MarketEvent, IntegrationError>> {
         if let Some(event) = self.pending.pop() {
-            return Ok(event);
+            return Poll::Ready(Ok(event));
         }
         loop {
-            let value = self.next_value().await?;
-            let mut events = market::stream_events(&value)?;
-            let Some(first) = events.pop_front() else {
-                continue;
+            let value = match self.poll_next_value(cx) {
+                Poll::Ready(Ok(value)) => value,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
             };
-            self.pending.extend(events)?;
-            return Ok(first);
+            let mut events = match market::stream_events(&value) {
+                Ok(events) => events,
+                Err(error) => return Poll::Ready(Err(error)),
+            };
+            if let Err(error) = self.queue_market_events(events.drain(..)) {
+                return Poll::Ready(Err(error));
+            }
+            if let Some(event) = self.pending.pop() {
+                return Poll::Ready(Ok(event));
+            }
         }
+    }
+}
+
+impl crate::ConnectionMaintenance for OkxPublicWebSocketConnection {
+    fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+        self.service.next_maintenance_at()
+    }
+
+    fn poll_maintenance(
+        &mut self,
+        _cx: &mut Context<'_>,
+        now: tokio::time::Instant,
+    ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
+        self.service.poll_maintenance(now)
     }
 }

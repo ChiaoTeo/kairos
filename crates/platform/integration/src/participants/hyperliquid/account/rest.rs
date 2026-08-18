@@ -1,5 +1,9 @@
 use serde_json::{json, Value};
 
+use super::{
+    history, HyperliquidFillRecord, HyperliquidFundingRecord, HyperliquidHistoryPage,
+    HyperliquidHistoryQuery, HyperliquidLedgerRecord,
+};
 use crate::participants::hyperliquid::HyperliquidAccountRestConfig;
 use crate::services::participants::hyperliquid::{account, rest::RestService};
 use crate::{
@@ -13,7 +17,10 @@ pub struct HyperliquidAccountRestConnection {
 }
 
 impl HyperliquidAccountRestConnection {
-    pub fn new(config: HyperliquidAccountRestConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: HyperliquidAccountRestConfig,
+    ) -> Result<Self, IntegrationError> {
         if !config.address.starts_with("0x") || config.address.len() != 42 {
             return Err(IntegrationError::InvalidRequest(
                 "Hyperliquid account address must be a 42-character hexadecimal address".into(),
@@ -21,7 +28,12 @@ impl HyperliquidAccountRestConnection {
         }
         let address = config.address.to_ascii_lowercase();
         Ok(Self {
-            service: RestService::new(config.connection, "account.rest", Some(address.clone()))?,
+            service: RestService::new(
+                connection_key,
+                config.connection,
+                "account.rest",
+                Some(address.clone()),
+            )?,
             address,
         })
     }
@@ -38,6 +50,53 @@ impl HyperliquidAccountRestConnection {
             .await
             .map_err(|error| IntegrationError::Transport(error.to_string()))
     }
+
+    pub async fn fetch_user_fills(
+        &mut self,
+        query: &HyperliquidHistoryQuery,
+    ) -> Result<HyperliquidHistoryPage<HyperliquidFillRecord>, IntegrationError> {
+        query.validate()?;
+        let mut body = json!({
+            "type": "userFillsByTime",
+            "user": self.address,
+            "startTime": query.start_millis(),
+            "aggregateByTime": query.aggregate_fills_by_time,
+        });
+        if let Some(end) = query.end_millis() {
+            body["endTime"] = json!(end);
+        }
+        history::fills(&self.info(body).await?)
+    }
+
+    pub async fn fetch_user_funding(
+        &mut self,
+        query: &HyperliquidHistoryQuery,
+    ) -> Result<HyperliquidHistoryPage<HyperliquidFundingRecord>, IntegrationError> {
+        query.validate()?;
+        let body = history_body("userFunding", &self.address, query);
+        history::funding(&self.info(body).await?)
+    }
+
+    pub async fn fetch_non_funding_ledger(
+        &mut self,
+        query: &HyperliquidHistoryQuery,
+    ) -> Result<HyperliquidHistoryPage<HyperliquidLedgerRecord>, IntegrationError> {
+        query.validate()?;
+        let body = history_body("userNonFundingLedgerUpdates", &self.address, query);
+        history::ledger(&self.info(body).await?)
+    }
+}
+
+fn history_body(kind: &str, address: &str, query: &HyperliquidHistoryQuery) -> Value {
+    let mut body = json!({
+        "type": kind,
+        "user": address,
+        "startTime": query.start_millis(),
+    });
+    if let Some(end) = query.end_millis() {
+        body["endTime"] = json!(end);
+    }
+    body
 }
 
 impl AccountQuery for HyperliquidAccountRestConnection {
@@ -63,11 +122,11 @@ impl OrderQuery for HyperliquidAccountRestConnection {
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
         let address = self.address.clone();
-        let binding_id = self.descriptor().binding_id.clone();
+        let connection_key = self.descriptor().connection_key.clone();
         let value = self
             .info(json!({"type": "openOrders", "user": address}))
             .await?;
-        account::orders(&binding_id, &value, query)
+        account::orders(&connection_key, &value, query)
     }
 
     async fn order_history(
@@ -75,11 +134,11 @@ impl OrderQuery for HyperliquidAccountRestConnection {
         query: &ExternalOrderQuery,
     ) -> Result<Vec<ExternalOrder>, IntegrationError> {
         let address = self.address.clone();
-        let binding_id = self.descriptor().binding_id.clone();
+        let connection_key = self.descriptor().connection_key.clone();
         let value = self
             .info(json!({"type": "historicalOrders", "user": address}))
             .await?;
-        account::orders(&binding_id, &value, query)
+        account::orders(&connection_key, &value, query)
     }
 
     async fn order_detail(

@@ -5,7 +5,9 @@ mod generated_spec;
 pub mod replacement;
 pub mod shared_memory;
 
-pub use aeron::{AeronBytePublisher, AeronByteSubscription, AeronTransportError, PublishOutcome};
+pub use aeron::{
+    AeronBytePublisher, AeronByteSubscription, AeronEndpoint, AeronTransportError, PublishOutcome,
+};
 pub use generated_spec::{
     stream_ids, DEFAULT_CHANNEL, DEFAULT_MAX_PAYLOAD_LEN, TRANSPORT_FINGERPRINT,
     TRANSPORT_SPEC_VERSION,

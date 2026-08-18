@@ -1,24 +1,24 @@
 [package]
 name = "kairos-transport"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Aeron and shared-memory transport adapters for Kairos"
 
 [dependencies]
 # Keep the Rust client and the Aeron C ABI in one release train. The bundled
 # precompiled C client avoids requiring a local CMake/Java toolchain and uses
 # the same CnC layout as the current Media Driver.
-rusteron-client = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
-rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
-memmap2 = "0.9"
-crc32fast = "1"
-fs2 = "0.4"
-thiserror = "2"
-clap = { version = "4", features = ["derive", "env"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-kairos-workspace = { path = "../workspace", features = ["otel"] }
+clap.workspace = true
+crc32fast.workspace = true
+fs2.workspace = true
+kairos-workspace = { workspace = true, features = ["otel"] }
+memmap2.workspace = true
+rusteron-client.workspace = true
+rusteron-media-driver.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [[bin]]
 name = "kairos-aeron-driver"
@@ -29,4 +29,4 @@ name = "kairos-aeron-bridge"
 path = "src/bin/kairos-aeron-bridge.rs"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

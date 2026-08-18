@@ -32,6 +32,17 @@ class AeronExecutionEventSource(NativeEventSource[ExecutionEventRecord]):
             aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
         )
 
+    def check_ready(self) -> None:
+        """Open and retain the subscription before snapshot recovery.
+
+        Keeping the subscription open closes the snapshot/live handoff race:
+        events published while Strategy reconciles the current view remain in
+        the bounded native queue and are deduplicated against the recovered
+        cursor when live consumption starts.
+        """
+
+        self._open()
+
 
 def decode_execution_event(payload: bytes) -> ExecutionEventRecord:
     if len(payload) < 8 or payload[4:8] not in _V2_EVENT_ROOTS:
@@ -42,6 +53,7 @@ def decode_execution_event(payload: bytes) -> ExecutionEventRecord:
 _V2_EVENT_ROOTS = {
     b"EIA2": "IntentAccepted",
     b"EIR2": "IntentRejected",
+    b"EIL2": "IntentLifecycleChanged",
     b"EPV2": "PlanCreated",
     b"EOS2": "OrderSubmitted",
     b"EOA2": "OrderAccepted",
@@ -78,6 +90,39 @@ def _decode_v2_event(payload: bytes) -> ExecutionEventRecord:
 
 
 def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object]]:
+    if root_name in {"IntentAccepted", "IntentRejected"}:
+        value = root.Intent()
+        if value is None:
+            # Legacy admission events did not carry enough scope to dispatch
+            # safely to a Strategy instance.
+            return None, {
+                "intent_id": _required_text(root.IntentId(), "intent_id"),
+                "kind": root_name,
+            }
+        intent = _v2_intent(value)
+        lifecycle = int(root.Lifecycle())
+        return "intent_update", {
+            "intent": intent,
+            "status": _intent_status(lifecycle),
+            "previous_status": None,
+            "order_ids": [],
+            "reason": "" if root_name == "IntentAccepted" else _rejection_detail(root),
+        }
+    if root_name == "IntentLifecycleChanged":
+        value = root.Intent()
+        if value is None:
+            raise ValueError("IntentLifecycleChanged intent payload is missing")
+        return "intent_update", {
+            "intent": _v2_intent(value),
+            "status": _intent_status(int(root.Lifecycle())),
+            "previous_status": _intent_status(int(root.PreviousLifecycle())),
+            "order_ids": [
+                _required_text(root.OrderIds(index), "intent order_id")
+                for index in range(root.OrderIdsLength())
+            ],
+            "completed_quantity": _decimal(root.CompletedQuantity()),
+            "reason": _text(root.Reason()) or "",
+        }
     if root_name in {"OrderSubmitted", "OrderAccepted", "OrderRejected", "OrderCanceled", "OrderExpired"}:
         value = root.Order()
         if value is None:
@@ -110,6 +155,58 @@ def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object
             "kind": root_name,
         }
     return None, {"intent_id": _required_text(root.IntentId(), "intent_id")}
+
+
+def _v2_intent(value: Any) -> dict[str, object]:
+    legs = [value.Legs(index) for index in range(value.LegsLength())]
+    if not legs:
+        raise ValueError("Execution intent requires at least one leg")
+    account_ids = list(
+        dict.fromkeys(
+            _required_text(leg.AccountId(), "intent leg account_id") for leg in legs
+        )
+    )
+    first = legs[0]
+    return {
+        "intent_id": _required_text(value.IntentId(), "intent_id"),
+        "strategy_decision_id": _text(value.StrategyDecisionId()),
+        "strategy_id": _required_text(value.StrategyId(), "intent strategy_id"),
+        "launch_id": _required_text(value.LaunchId(), "intent launch_id"),
+        "instance_id": _required_text(value.InstanceId(), "intent instance_id"),
+        "instrument_id": _required_text(
+            first.InstrumentId(), "intent instrument_id"
+        ),
+        "account_ids": account_ids,
+        "target_quantity": None,
+        "reason": _text(value.Reason()) or "",
+    }
+
+
+def _rejection_detail(root: Any) -> str:
+    return "; ".join(
+        filter(
+            None,
+            (_text(root.Details(index)) for index in range(root.DetailsLength())),
+        )
+    )
+
+
+def _intent_status(value: int) -> str:
+    return {
+        1: "accepted",
+        2: "planning",
+        3: "planned",
+        4: "executing",
+        5: "partially_filled",
+        6: "cancel_requested",
+        7: "satisfied",
+        8: "rejected",
+        9: "canceled",
+        10: "expired",
+        11: "failed",
+        12: "compensating",
+        13: "reconciliation_required",
+    }.get(value, "unknown")
 
 
 def _v2_order(value: Any) -> dict[str, object]:
@@ -204,7 +301,7 @@ def _v2_strategy_id(value: object) -> str:
         raw = value.get("strategy_id")
         if isinstance(raw, str) and raw:
             return raw
-        nested = value.get("order") or value.get("fill")
+        nested = value.get("intent") or value.get("order") or value.get("fill")
         if isinstance(nested, dict) and isinstance(nested.get("strategy_id"), str):
             return cast(str, nested["strategy_id"])
     return "execution"

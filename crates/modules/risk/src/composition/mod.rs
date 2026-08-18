@@ -40,9 +40,12 @@ pub fn build_risk_host(config: RiskHostConfig) -> Result<crate::RiskHost, String
     )
     .map_err(|error| error.to_string())?;
     let event_publisher = kairos_risk_contract::RiskAeronEventPublisher::connect(
-        config.aeron_dir.as_deref(),
-        &config.event_channel,
-        config.event_stream_id,
+        &kairos_risk_contract::AeronEndpoint::from_parts(
+            config.aeron_dir.as_deref(),
+            config.event_channel,
+            config.event_stream_id,
+        )
+        .map_err(|error| error.to_string())?,
         config.actor_id,
         config.identity,
     )

@@ -46,7 +46,7 @@ use kairos_account::{
     AccountApplication, AccountCurrentView, AccountRuntimeMode, MarkToMarket, ReconcileAccount,
     RefreshAccount,
 };
-use kairos_integration::composition::credentials::{CredentialRecord, CredentialStore};
+use kairos_conflux::{CredentialRecord, CredentialStore};
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {

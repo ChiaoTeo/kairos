@@ -119,9 +119,8 @@ impl BinancePortfolioMarginRestConnection {
         if let Some(limit) = query.limit {
             params.push(("limit", limit.to_string()));
         }
-        let binding_id = self.descriptor().binding_id.clone();
         let value = self.service.signed_get(&path, &params).await?;
-        execution::orders(&binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
 }
 

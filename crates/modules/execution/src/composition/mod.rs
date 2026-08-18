@@ -13,8 +13,7 @@ mod persistence;
 pub use crate::services::audit::{MemoryExecutionAudit, SqlxExecutionAudit};
 pub use crate::services::risk::{SimulatedRiskBehavior, SimulatedRiskReconciliation};
 pub use connections::{
-    compose_order_entry, load_execution_routes_from_reference_markets, ExecutionAsyncEventSource,
-    ExecutionAsyncOrderEntry, ExecutionAsyncOrderQuery, ExecutionConnectionOptions,
+    compose_order_entry, load_execution_routes_from_reference_markets, ExecutionConnectionOptions,
     ExecutionInstrumentRoute, ExecutionWriterFence, SimulatedOrderEntry,
 };
 pub use dependencies::{configure_execution_dependencies, configure_simulated_risk};

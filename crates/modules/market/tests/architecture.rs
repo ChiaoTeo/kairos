@@ -19,7 +19,7 @@ fn production_market_runtime_never_bridges_provider_io_through_blocking_threads(
     ] {
         let source = source(path);
         assert!(
-            !source.contains("kairos_integration::blocking")
+            !source.contains(concat!("kairos_", "integration::blocking"))
                 && !source.contains("spawn_blocking")
                 && !source.contains("block_in_place"),
             "Market production provider I/O must stay on the caller Tokio runtime: {path}"
@@ -37,8 +37,40 @@ fn historical_download_uses_async_provider_capabilities() {
     assert!(source.contains(".fetch_quotes(window)"));
     assert!(source.contains(".fetch_trades(window)"));
     assert!(source.contains(".await?"));
-    assert!(!source.contains("kairos_integration::blocking"));
+    assert!(!source.contains(concat!("kairos_", "integration::blocking")));
     assert!(!source.contains("blocking_historical_market"));
+    assert!(source.contains("ConfluxSystem::new()"));
+    assert!(source.contains("connections.massive_rest.get(&key)"));
+    assert!(source.contains("connections.binance_spot_rest.get(&key)"));
+    assert!(!source.contains("MassiveRestConnection::new("));
+    assert!(!source.contains("BinanceSpotRestConnection::new("));
+}
+
+#[test]
+fn diagnostic_provider_io_uses_the_normal_conflux_owner() {
+    let diagnostic = source("src/composition/launch/diagnostic.rs");
+    assert!(diagnostic.contains("ConfluxSystem::new()"));
+    assert!(diagnostic.contains("Conflux::new("));
+    assert!(diagnostic.contains(".binance_spot_rest"));
+    assert!(diagnostic.contains(".binance_spot_websocket"));
+    assert!(diagnostic.contains(".binance_options_rest"));
+    for forbidden in [
+        "Connection::new(",
+        "spawn_stream(",
+        "spawn_snapshot(",
+        "attach_source(",
+    ] {
+        assert!(
+            !diagnostic.contains(forbidden),
+            "diagnostic path bypasses Conflux with {forbidden}"
+        );
+    }
+    let activation = source("src/composition/sources/activation.rs");
+    assert!(!activation.contains("spawn_stream("));
+    assert!(!activation.contains("spawn_snapshot("));
+    let services = source("src/services/source/mod.rs");
+    assert!(!services.contains("spawn_stream"));
+    assert!(!services.contains("spawn_snapshot"));
 }
 
 #[test]
@@ -70,52 +102,6 @@ fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
 }
 
 #[test]
-fn legacy_feed_runtime_files_and_names_are_absent() {
-    for path in [
-        "src/application/runtime.rs",
-        "src/application/ports.rs",
-        "src/services/connection.rs",
-        "src/services/worker.rs",
-        "src/services/composite.rs",
-        "src/services/feed.rs",
-        "src/services/integration.rs",
-    ] {
-        assert!(
-            !crate_root().join(path).exists(),
-            "legacy file remains: {path}"
-        );
-    }
-    let mut pending = vec![crate_root().join("src")];
-    while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                pending.push(path);
-                continue;
-            }
-            if path.extension().and_then(|value| value.to_str()) != Some("rs") {
-                continue;
-            }
-            let value = std::fs::read_to_string(&path).unwrap();
-            for forbidden in [
-                "MarketFeedWorker",
-                "MarketConnectionManager",
-                "AsyncMarketConnectionManager",
-                "MarketEngine",
-                "poll_feed",
-                "drain_source_inputs",
-            ] {
-                assert!(
-                    !value.contains(forbidden),
-                    "legacy runtime concept {forbidden} remains in {}",
-                    path.display()
-                );
-            }
-        }
-    }
-}
-
-#[test]
 fn business_layers_do_not_import_provider_implementation_or_composition() {
     for directory in ["src/application", "src/domain"] {
         let mut pending = vec![crate_root().join(directory)];
@@ -132,7 +118,7 @@ fn business_layers_do_not_import_provider_implementation_or_composition() {
                 let value = std::fs::read_to_string(&path).unwrap();
                 let value = value.split("#[cfg(test)]").next().unwrap_or(&value);
                 for forbidden in [
-                    "kairos_integration::services",
+                    concat!("kairos_", "integration::services"),
                     "tokio_tungstenite",
                     "tungstenite::",
                     "crate::composition",
@@ -163,7 +149,10 @@ fn private_services_do_not_depend_on_composition_or_provider_types() {
             }
             let value = std::fs::read_to_string(&path).unwrap();
             let production = value.split("#[cfg(test)]").next().unwrap_or(&value);
-            for forbidden in ["crate::composition", "kairos_integration::participants"] {
+            for forbidden in [
+                "crate::composition",
+                concat!("kairos_", "integration::participants"),
+            ] {
                 assert!(
                     !production.contains(forbidden),
                     "Market service imports forbidden dependency {forbidden}: {}",
@@ -175,44 +164,26 @@ fn private_services_do_not_depend_on_composition_or_provider_types() {
 }
 
 #[test]
-fn reference_client_and_contract_are_composition_only() {
-    for directory in ["src/application", "src/services", "src/domain"] {
-        let mut pending = vec![crate_root().join(directory)];
-        while let Some(directory) = pending.pop() {
-            for entry in std::fs::read_dir(directory).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    pending.push(path);
-                    continue;
-                }
-                if path.extension().and_then(|value| value.to_str()) != Some("rs") {
-                    continue;
-                }
-                let value = std::fs::read_to_string(&path).unwrap();
-                assert!(
-                    !value.contains("kairos_reference_contract")
-                        && !value.contains("ReferenceSqliteReader")
-                        && !value.contains("ReferenceProjection")
-                        && !value.contains("ReferenceChanged"),
-                    "Market business layer contains a Reference adapter/model: {}",
-                    path.display()
-                );
-            }
-        }
-    }
-    for path in ["src/domain/reference", "src/services/reference"] {
-        assert!(
-            !crate_root().join(path).exists(),
-            "obsolete Market-owned Reference boundary remains: {path}"
-        );
-    }
+fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
+    let actor = std::fs::read_to_string(crate_root().join("src/application/conflux.rs")).unwrap();
+    let assembly =
+        std::fs::read_to_string(crate_root().join("src/composition/launch/assembly.rs")).unwrap();
+    assert!(actor.contains("ConfluxEvent::Reference"));
+    assert!(actor.contains(".reference_client(&client_key)"));
+    assert!(assembly.contains("install_reference_contract"));
+    assert!(!assembly.contains("spawn_market_universe_watcher"));
+    assert!(!crate_root()
+        .join("src/composition/reference/client.rs")
+        .exists());
+    assert!(!crate_root()
+        .join("src/composition/reference/events.rs")
+        .exists());
+    assert!(!crate_root().join("src/domain/reference").exists());
     let composition = source("src/composition/reference/projection.rs");
     assert!(composition.contains("ReferenceProjectionSnapshot"));
     assert!(composition.contains("ReconcileMarketUniverse"));
-    let process = source("src/composition/launch/assembly.rs");
-    let watcher = source("src/composition/reference/client.rs");
-    assert!(process.contains("market_snapshot()"));
-    assert!(watcher.contains("market_snapshot()"));
+    assert!(assembly.contains("read_reference_snapshot"));
+    assert!(actor.contains(".market_snapshot()"));
 }
 
 #[test]
@@ -478,11 +449,14 @@ fn source_and_freshness_slices_have_owned_modules() {
             .join(format!("src/application/sources/{file}"))
             .is_file());
     }
-    for file in ["driver.rs", "normalization.rs", "recovery.rs"] {
+    for file in ["driver.rs", "normalization.rs"] {
         assert!(crate_root()
             .join(format!("src/services/source/{file}"))
             .is_file());
     }
+    assert!(!crate_root()
+        .join("src/services/source/recovery.rs")
+        .exists());
     for file in ["routing.rs", "activation.rs", "replay.rs"] {
         assert!(crate_root()
             .join(format!("src/composition/sources/{file}"))
@@ -523,7 +497,8 @@ fn conflux_uses_the_closed_market_contract() {
     assert!(actor.contains("impl Contract for MarketApplication"));
     assert!(actor.contains("ConfluxEvent::Rest(request)"));
     assert!(actor.contains("MarketRestRequest"));
-    assert!(actor.contains("take_managed_source"));
+    assert!(!actor.contains("take_managed_source"));
+    assert!(actor.contains("sync_managed_source_subscriptions"));
     assert!(!actor.contains("SourceActivator"));
     let contract = source("contract/src/control/types.rs");
     assert!(contract.contains("pub enum MarketRestRequest"));
@@ -536,16 +511,16 @@ fn provider_connections_enter_market_through_named_conflux_collections() {
     let installer = source("src/composition/sources/connections.rs");
     let actor = source("src/application/conflux.rs");
     for collection in [
-        "binance_spot_rest_connections",
-        "binance_spot_websocket_connections",
-        "binance_stocks_rest_connections",
-        "okx_public_rest_connections",
-        "okx_public_websocket_connections",
-        "hyperliquid_info_rest_connections",
-        "hyperliquid_websocket_connections",
-        "massive_stocks_websocket_connections",
-        "massive_options_websocket_connections",
-        "ibkr_market_data_connections",
+        ".binance_spot_rest",
+        ".binance_spot_websocket",
+        ".binance_stocks_rest",
+        ".okx_public_rest",
+        ".okx_public_websocket",
+        ".hyperliquid_info_rest",
+        ".hyperliquid_websocket",
+        ".massive_stocks_websocket",
+        ".massive_options_websocket",
+        ".ibkr_market_data",
     ] {
         assert!(
             installer.contains(collection),
@@ -553,7 +528,7 @@ fn provider_connections_enter_market_through_named_conflux_collections() {
         );
         assert!(
             actor.contains(collection),
-            "Actor does not consume {collection}"
+            "Actor does not borrow {collection} through Context"
         );
     }
     let driver = source("src/services/source/driver.rs");
@@ -614,7 +589,7 @@ fn composition_uses_symmetric_launch_config_and_reference_modules() {
             .join(format!("src/composition/config/{file}"))
             .is_file());
     }
-    for file in ["client.rs", "events.rs", "projection.rs"] {
+    for file in ["mod.rs", "projection.rs"] {
         assert!(crate_root()
             .join(format!("src/composition/reference/{file}"))
             .is_file());

@@ -5,6 +5,49 @@ use kairos_primitives::UnixNanos;
 use super::ParticipantRef;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConnectionKey(String);
+
+impl ConnectionKey {
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err("connection key is required".into());
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ConnectionKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::ops::Deref for ConnectionKey {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ConnectionKey {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<ConnectionKey> for String {
+    fn from(value: ConnectionKey) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConnectionDomainRef {
     code: String,
 }
@@ -25,7 +68,7 @@ impl ConnectionDomainRef {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionDescriptor {
-    pub binding_id: String,
+    pub connection_key: ConnectionKey,
     pub participant: ParticipantRef,
     pub environment: String,
     pub principal_id: Option<String>,
@@ -34,12 +77,12 @@ pub struct ConnectionDescriptor {
 
 impl ConnectionDescriptor {
     pub fn new(
-        binding_id: impl Into<String>,
+        connection_key: impl Into<String>,
         participant: ParticipantRef,
         domain: impl Into<String>,
     ) -> Result<Self, String> {
         let value = Self {
-            binding_id: binding_id.into(),
+            connection_key: ConnectionKey::new(connection_key)?,
             participant,
             environment: "unspecified".into(),
             principal_id: None,
@@ -50,9 +93,6 @@ impl ConnectionDescriptor {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.binding_id.trim().is_empty() {
-            return Err("connection binding id is required".into());
-        }
         if self.environment.trim().is_empty() {
             return Err("connection environment is required".into());
         }
@@ -141,4 +181,12 @@ pub struct ConnectionHealth {
     pub healthy: bool,
     pub authenticated: bool,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProviderClockHealth {
+    pub sampled: bool,
+    pub fresh: bool,
+    pub offset_millis: Option<i64>,
+    pub sample_age_millis: Option<u64>,
 }

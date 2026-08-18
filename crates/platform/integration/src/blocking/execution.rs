@@ -1,10 +1,8 @@
 //! Synchronous order and execution capabilities.
 
-use std::time::Duration;
-
 use crate::{
-    CommandResult, ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder,
-    ExternalOrderQuery, IntegrationError, OrderEntryEvent, OrderEntryRequest,
+    CommandResult, ExternalOrder, ExternalOrderQuery, IntegrationError, OrderEntryEvent,
+    OrderEntryRequest,
 };
 
 pub trait OrderCommand: Send {
@@ -30,11 +28,4 @@ pub trait OrderQuery: Send {
         &mut self,
         query: &ExternalOrderQuery,
     ) -> Result<Option<ExternalOrder>, IntegrationError>;
-}
-
-pub trait ExecutionStream: Send {
-    fn next(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<ExternalEventEnvelope<ExternalExecutionEvent>>, IntegrationError>;
 }

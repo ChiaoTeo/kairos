@@ -22,6 +22,9 @@ _SECRET_KEYS = frozenset(
         "x_api_key",
         "x-api-key",
         "token",
+        "bot_token",
+        "webhook_url",
+        "signing_secret",
     }
 )
 _PROMOTED_FIELDS = frozenset(

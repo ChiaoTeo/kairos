@@ -122,17 +122,6 @@ impl MarketApplication {
                     }
                 }
             }
-            SourceInput::SubscriptionRejected {
-                source_id,
-                epoch,
-                request_id,
-                error,
-            } => {
-                self.actor.pending_source_requests.remove(&request_id);
-                self.actor
-                    .apply_source_status(&source_id, epoch, SourceStatus::Degraded, Some(error))
-                    .map_err(MarketError::Invalid)?;
-            }
             SourceInput::Unsubscribed {
                 source_id,
                 epoch,
@@ -200,39 +189,6 @@ impl MarketApplication {
                         }
                         Err(error) => return Err(error),
                     }
-                }
-            }
-            SourceInput::ResyncRequired {
-                source_id,
-                epoch,
-                market,
-                reason,
-            } => {
-                if self.accepts_epoch(&source_id, epoch) {
-                    self.request_orderbook_resync(source_id, epoch, *market, reason)
-                        .await?;
-                }
-            }
-            SourceInput::ResyncCompleted {
-                source_id,
-                epoch,
-                request_id,
-                market_id,
-            } => {
-                if !self.accepts_epoch(&source_id, epoch) {
-                    return Ok(0);
-                }
-                let Some(PendingSourceRequest::ResyncOrderBook {
-                    source_id: pending_source,
-                    market_id: pending_market,
-                }) = self.actor.pending_source_requests.remove(&request_id)
-                else {
-                    return Ok(0);
-                };
-                if source_id == pending_source && market_id == pending_market {
-                    self.actor
-                        .complete_orderbook_resync(&source_id, epoch, &market_id)
-                        .map_err(MarketError::Invalid)?;
                 }
             }
             SourceInput::ResyncRejected {

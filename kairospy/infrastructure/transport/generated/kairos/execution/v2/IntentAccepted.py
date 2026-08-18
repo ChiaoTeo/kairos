@@ -53,8 +53,19 @@ class IntentAccepted(object):
             return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
         return 1
 
+    # IntentAccepted
+    def Intent(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.execution.v2.ExecutionIntent import ExecutionIntent
+            obj = ExecutionIntent()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
 def IntentAcceptedStart(builder):
-    builder.StartObject(3)
+    builder.StartObject(4)
 
 def Start(builder):
     IntentAcceptedStart(builder)
@@ -76,6 +87,12 @@ def IntentAcceptedAddLifecycle(builder, lifecycle):
 
 def AddLifecycle(builder, lifecycle):
     IntentAcceptedAddLifecycle(builder, lifecycle)
+
+def IntentAcceptedAddIntent(builder, intent):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(intent), 0)
+
+def AddIntent(builder, intent):
+    IntentAcceptedAddIntent(builder, intent)
 
 def IntentAcceptedEnd(builder):
     return builder.EndObject()

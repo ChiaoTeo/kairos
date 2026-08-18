@@ -5,5 +5,4 @@ pub(crate) mod gateway;
 pub(crate) mod persistence;
 pub(crate) mod publication;
 pub(crate) mod risk;
-pub(crate) mod routing;
 pub mod simulation;

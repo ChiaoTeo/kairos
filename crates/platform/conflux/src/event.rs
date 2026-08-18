@@ -1,6 +1,6 @@
 use kairos_account_contract::AccountEventFrame;
 use kairos_execution_contract::ExecutionEventFrame;
-use kairos_integration::ExternalParticipantEvent;
+use kairos_integration::{ConnectionDescriptor, ExternalParticipantEvent};
 use kairos_market_contract::MarketEventFrame;
 use kairos_reference_contract::ReferenceEventFrame;
 use kairos_risk_contract::RiskEventFrame;
@@ -28,8 +28,14 @@ pub enum SystemEvent {
 
 /// Normalized provider facts delivered through the same Actor event loop.
 pub struct IntegrationEvent {
-    pub connection: String,
+    pub identity: ManagedConnectionIdentity,
     pub event: ExternalParticipantEvent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedConnectionIdentity {
+    pub descriptor: ConnectionDescriptor,
+    pub generation: u64,
 }
 
 /// Every event source visible to a Conflux Actor.

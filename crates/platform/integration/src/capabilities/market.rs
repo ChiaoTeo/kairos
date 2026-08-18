@@ -1,6 +1,7 @@
 //! Async market queries, subscription commands, and streams.
 
 use std::future::Future;
+use std::task::{Context, Poll};
 
 use kairos_primitives::ParticipantSymbol;
 
@@ -103,7 +104,7 @@ pub trait MarketSubscriptionCommand: Send {
 }
 
 pub trait MarketDataStream: Send {
-    fn next(&mut self) -> impl Future<Output = Result<MarketEvent, IntegrationError>> + Send;
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<MarketEvent, IntegrationError>>;
 }
 
 pub trait HistoricalBarQuery: Send {

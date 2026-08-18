@@ -23,9 +23,9 @@ Runtime and owner isolation are defined by [`isolation.md`](./isolation.md);
 process isolation boundaries. Venue observations use a canonical `market_id`;
 consolidated observations use `instrument_id` plus an optional network.
 
-The schema-to-runtime hand-off and the first Quote migration slice are tracked
-in [`migration.md`](./migration.md). Generated bindings alone do not mean that
-the running Market process has switched to v2.
+Runtime adoption is evidenced by the owning module's contract, publication and
+architecture tests. Generated bindings alone do not mean that the running
+Market process publishes v2.
 
 ## Market v2 surface
 

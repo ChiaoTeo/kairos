@@ -26,6 +26,8 @@ table IntentLifecycleEventState {
   completed_quantity:kairos.common.v2.Decimal64 (required);
   occurred_at_unix_nanos:ulong;
   reason:string;
+  strategy_decision_id:string;
+  previous_lifecycle:IntentLifecycle = UNSPECIFIED;
 }
 
 table UnknownRemoteOrderState {

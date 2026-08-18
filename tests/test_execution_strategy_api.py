@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 import pytest
@@ -16,6 +17,11 @@ from kairospy.application.execution import (
     QuoteRefreshRequest,
     SubmissionStatus,
 )
+from kairospy.application.execution.events import (
+    ExecutionChangeRecord,
+    ExecutionEventRecord,
+)
+from kairospy.application.execution.services import ExecutionEventCursorCheckpoint
 from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId
 from kairospy.strategy import CommandResult
 
@@ -201,6 +207,182 @@ def test_rejected_receipt_require_accepted_preserves_delivery_semantics() -> Non
     assert not receipt.may_have_been_sent
     with pytest.raises(RuntimeError, match="disabled"):
         receipt.require_accepted()
+
+
+class EventSource:
+    def __init__(self, records: tuple[ExecutionEventRecord, ...]) -> None:
+        self.records = records
+
+    async def subscribe_live(self):
+        for record in self.records:
+            yield record
+
+    def check_ready(self) -> None:
+        return None
+
+
+def _event_record(sequence: int) -> ExecutionEventRecord:
+    return ExecutionEventRecord(
+        "execution.events",
+        sequence,
+        "execution",
+        "instance-1",
+        (),
+        sequence,
+    )
+
+
+def test_execution_event_cursor_ignores_duplicates_and_reports_gaps() -> None:
+    execution = ExecutionApplication(
+        None,
+        None,
+        EventSource((_event_record(1), _event_record(1), _event_record(2))),
+        strategy_id="strategy-a",
+        instance_id="instance-1",
+    )
+    asyncio.run(_drain(execution))
+    assert execution.health() == {
+        "event_source_ready": False,
+        "event_cursor": 2,
+        "processing_event_cursor": 2,
+        "event_lag": 0,
+        "event_gap_count": 0,
+        "event_scope_error_count": 0,
+        "event_recovery_count": 0,
+        "event_recovery_incomplete": False,
+    }
+
+    gap = ExecutionApplication(
+        None,
+        None,
+        EventSource((_event_record(4), _event_record(6))),
+        strategy_id="strategy-a",
+        instance_id="instance-1",
+    )
+    with pytest.raises(RuntimeError, match="not contiguous"):
+        asyncio.run(_drain(gap))
+    assert gap.health()["event_gap_count"] == 1
+
+
+def test_execution_cursor_checkpoints_only_after_record_consumption(
+    tmp_path,
+) -> None:
+    checkpoint = ExecutionEventCursorCheckpoint(
+        tmp_path / "cursor.json", instance_id="instance-1"
+    )
+    change = ExecutionChangeRecord(
+        "intent_update",
+        "strategy-a",
+        "main",
+        {
+            "intent": {
+                "intent_id": "intent-1",
+                "instrument_id": "instrument:test:BTCUSDT",
+                "account_ids": ["main"],
+                "strategy_decision_id": "decision-1",
+            },
+            "status": "accepted",
+            "previous_status": None,
+            "order_ids": [],
+            "reason": "",
+        },
+    )
+    execution = ExecutionApplication(
+        None,
+        None,
+        EventSource(
+            (
+                ExecutionEventRecord(
+                    "execution.events",
+                    1,
+                    "execution",
+                    "instance-1",
+                    (change,),
+                    1,
+                ),
+            )
+        ),
+        strategy_id="strategy-a",
+        instance_id="instance-1",
+        account_ids=(AccountId("main"),),
+        cursor_checkpoint=checkpoint,
+    )
+
+    async def consume() -> None:
+        iterator = execution.events()
+        await anext(iterator)
+        assert checkpoint.load() == 0
+        assert execution.health()["event_cursor"] == 0
+        assert execution.health()["processing_event_cursor"] == 1
+        assert execution.health()["event_lag"] == 1
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    asyncio.run(consume())
+    assert checkpoint.load() == 1
+    restored = ExecutionApplication(
+        None,
+        None,
+        EventSource(()),
+        strategy_id="strategy-a",
+        instance_id="instance-1",
+        cursor_checkpoint=checkpoint,
+    )
+    assert restored.health()["event_cursor"] == 1
+
+
+def test_execution_cursor_recovers_decision_progress_from_current_view(
+    tmp_path,
+) -> None:
+    intent = ExecutionIntent(
+        IntentId("intent-recovered"),
+        "strategy-a",
+        _instrument(InstrumentId("instrument:test:BTCUSDT")),
+        (AccountId("main"),),
+        Decimal("1"),
+        IntentStatus.SATISFIED,
+        "filled while Strategy was stopped",
+        (OrderId("order-1"),),
+        strategy_decision_id="decision-recovered",
+        updated_at_unix_nanos=10,
+    )
+
+    class CurrentProjection:
+        def recovery_snapshot(self):
+            return 7, (intent,), (), True
+
+    class Decisions:
+        def __init__(self) -> None:
+            self.values = []
+
+        def reconcile_execution_snapshot(self, value, *, source_event_sequence):
+            self.values.append((value, source_event_sequence))
+
+    checkpoint = ExecutionEventCursorCheckpoint(
+        tmp_path / "cursor.json", instance_id="instance-1"
+    )
+    decisions = Decisions()
+    execution = ExecutionApplication(
+        None,
+        CurrentProjection(),
+        EventSource(()),
+        strategy_id="strategy-a",
+        instance_id="instance-1",
+        account_ids=(AccountId("main"),),
+        cursor_checkpoint=checkpoint,
+    )
+    execution.bind_decisions(decisions)
+    execution.check_event_source_ready()
+
+    assert decisions.values == [(intent, 7)]
+    assert checkpoint.load() == 7
+    assert execution.health()["event_recovery_count"] == 1
+    assert execution.health()["event_recovery_incomplete"] is True
+
+
+async def _drain(execution: ExecutionApplication) -> None:
+    async for _ in execution.events():
+        pass
 
 
 def _instrument(instrument_id: InstrumentId):

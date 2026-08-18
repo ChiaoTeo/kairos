@@ -61,11 +61,12 @@ fn capabilities_and_domain_facts_have_distinct_semantic_homes() {
     for capability in [
         "account.rs",
         "connection.rs",
+        "earn.rs",
         "event.rs",
         "execution.rs",
-        "funding.rs",
         "market.rs",
         "reference.rs",
+        "transfer.rs",
     ] {
         assert!(
             capabilities.join(capability).is_file(),
@@ -110,11 +111,12 @@ fn capability_and_blocking_surfaces_have_distinct_ownership() {
     for module in [
         "account.rs",
         "connection.rs",
+        "earn.rs",
         "event.rs",
         "execution.rs",
-        "funding.rs",
         "market.rs",
         "reference.rs",
+        "transfer.rs",
     ] {
         assert!(
             blocking.join(module).is_file(),
@@ -205,7 +207,7 @@ fn external_event_envelopes_preserve_participant_and_recovery_identity() {
         .expect("read external event envelope");
     for field in [
         "participant: ParticipantRef",
-        "binding_id: String",
+        "connection_key: crate::ConnectionKey",
         "channel_id: String",
         "channel_epoch: u64",
         "participant_event_id: Option<String>",

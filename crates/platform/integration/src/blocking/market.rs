@@ -1,15 +1,13 @@
 //! Synchronous market capabilities.
 
-use std::time::Duration;
-
 use kairos_primitives::ParticipantSymbol;
 
 use crate::{
     HistoricalBarRequest, HistoricalWindow, IntegrationError, MarketBar, MarketBarRequest,
-    MarketEvent, MarketFundingRate, MarketGreeks, MarketIndexPrice, MarketMarkPrice,
-    MarketOpenInterest, MarketOrderBook, MarketOrderBookRequest, MarketQuote, MarketStatus,
-    MarketSubscription, MarketSubscriptionId, MarketSubscriptionOutcome, MarketSubscriptionRequest,
-    MarketTicker, MarketTrade,
+    MarketFundingRate, MarketGreeks, MarketIndexPrice, MarketMarkPrice, MarketOpenInterest,
+    MarketOrderBook, MarketOrderBookRequest, MarketQuote, MarketStatus, MarketSubscription,
+    MarketSubscriptionId, MarketSubscriptionOutcome, MarketSubscriptionRequest, MarketTicker,
+    MarketTrade,
 };
 
 pub trait MarketQuoteQuery: Send {
@@ -98,10 +96,6 @@ pub trait MarketSubscriptionCommand: Send {
         &mut self,
         subscription: MarketSubscriptionId,
     ) -> Result<MarketSubscriptionOutcome<()>, IntegrationError>;
-}
-
-pub trait MarketDataStream: Send {
-    fn next(&mut self, timeout: Duration) -> Result<Option<MarketEvent>, IntegrationError>;
 }
 
 pub trait HistoricalBarQuery: Send {

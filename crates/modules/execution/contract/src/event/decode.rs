@@ -22,6 +22,11 @@ pub fn decode_event(bytes: &[u8]) -> ContractResult<ExecutionEvent<'_>> {
         IntentRejected
     );
     root!(
+        intent_lifecycle_changed_buffer_has_identifier,
+        root_as_intent_lifecycle_changed,
+        IntentLifecycleChanged
+    );
+    root!(
         plan_created_buffer_has_identifier,
         root_as_plan_created,
         PlanCreated

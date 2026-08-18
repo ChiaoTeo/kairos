@@ -1,27 +1,27 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use kairos_conflux::ExternalParticipantEvent;
 use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, IntegrationEvent, RestContract, SystemEvent,
+    CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, IntegrationError,
+    IntegrationEvent, OrderCommand, OrderEntryEvent, OrderEntryRequest, ResourceOperationError,
+    RestContract, SystemEvent,
 };
 use kairos_execution_contract::{
     ExecutionCommandStatus, ExecutionControlError, ExecutionHealthResponse,
     ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
     ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesResponse,
 };
-use kairos_integration::ExternalParticipantEvent;
 use kairos_protocol::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{
     CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionError,
-    ExecutionOrderOptions, ExecutionRouteQuery, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
+    ExecutionOrderOptions, ExecutionRouteQuery, RemoteOrderQuery, SubmitOrder,
 };
 use crate::services::actor::RemoteOrderEvent;
 use crate::services::audit::ExecutionAudit;
-use crate::services::gateway::{
-    build_managed_gateways, ExecutionConnectionPlan, ExecutionWriterFence,
-};
+use crate::services::gateway::{ExecutionConnectionPlan, ExecutionWriterFence};
 use crate::services::persistence::ExecutionOutboxEvent;
 use crate::services::simulation::SimulatedAccountSettlement;
 
@@ -39,7 +39,6 @@ impl Contract for ExecutionApplication {
 pub(crate) struct ExecutionConfluxState {
     plans: Vec<ExecutionConnectionPlan>,
     writer_fences: Vec<ExecutionWriterFence>,
-    gateway_shutdown: Option<tokio::sync::watch::Sender<bool>>,
     identity: InstanceIdentity,
     view_root: std::path::PathBuf,
     view_slot_size: usize,
@@ -54,7 +53,6 @@ impl Default for ExecutionConfluxState {
         Self {
             plans: Vec::new(),
             writer_fences: Vec::new(),
-            gateway_shutdown: None,
             identity: InstanceIdentity::default(),
             view_root: std::path::PathBuf::new(),
             view_slot_size: 4 * 1024 * 1024,
@@ -94,50 +92,394 @@ impl ExecutionApplication {
         Ok(())
     }
 
-    fn start_managed_connections(
+    fn register_managed_streams(
         &mut self,
         context: &mut Context<'_, Self>,
     ) -> Result<(), ExecutionError> {
-        if !self.conflux.plans.is_empty() {
-            let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-            let (entry, query, entry_task, query_task) = build_managed_gateways(
-                context.system(),
-                &self.conflux.plans,
-                std::mem::take(&mut self.conflux.writer_fences),
-                shutdown_rx,
-            )
-            .map_err(ExecutionError::Gateway)?;
-            self.install_order_entry(Box::new(entry));
-            self.install_order_query(Box::new(query));
-            context.spawn_task(entry_task);
-            context.spawn_task(query_task);
-            self.conflux.gateway_shutdown = Some(shutdown);
-        }
         for plan in self.conflux.plans.clone() {
-            spawn_execution_stream(context, &plan)?;
+            register_execution_stream(context, &plan)?;
         }
         Ok(())
     }
 
-    async fn maintain(&mut self) -> Result<(), ExecutionError> {
+    fn validate_writer_fence(&self, request: &OrderEntryRequest) -> Result<(), ExecutionError> {
+        if self.conflux.writer_fences.is_empty() {
+            return Ok(());
+        }
+        self.conflux
+            .writer_fences
+            .iter()
+            .find(|fence| fence.validates(request))
+            .ok_or_else(|| {
+                ExecutionError::Gateway(format!(
+                    "no Execution writer fence for account={}, segment={}",
+                    request.account_id, request.segment_key
+                ))
+            })?
+            .validate()
+            .map_err(|error| ExecutionError::Gateway(error.to_string()))
+    }
+
+    async fn maintain(&mut self, context: &mut Context<'_, Self>) -> Result<(), ExecutionError> {
         let now = now_unix_nanos();
         let business_now = self.business_time_unix_nanos().unwrap_or(now);
-        if self.has_order_query() {
-            match self.reconcile_remote_orders(RemoteOrderQuery {
-                limit: Some(200),
-                ..Default::default()
-            }) {
+        if !self.conflux.plans.is_empty() {
+            match self
+                .reconcile_managed_orders(
+                    RemoteOrderQuery {
+                        limit: Some(200),
+                        ..Default::default()
+                    },
+                    context,
+                )
+                .await
+            {
                 Ok(_) => self.complete_writer_reconciliation(),
                 Err(error) => {
                     tracing::warn!(component = "execution", error = %error, "Execution reconciliation failed")
                 }
             }
         }
-        self.refresh_maker_quotes()?;
-        self.advance_due_intent_orders(business_now, 64)?;
-        self.expire_due_intents(business_now)?;
+        self.refresh_maker_quotes_managed(context).await?;
+        self.advance_due_intent_orders_managed(business_now, 64, context)
+            .await?;
+        self.expire_due_intents_managed(business_now, context)
+            .await?;
         Ok(())
     }
+
+    async fn advance_due_intent_orders_managed(
+        &mut self,
+        now_unix_nanos: u64,
+        limit: usize,
+        context: &mut Context<'_, Self>,
+    ) -> Result<usize, ExecutionError> {
+        let mut submitted = 0;
+        while submitted < limit {
+            let Some(due) = self.take_due_intent_order(now_unix_nanos)? else {
+                break;
+            };
+            match self
+                .submit_managed_order(due.request.clone(), context)
+                .await
+            {
+                Ok(order) => {
+                    self.complete_due_intent_order(&due, &order, now_unix_nanos)?;
+                    submitted += 1;
+                }
+                Err(error) => {
+                    let cancellations = self.fail_due_intent_order(&due, &error, now_unix_nanos)?;
+                    for cancellation in cancellations {
+                        if let Err(cancel_error) =
+                            self.cancel_managed_order(cancellation, context).await
+                        {
+                            tracing::warn!(component = "execution", error = %cancel_error, "failed to cancel sibling after scheduled order failure");
+                        }
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        if submitted > 0 {
+            self.persist_snapshot()?;
+        }
+        Ok(submitted)
+    }
+
+    async fn expire_due_intents_managed(
+        &mut self,
+        now_unix_nanos: u64,
+        context: &mut Context<'_, Self>,
+    ) -> Result<usize, ExecutionError> {
+        let due = self.due_intent_expirations(now_unix_nanos);
+        let count = due.len();
+        for request in due {
+            let cancellations = self.begin_intent_expiration(&request)?;
+            for cancellation in cancellations {
+                if let Err(error) = self.cancel_managed_order(cancellation, context).await {
+                    tracing::warn!(component = "execution", error = %error, "failed to cancel child of expired intent");
+                }
+            }
+            self.complete_intent_expiration(&request)?;
+        }
+        Ok(count)
+    }
+
+    async fn refresh_maker_quotes_managed(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<usize, ExecutionError> {
+        let requests = self.maker_quote_refresh_requests()?;
+        let mut refreshed = 0;
+        'refresh: for request in requests {
+            let prepared = match self.prepare_quote_refresh(request) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    tracing::warn!(component = "execution", error = %error, "maker quote refresh was rejected by execution guardrails");
+                    continue;
+                }
+            };
+            for cancellation in prepared.cancellations.clone() {
+                if let Err(error) = self.cancel_managed_order(cancellation, context).await {
+                    self.fail_prepared_quote_refresh(&prepared, &error)?;
+                    tracing::warn!(component = "execution", error = %error, "maker quote refresh cancellation failed");
+                    continue 'refresh;
+                }
+            }
+            let mut orders = Vec::with_capacity(prepared.submissions.len());
+            for (leg_id, submission) in prepared.submissions.clone() {
+                match self.submit_managed_order(submission, context).await {
+                    Ok(order) => orders.push((leg_id, order)),
+                    Err(error) => {
+                        self.fail_prepared_quote_refresh(&prepared, &error)?;
+                        tracing::warn!(component = "execution", error = %error, "maker quote refresh submission failed");
+                        continue 'refresh;
+                    }
+                }
+            }
+            self.complete_prepared_quote_refresh(prepared, orders)?;
+            refreshed += 1;
+        }
+        Ok(refreshed)
+    }
+
+    async fn submit_compensating_hedge_managed(
+        &mut self,
+        intent_id: &str,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        let Some(prepared) = self.prepare_compensating_hedge(intent_id)? else {
+            return Ok(());
+        };
+        match self
+            .submit_managed_order(prepared.request.clone(), context)
+            .await
+        {
+            Ok(order) => self.complete_compensating_hedge(&prepared, &order),
+            Err(error) => self.fail_compensating_hedge(&prepared, &error),
+        }
+    }
+
+    async fn submit_managed_order(
+        &mut self,
+        request: SubmitOrder,
+        context: &mut Context<'_, Self>,
+    ) -> Result<crate::ExecutionOrder, ExecutionError> {
+        let (order, provider_request) = self.prepare_submission(request)?;
+        self.validate_writer_fence(&provider_request)?;
+        let plan = self
+            .conflux
+            .plans
+            .iter()
+            .find(|plan| {
+                plan.account_id == provider_request.account_id
+                    && plan.segment_key == provider_request.segment_key
+                    && provider_request
+                        .participant_instrument
+                        .instrument_type
+                        .as_ref()
+                        .is_none_or(|kind| kind == &plan.instrument_type)
+            })
+            .ok_or_else(|| {
+                ExecutionError::Gateway(format!(
+                    "no managed execution route for account={}, segment={}",
+                    provider_request.account_id, provider_request.segment_key
+                ))
+            })?;
+        let key = ConnectionKey::new(plan.entry_key.clone()).map_err(ExecutionError::Gateway)?;
+        self.begin_order_dispatch(order.order_id.as_str())?;
+        let outcome = managed_submit_order(context, &key, &provider_request).await;
+        self.complete_order_submission(order, outcome)
+    }
+
+    async fn cancel_managed_order(
+        &mut self,
+        request: CancelOrder,
+        context: &mut Context<'_, Self>,
+    ) -> Result<crate::ExecutionOrder, ExecutionError> {
+        let prepared = self.prepare_cancellation(request)?;
+        self.validate_writer_fence(&prepared.provider_request)?;
+        let plan = self
+            .conflux
+            .plans
+            .iter()
+            .find(|plan| {
+                plan.account_id == prepared.provider_request.account_id
+                    && plan.segment_key == prepared.provider_request.segment_key
+                    && prepared
+                        .provider_request
+                        .participant_instrument
+                        .instrument_type
+                        .as_ref()
+                        .is_none_or(|kind| kind == &plan.instrument_type)
+            })
+            .ok_or_else(|| {
+                ExecutionError::Gateway(format!(
+                    "no managed execution route for account={}, segment={}",
+                    prepared.provider_request.account_id, prepared.provider_request.segment_key
+                ))
+            })?;
+        let key = ConnectionKey::new(plan.entry_key.clone()).map_err(ExecutionError::Gateway)?;
+        let outcome = managed_cancel_order(
+            context,
+            &key,
+            &prepared.provider_request,
+            &prepared.remote_order_id,
+            prepared.at_unix_nanos,
+        )
+        .await;
+        self.complete_cancellation(prepared, outcome)
+    }
+
+    async fn reconcile_managed_orders(
+        &mut self,
+        query: RemoteOrderQuery,
+        context: &mut Context<'_, Self>,
+    ) -> Result<usize, ExecutionError> {
+        let request = kairos_conflux::ExternalOrderQuery {
+            instrument_type: None,
+            symbol: query.symbol,
+            order_id: query.order_id,
+            limit: query.limit,
+            since_unix_nanos: query.since_unix_nanos,
+        };
+        let keys = self
+            .conflux
+            .plans
+            .iter()
+            .filter(|plan| {
+                query.binding_id.as_ref().is_none_or(|binding| {
+                    plan.query_key == *binding
+                        || plan.route_id == *binding
+                        || binding.contains(&plan.route_id)
+                })
+            })
+            .map(|plan| plan.query_key.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut orders = Vec::new();
+        for value in keys {
+            let key = ConnectionKey::new(value).map_err(ExecutionError::Gateway)?;
+            orders.extend(
+                managed_open_orders(context, &key, &request)
+                    .await
+                    .map_err(|error| ExecutionError::Gateway(error.to_string()))?,
+            );
+            orders.extend(
+                managed_order_history(context, &key, &request)
+                    .await
+                    .map_err(|error| ExecutionError::Gateway(error.to_string()))?,
+            );
+        }
+        self.reconcile_external_orders(orders)
+    }
+}
+
+async fn managed_submit_order(
+    context: &mut Context<'_, ExecutionApplication>,
+    key: &ConnectionKey,
+    request: &OrderEntryRequest,
+) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return connection.submit_order(request).await;
+            }
+        }};
+    }
+    try_family!(binance_spot_rest);
+    try_family!(binance_margin_rest);
+    try_family!(binance_usdm_rest);
+    try_family!(binance_coinm_rest);
+    try_family!(binance_options_rest);
+    try_family!(binance_stocks_rest);
+    try_family!(okx_private_rest);
+    try_family!(ibkr_order);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Execution order connection is missing: {key}"
+    )))
+}
+
+async fn managed_cancel_order(
+    context: &mut Context<'_, ExecutionApplication>,
+    key: &ConnectionKey,
+    request: &OrderEntryRequest,
+    remote_order_id: &str,
+    at_unix_nanos: u64,
+) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return connection
+                    .cancel_order(request, remote_order_id, at_unix_nanos)
+                    .await;
+            }
+        }};
+    }
+    try_family!(binance_spot_rest);
+    try_family!(binance_margin_rest);
+    try_family!(binance_usdm_rest);
+    try_family!(binance_coinm_rest);
+    try_family!(binance_options_rest);
+    try_family!(binance_stocks_rest);
+    try_family!(okx_private_rest);
+    try_family!(ibkr_order);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Execution order connection is missing: {key}"
+    )))
+}
+
+async fn managed_open_orders(
+    context: &mut Context<'_, ExecutionApplication>,
+    key: &ConnectionKey,
+    query: &kairos_conflux::ExternalOrderQuery,
+) -> Result<Vec<kairos_conflux::ExternalOrder>, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return kairos_conflux::OrderQuery::open_orders(connection, query).await;
+            }
+        }};
+    }
+    try_family!(binance_spot_rest);
+    try_family!(binance_margin_rest);
+    try_family!(binance_usdm_rest);
+    try_family!(binance_coinm_rest);
+    try_family!(binance_options_rest);
+    try_family!(binance_stocks_rest);
+    try_family!(okx_private_rest);
+    try_family!(ibkr_order);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Execution query connection is missing: {key}"
+    )))
+}
+
+async fn managed_order_history(
+    context: &mut Context<'_, ExecutionApplication>,
+    key: &ConnectionKey,
+    query: &kairos_conflux::ExternalOrderQuery,
+) -> Result<Vec<kairos_conflux::ExternalOrder>, IntegrationError> {
+    macro_rules! try_family {
+        ($field:ident) => {{
+            let mut connections = context.connections();
+            if let Ok(connection) = connections.$field.get(key) {
+                return kairos_conflux::OrderQuery::order_history(connection, query).await;
+            }
+        }};
+    }
+    try_family!(binance_spot_rest);
+    try_family!(binance_margin_rest);
+    try_family!(binance_usdm_rest);
+    try_family!(binance_coinm_rest);
+    try_family!(binance_options_rest);
+    try_family!(binance_stocks_rest);
+    try_family!(okx_private_rest);
+    try_family!(ibkr_order);
+    Err(IntegrationError::Unavailable(format!(
+        "managed Execution query connection is missing: {key}"
+    )))
 }
 
 impl ConfluxActor for ExecutionApplication {
@@ -145,7 +487,7 @@ impl ConfluxActor for ExecutionApplication {
     type LocalEvent = ();
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
-        self.start_managed_connections(context)?;
+        self.register_managed_streams(context)?;
         context.spawn_timer("maintenance", Duration::from_secs(1));
         self.publish(context)?;
         Ok(())
@@ -157,15 +499,24 @@ impl ConfluxActor for ExecutionApplication {
         context: &mut Context<'_, Self>,
     ) -> Result<Option<ExecutionRestResponse>, Self::FatalError> {
         let response = match event {
-            ConfluxEvent::Rest(request) => Some(self.handle_rest(request)),
+            ConfluxEvent::Rest(request) => Some(self.handle_rest(request, context).await),
             ConfluxEvent::Integration(IntegrationEvent {
-                connection,
+                identity,
                 event: ExternalParticipantEvent::Execution(event),
             }) => {
-                let event = remote_order_event(event, connection);
+                debug_assert_eq!(event.connection_key, identity.descriptor.connection_key);
+                let event = remote_order_event(event);
                 if self.accept_remote_event_identity(&event.event_id) {
-                    if let Err(error) = self.apply_remote_execution_event(event.event) {
-                        tracing::warn!(component = "execution", error = %error, "Execution rejected provider event");
+                    match self.apply_remote_execution_event_deferred(event.event) {
+                        Ok(order) => {
+                            if let Some(intent_id) = order.intent_id.as_deref() {
+                                self.submit_compensating_hedge_managed(intent_id, context)
+                                    .await?;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(component = "execution", error = %error, "Execution rejected provider event")
+                        }
                     }
                 }
                 None
@@ -180,7 +531,7 @@ impl ConfluxActor for ExecutionApplication {
                 None
             }
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "maintenance" => {
-                self.maintain().await?;
+                self.maintain(context).await?;
                 None
             }
             _ => None,
@@ -190,15 +541,16 @@ impl ConfluxActor for ExecutionApplication {
     }
 
     async fn stopping(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
-        if let Some(shutdown) = self.conflux.gateway_shutdown.take() {
-            let _ = shutdown.send(true);
-        }
         self.publish(context)
     }
 }
 
 impl ExecutionApplication {
-    fn handle_rest(&mut self, request: ExecutionRestRequest) -> ExecutionRestResponse {
+    async fn handle_rest(
+        &mut self,
+        request: ExecutionRestRequest,
+        context: &mut Context<'_, Self>,
+    ) -> ExecutionRestResponse {
         match request {
             ExecutionRestRequest::Health => {
                 ExecutionRestResponse::Health(Ok(self.contract_health()))
@@ -225,41 +577,75 @@ impl ExecutionApplication {
                 )
             }
             ExecutionRestRequest::SubmitIntent(request) => {
-                let result = serde_json::from_value::<ExecuteStrategyIntent>(request.intent)
+                let command_id = request.envelope.command_id;
+                let result = match serde_json::from_value::<ExecuteStrategyIntent>(request.intent)
                     .map_err(|error| ExecutionError::Invalid(error.to_string()))
-                    .and_then(|intent| {
-                        let key = request
-                            .envelope
-                            .idempotency_key
-                            .or(request.envelope.command_id.clone())
-                            .ok_or_else(|| {
-                                ExecutionError::Invalid("idempotency_key is required".into())
-                            })?;
-                        self.submit_intent_with_idempotency(intent, key).map(
-                            |(intent, duplicate)| ExecutionCommandStatus {
-                                status: if duplicate { "duplicate" } else { "accepted" }.into(),
-                                command_id: request.envelope.command_id,
-                                intent_id: Some(intent.intent.intent_id.to_string()),
-                                order_id: None,
-                            },
-                        )
-                    });
+                {
+                    Ok(intent) => match request
+                        .envelope
+                        .idempotency_key
+                        .or(command_id.clone())
+                        .ok_or_else(|| {
+                            ExecutionError::Invalid("idempotency_key is required".into())
+                        }) {
+                        Ok(key) => {
+                            match self.accept_intent_with_idempotency_deferred(intent, key) {
+                                Ok((intent, duplicate)) => {
+                                    if !duplicate {
+                                        let business_now = self
+                                            .business_time_unix_nanos()
+                                            .unwrap_or_else(now_unix_nanos);
+                                        if let Err(error) = self
+                                            .advance_due_intent_orders_managed(
+                                                business_now,
+                                                usize::MAX,
+                                                context,
+                                            )
+                                            .await
+                                        {
+                                            return ExecutionRestResponse::SubmitIntent(Err(
+                                                control_error(error),
+                                            ));
+                                        }
+                                    }
+                                    Ok(ExecutionCommandStatus {
+                                        status: if duplicate { "duplicate" } else { "accepted" }
+                                            .into(),
+                                        command_id,
+                                        intent_id: Some(intent.intent.intent_id.to_string()),
+                                        order_id: None,
+                                    })
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    },
+                    Err(error) => Err(error),
+                };
                 ExecutionRestResponse::SubmitIntent(result.map_err(control_error))
             }
             ExecutionRestRequest::CancelOrder { order_id, request } => {
-                let result = kairos_primitives::OrderId::new(order_id)
-                    .map_err(|error| ExecutionError::Invalid(error.to_string()))
-                    .and_then(|order_id| {
-                        self.cancel(CancelOrder {
-                            order_id,
-                            reason: request.reason.unwrap_or_default(),
-                        })
-                    })
-                    .map(|order| command_status("accepted", Some(order.order_id.to_string())));
+                let result = match kairos_primitives::OrderId::new(order_id) {
+                    Ok(order_id) => {
+                        self.cancel_managed_order(
+                            CancelOrder {
+                                order_id,
+                                reason: request.reason.unwrap_or_default(),
+                            },
+                            context,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(ExecutionError::Invalid(error.to_string())),
+                }
+                .map(|order| command_status("accepted", Some(order.order_id.to_string())));
                 ExecutionRestResponse::CancelOrder(result.map_err(control_error))
             }
             ExecutionRestRequest::ReplaceOrder { order_id, request } => {
-                let result = self.replace_contract_order(order_id, request);
+                let result = self
+                    .replace_contract_order(order_id, request, context)
+                    .await;
                 ExecutionRestResponse::ReplaceOrder(result.map_err(control_error))
             }
             ExecutionRestRequest::Reconcile(request) => {
@@ -277,21 +663,24 @@ impl ExecutionApplication {
                         ..Default::default()
                     });
                 ExecutionRestResponse::Reconcile(
-                    query
-                        .and_then(|query| {
-                            self.reconcile_remote_orders(query)
-                                .map(|changed| ExecutionReconcileResponse { changed })
-                        })
-                        .map_err(control_error),
+                    match query {
+                        Ok(query) => self
+                            .reconcile_managed_orders(query, context)
+                            .await
+                            .map(|changed| ExecutionReconcileResponse { changed }),
+                        Err(error) => Err(error),
+                    }
+                    .map_err(control_error),
                 )
             }
         }
     }
 
-    fn replace_contract_order(
+    async fn replace_contract_order(
         &mut self,
         order_id: String,
         patch: kairos_execution_contract::ReplaceOrderRequest,
+        context: &mut Context<'_, Self>,
     ) -> Result<ExecutionCommandStatus, ExecutionError> {
         let order_id = kairos_primitives::OrderId::new(order_id)
             .map_err(|e| ExecutionError::Invalid(e.to_string()))?;
@@ -333,14 +722,22 @@ impl ExecutionApplication {
             options,
             submitted_at_unix_nanos: None,
         };
-        self.replace(ReplaceOrder {
-            order_id,
-            replacement,
-        })
-        .map(|order| command_status("accepted", Some(order.order_id.to_string())))
+        if !original.status.terminal() {
+            self.cancel_managed_order(
+                CancelOrder {
+                    order_id,
+                    reason: "replaced".into(),
+                },
+                context,
+            )
+            .await?;
+        }
+        self.submit_managed_order(replacement, context)
+            .await
+            .map(|order| command_status("accepted", Some(order.order_id.to_string())))
     }
 
-    fn contract_health(&self) -> ExecutionHealthResponse {
+    fn contract_health(&mut self) -> ExecutionHealthResponse {
         let routes = self
             .conflux
             .route_status
@@ -354,14 +751,27 @@ impl ExecutionApplication {
         let routes_ready = routes
             .iter()
             .all(|route| !route.required || route.status == "ready");
+        let (pending, outbox_error) = match self.pending_outbox(1_000_000) {
+            Ok(pending) => (pending, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        let now = now_unix_nanos();
+        let oldest_outbox_event_age_ms = pending
+            .iter()
+            .map(|entry| entry.created_at_unix_nanos)
+            .min()
+            .map(|created_at| now.saturating_sub(created_at) / 1_000_000);
         ExecutionHealthResponse {
-            status: if routes_ready && self.writer_recovery_ready() {
+            status: if routes_ready && self.writer_recovery_ready() && outbox_error.is_none() {
                 "ready"
             } else {
                 "degraded"
             }
             .into(),
             writer_recovery_ready: self.writer_recovery_ready(),
+            outbox_backlog: pending.len(),
+            oldest_outbox_event_age_ms,
+            outbox_error,
             routes,
         }
     }
@@ -380,13 +790,7 @@ impl ExecutionApplication {
         self.flush_durable_events()?;
         let actor_id = self.snapshot().actor_id.to_string();
         while let Some(event) = self.pending_business_event().cloned() {
-            let publisher = context
-                .system()
-                .aeron_publishers
-                .get_mut(&"execution-events".to_owned())
-                .ok_or_else(|| {
-                    ExecutionError::Gateway("missing execution-events Aeron publisher".into())
-                })?;
+            let resource_key = "execution-events".to_owned();
             for (index, change) in event.changes.iter().enumerate() {
                 for bytes in crate::services::publication::encode_business_change(
                     &actor_id,
@@ -398,10 +802,18 @@ impl ExecutionApplication {
                 )
                 .map_err(ExecutionError::Gateway)?
                 {
-                    publisher
-                        .resource_mut()
-                        .publish(&bytes)
-                        .map_err(|e| ExecutionError::Gateway(e.to_string()))?;
+                    context
+                        .system()
+                        .execution_event_publishers
+                        .try_with(&resource_key, |publisher| publisher.publish(&bytes))
+                        .map_err(|error| match error {
+                            ResourceOperationError::NotFound => ExecutionError::Gateway(
+                                "missing execution-events Aeron publisher".into(),
+                            ),
+                            ResourceOperationError::Operation(error) => {
+                                ExecutionError::Gateway(error.to_string())
+                            }
+                        })?;
                 }
             }
             self.acknowledge_business_event();
@@ -528,45 +940,47 @@ impl ExecutionApplication {
             context
                 .system()
                 .execution_view_publishers
-                .get_mut(&resource_key)
-                .expect("publisher inserted")
-                .resource_mut()
-                .publish(metadata, &bytes)
-                .map_err(|e| ExecutionError::Gateway(e.to_string()))?;
+                .try_with(&resource_key, |publisher| publisher.publish(metadata, &bytes))
+                .map_err(|error| match error {
+                    ResourceOperationError::NotFound => {
+                        ExecutionError::Gateway("Execution view publisher disappeared".into())
+                    }
+                    ResourceOperationError::Operation(error) => {
+                        ExecutionError::Gateway(error.to_string())
+                    }
+                })?;
         }
         Ok(())
     }
 }
 
-fn spawn_execution_stream(
+fn register_execution_stream(
     context: &mut Context<'_, ExecutionApplication>,
     plan: &ExecutionConnectionPlan,
 ) -> Result<(), ExecutionError> {
-    let key = plan.stream_key.clone();
-    macro_rules! spawn {
-        ($field:ident) => {
-            if let Some(value) = context.system().$field.remove(&key) {
-                context.spawn_integration_execution_events(key.clone(), value.into_connection());
+    let key = ConnectionKey::new(plan.stream_key.clone()).map_err(ExecutionError::Gateway)?;
+    macro_rules! register {
+        ($family:ident) => {
+            if context.connections().$family.keys().contains(&key) {
                 return Ok(());
             }
         };
     }
-    spawn!(binance_spot_user_websocket_connections);
-    spawn!(binance_margin_user_websocket_connections);
-    spawn!(binance_usdm_user_websocket_connections);
-    spawn!(binance_coinm_user_websocket_connections);
-    spawn!(binance_options_user_websocket_connections);
-    spawn!(binance_stocks_user_websocket_connections);
-    spawn!(okx_private_websocket_connections);
-    spawn!(ibkr_execution_stream_connections);
+    register!(binance_spot_user_websocket);
+    register!(binance_margin_user_websocket);
+    register!(binance_usdm_user_websocket);
+    register!(binance_coinm_user_websocket);
+    register!(binance_options_user_websocket);
+    register!(binance_stocks_user_websocket);
+    register!(okx_private_websocket);
+    register!(ibkr_execution_stream);
     Err(ExecutionError::Gateway(format!(
         "missing managed Execution stream: {key}"
     )))
 }
 
 fn remote_order_event(
-    envelope: kairos_integration::ExternalEventEnvelope<kairos_integration::ExternalExecutionEvent>,
-    connection: String,
+    envelope: kairos_conflux::ExternalEventEnvelope<kairos_conflux::ExternalExecutionEvent>,
 ) -> RemoteOrderEvent {
     let event_id = envelope.participant_event_id.clone().unwrap_or_else(|| {
         format!(
@@ -579,11 +993,7 @@ fn remote_order_event(
     let event = envelope.payload;
     RemoteOrderEvent {
         event_id,
-        connection_id: if envelope.binding_id.is_empty() {
-            connection
-        } else {
-            envelope.binding_id
-        },
+        connection_id: envelope.connection_key.to_string(),
         event: super::RemoteOrderUpdate {
             order_id: event.order_id,
             symbol: event.symbol,
@@ -599,7 +1009,7 @@ fn remote_order_event(
     }
 }
 
-fn decimal(value: kairos_integration::DecimalValue) -> String {
+fn decimal(value: kairos_conflux::DecimalValue) -> String {
     if value.scale == 0 {
         return value.mantissa.to_string();
     }

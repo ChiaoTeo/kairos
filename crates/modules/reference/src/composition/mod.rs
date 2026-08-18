@@ -17,7 +17,7 @@ use crate::services::providers::{
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use crate::ReferenceApplication;
 
-use kairos_integration::composition::credentials::load_workspace_credential;
+use kairos_conflux::{load_workspace_credential, BinanceCredential};
 use kairos_transport::AeronBytePublisher;
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
@@ -49,7 +49,9 @@ pub struct ReferenceComposition {
 
 impl ReferenceComposition {
     pub async fn activate_sources(&mut self) -> ReferenceResult<()> {
-        self.application.activate_sources(&mut self.system).await
+        self.application
+            .activate_sources(&mut self.system.connections())
+            .await
     }
 
     pub fn into_conflux(
@@ -60,6 +62,20 @@ impl ReferenceComposition {
         Option<ReferenceEventWriter>,
     ) {
         (self.application, self.system, self.event_writer)
+    }
+
+    pub fn split_mut(
+        &mut self,
+    ) -> (
+        &mut ComposedReferenceApplication,
+        &mut kairos_conflux::ConfluxSystem,
+        Option<&mut ReferenceEventWriter>,
+    ) {
+        (
+            &mut self.application,
+            &mut self.system,
+            self.event_writer.as_mut(),
+        )
     }
 }
 
@@ -304,7 +320,7 @@ async fn build_source_plan(
         providers.push(ReferenceProviderPlan::BinanceEquity {
             key: "reference-binance-stocks".into(),
             endpoint,
-            credential: kairos_integration::participants::binance::BinanceCredential {
+            credential: BinanceCredential {
                 principal_id: credential_id.unwrap_or("reference-binance-stocks").into(),
                 api_key: secrecy::SecretString::new(credential.api_key.into()),
                 secret: credential.secret,
@@ -455,7 +471,7 @@ pub async fn build_application(
     }
     let source_plan = build_source_plan(config).await?;
     let mut system = kairos_conflux::ConfluxSystem::new();
-    source_plan.install(&mut system)?;
+    source_plan.install(&mut system.connections())?;
     let store = SqlxCatalogStore::open(&config.database).await?;
     let event_writer = if publish {
         Some(ReferenceEventWriter::connect(

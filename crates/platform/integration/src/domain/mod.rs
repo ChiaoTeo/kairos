@@ -5,22 +5,23 @@
 pub mod account;
 pub mod connection;
 mod decimal;
+pub mod earn;
 mod event;
 pub mod execution;
-pub mod funding;
 pub mod instrument;
 pub mod market;
 pub mod operation;
 pub mod participant;
 pub mod reference;
+pub mod transfer;
 pub use account::*;
 pub use connection::{
-    ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionLifecycle,
-    ConnectionState,
+    ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionKey,
+    ConnectionLifecycle, ConnectionState, ProviderClockHealth,
 };
-pub use event::{ExternalEventEnvelope, ExternalParticipantEvent};
+pub use earn::*;
+pub use event::{ExternalEventDelivery, ExternalEventEnvelope, ExternalParticipantEvent};
 pub use execution::*;
-pub use funding::*;
 pub use instrument::{ParticipantInstrumentRef, ParticipantInstrumentTypeRef};
 pub use market::*;
 pub use operation::{
@@ -28,3 +29,4 @@ pub use operation::{
 };
 pub use participant::{ParticipantKind, ParticipantRef};
 pub use reference::*;
+pub use transfer::*;

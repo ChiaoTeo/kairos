@@ -24,16 +24,19 @@ impl std::fmt::Debug for BinanceCredential {
 
 #[derive(Clone, Debug)]
 pub struct BinanceRestConfig {
-    pub binding_id: String,
     pub environment: String,
     pub endpoint: String,
     pub credential: Option<BinanceCredential>,
 }
 
 impl BinanceRestConfig {
-    pub fn descriptor(&self, domain: &str) -> Result<ConnectionDescriptor, IntegrationError> {
+    pub fn descriptor(
+        &self,
+        connection_key: crate::ConnectionKey,
+        domain: &str,
+    ) -> Result<ConnectionDescriptor, IntegrationError> {
         descriptor(
-            &self.binding_id,
+            connection_key,
             &self.environment,
             self.credential
                 .as_ref()
@@ -45,7 +48,6 @@ impl BinanceRestConfig {
 
 #[derive(Clone, Debug)]
 pub struct BinanceWebSocketConfig {
-    pub binding_id: String,
     pub environment: String,
     pub endpoint: String,
     pub credential: Option<BinanceCredential>,
@@ -54,7 +56,6 @@ pub struct BinanceWebSocketConfig {
 
 #[derive(Clone, Debug)]
 pub struct BinanceUserWebSocketConfig {
-    pub binding_id: String,
     pub environment: String,
     pub rest_endpoint: String,
     pub websocket_endpoint: String,
@@ -64,9 +65,13 @@ pub struct BinanceUserWebSocketConfig {
 }
 
 impl BinanceUserWebSocketConfig {
-    pub fn descriptor(&self, domain: &str) -> Result<ConnectionDescriptor, IntegrationError> {
+    pub fn descriptor(
+        &self,
+        connection_key: crate::ConnectionKey,
+        domain: &str,
+    ) -> Result<ConnectionDescriptor, IntegrationError> {
         descriptor(
-            &self.binding_id,
+            connection_key,
             &self.environment,
             Some(self.credential.principal_id.clone()),
             domain,
@@ -75,9 +80,13 @@ impl BinanceUserWebSocketConfig {
 }
 
 impl BinanceWebSocketConfig {
-    pub fn descriptor(&self, domain: &str) -> Result<ConnectionDescriptor, IntegrationError> {
+    pub fn descriptor(
+        &self,
+        connection_key: crate::ConnectionKey,
+        domain: &str,
+    ) -> Result<ConnectionDescriptor, IntegrationError> {
         descriptor(
-            &self.binding_id,
+            connection_key,
             &self.environment,
             self.credential
                 .as_ref()
@@ -88,13 +97,13 @@ impl BinanceWebSocketConfig {
 }
 
 fn descriptor(
-    binding_id: &str,
+    connection_key: crate::ConnectionKey,
     environment: &str,
     principal_id: Option<String>,
     domain: &str,
 ) -> Result<ConnectionDescriptor, IntegrationError> {
     let mut descriptor = ConnectionDescriptor::new(
-        binding_id,
+        connection_key,
         ParticipantRef::new(ParticipantKind::Exchange, "binance")
             .map_err(IntegrationError::InvalidRequest)?,
         domain,

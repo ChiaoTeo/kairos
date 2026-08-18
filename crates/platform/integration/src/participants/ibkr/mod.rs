@@ -16,13 +16,13 @@ pub use market::IbkrMarketDataConnection;
 pub use trading::{IbkrExecutionStreamConnection, IbkrOrderConnection};
 
 fn descriptor(
-    binding_id: String,
+    connection_key: crate::ConnectionKey,
     environment: String,
     client_id: i32,
     domain: &str,
 ) -> Result<crate::ConnectionDescriptor, crate::IntegrationError> {
     let mut descriptor = crate::ConnectionDescriptor::new(
-        binding_id,
+        connection_key,
         crate::ParticipantRef::new(crate::ParticipantKind::Broker, "ibkr")
             .map_err(crate::IntegrationError::InvalidRequest)?,
         domain,

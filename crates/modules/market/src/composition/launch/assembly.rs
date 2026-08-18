@@ -8,7 +8,7 @@ use crate::composition::history::{spawn_jsonl_history, HistoryCollectionSpec};
 use crate::services::source::load_replay_checkpoint;
 use crate::{MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId};
 
-use super::super::reference::{project_market_universe, spawn_market_universe_watcher};
+use super::super::reference::{build_reference_projection, project_market_universe};
 
 use super::super::{
     attach_replay_source_with_policy, MarketCompositionConfig, MarketHost, MarketHostRequest,
@@ -146,9 +146,12 @@ fn reference_endpoint(
             .child(&["state", "reference", "reference.sqlite"])
             .map_err(MarketStartupError::new)?,
         actor_id: "reference-actor".into(),
-        aeron_dir: std::env::var("AERON_DIR").ok(),
-        aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-        event_stream_id: kairos_transport::stream_ids::REFERENCE_CHANGES,
+        events: kairos_transport::AeronEndpoint::from_parts(
+            std::env::var("AERON_DIR").ok().as_deref(),
+            kairos_transport::DEFAULT_CHANNEL,
+            kairos_transport::stream_ids::REFERENCE_CHANGES,
+        )
+        .map_err(MarketStartupError::new)?,
     })
 }
 
@@ -394,26 +397,27 @@ pub async fn build_market_host(
     let history = (!history_specs.is_empty())
         .then(|| spawn_jsonl_history(history_specs).map_err(MarketStartupError::new))
         .transpose()?;
+    let mut system = kairos_conflux::ConfluxSystem::new();
     // A static replay resolves subscriptions from its explicit request and
-    // must remain independent of the live Reference/Aeron runtime.
-    let watcher_guard = if profile.scope != MarketRuntimeScope::Replay {
-        let client =
-            kairos_reference_contract::ReferenceClient::connect(reference_endpoint(&workspace)?);
-        let (updates, guard) = spawn_market_universe_watcher(
-            client,
-            market_config.sources.clone(),
-            profile.reference_recovery_interval,
-            profile.publication_queue_capacity.max(1),
-        )
-        .map_err(MarketStartupError::new)?;
-        Some((updates, guard))
+    // remains independent of the live Reference/Aeron runtime. Live modes
+    // install both client and event stream into Conflux so no watcher task
+    // becomes a second Aeron owner.
+    let reference_projection = if let Some(client) = reference_client {
+        let key = "market-reference".to_owned();
+        let events = client
+            .events(profile.publication_queue_capacity.max(1))
+            .map_err(|error| MarketStartupError::new(error.to_string()))?;
+        system
+            .install_reference_contract(key.clone(), client, events)
+            .map_err(|error| MarketStartupError::new(error.to_string()))?;
+        Some(crate::application::ReferenceProjectionConfig {
+            client_key: key,
+            interval: profile.reference_recovery_interval,
+            projection: build_reference_projection(&market_config.sources),
+        })
     } else {
         None
     };
-    let (universe_updates, watcher_guard) = watcher_guard
-        .map(|(updates, guard)| (Some(updates), Some(guard)))
-        .unwrap_or((None, None));
-    let mut system = kairos_conflux::ConfluxSystem::new();
     let source_plans = if profile.scope != MarketRuntimeScope::Replay {
         let credentials_root = workspace
             .existing_path(&["config", "credentials"], &["credentials"])
@@ -440,7 +444,7 @@ pub async fn build_market_host(
             identity,
             source_plans,
             history,
-            universe_updates,
+            reference_projection,
         )
         .map_err(MarketStartupError::new)?;
     let publisher = kairos_transport::AeronBytePublisher::connect(
@@ -460,6 +464,5 @@ pub async fn build_market_host(
         socket_path,
         health_path,
         process_lock,
-        watcher_guard,
     ))
 }

@@ -1,6 +1,5 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbkrAccountQueryConfig {
-    pub binding_id: String,
     pub environment: String,
     pub host: String,
     pub port: u16,
@@ -10,7 +9,6 @@ pub struct IbkrAccountQueryConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbkrAccountStreamConfig {
-    pub binding_id: String,
     pub environment: String,
     pub host: String,
     pub port: u16,
@@ -21,7 +19,6 @@ pub struct IbkrAccountStreamConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbkrOrderConfig {
-    pub binding_id: String,
     pub environment: String,
     pub host: String,
     pub port: u16,
@@ -31,7 +28,6 @@ pub struct IbkrOrderConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbkrExecutionStreamConfig {
-    pub binding_id: String,
     pub environment: String,
     pub host: String,
     pub port: u16,
@@ -42,7 +38,6 @@ pub struct IbkrExecutionStreamConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IbkrMarketDataConfig {
-    pub binding_id: String,
     pub environment: String,
     pub host: String,
     pub port: u16,

@@ -98,7 +98,7 @@ pub(crate) fn snapshot(
 }
 
 pub(crate) fn orders(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     value: &Value,
     query: &ExternalOrderQuery,
 ) -> Result<Vec<ExternalOrder>, IntegrationError> {
@@ -118,13 +118,13 @@ pub(crate) fn orders(
             {
                 return None;
             }
-            Some(normalize_order(binding_id, outer, row, symbol))
+            Some(normalize_order(connection_key, outer, row, symbol))
         })
         .collect()
 }
 
 fn normalize_order(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     outer: &Value,
     row: &Value,
     symbol: &str,
@@ -141,7 +141,7 @@ fn normalize_order(
         .filter(|value| !value.is_empty())
         .unwrap_or(&remote);
     Ok(ExternalOrder {
-        binding_id: binding_id.into(),
+        connection_key: connection_key.clone(),
         order_id: OrderId::new(local).map_err(payload)?,
         client_order_id: row
             .get("cloid")

@@ -2,6 +2,13 @@ include "../../../common/metadata.fbs";
 include "../../types/intent.fbs";
 
 namespace kairos.execution.v2;
-table IntentRejected { metadata:kairos.common.v2.EventMetadata (required); intent_id:string (required); codes:[IntentRejectionCode] (required); details:[string] (required); }
+table IntentRejected {
+  metadata:kairos.common.v2.EventMetadata (required);
+  intent_id:string (required);
+  codes:[IntentRejectionCode] (required);
+  details:[string] (required);
+  lifecycle:IntentLifecycle = REJECTED;
+  intent:ExecutionIntent;
+}
 root_type IntentRejected;
 file_identifier "EIR2";

@@ -8,16 +8,22 @@ use crate::{
     OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType, ParticipantRejection, TimeInForce,
 };
 
-pub(crate) fn normalize_okx_orders(value: &Value) -> Result<Vec<ExternalOrder>, String> {
+pub(crate) fn normalize_okx_orders(
+    connection_key: &crate::ConnectionKey,
+    value: &Value,
+) -> Result<Vec<ExternalOrder>, String> {
     value
         .get("data")
         .and_then(Value::as_array)
         .ok_or_else(|| "OKX order query data is missing".to_string())?
         .iter()
-        .map(normalize_okx_order)
+        .map(|value| normalize_okx_order(connection_key, value))
         .collect()
 }
-pub(crate) fn normalize_okx_order(value: &Value) -> Result<ExternalOrder, String> {
+pub(crate) fn normalize_okx_order(
+    connection_key: &crate::ConnectionKey,
+    value: &Value,
+) -> Result<ExternalOrder, String> {
     let text = |key: &str| {
         value
             .get(key)
@@ -30,7 +36,7 @@ pub(crate) fn normalize_okx_order(value: &Value) -> Result<ExternalOrder, String
     let filled_quantity = order_decimal(decimal_field(value, "accFillSz").unwrap_or_default());
     let average_fill_price = decimal_field(value, "avgPx").ok().map(order_decimal);
     Ok(ExternalOrder {
-        binding_id: String::new(),
+        connection_key: connection_key.clone(),
         order_id: OrderId::try_from(order_id).map_err(|error| error.to_string())?,
         client_order_id: text("clOrdId")
             .map(ClientOrderId::try_from)

@@ -39,6 +39,25 @@ pub struct MassiveCashDividend {
     pub frequency: Option<u32>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MassiveIndexDefinition {
+    pub ticker: String,
+    pub name: String,
+    pub currency: Option<String>,
+    pub source_venue: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MassiveOptionSnapshot {
+    pub symbol: kairos_primitives::ParticipantSymbol,
+    pub values: crate::Greeks,
+    pub break_even_price: Option<kairos_primitives::Price>,
+    pub open_interest: Option<kairos_primitives::Quantity>,
+    pub market_status: Option<String>,
+    pub observed_at_unix_nanos: kairos_primitives::UnixNanos,
+}
+
 impl InstrumentQuery {
     pub const fn equities() -> Self {
         Self {

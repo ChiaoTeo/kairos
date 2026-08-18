@@ -1,8 +1,8 @@
 use clap::Parser;
+use kairos_conflux::load_workspace_credential;
 use kairos_execution::composition::{
     build_execution_host, ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence,
 };
-use kairos_integration::composition::credentials::load_workspace_credential;
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use secrecy::ExposeSecret;
 use serde::Deserialize;

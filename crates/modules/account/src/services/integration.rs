@@ -8,6 +8,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use kairos_conflux::{
+    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, ExternalAccountEvent,
+    ExternalAccountIdentity, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
+    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalOpenOrder,
+    ExternalOrderStatus, ExternalPosition, ExternalPositionMode, IbkrAccountQueryConfig,
+    IbkrAccountStreamConfig, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
+    ParticipantInstrumentRef,
+};
+
 use crate::domain::{
     AccountEvent, AccountModel, AccountObservedFill, AccountOrderObservation, AccountSegment,
     AccountSnapshot, AccountStatus, AssetId, Balance, FillId, InstrumentId, MarginMode, Money,
@@ -36,9 +45,12 @@ impl AccountInstrumentResolver {
                     kairos_reference_contract::ReferenceEndpoint {
                         database: database.as_ref().to_path_buf(),
                         actor_id: actor_id.to_owned(),
-                        aeron_dir: None,
-                        aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-                        event_stream_id: kairos_transport::stream_ids::REFERENCE_CHANGES,
+                        events: kairos_transport::AeronEndpoint::from_parts(
+                            None,
+                            kairos_transport::DEFAULT_CHANNEL,
+                            kairos_transport::stream_ids::REFERENCE_CHANGES,
+                        )
+                        .map_err(|error| error.to_string())?,
                     },
                 ),
             )),
@@ -48,7 +60,7 @@ impl AccountInstrumentResolver {
 
     fn resolve(
         &self,
-        provider: &kairos_integration::ParticipantInstrumentRef,
+        provider: &ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let key = format!(
             "{}|{}|{}",
@@ -100,7 +112,7 @@ impl AccountInstrumentResolver {
 
     fn resolve_uncached(
         &self,
-        provider: &kairos_integration::ParticipantInstrumentRef,
+        provider: &ParticipantInstrumentRef,
     ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
         let symbol = provider.source_symbol.as_str();
         let (markets, instruments) = self.identity_snapshot()?;
@@ -212,10 +224,7 @@ fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
     true
 }
 
-fn identity_resolution_error(
-    provider: &kairos_integration::ParticipantInstrumentRef,
-    matches: usize,
-) -> String {
+fn identity_resolution_error(provider: &ParticipantInstrumentRef, matches: usize) -> String {
     format!(
         "Reference identity resolution expected one match for {}/{}/{}, found {matches}",
         provider.participant.id,
@@ -275,31 +284,31 @@ fn reference_market(
 pub(crate) enum AccountAsyncEventSource {
     BinanceSpot {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::spot::BinanceSpotUserWebSocketConnection,
+        parameters: BinanceUserWebSocketConfig,
     },
     BinanceUsdM {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::usdm::BinanceUsdMUserWebSocketConnection,
+        parameters: BinanceUserWebSocketConfig,
     },
     BinanceCoinM {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::coinm::BinanceCoinMUserWebSocketConnection,
+        parameters: BinanceUserWebSocketConfig,
     },
     BinanceOptions {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::options::BinanceOptionsUserWebSocketConnection,
+        parameters: BinanceUserWebSocketConfig,
     },
     BinanceMargin {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::binance::margin::BinanceMarginUserWebSocketConnection,
+        parameters: BinanceUserWebSocketConfig,
     },
     Ibkr {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::ibkr::IbkrAccountStreamConnection,
+        parameters: IbkrAccountStreamConfig,
     },
     OkxTrading {
         segment_key: SegmentKey,
-        source: kairos_integration::participants::okx::private::OkxPrivateWebSocketConnection,
+        parameters: OkxPrivateWebSocketConfig,
     },
 }
 
@@ -307,65 +316,41 @@ pub(crate) enum AccountAsyncEventSource {
 /// This enum is deliberately private: it keeps heterogeneous provider handles
 /// without publishing a second Account-owned provider protocol.
 pub(crate) enum AccountAsyncSnapshotConnection {
-    BinanceSpot(kairos_integration::participants::binance::spot::BinanceSpotRestConnection),
-    BinanceFunding(
-        kairos_integration::participants::binance::funding::BinanceFundingRestConnection,
-    ),
-    BinanceMargin(kairos_integration::participants::binance::margin::BinanceMarginRestConnection),
-    BinanceUsdM(kairos_integration::participants::binance::usdm::BinanceUsdMRestConnection),
-    BinanceCoinM(kairos_integration::participants::binance::coinm::BinanceCoinMRestConnection),
-    BinanceOptions(
-        kairos_integration::participants::binance::options::BinanceOptionsRestConnection,
-    ),
-    Ibkr(kairos_integration::participants::ibkr::IbkrAccountQueryConnection),
-    OkxTrading(kairos_integration::participants::okx::private::OkxPrivateRestConnection),
+    BinanceSpot(BinanceRestConfig),
+    BinanceFunding(BinanceRestConfig),
+    BinanceMargin(BinanceRestConfig),
+    BinanceUsdM(BinanceRestConfig),
+    BinanceCoinM(BinanceRestConfig),
+    BinanceOptions(BinanceRestConfig),
+    Ibkr(IbkrAccountQueryConfig),
+    OkxTrading(OkxPrivateRestConfig),
 }
 
 impl AccountAsyncSnapshotConnection {
     pub(crate) fn into_conflux(
         self,
         key: String,
-        system: &mut kairos_conflux::ConfluxSystem,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> Result<(), String> {
+        let key = ConnectionKey::new(key).map_err(|error| error.to_string())?;
         match self {
-            Self::BinanceSpot(connection) => {
-                system
-                    .binance_spot_rest_connections
-                    .ensure_with(key, 1, || connection)
+            Self::BinanceSpot(parameters) => connections.binance_spot_rest.create(key, parameters),
+            Self::BinanceFunding(parameters) => {
+                connections.binance_funding_rest.create(key, parameters)
             }
-            Self::BinanceFunding(connection) => system
-                .binance_funding_rest_connections
-                .ensure_with(key, 1, || connection),
-            Self::BinanceMargin(connection) => {
-                system
-                    .binance_margin_rest_connections
-                    .ensure_with(key, 1, || connection)
+            Self::BinanceMargin(parameters) => {
+                connections.binance_margin_rest.create(key, parameters)
             }
-            Self::BinanceUsdM(connection) => {
-                system
-                    .binance_usdm_rest_connections
-                    .ensure_with(key, 1, || connection)
+            Self::BinanceUsdM(parameters) => connections.binance_usdm_rest.create(key, parameters),
+            Self::BinanceCoinM(parameters) => {
+                connections.binance_coinm_rest.create(key, parameters)
             }
-            Self::BinanceCoinM(connection) => {
-                system
-                    .binance_coinm_rest_connections
-                    .ensure_with(key, 1, || connection)
+            Self::BinanceOptions(parameters) => {
+                connections.binance_options_rest.create(key, parameters)
             }
-            Self::BinanceOptions(connection) => system
-                .binance_options_rest_connections
-                .ensure_with(key, 1, || connection),
-            Self::Ibkr(connection) => {
-                system
-                    .ibkr_account_query_connections
-                    .ensure_with(key, 1, || connection)
-            }
-            Self::OkxTrading(connection) => {
-                system
-                    .okx_private_rest_connections
-                    .ensure_with(key, 1, || connection)
-            }
+            Self::Ibkr(parameters) => connections.ibkr_account_query.create(key, parameters),
+            Self::OkxTrading(parameters) => connections.okx_private_rest.create(key, parameters),
         }
-        .map(|_| ())
         .map_err(|error| error.to_string())
     }
 }
@@ -373,35 +358,33 @@ impl AccountAsyncSnapshotConnection {
 impl AccountAsyncEventSource {
     pub(crate) fn into_conflux(
         self,
-        system: &mut kairos_conflux::ConfluxSystem,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> Result<(), String> {
-        let key = self.segment_key().to_string();
+        let key = ConnectionKey::new(self.segment_key().to_string())
+            .map_err(|error| error.to_string())?;
         match self {
-            Self::BinanceSpot { source, .. } => system
-                .binance_spot_user_websocket_connections
-                .ensure_with(key, 1, || source),
-            Self::BinanceUsdM { source, .. } => system
-                .binance_usdm_user_websocket_connections
-                .ensure_with(key, 1, || source),
-            Self::BinanceCoinM { source, .. } => system
-                .binance_coinm_user_websocket_connections
-                .ensure_with(key, 1, || source),
-            Self::BinanceOptions { source, .. } => system
-                .binance_options_user_websocket_connections
-                .ensure_with(key, 1, || source),
-            Self::BinanceMargin { source, .. } => system
-                .binance_margin_user_websocket_connections
-                .ensure_with(key, 1, || source),
-            Self::Ibkr { source, .. } => {
-                system
-                    .ibkr_account_stream_connections
-                    .ensure_with(key, 1, || source)
+            Self::BinanceSpot { parameters, .. } => connections
+                .binance_spot_user_websocket
+                .create(key, parameters),
+            Self::BinanceUsdM { parameters, .. } => connections
+                .binance_usdm_user_websocket
+                .create(key, parameters),
+            Self::BinanceCoinM { parameters, .. } => connections
+                .binance_coinm_user_websocket
+                .create(key, parameters),
+            Self::BinanceOptions { parameters, .. } => connections
+                .binance_options_user_websocket
+                .create(key, parameters),
+            Self::BinanceMargin { parameters, .. } => connections
+                .binance_margin_user_websocket
+                .create(key, parameters),
+            Self::Ibkr { parameters, .. } => {
+                connections.ibkr_account_stream.create(key, parameters)
             }
-            Self::OkxTrading { source, .. } => system
-                .okx_private_websocket_connections
-                .ensure_with(key, 1, || source),
+            Self::OkxTrading { parameters, .. } => {
+                connections.okx_private_websocket.create(key, parameters)
+            }
         }
-        .map(|_| ())
         .map_err(|error| error.to_string())
     }
 
@@ -417,12 +400,6 @@ impl AccountAsyncEventSource {
         }
     }
 }
-use kairos_integration::{
-    ExternalAccountEvent, ExternalAccountModel, ExternalAccountSegment, ExternalAccountStatus,
-    ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalOrderStatus,
-    ExternalPositionMode,
-};
-
 pub(crate) enum AccountSnapshotGateway {
     Memory(BTreeMap<String, AccountSnapshot>),
 }
@@ -455,7 +432,7 @@ impl AccountSnapshotGateway {
 
 pub(crate) fn external_segment(segment: &AccountSegment) -> ExternalAccountSegment {
     ExternalAccountSegment {
-        identity: kairos_integration::ExternalAccountIdentity {
+        identity: ExternalAccountIdentity {
             broker: segment.identity.broker.to_string(),
             account_id: segment.identity.account_id.clone(),
         },
@@ -495,7 +472,7 @@ fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
 }
 
 fn map_position(
-    value: kairos_integration::ExternalPosition,
+    value: ExternalPosition,
     resolver: &AccountInstrumentResolver,
 ) -> Result<Position, String> {
     let (instrument_id, market_id) = resolver.resolve(&value.participant_instrument)?;
@@ -513,7 +490,7 @@ fn map_position(
 }
 
 pub(crate) fn map_snapshot(
-    value: kairos_integration::ExternalAccountSnapshot,
+    value: ExternalAccountSnapshot,
     resolver: &AccountInstrumentResolver,
 ) -> Result<AccountSnapshot, String> {
     Ok(AccountSnapshot {
@@ -556,7 +533,7 @@ pub(crate) fn map_snapshot(
 }
 
 fn map_open_order(
-    value: kairos_integration::ExternalOpenOrder,
+    value: ExternalOpenOrder,
     resolver: &AccountInstrumentResolver,
 ) -> Result<OpenOrder, String> {
     let (instrument_id, market_id) = resolver.resolve(&value.participant_instrument)?;
@@ -678,7 +655,7 @@ pub(crate) fn map_event(
 #[cfg(test)]
 mod identity_tests {
     use super::AccountInstrumentResolver;
-    use kairos_integration::{
+    use kairos_conflux::{
         ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     };
 

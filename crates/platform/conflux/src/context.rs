@@ -1,14 +1,9 @@
-use std::fmt::Display;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use futures_util::{Stream, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::process::EventEnvelope;
-use crate::{
-    ConfluxActor, ConfluxEvent, ConfluxSystem, ContractEvent, IntegrationEvent, ShutdownMode,
-    SystemEvent,
-};
+use crate::{ConfluxActor, ConfluxEvent, ConfluxSystem, ShutdownMode, SystemEvent};
 
 /// Exclusive authority available during one Actor event.
 pub struct Context<'process, A: ConfluxActor> {
@@ -37,93 +32,108 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         self.system
     }
 
+    pub fn connections(&mut self) -> crate::system::ConnectionCollections<'_> {
+        self.system.connections()
+    }
+
+    pub fn reference_client(
+        &mut self,
+        key: &str,
+    ) -> Option<&mut kairos_reference_contract::ReferenceClient> {
+        self.system.reference_client_mut(key)
+    }
+
     pub fn request_shutdown(&mut self, mode: ShutdownMode) {
         *self.shutdown = Some(mode);
     }
 
-    pub fn spawn_account_events(
+    pub fn register_account_events(
         &mut self,
         client: impl Into<String>,
         stream: kairos_account_contract::AccountEventStream,
-    ) {
-        self.spawn_contract_stream(client, stream, |client, frame| {
-            ConfluxEvent::Account(ContractEvent { client, frame })
-        });
+    ) -> Result<(), crate::ResourceError> {
+        let client = client.into();
+        self.system
+            .account_event_streams
+            .ensure_with(client.clone(), 1, || stream)?;
+        self.system
+            .account_event_streams
+            .get_mut(&client)
+            .expect("registered Account event stream")
+            .set_state(crate::ResourceState::Ready);
+        Ok(())
     }
 
-    pub fn spawn_execution_events(
+    pub fn register_execution_events(
         &mut self,
         client: impl Into<String>,
         stream: kairos_execution_contract::ExecutionEventStream,
-    ) {
-        self.spawn_contract_stream(client, stream, |client, frame| {
-            ConfluxEvent::Execution(ContractEvent { client, frame })
-        });
+    ) -> Result<(), crate::ResourceError> {
+        let client = client.into();
+        self.system
+            .execution_event_streams
+            .ensure_with(client.clone(), 1, || stream)?;
+        self.system
+            .execution_event_streams
+            .get_mut(&client)
+            .expect("registered Execution event stream")
+            .set_state(crate::ResourceState::Ready);
+        Ok(())
     }
 
-    pub fn spawn_market_events(
+    pub fn register_market_events(
         &mut self,
         client: impl Into<String>,
         stream: kairos_market_contract::MarketEventStream,
-    ) {
-        self.spawn_contract_stream(client, stream, |client, frame| {
-            ConfluxEvent::Market(ContractEvent { client, frame })
-        });
+    ) -> Result<(), crate::ResourceError> {
+        let client = client.into();
+        self.system
+            .market_event_streams
+            .ensure_with(client.clone(), 1, || stream)?;
+        self.system
+            .market_event_streams
+            .get_mut(&client)
+            .expect("registered Market event stream")
+            .set_state(crate::ResourceState::Ready);
+        Ok(())
     }
 
-    pub fn spawn_reference_events(
+    pub fn register_reference_events(
         &mut self,
         client: impl Into<String>,
         stream: kairos_reference_contract::ReferenceEventStream,
-    ) {
-        self.spawn_contract_stream(client, stream, |client, frame| {
-            ConfluxEvent::Reference(ContractEvent { client, frame })
-        });
+    ) -> Result<(), crate::ResourceError> {
+        let client = client.into();
+        self.system
+            .reference_event_streams
+            .ensure_with(client.clone(), 1, || stream)?;
+        self.system
+            .reference_event_streams
+            .get_mut(&client)
+            .expect("registered Reference event stream")
+            .set_state(crate::ResourceState::Ready);
+        Ok(())
     }
 
-    pub fn spawn_risk_events(
+    pub fn register_risk_events(
         &mut self,
         client: impl Into<String>,
         stream: kairos_risk_contract::RiskEventStream,
-    ) {
-        self.spawn_contract_stream(client, stream, |client, frame| {
-            ConfluxEvent::Risk(ContractEvent { client, frame })
-        });
+    ) -> Result<(), crate::ResourceError> {
+        let client = client.into();
+        self.system
+            .risk_event_streams
+            .ensure_with(client.clone(), 1, || stream)?;
+        self.system
+            .risk_event_streams
+            .get_mut(&client)
+            .expect("registered Risk event stream")
+            .set_state(crate::ResourceState::Ready);
+        Ok(())
     }
 
     pub fn spawn_timer(&mut self, name: impl Into<String>, period: Duration) {
-        let name = name.into();
-        let source = format!("timer:{name}");
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            if period.is_zero() {
-                send_source_failure::<A>(&sender, source, "timer period must be positive".into())
-                    .await;
-                return;
-            }
-            let mut interval =
-                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                let fired_at_unix_nanos = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|value| u64::try_from(value.as_nanos()).unwrap_or(u64::MAX))
-                    .unwrap_or_default();
-                if send_event(
-                    &sender,
-                    ConfluxEvent::System(SystemEvent::Timer {
-                        name: name.clone(),
-                        fired_at_unix_nanos,
-                    }),
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
-            }
-        }));
+        self.system.register_timer(name.into(), period);
     }
 
     /// Places a module-owned technical worker under the Conflux lifecycle.
@@ -170,226 +180,6 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
             send_source_failure::<A>(&sender, source, "local event source closed".into()).await;
         }));
     }
-
-    /// Moves one multiplexed physical provider connection into a single
-    /// supervised reader. This avoids competing mutable consumers for account,
-    /// execution, and market channels carried by the same socket.
-    pub fn spawn_integration_events<C>(&mut self, connection: impl Into<String>, mut stream: C)
-    where
-        C: kairos_integration::ParticipantEventStream
-            + kairos_integration::ConnectionLifecycleCommand
-            + 'static,
-    {
-        let connection = connection.into();
-        let source = format!("integration:{connection}");
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            if let Err(error) =
-                kairos_integration::ConnectionLifecycleCommand::connect(&mut stream).await
-            {
-                send_source_failure::<A>(&sender, source.clone(), error.to_string()).await;
-                return;
-            }
-            send_source_ready::<A>(&sender, source.clone()).await;
-            loop {
-                match kairos_integration::ParticipantEventStream::next(&mut stream).await {
-                    Ok(event) => {
-                        if send_event(
-                            &sender,
-                            ConfluxEvent::Integration(IntegrationEvent {
-                                connection: connection.clone(),
-                                event,
-                            }),
-                        )
-                        .await
-                        .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ =
-                            kairos_integration::ConnectionLifecycleCommand::disconnect(&mut stream)
-                                .await;
-                        send_source_failure::<A>(&sender, source, error.to_string()).await;
-                        return;
-                    }
-                }
-            }
-        }));
-    }
-
-    pub fn spawn_integration_account_events<C>(
-        &mut self,
-        connection: impl Into<String>,
-        mut stream: C,
-    ) where
-        C: kairos_integration::AccountStream
-            + kairos_integration::ConnectionLifecycleCommand
-            + 'static,
-    {
-        let connection = connection.into();
-        let source = format!("integration:{connection}");
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            if let Err(error) =
-                kairos_integration::ConnectionLifecycleCommand::connect(&mut stream).await
-            {
-                send_source_failure::<A>(&sender, source.clone(), error.to_string()).await;
-                return;
-            }
-            send_source_ready::<A>(&sender, source.clone()).await;
-            loop {
-                match kairos_integration::AccountStream::next(&mut stream).await {
-                    Ok(event) => {
-                        if send_event(
-                            &sender,
-                            ConfluxEvent::Integration(IntegrationEvent {
-                                connection: connection.clone(),
-                                event: kairos_integration::ExternalParticipantEvent::Account(event),
-                            }),
-                        )
-                        .await
-                        .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ =
-                            kairos_integration::ConnectionLifecycleCommand::disconnect(&mut stream)
-                                .await;
-                        send_source_failure::<A>(&sender, source, error.to_string()).await;
-                        return;
-                    }
-                }
-            }
-        }));
-    }
-
-    pub fn spawn_integration_execution_events<C>(
-        &mut self,
-        connection: impl Into<String>,
-        mut stream: C,
-    ) where
-        C: kairos_integration::ExecutionStream
-            + kairos_integration::ConnectionLifecycleCommand
-            + 'static,
-    {
-        let connection = connection.into();
-        let source = format!("integration:{connection}");
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            if let Err(error) =
-                kairos_integration::ConnectionLifecycleCommand::connect(&mut stream).await
-            {
-                send_source_failure::<A>(&sender, source.clone(), error.to_string()).await;
-                return;
-            }
-            send_source_ready::<A>(&sender, source.clone()).await;
-            loop {
-                match kairos_integration::ExecutionStream::next(&mut stream).await {
-                    Ok(event) => {
-                        if send_event(
-                            &sender,
-                            ConfluxEvent::Integration(IntegrationEvent {
-                                connection: connection.clone(),
-                                event: kairos_integration::ExternalParticipantEvent::Execution(
-                                    event,
-                                ),
-                            }),
-                        )
-                        .await
-                        .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ =
-                            kairos_integration::ConnectionLifecycleCommand::disconnect(&mut stream)
-                                .await;
-                        send_source_failure::<A>(&sender, source, error.to_string()).await;
-                        return;
-                    }
-                }
-            }
-        }));
-    }
-
-    pub fn spawn_integration_market_events<C>(
-        &mut self,
-        connection: impl Into<String>,
-        mut stream: C,
-    ) where
-        C: kairos_integration::MarketDataStream
-            + kairos_integration::ConnectionLifecycleCommand
-            + 'static,
-    {
-        let connection = connection.into();
-        let source = format!("integration:{connection}");
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            if let Err(error) =
-                kairos_integration::ConnectionLifecycleCommand::connect(&mut stream).await
-            {
-                send_source_failure::<A>(&sender, source.clone(), error.to_string()).await;
-                return;
-            }
-            send_source_ready::<A>(&sender, source.clone()).await;
-            loop {
-                match kairos_integration::MarketDataStream::next(&mut stream).await {
-                    Ok(event) => {
-                        if send_event(
-                            &sender,
-                            ConfluxEvent::Integration(IntegrationEvent {
-                                connection: connection.clone(),
-                                event: kairos_integration::ExternalParticipantEvent::Market(event),
-                            }),
-                        )
-                        .await
-                        .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ =
-                            kairos_integration::ConnectionLifecycleCommand::disconnect(&mut stream)
-                                .await;
-                        send_source_failure::<A>(&sender, source, error.to_string()).await;
-                        return;
-                    }
-                }
-            }
-        }));
-    }
-
-    fn spawn_contract_stream<S, F, E, M>(&mut self, source: impl Into<String>, stream: S, map: M)
-    where
-        S: Stream<Item = Result<F, E>> + Send + Unpin + 'static,
-        F: Send + 'static,
-        E: Display + Send + 'static,
-        M: Fn(String, F) -> ConfluxEvent<A, A::LocalEvent> + Send + 'static,
-    {
-        let source = source.into();
-        let sender = self.sender.clone();
-        self.source_tasks.push(tokio::spawn(async move {
-            let mut stream = stream;
-            while let Some(result) = stream.next().await {
-                let event = match result {
-                    Ok(frame) => map(source.clone(), frame),
-                    Err(error) => {
-                        send_source_failure::<A>(&sender, source.clone(), error.to_string()).await;
-                        return;
-                    }
-                };
-                if send_event(&sender, event).await.is_err() {
-                    return;
-                }
-            }
-        }));
-    }
 }
 
 async fn send_source_failure<A: ConfluxActor>(
@@ -400,17 +190,6 @@ async fn send_source_failure<A: ConfluxActor>(
     let _ = send_event(
         sender,
         ConfluxEvent::System(SystemEvent::SourceFailed { source, error }),
-    )
-    .await;
-}
-
-async fn send_source_ready<A: ConfluxActor>(
-    sender: &mpsc::Sender<EventEnvelope<A>>,
-    source: String,
-) {
-    let _ = send_event(
-        sender,
-        ConfluxEvent::System(SystemEvent::SourceReady { source }),
     )
     .await;
 }

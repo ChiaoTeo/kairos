@@ -12,6 +12,7 @@ sys.modules.setdefault("kairos", _generated_kairos)
 _EVENT_ROOTS: dict[bytes, str] = {
     b"EIA2": "IntentAccepted",
     b"EIR2": "IntentRejected",
+    b"EIL2": "IntentLifecycleChanged",
     b"EPV2": "PlanCreated",
     b"EOS2": "OrderSubmitted",
     b"EOA2": "OrderAccepted",

@@ -37,7 +37,7 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for SequenceSource {
     fn source_id(&self) -> &str {
         "sequence-test"
@@ -54,7 +54,7 @@ impl ReferenceSource for SequenceSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for TestSource {
     fn source_id(&self) -> &str {
         "test"

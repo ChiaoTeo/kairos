@@ -3,10 +3,23 @@ use secrecy::ExposeSecret;
 use crate::participants::hyperliquid::HyperliquidExchangeRestConfig;
 use crate::services::participants::hyperliquid::exchange::ExchangeService;
 use crate::{
-    CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
+    CommandOutcome, CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
     ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionState, IntegrationError,
     OrderCommand, OrderEntryEvent, OrderEntryRequest, ParticipantKind, ParticipantRef,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HyperliquidAmendOrderRequest {
+    pub replacement: OrderEntryRequest,
+    pub remote_order_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HyperliquidCancelOrderRequest {
+    pub order: OrderEntryRequest,
+    pub remote_order_id: String,
+    pub at_unix_nanos: u64,
+}
 
 pub struct HyperliquidExchangeRestConnection {
     state: ConnectionState,
@@ -14,9 +27,12 @@ pub struct HyperliquidExchangeRestConnection {
 }
 
 impl HyperliquidExchangeRestConnection {
-    pub fn new(config: HyperliquidExchangeRestConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: HyperliquidExchangeRestConfig,
+    ) -> Result<Self, IntegrationError> {
         let mut descriptor = ConnectionDescriptor::new(
-            config.binding_id,
+            connection_key,
             ParticipantRef::new(ParticipantKind::Exchange, "hyperliquid")
                 .map_err(IntegrationError::InvalidRequest)?,
             "exchange.rest",
@@ -35,6 +51,50 @@ impl HyperliquidExchangeRestConnection {
 
     pub fn descriptor(&self) -> &ConnectionDescriptor {
         &self.state.identity
+    }
+
+    pub async fn submit_orders(
+        &mut self,
+        requests: &[OrderEntryRequest],
+    ) -> CommandResult<Vec<CommandOutcome<OrderEntryEvent>>> {
+        self.service.submit_batch(requests).await
+    }
+
+    pub async fn amend_order(
+        &mut self,
+        request: &HyperliquidAmendOrderRequest,
+    ) -> CommandResult<OrderEntryEvent> {
+        self.service
+            .modify(&request.replacement, &request.remote_order_id)
+            .await
+    }
+
+    pub async fn amend_orders(
+        &mut self,
+        requests: &[HyperliquidAmendOrderRequest],
+    ) -> CommandResult<Vec<CommandOutcome<OrderEntryEvent>>> {
+        let requests = requests
+            .iter()
+            .map(|request| (request.replacement.clone(), request.remote_order_id.clone()))
+            .collect::<Vec<_>>();
+        self.service.modify_batch(&requests).await
+    }
+
+    pub async fn cancel_orders(
+        &mut self,
+        requests: &[HyperliquidCancelOrderRequest],
+    ) -> CommandResult<Vec<CommandOutcome<OrderEntryEvent>>> {
+        let requests = requests
+            .iter()
+            .map(|request| {
+                (
+                    request.order.clone(),
+                    request.remote_order_id.clone(),
+                    request.at_unix_nanos,
+                )
+            })
+            .collect::<Vec<_>>();
+        self.service.cancel_batch(&requests).await
     }
 }
 

@@ -251,6 +251,7 @@ class ExecutionCommandClient:
             payload={
                 "intent": {
                     "intent_id": intent_id,
+                    "strategy_decision_id": request.strategy_decision_id,
                     "strategy_id": strategy_id,
                     "launch_id": self.launch_id or "",
                     "instance_id": instance_id,
@@ -445,6 +446,7 @@ class ExecutionCommandClient:
             )
         body = {
             "intent_id": intent_id,
+            "strategy_decision_id": request.strategy_decision_id,
             "strategy_id": strategy_id,
             "launch_id": self.launch_id or "",
             "instance_id": instance_id,
@@ -503,6 +505,7 @@ class ExecutionCommandClient:
         intent_id = request.intent_id or f"{strategy_id}:intent:{request_id}"
         body = {
             "intent_id": intent_id,
+            "strategy_decision_id": request.strategy_decision_id,
             "strategy_id": strategy_id,
             "launch_id": self.launch_id or "",
             "instance_id": instance_id,
@@ -587,6 +590,7 @@ class ExecutionCommandClient:
         first = request.targets[0]
         body = {
             "intent_id": intent_id,
+            "strategy_decision_id": request.strategy_decision_id,
             "strategy_id": strategy_id,
             "launch_id": self.launch_id or "",
             "instance_id": instance_id,
@@ -642,6 +646,7 @@ class ExecutionCommandClient:
         account_ids = [request.account_id]
         body = {
             "intent_id": intent_id,
+            "strategy_decision_id": request.strategy_decision_id,
             "strategy_id": strategy_id,
             "launch_id": self.launch_id or "",
             "instance_id": instance_id,

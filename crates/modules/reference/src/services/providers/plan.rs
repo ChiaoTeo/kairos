@@ -1,5 +1,7 @@
-use kairos_conflux::ConfluxSystem;
-use kairos_integration::participants::{binance, hyperliquid, massive, okx};
+use kairos_conflux::{
+    BinanceCredential, BinanceRestConfig, ConnectionCollections, ConnectionKey,
+    HyperliquidRestConfig, MassiveInstrumentQuery, MassiveRestConfig, OkxRestConfig,
+};
 
 use super::{
     BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
@@ -30,7 +32,7 @@ pub(crate) enum ReferenceProviderPlan {
     BinanceEquity {
         key: String,
         endpoint: String,
-        credential: binance::BinanceCredential,
+        credential: BinanceCredential,
     },
     Okx {
         key: String,
@@ -76,76 +78,84 @@ impl ReferenceSourcePlan {
         }
     }
 
-    pub(crate) fn install(&self, system: &mut ConfluxSystem) -> ReferenceResult<()> {
+    pub(crate) fn install(
+        &self,
+        connections: &mut ConnectionCollections<'_>,
+    ) -> ReferenceResult<()> {
         for provider in &self.providers {
             match provider {
                 ReferenceProviderPlan::BinanceSpot { key, endpoint } => {
-                    let connection = binance::spot::BinanceSpotRestConnection::new(binance_config(
-                        key, endpoint, None,
-                    ))
-                    .map_err(provider_error)?;
-                    ensure(&mut system.binance_spot_rest_connections, key, connection)?;
+                    connections
+                        .binance_spot_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            binance_config(endpoint, None),
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::BinanceUsdM { key, endpoint } => {
-                    let connection = binance::usdm::BinanceUsdMRestConnection::new(binance_config(
-                        key, endpoint, None,
-                    ))
-                    .map_err(provider_error)?;
-                    ensure(&mut system.binance_usdm_rest_connections, key, connection)?;
+                    connections
+                        .binance_usdm_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            binance_config(endpoint, None),
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::BinanceCoinM { key, endpoint } => {
-                    let connection = binance::coinm::BinanceCoinMRestConnection::new(
-                        binance_config(key, endpoint, None),
-                    )
-                    .map_err(provider_error)?;
-                    ensure(&mut system.binance_coinm_rest_connections, key, connection)?;
+                    connections
+                        .binance_coinm_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            binance_config(endpoint, None),
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::BinanceOptions { key, endpoint } => {
-                    let connection = binance::options::BinanceOptionsRestConnection::new(
-                        binance_config(key, endpoint, None),
-                    )
-                    .map_err(provider_error)?;
-                    ensure(
-                        &mut system.binance_options_rest_connections,
-                        key,
-                        connection,
-                    )?;
+                    connections
+                        .binance_options_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            binance_config(endpoint, None),
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::BinanceEquity {
                     key,
                     endpoint,
                     credential,
                 } => {
-                    let connection = binance::advanced::stocks::BinanceStocksRestConnection::new(
-                        binance_config(key, endpoint, Some(credential.clone())),
-                    )
-                    .map_err(provider_error)?;
-                    ensure(&mut system.binance_stocks_rest_connections, key, connection)?;
+                    connections
+                        .binance_stocks_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            binance_config(endpoint, Some(credential.clone())),
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::Okx { key, endpoint, .. } => {
-                    let connection =
-                        okx::public::OkxPublicRestConnection::new(okx::OkxRestConfig {
-                            binding_id: key.clone(),
-                            environment: "public".into(),
-                            endpoint: endpoint.clone(),
-                        })
+                    connections
+                        .okx_public_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            OkxRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone(),
+                            },
+                        )
                         .map_err(provider_error)?;
-                    ensure(&mut system.okx_public_rest_connections, key, connection)?;
                 }
                 ReferenceProviderPlan::Hyperliquid { key, endpoint, .. } => {
-                    let connection = hyperliquid::info::HyperliquidInfoRestConnection::new(
-                        hyperliquid::HyperliquidRestConfig {
-                            binding_id: key.clone(),
-                            environment: "public".into(),
-                            endpoint: endpoint.clone(),
-                        },
-                    )
-                    .map_err(provider_error)?;
-                    ensure(
-                        &mut system.hyperliquid_info_rest_connections,
-                        key,
-                        connection,
-                    )?;
+                    connections
+                        .hyperliquid_info_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            HyperliquidRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone(),
+                            },
+                        )
+                        .map_err(provider_error)?;
                 }
                 ReferenceProviderPlan::MassiveEquity {
                     key,
@@ -153,16 +163,18 @@ impl ReferenceSourcePlan {
                     endpoint,
                     ..
                 } => {
-                    let connection =
-                        massive::MassiveRestConnection::new(massive::MassiveRestConfig {
-                            binding_id: key.clone(),
-                            environment: "public".into(),
-                            endpoint: endpoint.clone(),
-                            api_key: secrecy::SecretString::new(api_key.clone().into()),
-                            instrument_query: massive::InstrumentQuery::equities(),
-                        })
+                    connections
+                        .massive_rest
+                        .create(
+                            ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                            MassiveRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone(),
+                                api_key: secrecy::SecretString::new(api_key.clone().into()),
+                                instrument_query: MassiveInstrumentQuery::equities(),
+                            },
+                        )
                         .map_err(provider_error)?;
-                    ensure(&mut system.massive_rest_connections, key, connection)?;
                 }
                 ReferenceProviderPlan::MassiveOptions {
                     api_key,
@@ -172,18 +184,20 @@ impl ReferenceSourcePlan {
                 } => {
                     for underlying in underlyings {
                         let key = MassiveOptionsCoverageSource::connection_key(underlying)?;
-                        let connection =
-                            massive::MassiveRestConnection::new(massive::MassiveRestConfig {
-                                binding_id: key.clone(),
-                                environment: "public".into(),
-                                endpoint: endpoint.clone(),
-                                api_key: secrecy::SecretString::new(api_key.clone().into()),
-                                instrument_query: massive::InstrumentQuery::options(Some(
-                                    underlying.clone(),
-                                )),
-                            })
+                        connections
+                            .massive_rest
+                            .create(
+                                ConnectionKey::new(key.clone()).map_err(provider_error)?,
+                                MassiveRestConfig {
+                                    environment: "public".into(),
+                                    endpoint: endpoint.clone(),
+                                    api_key: secrecy::SecretString::new(api_key.clone().into()),
+                                    instrument_query: MassiveInstrumentQuery::options(Some(
+                                        underlying.clone(),
+                                    )),
+                                },
+                            )
                             .map_err(provider_error)?;
-                        ensure(&mut system.massive_rest_connections, &key, connection)?;
                     }
                 }
             }
@@ -193,41 +207,38 @@ impl ReferenceSourcePlan {
 
     pub(crate) async fn activate(
         self,
-        system: &mut ConfluxSystem,
+        _connections: &mut ConnectionCollections<'_>,
     ) -> ReferenceResult<ConfiguredReferenceSource> {
         let mut sources = Vec::with_capacity(self.providers.len());
         for provider in self.providers {
             let source = match provider {
                 ReferenceProviderPlan::BinanceSpot { key, .. } => {
-                    ConfiguredProviderSource::BinanceSpot(BinanceSpotSource::from_connection(take(
-                        &mut system.binance_spot_rest_connections,
-                        &key,
-                    )?))
+                    ConfiguredProviderSource::BinanceSpot(BinanceSpotSource::from_key(
+                        ConnectionKey::new(key).map_err(provider_error)?,
+                    ))
                 }
                 ReferenceProviderPlan::BinanceUsdM { key, .. } => {
                     ConfiguredProviderSource::BinanceDerivatives(
-                        BinanceDerivativesSource::from_usdm(take(
-                            &mut system.binance_usdm_rest_connections,
-                            &key,
-                        )?),
+                        BinanceDerivativesSource::from_usdm_key(
+                            ConnectionKey::new(key).map_err(provider_error)?,
+                        ),
                     )
                 }
                 ReferenceProviderPlan::BinanceCoinM { key, .. } => {
                     ConfiguredProviderSource::BinanceDerivatives(
-                        BinanceDerivativesSource::from_coinm(take(
-                            &mut system.binance_coinm_rest_connections,
-                            &key,
-                        )?),
+                        BinanceDerivativesSource::from_coinm_key(
+                            ConnectionKey::new(key).map_err(provider_error)?,
+                        ),
                     )
                 }
                 ReferenceProviderPlan::BinanceOptions { key, .. } => {
-                    ConfiguredProviderSource::BinanceOptions(BinanceOptionsSource::from_connection(
-                        take(&mut system.binance_options_rest_connections, &key)?,
+                    ConfiguredProviderSource::BinanceOptions(BinanceOptionsSource::from_key(
+                        ConnectionKey::new(key).map_err(provider_error)?,
                     ))
                 }
                 ReferenceProviderPlan::BinanceEquity { key, .. } => {
-                    ConfiguredProviderSource::BinanceEquity(BinanceEquitySource::from_connection(
-                        take(&mut system.binance_stocks_rest_connections, &key)?,
+                    ConfiguredProviderSource::BinanceEquity(BinanceEquitySource::from_key(
+                        ConnectionKey::new(key).map_err(provider_error)?,
                     ))
                 }
                 ReferenceProviderPlan::Okx {
@@ -235,22 +246,22 @@ impl ReferenceSourcePlan {
                     source_id,
                     product,
                     ..
-                } => ConfiguredProviderSource::Okx(OkxSource::from_connection(
+                } => ConfiguredProviderSource::Okx(OkxSource::from_key(
                     source_id,
                     product,
-                    take(&mut system.okx_public_rest_connections, &key)?,
+                    ConnectionKey::new(key).map_err(provider_error)?,
                 )),
                 ReferenceProviderPlan::Hyperliquid { key, product, .. } => {
-                    ConfiguredProviderSource::Hyperliquid(HyperliquidSource::from_connection(
+                    ConfiguredProviderSource::Hyperliquid(HyperliquidSource::from_key(
                         product,
-                        take(&mut system.hyperliquid_info_rest_connections, &key)?,
+                        ConnectionKey::new(key).map_err(provider_error)?,
                     ))
                 }
                 ReferenceProviderPlan::MassiveEquity {
                     key, sync_store, ..
                 } => ConfiguredProviderSource::MassiveEquity(
-                    MassiveEquitySource::from_connection(
-                        take(&mut system.massive_rest_connections, &key)?,
+                    MassiveEquitySource::from_key(
+                        ConnectionKey::new(key).map_err(provider_error)?,
                         sync_store,
                     )
                     .await?,
@@ -261,7 +272,7 @@ impl ReferenceSourcePlan {
                     sync_store,
                     underlyings,
                 } => ConfiguredProviderSource::MassiveOptions(
-                    MassiveOptionsCoverageSource::from_connections(
+                    MassiveOptionsCoverageSource::from_keys(
                         api_key,
                         endpoint,
                         sync_store,
@@ -270,8 +281,9 @@ impl ReferenceSourcePlan {
                             .map(|underlying| {
                                 let key =
                                     MassiveOptionsCoverageSource::connection_key(&underlying)?;
-                                take(&mut system.massive_rest_connections, &key)
-                                    .map(|connection| (underlying, connection))
+                                ConnectionKey::new(key)
+                                    .map(|connection_key| (underlying, connection_key))
+                                    .map_err(provider_error)
                             })
                             .collect::<ReferenceResult<Vec<_>>>()?,
                     )
@@ -288,46 +300,12 @@ impl ReferenceSourcePlan {
     }
 }
 
-fn binance_config(
-    key: &str,
-    endpoint: &str,
-    credential: Option<binance::BinanceCredential>,
-) -> binance::BinanceRestConfig {
-    binance::BinanceRestConfig {
-        binding_id: key.into(),
+fn binance_config(endpoint: &str, credential: Option<BinanceCredential>) -> BinanceRestConfig {
+    BinanceRestConfig {
         environment: "public".into(),
         endpoint: endpoint.into(),
         credential,
     }
-}
-
-fn ensure<K, C>(
-    connections: &mut kairos_conflux::ManagedConnections<K, C>,
-    key: &K,
-    connection: C,
-) -> ReferenceResult<()>
-where
-    K: Clone + std::hash::Hash + Eq,
-{
-    connections
-        .ensure_with(key.clone(), 1, || connection)
-        .map(|_| ())
-        .map_err(|error| ReferenceError::Provider(error.to_string()))
-}
-
-fn take<K, C>(
-    connections: &mut kairos_conflux::ManagedConnections<K, C>,
-    key: &K,
-) -> ReferenceResult<C>
-where
-    K: std::hash::Hash + Eq + std::fmt::Display,
-{
-    connections
-        .remove(key)
-        .map(|managed| managed.into_connection())
-        .ok_or_else(|| {
-            ReferenceError::Provider(format!("missing managed Reference connection: {key}"))
-        })
 }
 
 fn provider_error(error: impl ToString) -> ReferenceError {

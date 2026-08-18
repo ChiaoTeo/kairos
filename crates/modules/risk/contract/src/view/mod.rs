@@ -7,7 +7,14 @@ use kairos_transport::{
 };
 pub use key::{RiskViewKey, RiskViewKind};
 pub use metadata::ViewMetadata;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub fn risk_view_path(
+    root: impl AsRef<Path>,
+    key: &RiskViewKey,
+) -> ContractResult<PathBuf> {
+    key.resource_path(root)
+}
 pub struct ViewFrame {
     metadata: SnapshotEnvelopeMetadata,
     bytes: Vec<u8>,
@@ -44,8 +51,15 @@ pub struct RiskViewReader {
     reader: SharedSnapshotReader,
 }
 impl RiskViewReader {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &RiskViewKey,
+    ) -> ContractResult<PathBuf> {
+        risk_view_path(root, key)
+    }
+
     pub fn open(root: impl AsRef<Path>, key: RiskViewKey) -> ContractResult<Self> {
-        let reader = SharedSnapshotReader::open(key.resource_path(root))
+        let reader = SharedSnapshotReader::open(risk_view_path(root, &key)?)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { reader, key })
     }
@@ -76,12 +90,19 @@ pub struct RiskViewPublisher {
 }
 
 impl RiskViewPublisher {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &RiskViewKey,
+    ) -> ContractResult<PathBuf> {
+        risk_view_path(root, key)
+    }
+
     pub fn create(
         root: impl AsRef<Path>,
         key: RiskViewKey,
         slot_capacity: usize,
     ) -> ContractResult<Self> {
-        let writer = ReplacementSnapshotStorage::create(key.resource_path(root), slot_capacity)
+        let writer = ReplacementSnapshotStorage::create(risk_view_path(root, &key)?, slot_capacity)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, writer })
     }

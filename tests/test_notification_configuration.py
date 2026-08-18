@@ -1,0 +1,379 @@
+from __future__ import annotations
+
+import asyncio
+from decimal import Decimal
+import json
+from pathlib import Path
+
+import pytest
+
+from kairospy.application.launch.application.configuration import (
+    LaunchConfigError,
+    LaunchConfigurationApplication,
+)
+from kairospy.application.notification.composition import (
+    NotificationConfigError,
+    compose_notifications,
+    validate_notification_resources,
+)
+from kairospy.application.strategy.composition import compose_strategy_process
+from kairospy.application.workspace import WorkspaceApplication
+from kairospy.strategy import StrategyIdentity, StrategyLogger
+from kairospy.strategy import InstrumentId
+
+
+def _workspace(tmp_path: Path):
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="ws")
+    workspace.paths.notification_config().write_text(
+        """version = 1
+
+[destinations.feishu-options]
+sender = "feishu"
+credential_id = "feishu-options"
+
+[destinations.telegram-personal]
+sender = "telegram"
+credential_id = "telegram-options"
+chat_id = "-10042"
+""",
+        encoding="utf-8",
+    )
+    (workspace.paths.credential_config().parent / "feishu-options.toml").write_text(
+        """[credential]
+id = "feishu-options"
+provider = "feishu"
+webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/feishu-test-token"
+""",
+        encoding="utf-8",
+    )
+    (workspace.paths.credential_config().parent / "telegram-options.toml").write_text(
+        """[credential]
+id = "telegram-options"
+provider = "telegram"
+bot_token = "123456:test-token"
+""",
+        encoding="utf-8",
+    )
+    return workspace
+
+
+def _config() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "required": True,
+        "default_routes": ["signals"],
+        "queue_capacity": 16,
+        "shutdown_grace_seconds": 1,
+        "routes": {
+            "signals": ["feishu-options", "telegram-personal"],
+        },
+    }
+
+
+def test_workspace_resources_resolve_without_exposing_secrets(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    composition = compose_notifications(
+        workspace=workspace,
+        instance=workspace.instance("paper", "launch", "instance"),
+        identity=StrategyIdentity("strategy", "launch", "instance"),
+        mode="paper",
+        config=_config(),
+        logger=StrategyLogger(),
+    )
+
+    assert composition.config_hash
+    assert composition.issues == ()
+    assert composition.application.health()["state"] == "healthy"
+    assert "test-token" not in repr(composition)
+
+
+def test_required_and_degraded_resource_behavior(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    (workspace.paths.credential_config().parent / "telegram-options.toml").unlink()
+    with pytest.raises(NotificationConfigError, match="credential not found"):
+        compose_notifications(
+            workspace=workspace,
+            instance=workspace.instance("paper", "launch", "required"),
+            identity=StrategyIdentity("strategy", "launch", "required"),
+            mode="paper",
+            config=_config(),
+            logger=StrategyLogger(),
+        )
+
+    config = _config() | {"required": False}
+    composition = compose_notifications(
+        workspace=workspace,
+        instance=workspace.instance("paper", "launch", "degraded"),
+        identity=StrategyIdentity("strategy", "launch", "degraded"),
+        mode="paper",
+        config=config,
+        logger=StrategyLogger(),
+    )
+    assert composition.issues
+    assert composition.application.health()["state"] == "degraded"
+
+
+def test_feishu_signing_is_rejected_until_the_component_supports_it(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    credential = workspace.paths.credential_config().parent / "feishu-options.toml"
+    credential.write_text(
+        credential.read_text(encoding="utf-8") + 'signing_secret = "secret"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(NotificationConfigError, match="Apprise adapter does not support"):
+        compose_notifications(
+            workspace=workspace,
+            instance=workspace.instance("paper", "launch", "signed"),
+            identity=StrategyIdentity("strategy", "launch", "signed"),
+            mode="paper",
+            config=_config(),
+            logger=StrategyLogger(),
+        )
+
+
+def test_backtest_records_without_resolving_credentials(tmp_path: Path) -> None:
+    async def scenario() -> tuple[dict[str, object], Path]:
+        workspace = _workspace(tmp_path)
+        for credential in workspace.paths.credential_config().parent.glob("*.toml"):
+            credential.unlink()
+        instance = workspace.instance("backtest", "launch", "instance")
+        composition = compose_notifications(
+            workspace=workspace,
+            instance=instance,
+            identity=StrategyIdentity("strategy", "launch", "instance"),
+            mode="backtest",
+            config=_config(),
+            logger=StrategyLogger(),
+        )
+        await composition.runtime.start()
+        composition.application.publish(title="signal", body="body")
+        await composition.runtime.flush(timeout=1)
+        health = composition.application.health()
+        await composition.runtime.close()
+        return health, instance.artifact("notifications.jsonl")
+
+    health, artifact = asyncio.run(scenario())
+    assert health["delivered_total"] == 2
+    records = [json.loads(line) for line in artifact.read_text().splitlines()]
+    assert {record["destination_id"] for record in records} == {
+        "feishu-options",
+        "telegram-personal",
+    }
+
+
+def test_launch_normalizes_notifications_and_validates_workspace(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    launch = workspace.paths.config / "launches" / "signals.toml"
+    launch.write_text(
+        """[launch]
+id = "signals"
+mode = "paper"
+strategy = "strategies.signals:Strategy"
+
+[execution]
+enabled = false
+
+[notifications]
+enabled = true
+required = true
+default_routes = ["signals"]
+queue_capacity = 32
+
+[notifications.routes]
+signals = ["feishu-options", "telegram-personal"]
+""",
+        encoding="utf-8",
+    )
+    application = LaunchConfigurationApplication()
+    report = application.validate(launch, workspace_root=workspace.paths.root)
+    assert report == {"path": str(launch.resolve()), "valid": True, "issues": []}
+
+    environment = application.environment(
+        launch, workspace_root=workspace.paths.root, instance_id="one"
+    )
+    normalized = json.loads(environment.normalized_config_path.read_text())
+    assert normalized["notifications"] == {
+        "enabled": True,
+        "required": True,
+        "default_routes": ["signals"],
+        "queue_capacity": 32,
+        "shutdown_grace_seconds": 5,
+        "routes": {
+            "signals": ["feishu-options", "telegram-personal"],
+        },
+    }
+    assert "test-token" not in environment.normalized_config_path.read_text()
+
+
+def test_launch_rejects_inline_notification_secret(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    launch = workspace.paths.config / "launches" / "bad.toml"
+    launch.write_text(
+        """[launch]
+id = "bad"
+mode = "paper"
+strategy = "strategies.signals:Strategy"
+
+[execution]
+enabled = false
+
+[notifications]
+enabled = true
+webhook_url = "https://secret.example"
+
+[notifications.routes]
+signals = ["feishu-options"]
+""",
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(
+        launch, workspace_root=workspace.paths.root
+    )
+    assert not report["valid"]
+    assert "forbidden" in " ".join(report["issues"])
+
+
+def test_notification_fanout_has_a_configuration_bound(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    config = _config() | {
+        "routes": {"signals": [f"destination-{index}" for index in range(65)]}
+    }
+    with pytest.raises(NotificationConfigError, match="at most 64"):
+        compose_notifications(
+            workspace=workspace,
+            instance=workspace.instance("backtest", "launch", "bounded"),
+            identity=StrategyIdentity("strategy", "launch", "bounded"),
+            mode="backtest",
+            config=config,
+            logger=StrategyLogger(),
+        )
+
+
+def test_static_resource_validation_does_not_require_backtest_secrets(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    for credential in workspace.paths.credential_config().parent.glob("*.toml"):
+        credential.unlink()
+    assert validate_notification_resources(
+        workspace, _config(), mode="backtest", resolve_secrets=False
+    ) == ()
+    issues = validate_notification_resources(
+        workspace, _config(), mode="paper", resolve_secrets=False
+    )
+    assert "notification credential not found" in " ".join(issues)
+
+
+def test_workspace_validation_rejects_provider_configuration_apprise_cannot_use(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    credential = workspace.paths.credential_config().parent / "feishu-options.toml"
+    credential.write_text(
+        """[credential]
+id = "feishu-options"
+provider = "feishu"
+webhook_url = "https://example.test/not-a-feishu-hook"
+""",
+        encoding="utf-8",
+    )
+    issues = validate_notification_resources(
+        workspace, _config(), mode="paper", resolve_secrets=True
+    )
+    assert "official custom-bot webhook" in " ".join(issues)
+
+
+def test_strategy_context_records_start_and_end_notifications_without_execution(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[list[dict[str, object]], object]:
+        workspace = _workspace(tmp_path)
+        (workspace.paths.root / "signal_strategy.py").write_text(
+            "from kairospy.strategy import Strategy\n"
+            "class SignalStrategy(Strategy):\n"
+            "    strategy_id = 'signal-strategy'\n"
+            "    def on_start(self, ctx):\n"
+            "        ctx.notifications.publish(title='started', body='ready')\n"
+            "    def on_end(self, ctx):\n"
+            "        ctx.notifications.publish(title='stopped', body='done')\n",
+            encoding="utf-8",
+        )
+        launch = workspace.paths.config / "launches" / "signal-backtest.toml"
+        launch.write_text(
+            """[launch]
+id = "signal-backtest"
+mode = "backtest"
+strategy = "signal_strategy:SignalStrategy"
+
+[execution]
+enabled = false
+
+[backtest]
+storage_format = "jsonl"
+
+[backtest.market]
+start = "2026-08-18T00:00:00Z"
+end = "2026-08-18T00:01:00Z"
+scope = "instance"
+
+[notifications]
+enabled = true
+required = true
+default_routes = ["signals"]
+
+[notifications.routes]
+signals = ["feishu-options", "telegram-personal"]
+""",
+            encoding="utf-8",
+        )
+        environment = LaunchConfigurationApplication().environment(
+            launch, workspace_root=workspace.paths.root, instance_id="one"
+        )
+        instance = workspace.instance("backtest", "signal-backtest", "one")
+        instance.component_manifest().write_text(
+            '{"schema_version":1,"components":{},"accounts":{}}',
+            encoding="utf-8",
+        )
+        composition = compose_strategy_process(
+            workspace,
+            strategy_ref="signal_strategy:SignalStrategy",
+            launch_id="signal-backtest",
+            instance_id="one",
+            mode="backtest",
+        )
+        await composition.notifications.runtime.start()
+        try:
+            composition.application.start()
+            composition.application.enable()
+            try:
+                composition.application.stop()
+            except FileNotFoundError:
+                # This focused composition has no running Market control socket;
+                # on_end has already run before owner-release cleanup is attempted.
+                pass
+            await composition.notifications.runtime.flush(timeout=1)
+        finally:
+            await composition.notifications.runtime.close()
+        records = [
+            json.loads(line)
+            for line in instance.artifact("notifications.jsonl").read_text().splitlines()
+        ]
+        return records, composition.application.context.execution
+
+    records, execution = asyncio.run(scenario())
+    assert [record["title"] for record in records] == [
+        "started",
+        "started",
+        "stopped",
+        "stopped",
+    ]
+    assert {
+        record["occurred_at"] for record in records
+    } == {"2026-08-18T00:00:00+00:00"}
+    rejected = execution.target_position(
+        InstrumentId("instrument:test:SPY"), Decimal("1"), account="main"
+    )
+    assert rejected.status == "rejected"
+    assert rejected.error == "execution is disabled for this launch"

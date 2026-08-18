@@ -1,8 +1,8 @@
 [package]
 name = "kairos-execution"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Execution state owner and exchange order boundary"
 autobins = false
 
@@ -11,33 +11,32 @@ name = "kairos_execution"
 path = "src/lib.rs"
 
 [dependencies]
-axum = "0.8"
-flatbuffers = "25.12.19"
-kairos-primitives = { path = "../../primitives" }
-kairos-integration = { path = "../../platform/integration" }
-kairos-conflux = { path = "../../platform/conflux" }
-kairos-protocol = { path = "../../platform/protocol" }
-kairos-transport = { path = "../../platform/transport" }
-kairos-execution-contract = { path = "contract" }
-kairos-account-contract = { path = "../account/contract" }
-kairos-market-contract = { path = "../market/contract" }
-kairos-reference-contract = { path = "../reference/contract" }
-kairos-risk-contract = { path = "../risk/contract" }
-clap = { version = "4", features = ["derive", "env"] }
-kairos-workspace = { path = "../../platform/workspace", features = ["otel"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-secrecy = { workspace = true }
-toml = "0.8"
+axum.workspace = true
+clap.workspace = true
+flatbuffers.workspace = true
+futures-util = { workspace = true, features = ["alloc"] }
+kairos-account-contract.workspace = true
+kairos-conflux.workspace = true
+kairos-execution-contract.workspace = true
+kairos-market-contract.workspace = true
+kairos-primitives.workspace = true
+kairos-protocol.workspace = true
+kairos-reference-contract.workspace = true
+kairos-risk-contract.workspace = true
+kairos-transport.workspace = true
+kairos-workspace = { workspace = true, features = ["otel"] }
+rust_decimal.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sqlx = { workspace = true, features = ["macros", "migrate"] }
-futures-util = { version = "0.3", features = ["alloc"] }
-thiserror = "2"
-tracing = "0.1"
-rust_decimal = { version = "1.42", default-features = false }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [[bin]]
 name = "kairos-execution-server"

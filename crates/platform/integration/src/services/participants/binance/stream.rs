@@ -76,8 +76,18 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
             event.kind = MarketEventKind::BookDelta;
             event.bids = levels(value.get("b").or_else(|| value.get("bids")))?;
             event.asks = levels(value.get("a").or_else(|| value.get("asks")))?;
-            event.first_sequence = value.get("U").and_then(Value::as_u64).map(Into::into);
+            event.first_sequence = value
+                .get("U")
+                .and_then(Value::as_u64)
+                .or_else(|| {
+                    value
+                        .get("pu")
+                        .and_then(Value::as_u64)
+                        .map(|previous| previous.saturating_add(1))
+                })
+                .map(Into::into);
             event.last_sequence = value.get("u").and_then(Value::as_u64).map(Into::into);
+            event.sequence = event.last_sequence;
         }
         "kline" => normalize_kline(&mut event, value.get("k").unwrap_or(value))?,
         "markPriceUpdate" => {
@@ -226,4 +236,34 @@ fn millis(value: Option<&Value>) -> UnixNanos {
 
 fn payload(error: impl std::fmt::Display) -> IntegrationError {
     IntegrationError::InvalidPayload(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn depth_fixture_preserves_spot_and_futures_sequence_evidence() {
+        let spot = normalize(&json!({
+            "e":"depthUpdate","E":1,"s":"BTCUSDT","U":41,"u":42,
+            "b":[["60000","1"]],"a":[["60001","2"]]
+        }))
+        .unwrap()
+        .pop_front()
+        .unwrap();
+        let futures = normalize(&json!({
+            "e":"depthUpdate","E":1,"s":"BTCUSDT","pu":42,"u":44,
+            "b":[["60000","1"]],"a":[["60001","2"]]
+        }))
+        .unwrap()
+        .pop_front()
+        .unwrap();
+
+        assert_eq!(spot.first_sequence.unwrap().get(), 41);
+        assert_eq!(spot.last_sequence.unwrap().get(), 42);
+        assert_eq!(futures.first_sequence.unwrap().get(), 43);
+        assert_eq!(futures.last_sequence.unwrap().get(), 44);
+    }
 }

@@ -1,9 +1,10 @@
 use crate::participants::okx::{OkxCredential, OkxRestConfig};
+use crate::services::clock::{unix_millis, ServerClock};
 use crate::services::participants::okx::signing::okx_signature;
 use crate::transport::http::{ExchangeError, HttpClient};
 use crate::{
-    CommandOutcome, CommandResult, ConnectionDescriptor, IntegrationError, ParticipantKind,
-    ParticipantRef,
+    CommandOutcome, CommandResult, ConnectionDescriptor, ConnectionKey, IntegrationError,
+    ParticipantKind, ParticipantRef,
 };
 use secrecy::ExposeSecret;
 
@@ -11,6 +12,7 @@ pub(crate) struct RestService {
     descriptor: ConnectionDescriptor,
     endpoint: String,
     client: HttpClient,
+    clock: std::sync::Mutex<ServerClock>,
 }
 
 pub(crate) fn check_okx_response(
@@ -20,6 +22,7 @@ pub(crate) fn check_okx_response(
         return Err(ExchangeError::Http {
             status: 200,
             body: value.to_string(),
+            metadata: Default::default(),
         });
     }
     Ok(value)
@@ -27,6 +30,7 @@ pub(crate) fn check_okx_response(
 
 impl RestService {
     pub(crate) fn new(
+        connection_key: ConnectionKey,
         config: OkxRestConfig,
         domain: &str,
         principal_id: Option<String>,
@@ -38,7 +42,7 @@ impl RestService {
             ));
         }
         let mut descriptor = ConnectionDescriptor::new(
-            config.binding_id,
+            connection_key,
             ParticipantRef::new(ParticipantKind::Exchange, "okx")
                 .map_err(IntegrationError::InvalidRequest)?,
             domain,
@@ -54,6 +58,7 @@ impl RestService {
             endpoint,
             client: HttpClient::new("kairos-integration/okx")
                 .map_err(|error| IntegrationError::Transport(error.to_string()))?,
+            clock: std::sync::Mutex::new(ServerClock::default()),
         })
     }
 
@@ -67,6 +72,17 @@ impl RestService {
 
     pub(crate) fn client(&mut self) -> &mut HttpClient {
         &mut self.client
+    }
+
+    pub(crate) fn rate_limit_headers(&self) -> std::collections::BTreeMap<String, String> {
+        self.client.diagnostics().last_rate_limit_headers
+    }
+
+    pub(crate) fn clock_health(&self) -> Result<crate::ProviderClockHealth, IntegrationError> {
+        self.clock
+            .lock()
+            .map(|clock| clock.health())
+            .map_err(|_| IntegrationError::Unavailable("OKX clock lock is poisoned".into()))
     }
 
     pub(crate) async fn public_get(
@@ -92,6 +108,24 @@ impl RestService {
         path: &str,
         query: &[(&str, String)],
     ) -> Result<serde_json::Value, IntegrationError> {
+        self.ensure_clock().await?;
+        let first = self.private_get_once(credential, path, query).await;
+        if is_timestamp_rejection(&first) {
+            self.sync_clock().await?;
+            return self
+                .private_get_once(credential, path, query)
+                .await
+                .map_err(map_error);
+        }
+        first.map_err(map_error)
+    }
+
+    async fn private_get_once(
+        &self,
+        credential: &OkxCredential,
+        path: &str,
+        query: &[(&str, String)],
+    ) -> Result<serde_json::Value, ExchangeError> {
         let query_string = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(query.iter().map(|(key, value)| (*key, value.as_str())))
             .finish();
@@ -100,15 +134,16 @@ impl RestService {
         } else {
             format!("{path}?{query_string}")
         };
-        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let timestamp = self
+            .adjusted_timestamp()
+            .map_err(|error| ExchangeError::InvalidRequest(error.to_string()))?;
         let signature = okx_signature(
             credential.secret.expose_secret(),
             &timestamp,
             "GET",
             &request_path,
             "",
-        )
-        .map_err(map_error)?;
+        )?;
         let headers = private_headers(credential, signature, timestamp);
         self.client
             .get_json_response_with_headers_and_query(
@@ -119,7 +154,6 @@ impl RestService {
             .await
             .map(|response| response.body)
             .and_then(check_okx_response)
-            .map_err(map_error)
     }
 
     pub(crate) async fn private_post_command(
@@ -128,7 +162,8 @@ impl RestService {
         path: &str,
         body: &serde_json::Value,
     ) -> CommandResult<serde_json::Value> {
-        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        self.ensure_clock().await?;
+        let timestamp = self.adjusted_timestamp()?;
         let signature = okx_signature(
             credential.secret.expose_secret(),
             &timestamp,
@@ -145,10 +180,66 @@ impl RestService {
             .await
             .map(|response| response.body)
             .and_then(check_okx_response);
+        if is_timestamp_rejection(&result) {
+            // The command was explicitly rejected. Refresh only the clock;
+            // the caller decides whether to submit a new command.
+            self.sync_clock().await?;
+        }
         match result {
             Ok(value) => Ok(CommandOutcome::Confirmed(value)),
             Err(error) => crate::transport::http::command_error_outcome(error),
         }
+    }
+
+    async fn ensure_clock(&self) -> Result<(), IntegrationError> {
+        let fresh = self
+            .clock
+            .lock()
+            .map_err(|_| IntegrationError::Unavailable("OKX clock lock is poisoned".into()))?
+            .is_fresh();
+        if fresh {
+            Ok(())
+        } else {
+            self.sync_clock().await
+        }
+    }
+
+    async fn sync_clock(&self) -> Result<(), IntegrationError> {
+        let started = unix_millis()?;
+        let response = self
+            .client
+            .get_json_response_with_headers_and_query(
+                &format!("{}/api/v5/public/time", self.endpoint),
+                &[],
+                &[],
+            )
+            .await
+            .map_err(map_error)?;
+        let received = unix_millis()?;
+        let provider = response
+            .body
+            .pointer("/data/0/ts")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| IntegrationError::InvalidPayload("OKX server time is missing".into()))?;
+        self.clock
+            .lock()
+            .map_err(|_| IntegrationError::Unavailable("OKX clock lock is poisoned".into()))?
+            .observe(provider, started, received)
+    }
+
+    fn adjusted_timestamp(&self) -> Result<String, IntegrationError> {
+        let millis = self
+            .clock
+            .lock()
+            .map_err(|_| IntegrationError::Unavailable("OKX clock lock is poisoned".into()))?
+            .adjusted_unix_millis()?;
+        let millis = i64::try_from(millis).map_err(|_| {
+            IntegrationError::Unavailable("OKX timestamp cannot be represented".into())
+        })?;
+        chrono::DateTime::from_timestamp_millis(millis)
+            .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+            .ok_or_else(|| IntegrationError::Unavailable("OKX timestamp is out of range".into()))
     }
 }
 
@@ -174,10 +265,39 @@ pub(crate) fn map_error(error: ExchangeError) -> IntegrationError {
     match error {
         ExchangeError::Authentication(message) => IntegrationError::Authentication(message),
         ExchangeError::InvalidRequest(message) => IntegrationError::InvalidRequest(message),
-        ExchangeError::Http { status: 429, body } => IntegrationError::RateLimited(body),
-        ExchangeError::Http { status, body } => {
+        ExchangeError::Http {
+            status: 429, body, ..
+        } => IntegrationError::RateLimited(body),
+        ExchangeError::Http { status, body, .. } => {
             IntegrationError::Transport(format!("OKX HTTP {status}: {body}"))
         }
         other => IntegrationError::Transport(other.to_string()),
+    }
+}
+
+fn is_timestamp_rejection(result: &Result<serde_json::Value, ExchangeError>) -> bool {
+    matches!(
+        result,
+        Err(ExchangeError::Http { body, .. })
+            if serde_json::from_str::<serde_json::Value>(body)
+                .ok()
+                .and_then(|value| value.get("code").and_then(serde_json::Value::as_str).map(str::to_owned))
+                .as_deref()
+                == Some("50102")
+    )
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_okx_timestamp_rejection_only() {
+        let timestamp = Err(ExchangeError::Http {
+            status: 200,
+            body: r#"{"code":"50102","msg":"Timestamp request expired"}"#.into(),
+            metadata: Default::default(),
+        });
+        assert!(is_timestamp_rejection(&timestamp));
     }
 }

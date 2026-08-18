@@ -1,0 +1,13 @@
+version = 1
+
+# Copy the required destinations into the Workspace-owned file:
+# .kairos/config/notifications/notifications.toml
+
+[destinations.feishu-options]
+sender = "feishu"
+credential_id = "feishu-options"
+
+[destinations.telegram-personal]
+sender = "telegram"
+credential_id = "telegram-options"
+chat_id = "-1001234567890"

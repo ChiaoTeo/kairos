@@ -11,16 +11,40 @@ fn reference_connections_enter_through_exact_conflux_collections() {
     let plan = std::fs::read_to_string(root.join("src/services/providers/plan.rs"))
         .expect("read Reference provider plan");
     for collection in [
-        "binance_spot_rest_connections",
-        "binance_usdm_rest_connections",
-        "binance_coinm_rest_connections",
-        "binance_options_rest_connections",
-        "binance_stocks_rest_connections",
-        "okx_public_rest_connections",
-        "hyperliquid_info_rest_connections",
-        "massive_rest_connections",
+        ".binance_spot_rest",
+        ".binance_usdm_rest",
+        ".binance_coinm_rest",
+        ".binance_options_rest",
+        ".binance_stocks_rest",
+        ".okx_public_rest",
+        ".hyperliquid_info_rest",
+        ".massive_rest",
     ] {
         assert!(plan.contains(collection), "missing {collection}");
+    }
+    assert!(plan.contains("ConnectionCollections<'_>"));
+    assert!(!plan.contains("ConfluxSystem"));
+
+    for path in [
+        "src/application/app.rs",
+        "src/application/conflux.rs",
+        "src/services/actor.rs",
+        "src/services/source.rs",
+        "src/services/providers/fan_in.rs",
+        "src/services/providers/binance.rs",
+        "src/services/providers/hyperliquid.rs",
+        "src/services/providers/massive.rs",
+        "src/services/providers/okx.rs",
+    ] {
+        let text = source(path);
+        assert!(
+            !text.contains("&mut kairos_conflux::ConfluxSystem"),
+            "Reference runtime must receive typed connection collections, not ConfluxSystem: {path}"
+        );
+        assert!(
+            !text.contains("with_system"),
+            "legacy whole-System operation remains in {path}"
+        );
     }
     let actor =
         std::fs::read_to_string(root.join("src/services/actor.rs")).expect("read Reference actor");
@@ -40,7 +64,7 @@ fn reference_provider_and_storage_paths_are_async_first() {
     .into_iter()
     .map(source)
     .collect::<String>();
-    assert!(!providers.contains("kairos_integration::blocking"));
+    assert!(!providers.contains("::blocking"));
     assert!(!providers.contains("blocking_instrument_catalog"));
     assert!(!providers.contains("std::thread::Builder"));
 

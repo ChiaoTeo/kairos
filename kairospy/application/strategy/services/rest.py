@@ -99,9 +99,17 @@ class StrategyControlServer:
                 not in {StrategyLifecycle.FAILED, StrategyLifecycle.STOPPED}
                 else "not_ready"
             }
+        if method == "GET" and path.startswith("/v1/decisions/"):
+            decision_id = path.removeprefix("/v1/decisions/").strip()
+            if not decision_id:
+                raise ValueError("strategy_decision_id is required")
+            trace = self.application.decision_trace(decision_id)
+            if trace is None:
+                raise ValueError(f"Strategy decision not found: {decision_id}")
+            return trace
         if method == "GET":
             raise ValueError(
-                "GET /v1/health is the only REST query; read state from typed mmap views"
+                "unsupported Strategy query; use /v1/health or /v1/decisions/{id}"
             )
         if method == "POST" and path == "/v1/command":
             payload = json.loads(body or b"{}")
@@ -207,4 +215,8 @@ class StrategyControlServer:
                 dict(subscription) for subscription in status.subscriptions
             ],
             "equity_curve": list(self.application.equity_curve),
+            "notifications": self.application.context.notifications.health(),
+            "decisions": self.application.decisions.health(),
+            "decision_traces": self.application.decisions.traces(),
+            "execution_events": self.application.context.execution.health(),
         }

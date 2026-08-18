@@ -1,6 +1,7 @@
 use crate::{
-    CommandOutcome, DecimalValue, ExternalOrder, IntegrationError, OrderEntryEvent,
-    OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType, ParticipantRejection,
+    CommandOutcome, DecimalValue, ExternalOrder, IndeterminateCommand, IntegrationError,
+    OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
+    ParticipantRejection,
 };
 use kairos_primitives::{ClientOrderId, OrderId, RemoteOrderId, Symbol, UnixNanos};
 use serde_json::Value;
@@ -82,6 +83,143 @@ pub(crate) fn params(
     }
     Ok(p)
 }
+
+pub(crate) fn amend_params(
+    request: &crate::participants::binance::BinanceAmendOrderRequest,
+) -> Result<Vec<(&'static str, String)>, IntegrationError> {
+    let replacement = &request.replacement;
+    if replacement.order_type != OrderType::Limit {
+        return Err(IntegrationError::UnsupportedOperation);
+    }
+    let price = replacement.limit_price.ok_or_else(|| {
+        IntegrationError::InvalidRequest("Binance amend requires a limit price".into())
+    })?;
+    Ok(vec![
+        (
+            "symbol",
+            replacement.participant_instrument.source_symbol.to_string(),
+        ),
+        ("orderId", request.remote_order_id.clone()),
+        (
+            "side",
+            if replacement.side == OrderSide::Buy {
+                "BUY".into()
+            } else {
+                "SELL".into()
+            },
+        ),
+        ("quantity", decimal(replacement.quantity)),
+        ("price", decimal(price)),
+    ])
+}
+
+pub(crate) fn batch_order_parameter(
+    requests: &[OrderEntryRequest],
+) -> Result<String, IntegrationError> {
+    if !(1..=5).contains(&requests.len()) {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance submit batch must contain 1-5 orders".into(),
+        ));
+    }
+    let rows = requests
+        .iter()
+        .map(|request| {
+            params(request).map(|params| {
+                serde_json::Value::Object(
+                    params
+                        .into_iter()
+                        .map(|(key, value)| (key.into(), Value::String(value)))
+                        .collect(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    serde_json::to_string(&rows)
+        .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))
+}
+
+pub(crate) fn cancel_id_parameter(
+    requests: &[crate::participants::binance::BinanceCancelOrderRequest],
+) -> Result<String, IntegrationError> {
+    if !(1..=10).contains(&requests.len()) {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance cancel batch must contain 1-10 orders".into(),
+        ));
+    }
+    let values = requests
+        .iter()
+        .map(|request| {
+            request.remote_order_id.parse::<u64>().map_err(|_| {
+                IntegrationError::InvalidRequest("invalid Binance remote order id".into())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    serde_json::to_string(&values)
+        .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))
+}
+
+pub(crate) fn submitted_batch_outcome(
+    requests: &[OrderEntryRequest],
+    outcome: CommandOutcome<Value>,
+) -> Result<CommandOutcome<Vec<CommandOutcome<OrderEntryEvent>>>, IntegrationError> {
+    match outcome {
+        CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+        CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        CommandOutcome::Confirmed(value) => {
+            let rows = value.as_array();
+            Ok(CommandOutcome::Confirmed(
+                requests
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(index, request)| match rows.and_then(|rows| rows.get(index)) {
+                            Some(row) => submitted(request, row),
+                            None => Ok(CommandOutcome::Indeterminate(
+                                IndeterminateCommand::may_have_been_sent(format!(
+                                    "Binance batch submit response item {index} is missing"
+                                )),
+                            )),
+                        },
+                    )
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        }
+    }
+}
+
+pub(crate) fn canceled_batch_outcome(
+    requests: &[crate::participants::binance::BinanceCancelOrderRequest],
+    outcome: CommandOutcome<Value>,
+) -> Result<CommandOutcome<Vec<CommandOutcome<OrderEntryEvent>>>, IntegrationError> {
+    match outcome {
+        CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
+        CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
+        CommandOutcome::Confirmed(value) => {
+            let rows = value.as_array();
+            Ok(CommandOutcome::Confirmed(
+                requests
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(index, request)| match rows.and_then(|rows| rows.get(index)) {
+                            Some(row) => canceled(
+                                &request.order,
+                                &request.remote_order_id,
+                                request.at_unix_nanos,
+                                row,
+                            ),
+                            None => Ok(CommandOutcome::Indeterminate(
+                                IndeterminateCommand::may_have_been_sent(format!(
+                                    "Binance batch cancel response item {index} is missing"
+                                )),
+                            )),
+                        },
+                    )
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))
+        }
+    }
+}
 pub(crate) fn submitted(
     request: &OrderEntryRequest,
     value: &Value,
@@ -141,15 +279,21 @@ pub(crate) fn canceled(
         reason: String::new(),
     }))
 }
-pub(crate) fn orders(binding: &str, value: &Value) -> Result<Vec<ExternalOrder>, IntegrationError> {
+pub(crate) fn orders(
+    connection_key: &crate::ConnectionKey,
+    value: &Value,
+) -> Result<Vec<ExternalOrder>, IntegrationError> {
     let rows = if let Some(rows) = value.as_array() {
         rows.clone()
     } else {
         vec![value.clone()]
     };
-    rows.iter().map(|row| order(binding, row)).collect()
+    rows.iter().map(|row| order(connection_key, row)).collect()
 }
-fn order(binding: &str, row: &Value) -> Result<ExternalOrder, IntegrationError> {
+fn order(
+    connection_key: &crate::ConnectionKey,
+    row: &Value,
+) -> Result<ExternalOrder, IntegrationError> {
     let text = |f: &str| row.get(f).and_then(Value::as_str).filter(|v| !v.is_empty());
     let id = row
         .get("orderId")
@@ -158,7 +302,7 @@ fn order(binding: &str, row: &Value) -> Result<ExternalOrder, IntegrationError> 
         .or_else(|| text("orderId").map(str::to_owned))
         .ok_or_else(|| IntegrationError::InvalidPayload("Binance order id missing".into()))?;
     Ok(ExternalOrder {
-        binding_id: binding.into(),
+        connection_key: connection_key.clone(),
         order_id: OrderId::new(text("clientOrderId").unwrap_or(&id)).map_err(payload)?,
         client_order_id: text("clientOrderId")
             .map(ClientOrderId::new)
@@ -214,6 +358,69 @@ pub(crate) fn decimal(v: DecimalValue) -> String {
         &padded[..split],
         &padded[split..]
     )
+}
+
+#[cfg(test)]
+mod native_order_tests {
+    use super::{amend_params, batch_order_parameter, cancel_id_parameter};
+
+    fn order(id: &str) -> crate::OrderEntryRequest {
+        crate::OrderEntryRequest {
+            order_id: kairos_primitives::OrderId::new(id).unwrap(),
+            intent_id: None,
+            account_id: kairos_primitives::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::SegmentKey::new("usdm").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("btc-perp").unwrap(),
+            market_id: None,
+            participant_instrument: crate::ParticipantInstrumentRef::new(
+                crate::ParticipantRef::new(crate::ParticipantKind::Exchange, "binance").unwrap(),
+                Some(crate::ParticipantInstrumentTypeRef::new("perpetual").unwrap()),
+                "BTCUSDT",
+            )
+            .unwrap(),
+            side: crate::OrderSide::Buy,
+            quantity: crate::DecimalValue::new(2, 0),
+            order_type: crate::OrderType::Limit,
+            limit_price: Some(crate::DecimalValue::new(50_000, 0)),
+            options: Default::default(),
+        }
+    }
+
+    #[test]
+    fn futures_amend_sends_full_required_replacement_state() {
+        let params = amend_params(&crate::participants::binance::BinanceAmendOrderRequest {
+            replacement: order("order-1"),
+            remote_order_id: "42".into(),
+        })
+        .unwrap();
+        assert!(params.contains(&("symbol", "BTCUSDT".into())));
+        assert!(params.contains(&("orderId", "42".into())));
+        assert!(params.contains(&("side", "BUY".into())));
+        assert!(params.contains(&("quantity", "2".into())));
+        assert!(params.contains(&("price", "50000".into())));
+    }
+
+    #[test]
+    fn futures_batch_limits_and_remote_ids_are_explicit() {
+        let orders = vec![order("order-1"), order("order-2")];
+        let encoded = batch_order_parameter(&orders).unwrap();
+        let rows: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 2);
+
+        let cancels = orders
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, order)| crate::participants::binance::BinanceCancelOrderRequest {
+                    order,
+                    remote_order_id: (index + 1).to_string(),
+                    at_unix_nanos: 1,
+                },
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(cancel_id_parameter(&cancels).unwrap(), "[1,2]");
+        assert!(batch_order_parameter(&[]).is_err());
+    }
 }
 fn parse(value: &str) -> Result<DecimalValue, IntegrationError> {
     let neg = value.starts_with('-');

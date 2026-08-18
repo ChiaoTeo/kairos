@@ -65,6 +65,7 @@ class LaunchPlan:
     paper_events: Path | None = None
     live_safety: Mapping[str, Any] | None = None
     live_private_sync: Mapping[str, Any] | None = None
+    notifications: Mapping[str, Any] | None = None
 
     def normalized(self) -> dict[str, Any]:
         return cast(
@@ -102,6 +103,7 @@ class LaunchPlan:
                     "paper_events": self.paper_events,
                     "live_safety": self.live_safety,
                     "live_private_sync": self.live_private_sync,
+                    "notifications": self.notifications,
                 }
             ),
         )
@@ -252,6 +254,10 @@ class LaunchConfig:
     def execution(self) -> Mapping[str, Any]:
         return _optional_table(self.values.get("execution"), "execution")
 
+    @property
+    def notifications(self) -> Mapping[str, Any]:
+        return _optional_table(self.values.get("notifications"), "notifications")
+
     def plan(self) -> LaunchPlan:
         self.require_valid()
         mode = self.mode
@@ -267,6 +273,7 @@ class LaunchConfig:
             else _text(raw_market_profile, f"{mode}.market.profile")
         )
         execution = dict(self.execution)
+        notifications = _normalized_notifications(self.notifications)
         if (
             mode in {"backtest", "paper"}
             and execution.get("enabled", True)
@@ -401,6 +408,7 @@ class LaunchConfig:
             paper_events=paper_events,
             live_safety=live_safety,
             live_private_sync=live_private_sync,
+            notifications=notifications,
         )
 
     @property
@@ -444,7 +452,7 @@ class LaunchConfig:
             not isinstance(strategy, str) or not strategy.strip() or ":" not in strategy
         ):
             issues.append("launch.strategy must be a module:callable reference")
-        for name in ("account", "execution", "strategy", "risk"):
+        for name in ("account", "execution", "strategy", "risk", "notifications"):
             value = self.values.get(name)
             if value is not None and not isinstance(value, Mapping):
                 issues.append(f"[{name}] must be a table")
@@ -654,6 +662,9 @@ class LaunchConfig:
                     issues.append(
                         f"execution.{obsolete} is obsolete; configure execution.routes"
                     )
+        notifications = self.values.get("notifications")
+        if isinstance(notifications, Mapping):
+            issues.extend(_notification_config_issues(notifications))
         mode_config = self.values.get(mode) if mode else None
         if isinstance(mode_config, Mapping) and "market" in mode_config:
             market = mode_config.get("market")
@@ -750,6 +761,13 @@ class LaunchEnvironment:
                 list(plan.account_refs), separators=(",", ":")
             ),
             **(
+                {"KAIROS_BACKTEST_START": str(plan.backtest_market.get("start"))}
+                if self.mode == "backtest"
+                and isinstance(plan.backtest_market, Mapping)
+                and plan.backtest_market.get("start") is not None
+                else {}
+            ),
+            **(
                 {"KAIROS_BACKTEST_END": str(plan.backtest_market.get("end"))}
                 if self.mode == "backtest"
                 and isinstance(plan.backtest_market, Mapping)
@@ -779,6 +797,9 @@ class LaunchEnvironment:
     ) -> "LaunchEnvironment":
         config.require_valid()
         root = Path(workspace_root).expanduser().resolve()
+        notification_issues = _workspace_notification_issues(config, root)
+        if notification_issues:
+            raise LaunchConfigError("; ".join(notification_issues))
         if not instance_id.strip():
             raise LaunchConfigError("launch instance id is required")
         group = root / "launches" / config.mode / config.launch_id
@@ -823,11 +844,19 @@ class LaunchConfigurationApplication:
     def validate(
         self, path: str | Path, *, workspace_root: str | Path | None = None
     ) -> dict[str, Any]:
-        report = self.load(path, workspace_root=workspace_root).report()
+        config = self.load(path, workspace_root=workspace_root)
+        report = config.report()
+        issues = list(report.issues)
+        if not issues and workspace_root is not None:
+            issues.extend(
+                _workspace_notification_issues(
+                    config, Path(workspace_root).expanduser().resolve()
+                )
+            )
         return {
             "path": str(report.path),
-            "valid": report.valid,
-            "issues": list(report.issues),
+            "valid": not issues,
+            "issues": issues,
         }
 
     def explain(
@@ -921,6 +950,158 @@ def _jsonable(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _normalized_notifications(value: Mapping[str, Any]) -> dict[str, Any]:
+    enabled = value.get("enabled", False)
+    required = value.get("required", False)
+    routes_value = value.get("routes", {})
+    routes = (
+        {
+            str(route): list(dict.fromkeys(str(item) for item in destinations))
+            for route, destinations in routes_value.items()
+            if isinstance(destinations, list)
+        }
+        if isinstance(routes_value, Mapping)
+        else {}
+    )
+    defaults_value = value.get("default_routes", [])
+    default_routes = (
+        list(dict.fromkeys(str(item) for item in defaults_value))
+        if isinstance(defaults_value, list)
+        else []
+    )
+    lifecycle_value = value.get("lifecycle_routes", [])
+    lifecycle_routes = (
+        list(dict.fromkeys(str(item) for item in lifecycle_value))
+        if isinstance(lifecycle_value, list)
+        else []
+    )
+    normalized = {
+        "enabled": enabled,
+        "required": required,
+        "default_routes": default_routes,
+        "queue_capacity": value.get("queue_capacity", 256),
+        "shutdown_grace_seconds": value.get("shutdown_grace_seconds", 5),
+        "routes": routes,
+    }
+    if "lifecycle_routes" in value:
+        normalized["lifecycle_routes"] = lifecycle_routes
+    return normalized
+
+
+def _notification_config_issues(value: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for name in ("enabled", "required"):
+        if name in value and not isinstance(value[name], bool):
+            issues.append(f"notifications.{name} must be a boolean")
+    enabled = value.get("enabled", False)
+    defaults = value.get("default_routes", [])
+    lifecycle_routes = value.get("lifecycle_routes", [])
+    if not isinstance(defaults, list) or any(
+        not isinstance(item, str) or not item.strip() for item in defaults
+    ):
+        issues.append("notifications.default_routes must be an array of route names")
+        defaults = []
+    elif len(defaults) != len(set(defaults)):
+        issues.append("notifications.default_routes must not contain duplicates")
+    if not isinstance(lifecycle_routes, list) or any(
+        not isinstance(item, str) or not item.strip() for item in lifecycle_routes
+    ):
+        issues.append("notifications.lifecycle_routes must be an array of route names")
+        lifecycle_routes = []
+    elif len(lifecycle_routes) != len(set(lifecycle_routes)):
+        issues.append("notifications.lifecycle_routes must not contain duplicates")
+    queue_capacity = value.get("queue_capacity", 256)
+    if (
+        not isinstance(queue_capacity, int)
+        or isinstance(queue_capacity, bool)
+        or not 1 <= queue_capacity <= 100_000
+    ):
+        issues.append("notifications.queue_capacity must be an integer from 1 to 100000")
+    grace = value.get("shutdown_grace_seconds", 5)
+    if (
+        not isinstance(grace, (int, float))
+        or isinstance(grace, bool)
+        or not 0 <= float(grace) <= 300
+    ):
+        issues.append(
+            "notifications.shutdown_grace_seconds must be a number from 0 to 300"
+        )
+    routes = value.get("routes", {})
+    route_names: set[str] = set()
+    destination_ids: set[str] = set()
+    if not isinstance(routes, Mapping):
+        issues.append("notifications.routes must be a table")
+    else:
+        for route, destinations in routes.items():
+            prefix = f"notifications.routes.{route}"
+            if not isinstance(route, str) or not route.strip():
+                issues.append("notification route names must be non-empty strings")
+                continue
+            route_names.add(route)
+            if not isinstance(destinations, list) or not destinations:
+                issues.append(f"{prefix} must be a non-empty array of destination IDs")
+            elif any(
+                not isinstance(item, str) or not item.strip() for item in destinations
+            ):
+                issues.append(f"{prefix} must contain non-empty destination IDs")
+            elif len(destinations) != len(set(destinations)):
+                issues.append(f"{prefix} must not contain duplicate destination IDs")
+            else:
+                destination_ids.update(destinations)
+        if len(destination_ids) > 64:
+            issues.append("notifications may reference at most 64 unique destinations")
+    for route in defaults if isinstance(defaults, list) else []:
+        if isinstance(route, str) and route not in route_names:
+            issues.append(f"notifications.default_routes references unknown route: {route}")
+    for route in lifecycle_routes if isinstance(lifecycle_routes, list) else []:
+        if isinstance(route, str) and route not in route_names:
+            issues.append(f"notifications.lifecycle_routes references unknown route: {route}")
+    if enabled and not route_names:
+        issues.append("enabled notifications require at least one route")
+    if not enabled and route_names:
+        issues.append("disabled notifications must not configure delivery routes")
+    if not enabled and value.get("required", False):
+        issues.append("disabled notifications cannot be required")
+    forbidden = {
+        "webhook",
+        "webhook_url",
+        "bot_token",
+        "token",
+        "signing_secret",
+        "secret",
+        "api_secret",
+    }
+    for key in value:
+        if str(key).lower() in forbidden:
+            issues.append(
+                f"notifications.{key} is forbidden; use a Workspace credential"
+            )
+    return issues
+
+
+def _workspace_notification_issues(
+    config: LaunchConfig, workspace_root: Path
+) -> tuple[str, ...]:
+    notifications = config.notifications
+    if not notifications.get("enabled", False):
+        return ()
+    from kairospy.application.notification.composition import (
+        validate_notification_resources,
+    )
+    from kairospy.application.workspace import WorkspaceApplication
+
+    try:
+        workspace = WorkspaceApplication().open(workspace_root)
+    except (FileNotFoundError, ValueError) as error:
+        return (f"cannot validate notification resources: {error}",)
+    return validate_notification_resources(
+        workspace,
+        _normalized_notifications(notifications),
+        mode=config.mode,
+        resolve_secrets=False,
+    )
 
 
 __all__ = [

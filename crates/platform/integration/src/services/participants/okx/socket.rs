@@ -1,9 +1,12 @@
 use crate::participants::okx::OkxWebSocketConfig;
 use crate::transport::websocket::{SocketEvent, TokioSocket};
 use crate::{
-    ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState, IntegrationError,
-    ParticipantKind, ParticipantRef,
+    ConnectionDescriptor, ConnectionHealth, ConnectionKey, ConnectionLifecycle, ConnectionState,
+    IntegrationError, ParticipantKind, ParticipantRef,
 };
+use std::task::{Context, Poll};
+
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 pub(crate) struct SocketService {
     state: ConnectionState,
@@ -14,6 +17,7 @@ pub(crate) struct SocketService {
 
 impl SocketService {
     pub(crate) fn new(
+        connection_key: ConnectionKey,
         config: OkxWebSocketConfig,
         domain: &str,
         principal_id: impl Into<Option<String>>,
@@ -29,7 +33,7 @@ impl SocketService {
             ));
         }
         let mut descriptor = ConnectionDescriptor::new(
-            config.binding_id,
+            connection_key,
             ParticipantRef::new(ParticipantKind::Exchange, "okx")
                 .map_err(IntegrationError::InvalidRequest)?,
             domain,
@@ -86,9 +90,29 @@ impl SocketService {
         &self.state.identity
     }
 
-    pub(crate) async fn send(&self, payload: String) -> Result<(), IntegrationError> {
+    pub(crate) fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
         self.socket
             .as_ref()
+            .map(|socket| socket.last_activity() + IDLE_TIMEOUT)
+    }
+
+    pub(crate) fn poll_maintenance(
+        &self,
+        now: tokio::time::Instant,
+    ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
+        match self.next_maintenance_at() {
+            Some(deadline) if deadline <= now => {
+                Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
+                    reason: "OKX WebSocket idle deadline elapsed".into(),
+                }))
+            }
+            _ => Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy)),
+        }
+    }
+
+    pub(crate) async fn send(&mut self, payload: String) -> Result<(), IntegrationError> {
+        self.socket
+            .as_mut()
             .ok_or(IntegrationError::NotReady)?
             .send_text(payload)
             .await
@@ -108,7 +132,7 @@ impl SocketService {
             {
                 SocketEvent::Message(tokio_tungstenite::tungstenite::Message::Ping(payload)) => {
                     self.socket
-                        .as_ref()
+                        .as_mut()
                         .ok_or(IntegrationError::NotReady)?
                         .send_pong(payload.to_vec())
                         .await
@@ -116,11 +140,28 @@ impl SocketService {
                 }
                 SocketEvent::Message(message) => return Ok(message),
                 SocketEvent::Error(error) => return Err(IntegrationError::Transport(error)),
-                SocketEvent::Backpressure => {
-                    return Err(IntegrationError::Backpressure(
-                        "OKX WebSocket event queue overflowed".into(),
-                    ))
+            }
+        }
+    }
+
+    pub(crate) fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<tokio_tungstenite::tungstenite::Message, IntegrationError>> {
+        loop {
+            let socket = match self.socket.as_mut() {
+                Some(socket) => socket,
+                None => return Poll::Ready(Err(IntegrationError::NotReady)),
+            };
+            match socket.poll_next_event(cx) {
+                Poll::Ready(SocketEvent::Message(
+                    tokio_tungstenite::tungstenite::Message::Ping(_),
+                )) => continue,
+                Poll::Ready(SocketEvent::Message(message)) => return Poll::Ready(Ok(message)),
+                Poll::Ready(SocketEvent::Error(error)) => {
+                    return Poll::Ready(Err(IntegrationError::Transport(error)))
                 }
+                Poll::Pending => return Poll::Pending,
             }
         }
     }

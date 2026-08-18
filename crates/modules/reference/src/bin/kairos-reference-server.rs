@@ -95,9 +95,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut composition = build_application(config, true).await?;
     composition.activate_sources().await?;
-    let (mut application, _, event_writer) = composition.into_conflux();
+    let (mut application, mut system, event_writer) = composition.into_conflux();
     let mut writer = event_writer.ok_or("reference publication is not configured")?;
-    let refresh = application.refresh().await?;
+    let refresh = application
+        .refresh_with_connections(&mut system.connections())
+        .await?;
     loop {
         let publications = application.pending_publications(1_024).await?;
         if publications.is_empty() {

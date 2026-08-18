@@ -2,12 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use ibapi::accounts::types::AccountId;
 use ibapi::accounts::AccountUpdate;
 use ibapi::subscriptions::{Subscription, SubscriptionItem, SubscriptionItemStreamExt};
-use tokio::sync::watch;
 
 use crate::domain::account::{
     external_instrument_ref, ExternalAccountEvent, ExternalAccountEventEnvelope,
@@ -28,11 +28,10 @@ pub(crate) struct AccountQueryService {
 
 pub(crate) struct AccountStreamService {
     session: Arc<SessionService>,
-    binding_id: String,
+    connection_key: crate::ConnectionKey,
     account_id: String,
     segment_key: kairos_primitives::SegmentKey,
     subscription: Option<Subscription<AccountUpdate>>,
-    notices: watch::Receiver<Option<ibapi::Notice>>,
     balance_values: BTreeMap<String, (Option<ExternalDecimal>, Option<ExternalDecimal>)>,
     lifecycle: ConnectionLifecycle,
     channel_epoch: u64,
@@ -42,20 +41,18 @@ pub(crate) struct AccountStreamService {
 impl AccountStreamService {
     pub(crate) fn new(
         session: Arc<SessionService>,
-        binding_id: impl Into<String>,
+        connection_key: crate::ConnectionKey,
         account_id: impl Into<String>,
         segment_key: impl Into<String>,
     ) -> Result<Self, IntegrationError> {
         let segment_key = kairos_primitives::SegmentKey::new(segment_key.into())
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
-        let notices = session.notice_receiver();
         Ok(Self {
             session,
-            binding_id: binding_id.into(),
+            connection_key,
             account_id: account_id.into(),
             segment_key,
             subscription: None,
-            notices,
             balance_values: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::Created,
             channel_epoch: 0,
@@ -178,69 +175,52 @@ impl AccountStreamService {
 }
 
 impl AccountStreamService {
-    pub(crate) async fn next(&mut self) -> Result<ExternalAccountEventEnvelope, IntegrationError> {
-        self.connect().await?;
+    pub(crate) fn poll_next(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalAccountEventEnvelope, IntegrationError>> {
         loop {
-            let item = {
-                let subscription = self
-                    .subscription
-                    .as_mut()
-                    .ok_or(IntegrationError::NotReady)?;
-                tokio::select! {
-                    changed = self.notices.changed() => {
-                        if changed.is_err() {
-                            return Err(IntegrationError::ResyncRequired(
-                                "IBKR global notice stream ended".into(),
-                            ));
-                        }
-                        let notice = self.notices.borrow_and_update().clone();
-                        if let Some(notice) = notice.as_ref() {
-                            if let Some(error) = super::execution::notice_error(notice) {
-                                return Err(error);
-                            }
-                        }
-                        continue;
-                    }
-                    item = subscription.next() => item
-                        .ok_or_else(|| IntegrationError::ResyncRequired(
-                            "IBKR account stream ended".into(),
-                        ))?
-                        .map_err(transport)?,
+            let subscription = match self.subscription.as_mut() {
+                Some(subscription) => subscription,
+                None => return Poll::Ready(Err(IntegrationError::NotReady)),
+            };
+            let item = match std::pin::Pin::new(subscription).poll_next(cx) {
+                Poll::Ready(Some(Ok(item))) => item,
+                Poll::Ready(Some(Err(error))) => return Poll::Ready(Err(transport(error))),
+                Poll::Ready(None) => {
+                    return Poll::Ready(Err(IntegrationError::ResyncRequired(
+                        "IBKR account stream ended".into(),
+                    )))
                 }
+                Poll::Pending => return Poll::Pending,
             };
             let SubscriptionItem::Data(update) = item else {
                 if let SubscriptionItem::Notice(notice) = item {
-                    tracing::info!(
-                        event = "ibkr_notice",
-                        component = "integration",
-                        channel = "account-events",
-                        code = notice.code,
-                        message = %notice.message,
-                        "IBKR account subscription notice observed"
-                    );
                     if let Some(error) = super::execution::notice_error(&notice) {
-                        return Err(error);
+                        return Poll::Ready(Err(error));
                     }
                 }
                 continue;
             };
-            let Some(payload) = partial_event(&self.segment_key, update, &mut self.balance_values)?
-            else {
-                continue;
+            let payload = match partial_event(&self.segment_key, update, &mut self.balance_values) {
+                Ok(Some(payload)) => payload,
+                Ok(None) => continue,
+                Err(error) => return Poll::Ready(Err(error)),
             };
             let observed = now_nanos();
-            return Ok(ExternalEventEnvelope {
+            return Poll::Ready(Ok(ExternalEventEnvelope {
                 participant: ParticipantRef::new(ParticipantKind::Broker, "ibkr")
                     .expect("static IBKR participant"),
-                binding_id: self.binding_id.clone(),
-                channel_id: format!("{}.account-updates", self.binding_id),
+                connection_key: self.connection_key.clone(),
+                channel_id: format!("{}.account-updates", self.connection_key),
                 channel_epoch: self.channel_epoch,
                 participant_event_id: None,
                 participant_sequence: None,
+                delivery: crate::ExternalEventDelivery::Incremental,
                 observed_at_unix_nanos: observed,
                 received_at_unix_nanos: observed,
                 payload,
-            });
+            }));
         }
     }
 }

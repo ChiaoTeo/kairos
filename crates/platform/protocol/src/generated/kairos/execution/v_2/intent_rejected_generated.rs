@@ -24,6 +24,8 @@ impl<'a> IntentRejected<'a> {
     pub const VT_INTENT_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_CODES: ::flatbuffers::VOffsetT = 8;
     pub const VT_DETAILS: ::flatbuffers::VOffsetT = 10;
+    pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 12;
+    pub const VT_INTENT: ::flatbuffers::VOffsetT = 14;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -40,6 +42,9 @@ impl<'a> IntentRejected<'a> {
         args: &'args IntentRejectedArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<IntentRejected<'bldr>> {
         let mut builder = IntentRejectedBuilder::new(_fbb);
+        if let Some(x) = args.intent {
+            builder.add_intent(x);
+        }
         if let Some(x) = args.details {
             builder.add_details(x);
         }
@@ -52,6 +57,7 @@ impl<'a> IntentRejected<'a> {
         if let Some(x) = args.metadata {
             builder.add_metadata(x);
         }
+        builder.add_lifecycle(args.lifecycle);
         builder.finish()
     }
 
@@ -102,6 +108,33 @@ impl<'a> IntentRejected<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn lifecycle(&self) -> IntentLifecycle {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<IntentLifecycle>(
+                    IntentRejected::VT_LIFECYCLE,
+                    Some(IntentLifecycle::REJECTED),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn intent(&self) -> Option<ExecutionIntent<'a>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<ExecutionIntent>>(
+                    IntentRejected::VT_INTENT,
+                    None,
+                )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for IntentRejected<'_> {
@@ -115,6 +148,8 @@ impl ::flatbuffers::Verifiable for IntentRejected<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("intent_id", Self::VT_INTENT_ID, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, IntentRejectionCode>>>("codes", Self::VT_CODES, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>>>("details", Self::VT_DETAILS, true)?
+     .visit_field::<IntentLifecycle>("lifecycle", Self::VT_LIFECYCLE, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<ExecutionIntent>>("intent", Self::VT_INTENT, false)?
      .finish();
         Ok(())
     }
@@ -128,6 +163,8 @@ pub struct IntentRejectedArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
         >,
     >,
+    pub lifecycle: IntentLifecycle,
+    pub intent: Option<::flatbuffers::WIPOffset<ExecutionIntent<'a>>>,
 }
 impl<'a> Default for IntentRejectedArgs<'a> {
     #[inline]
@@ -137,6 +174,8 @@ impl<'a> Default for IntentRejectedArgs<'a> {
             intent_id: None, // required field
             codes: None,     // required field
             details: None,   // required field
+            lifecycle: IntentLifecycle::REJECTED,
+            intent: None,
         }
     }
 }
@@ -183,6 +222,22 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentRejectedBuilder<'a, 'b,
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(IntentRejected::VT_DETAILS, details);
     }
     #[inline]
+    pub fn add_lifecycle(&mut self, lifecycle: IntentLifecycle) {
+        self.fbb_.push_slot::<IntentLifecycle>(
+            IntentRejected::VT_LIFECYCLE,
+            lifecycle,
+            IntentLifecycle::REJECTED,
+        );
+    }
+    #[inline]
+    pub fn add_intent(&mut self, intent: ::flatbuffers::WIPOffset<ExecutionIntent<'b>>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<ExecutionIntent>>(
+                IntentRejected::VT_INTENT,
+                intent,
+            );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> IntentRejectedBuilder<'a, 'b, A> {
@@ -212,6 +267,8 @@ impl ::core::fmt::Debug for IntentRejected<'_> {
         ds.field("intent_id", &self.intent_id());
         ds.field("codes", &self.codes());
         ds.field("details", &self.details());
+        ds.field("lifecycle", &self.lifecycle());
+        ds.field("intent", &self.intent());
         ds.finish()
     }
 }

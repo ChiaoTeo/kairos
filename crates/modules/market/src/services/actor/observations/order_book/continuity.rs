@@ -70,28 +70,4 @@ impl MarketActor {
         }
         Ok(true)
     }
-
-    pub(crate) fn complete_orderbook_resync(
-        &mut self,
-        source_id: &SourceId,
-        epoch: SourceEpoch,
-        market_id: &kairos_primitives::MarketId,
-    ) -> Result<bool, String> {
-        let source = self
-            .sources
-            .get_mut(source_id)
-            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
-        if epoch != source.epoch {
-            return Ok(false);
-        }
-        source
-            .resyncing_markets
-            .retain(|current| current != market_id);
-        if source.resyncing_markets.is_empty() {
-            source.status = SourceStatus::Ready;
-            source.last_error = None;
-        }
-        self.refresh_feed_status();
-        Ok(true)
-    }
 }

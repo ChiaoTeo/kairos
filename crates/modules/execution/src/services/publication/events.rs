@@ -12,38 +12,77 @@ pub(crate) fn encode_business_change(
     let event_id = format!("execution:{sequence}:{index}");
     let context = EncodeContext::event(actor_id, identity.clone(), sequence, event_id);
     match change {
-        ExecutionBusinessChange::Intent(value) => {
+        ExecutionBusinessChange::Intent { state, event } => {
             let mut builder = FlatBufferBuilder::new();
             let metadata = event_metadata(&mut builder, &context, occurred_at);
-            let intent_id = builder.create_string(&value.intent.intent_id.to_string());
-            if matches!(value.status, crate::application::IntentStatus::Rejected) {
-                let codes = builder.create_vector(&[fb::IntentRejectionCode::UNSPECIFIED]);
-                let detail = builder.create_string(&value.reason);
-                let details = builder.create_vector(&[detail]);
-                let root = fb::IntentRejected::create(
-                    &mut builder,
-                    &fb::IntentRejectedArgs {
-                        metadata: Some(metadata),
-                        intent_id: Some(intent_id),
-                        codes: Some(codes),
-                        details: Some(details),
-                    },
-                );
-                fb::finish_intent_rejected_buffer(&mut builder, root);
-            } else {
-                let root = fb::IntentAccepted::create(
-                    &mut builder,
-                    &fb::IntentAcceptedArgs {
-                        metadata: Some(metadata),
-                        intent_id: Some(intent_id),
-                        lifecycle: intent_lifecycle(value.status),
-                    },
-                );
-                fb::finish_intent_accepted_buffer(&mut builder, root);
+            let intent_id = builder.create_string(&state.intent.intent_id.to_string());
+            let intent = encode_execution_intent(&mut builder, &state.intent)?;
+            match state.status {
+                crate::application::IntentStatus::Rejected if event.previous_status.is_none() => {
+                    let codes = builder.create_vector(&[fb::IntentRejectionCode::UNSPECIFIED]);
+                    let detail = builder.create_string(&state.reason);
+                    let details = builder.create_vector(&[detail]);
+                    let root = fb::IntentRejected::create(
+                        &mut builder,
+                        &fb::IntentRejectedArgs {
+                            metadata: Some(metadata),
+                            intent_id: Some(intent_id),
+                            codes: Some(codes),
+                            details: Some(details),
+                            lifecycle: fb::IntentLifecycle::REJECTED,
+                            intent: Some(intent),
+                        },
+                    );
+                    fb::finish_intent_rejected_buffer(&mut builder, root);
+                }
+                crate::application::IntentStatus::Accepted if event.previous_status.is_none() => {
+                    let root = fb::IntentAccepted::create(
+                        &mut builder,
+                        &fb::IntentAcceptedArgs {
+                            metadata: Some(metadata),
+                            intent_id: Some(intent_id),
+                            lifecycle: fb::IntentLifecycle::ACCEPTED,
+                            intent: Some(intent),
+                        },
+                    );
+                    fb::finish_intent_accepted_buffer(&mut builder, root);
+                }
+                _ => {
+                    let order_ids = event
+                        .order_ids
+                        .iter()
+                        .map(|value| builder.create_string(value.as_str()))
+                        .collect::<Vec<_>>();
+                    let order_ids = builder.create_vector(&order_ids);
+                    let completed_quantity = decimal(event.completed_quantity);
+                    let reason =
+                        (!event.reason.is_empty()).then(|| builder.create_string(&event.reason));
+                    let dependency_evidence =
+                        encode_dependency_evidence(&mut builder, &event.dependency_watermarks);
+                    let root = fb::IntentLifecycleChanged::create(
+                        &mut builder,
+                        &fb::IntentLifecycleChangedArgs {
+                            metadata: Some(metadata),
+                            intent: Some(intent),
+                            previous_lifecycle: event
+                                .previous_status
+                                .map(intent_lifecycle)
+                                .unwrap_or(fb::IntentLifecycle::UNSPECIFIED),
+                            lifecycle: intent_lifecycle(event.status),
+                            order_ids: Some(order_ids),
+                            completed_quantity: Some(&completed_quantity),
+                            reason,
+                            dependency_evidence: Some(dependency_evidence),
+                        },
+                    );
+                    fb::finish_intent_lifecycle_changed_buffer(&mut builder, root);
+                }
             }
             let mut payloads = vec![builder.finished_data().to_vec()];
-            if let Some(plan) = value.plan.as_ref() {
-                payloads.push(encode_plan_event(&context, occurred_at, plan)?);
+            if event.previous_status.is_none() {
+                if let Some(plan) = state.plan.as_ref() {
+                    payloads.push(encode_plan_event(&context, occurred_at, plan)?);
+                }
             }
             Ok(payloads)
         }

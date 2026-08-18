@@ -61,6 +61,7 @@ def _write_backtest_report(composition, workspace) -> None:
         final_account = asdict(
             composition.application.context.account.account(account_ids[0])
         )
+    notifications = _notification_report(instance.artifact("notifications.jsonl"))
     report = {
         "schema_version": 1,
         "launch_id": composition.application.launch_id,
@@ -88,6 +89,7 @@ def _write_backtest_report(composition, workspace) -> None:
             if composition.application.equity_curve
             else None
         ),
+        "notifications": notifications,
     }
     report["deterministic_result_sha256"] = _deterministic_result_sha256(report)
     path = instance.state("backtest", "report.json")
@@ -187,9 +189,58 @@ def _deterministic_result_sha256(report: Mapping[str, Any]) -> str:
         "equity_curve": report.get("equity_curve", []),
         "final_account": report.get("final_account"),
         "metrics": report.get("metrics", {}),
+        "notifications": (
+            {
+                key: report["notifications"].get(key)
+                for key in ("count", "content_sha256")
+            }
+            if isinstance(report.get("notifications"), Mapping)
+            else {}
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _notification_report(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"count": 0, "content_sha256": None, "artifact": str(path)}
+    records: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    deterministic = [
+        {
+            key: record.get(key)
+            for key in (
+                "destination_id",
+                "title",
+                "body",
+                "severity",
+                "occurred_at",
+                "attributes",
+                "outcome",
+            )
+        }
+        for record in records
+    ]
+    deterministic.sort(
+        key=lambda record: (
+            str(record.get("occurred_at")),
+            str(record.get("title")),
+            str(record.get("destination_id")),
+        )
+    )
+    encoded = json.dumps(deterministic, sort_keys=True, separators=(",", ":"))
+    return {
+        "count": len(records),
+        "content_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "artifact": str(path),
+    }
 
 
 def _replay_dataset_identity(path: Path) -> dict[str, Any]:
@@ -312,16 +363,19 @@ async def _run(args: argparse.Namespace) -> None:
             mode=args.mode,
             params=_params(args.params),
         )
+        await composition.notifications.runtime.start()
         sys.stdout = StrategyOutput(composition.application.logger, source="stdout")
         sys.stderr = StrategyOutput(composition.application.logger, source="stderr")
         await composition.control.start()
         record_gauge("kairos.process.ready", 1)
         await composition.control.serve_until_stopped()
+        await composition.notifications.runtime.flush()
         if args.mode == "backtest":
             _write_backtest_report(composition, workspace)
     finally:
         if composition is not None:
             await composition.control.close()
+            await composition.notifications.runtime.close()
         sys.stdout.flush()
         sys.stderr.flush()
         sys.stdout = original_stdout

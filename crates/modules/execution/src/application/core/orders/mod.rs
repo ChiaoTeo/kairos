@@ -4,6 +4,22 @@ pub(crate) mod admission;
 
 use super::*;
 
+pub(crate) struct PreparedCancellation {
+    pub(crate) order: ExecutionOrder,
+    pub(crate) provider_request: OrderEntryRequest,
+    pub(crate) remote_order_id: String,
+    pub(crate) at_unix_nanos: u64,
+    pub(crate) reason: String,
+}
+
+pub(crate) struct PreparedQuoteRefresh {
+    pub(crate) request: RefreshQuoteIntent,
+    pub(crate) version: u64,
+    pub(crate) prepared_at_unix_nanos: u64,
+    pub(crate) cancellations: Vec<CancelOrder>,
+    pub(crate) submissions: Vec<(LegId, SubmitOrder)>,
+}
+
 impl ExecutionApplication {
     pub fn preview_submit(&self, request: &SubmitOrder) -> Result<ExecutionOrder, ExecutionError> {
         let mut order = ExecutionOrder::new(
@@ -29,6 +45,21 @@ impl ExecutionApplication {
         &mut self,
         request: ExecutionFillReport,
     ) -> Result<ExecutionOrder, ExecutionError> {
+        self.record_fill_with_compensation(request, true)
+    }
+
+    pub(crate) fn record_fill_deferred(
+        &mut self,
+        request: ExecutionFillReport,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        self.record_fill_with_compensation(request, false)
+    }
+
+    fn record_fill_with_compensation(
+        &mut self,
+        request: ExecutionFillReport,
+        compensate: bool,
+    ) -> Result<ExecutionOrder, ExecutionError> {
         info!(event = "fill_received", component = "execution", fill_id = %request.fill_id, order_id = %request.order_id, "execution fill received");
         let now = request
             .occurred_at_unix_nanos
@@ -44,7 +75,9 @@ impl ExecutionApplication {
                     if let Some(state) = self.actor.intent(intent_id).cloned() {
                         self.commit_intent(IntentEvent {
                             intent_id: typed_intent_id(intent_id),
+                            strategy_decision_id: None,
                             event_sequence: 0.into(),
+                            previous_status: None,
                             status: IntentStatus::ReconciliationRequired,
                             order_ids: Vec::new(),
                             completed_quantity: state.completed_quantity,
@@ -105,7 +138,9 @@ impl ExecutionApplication {
         }
         if let Some(intent_id) = next.intent_id.as_deref() {
             self.refresh_intent(intent_id)?;
-            self.maybe_submit_compensating_hedge(intent_id)?;
+            if compensate {
+                self.maybe_submit_compensating_hedge(intent_id)?;
+            }
         }
         info!(event = "fill_applied", component = "execution", fill_id = %fill.fill_id, order_id = %next.order_id, status = ?next.status, filled_quantity = next.filled_quantity.mantissa(), "execution fill applied");
         Ok(next)
@@ -480,18 +515,31 @@ impl ExecutionApplication {
                 "order entry connection is not configured".into(),
             ));
         }
-        self.actor
-            .mark_attempt_dispatched(order.order_id.as_str(), now_nanos())
-            .ok_or_else(|| ExecutionError::Invalid("execution attempt is missing".into()))?;
-        // Persist indeterminate delivery before the provider command can
-        // possibly leave the process. A crash after this point reconciles the
-        // attempt instead of retrying it transparently.
-        self.persist_snapshot()?;
+        self.begin_order_dispatch(order.order_id.as_str())?;
         let connection = self
             .order_entry
             .as_mut()
             .expect("order-entry presence checked above");
-        let event = match connection.submit_order(&connection_request) {
+        let outcome = connection.submit_order(&connection_request);
+        self.complete_order_submission(order, outcome)
+    }
+
+    pub(crate) fn begin_order_dispatch(&mut self, order_id: &str) -> Result<(), ExecutionError> {
+        self.actor
+            .mark_attempt_dispatched(order_id, now_nanos())
+            .ok_or_else(|| ExecutionError::Invalid("execution attempt is missing".into()))?;
+        // Persist indeterminate delivery before the provider command can
+        // possibly leave the process. A crash after this point reconciles the
+        // attempt instead of retrying it transparently.
+        self.persist_snapshot()
+    }
+
+    pub(crate) fn complete_order_submission(
+        &mut self,
+        order: ExecutionOrder,
+        outcome: Result<CommandOutcome<OrderEntryEvent>, IntegrationError>,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        let event = match outcome {
             Ok(CommandOutcome::Confirmed(event)) => event,
             Ok(CommandOutcome::Rejected(rejection)) => OrderEntryEvent {
                 order_id: order.order_id.clone(),
@@ -541,6 +589,25 @@ impl ExecutionApplication {
     }
 
     pub fn cancel(&mut self, request: CancelOrder) -> Result<ExecutionOrder, ExecutionError> {
+        let prepared = self.prepare_cancellation(request)?;
+        let outcome = self
+            .order_entry
+            .as_mut()
+            .ok_or_else(|| {
+                ExecutionError::Gateway("order entry connection is not configured".into())
+            })?
+            .cancel_order(
+                &prepared.provider_request,
+                &prepared.remote_order_id,
+                prepared.at_unix_nanos,
+            );
+        self.complete_cancellation(prepared, outcome)
+    }
+
+    pub(crate) fn prepare_cancellation(
+        &self,
+        request: CancelOrder,
+    ) -> Result<PreparedCancellation, ExecutionError> {
         info!(event = "order_cancel_started", component = "execution", order_id = %request.order_id, reason = %request.reason, "order cancellation started");
         let order = self
             .actor
@@ -558,17 +625,25 @@ impl ExecutionApplication {
             &self.execution_routes,
         )
         .map_err(ExecutionError::Invalid)?;
-        let outcome = self
-            .order_entry
-            .as_mut()
-            .ok_or_else(|| {
-                ExecutionError::Gateway("order entry connection is not configured".into())
-            })?
-            .cancel_order(
-                &connection_request,
-                order.remote_order_id.as_deref().unwrap_or_default(),
-                now_nanos(),
-            );
+        Ok(PreparedCancellation {
+            remote_order_id: order
+                .remote_order_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            order,
+            provider_request: connection_request,
+            at_unix_nanos: now_nanos(),
+            reason: request.reason,
+        })
+    }
+
+    pub(crate) fn complete_cancellation(
+        &mut self,
+        prepared: PreparedCancellation,
+        outcome: Result<CommandOutcome<OrderEntryEvent>, IntegrationError>,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        let PreparedCancellation { order, reason, .. } = prepared;
         let event = match outcome {
             Ok(CommandOutcome::Confirmed(event)) => event,
             Ok(CommandOutcome::Rejected(rejection)) => {
@@ -598,7 +673,7 @@ impl ExecutionApplication {
             .mark_delivery_status(
                 provider_order.order_id.as_str(),
                 provider_order.status,
-                request.reason,
+                reason,
                 now,
             )
             .expect("provider outcome retains the local order");
@@ -817,7 +892,9 @@ impl ExecutionApplication {
                         })?;
                     self.commit_intent(IntentEvent {
                         intent_id: request.intent_id.clone(),
+                        strategy_decision_id: None,
                         event_sequence: 0.into(),
+                        previous_status: None,
                         status: IntentStatus::ReconciliationRequired,
                         order_ids: Vec::new(),
                         completed_quantity: current.completed_quantity,
@@ -840,7 +917,9 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))?;
         self.commit_intent(IntentEvent {
             intent_id: request.intent_id,
+            strategy_decision_id: None,
             event_sequence: 0.into(),
+            previous_status: None,
             status: IntentStatus::Executing,
             order_ids: new_order_ids,
             completed_quantity: current.completed_quantity,
@@ -859,11 +938,251 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))
     }
 
+    pub(crate) fn prepare_quote_refresh(
+        &self,
+        request: RefreshQuoteIntent,
+    ) -> Result<PreparedQuoteRefresh, ExecutionError> {
+        let state = self
+            .actor
+            .intent(request.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("unknown intent".into()))?;
+        if state.intent.intent_type != IntentType::QuoteProvisioning {
+            return Err(ExecutionError::Invalid(
+                "quote refresh requires a QuoteProvisioning intent".into(),
+            ));
+        }
+        if request.bid_price.mantissa() <= 0 || request.ask_price.mantissa() <= 0 {
+            return Err(ExecutionError::Invalid(
+                "quote refresh prices must be positive".into(),
+            ));
+        }
+        if request.bid_price >= request.ask_price {
+            return Err(ExecutionError::Invalid(
+                "quote refresh requires bid below ask".into(),
+            ));
+        }
+        let now = now_nanos();
+        if request.quote_observed_at.get() > now {
+            return Err(ExecutionError::Invalid(
+                "quote observation cannot be in the future".into(),
+            ));
+        }
+        let max_age = state
+            .intent
+            .legs
+            .iter()
+            .filter_map(|leg| leg.options.maker.as_ref())
+            .chain(state.intent.order_options.maker.as_ref())
+            .filter_map(|policy| policy.max_quote_age)
+            .min();
+        if let Some(max_age) = max_age {
+            let age = now.saturating_sub(request.quote_observed_at.get());
+            if age > max_age.get() {
+                return Err(ExecutionError::Invalid(format!(
+                    "quote is stale: age={}ms exceeds {}ms",
+                    age / 1_000_000,
+                    max_age.get() / 1_000_000
+                )));
+            }
+        }
+        if let Some(last) = state.last_quote_refresh_unix_nanos {
+            let min_interval = state
+                .intent
+                .legs
+                .iter()
+                .filter_map(|leg| leg.options.maker.as_ref())
+                .chain(state.intent.order_options.maker.as_ref())
+                .filter_map(|policy| policy.min_interval)
+                .max()
+                .unwrap_or(DurationNanos::new(0));
+            if now.saturating_sub(last.get()) < min_interval.get() {
+                return Err(ExecutionError::Invalid(
+                    "quote refresh violates maker minimum interval".into(),
+                ));
+            }
+        }
+        let plan = state
+            .plan
+            .clone()
+            .ok_or_else(|| ExecutionError::Invalid("quote intent has no execution plan".into()))?;
+        let version = state.quote_version.saturating_add(1);
+        let mut templates = Vec::new();
+        for leg in &plan.legs {
+            let template = leg
+                .order_ids
+                .iter()
+                .rev()
+                .filter_map(|order_id| self.actor.order_map().get(order_id.as_str()))
+                .find(|order| !order.status.terminal())
+                .or_else(|| {
+                    leg.order_ids
+                        .iter()
+                        .rev()
+                        .filter_map(|order_id| self.actor.order_map().get(order_id.as_str()))
+                        .next()
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    ExecutionError::Invalid(format!(
+                        "quote leg has no order template: {}",
+                        leg.leg_id
+                    ))
+                })?;
+            templates.push((leg.leg_id.clone(), template));
+        }
+        let cancellations = templates
+            .iter()
+            .filter(|(_, template)| !template.status.terminal())
+            .map(|(_, template)| CancelOrder {
+                order_id: template.order_id.clone(),
+                reason: "maker quote refresh".into(),
+            })
+            .collect();
+        let submissions = templates
+            .into_iter()
+            .map(|(leg_id, template)| {
+                let options = template_options(&state.intent, &leg_id);
+                let mut replacement = SubmitOrder {
+                    order_id: OrderId::new(format!(
+                        "{}:quote:{}:{}",
+                        request.intent_id, version, leg_id
+                    ))
+                    .expect("validated quote order ID"),
+                    intent_id: Some(request.intent_id.clone()),
+                    strategy_id: Some(typed_strategy_id(state.intent.strategy_id.clone())),
+                    account_id: template.account_id,
+                    segment_key: template.segment_key,
+                    instrument_id: template.instrument_id,
+                    market_id: template.market_id,
+                    execution_route_id: template.execution_route_id,
+                    side: template.side,
+                    order_type: OrderType::Limit,
+                    quantity: Quantity::new(
+                        plan.legs
+                            .iter()
+                            .find(|leg| leg.leg_id == leg_id)
+                            .map(|leg| leg.target_quantity.mantissa())
+                            .unwrap_or(template.quantity.mantissa()),
+                        template.quantity.scale(),
+                    )
+                    .expect("validated quote quantity"),
+                    limit_price: Some(if template.side == OrderSide::Buy {
+                        request.bid_price
+                    } else {
+                        request.ask_price
+                    }),
+                    options,
+                    submitted_at_unix_nanos: Some(request.quote_observed_at),
+                };
+                replacement.options.post_only = Some(true);
+                (leg_id, replacement)
+            })
+            .collect();
+        Ok(PreparedQuoteRefresh {
+            request,
+            version,
+            prepared_at_unix_nanos: now,
+            cancellations,
+            submissions,
+        })
+    }
+
+    pub(crate) fn fail_prepared_quote_refresh(
+        &mut self,
+        prepared: &PreparedQuoteRefresh,
+        error: &ExecutionError,
+    ) -> Result<(), ExecutionError> {
+        let current = self
+            .actor
+            .intent(prepared.request.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: prepared.request.intent_id.clone(),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::ReconciliationRequired,
+            order_ids: Vec::new(),
+            completed_quantity: current.completed_quantity,
+            occurred_at_unix_nanos: prepared.prepared_at_unix_nanos.into(),
+            reason: format!("maker quote refresh failed: {error}"),
+            dependency_watermarks: current.dependency_watermarks,
+        })
+    }
+
+    pub(crate) fn complete_prepared_quote_refresh(
+        &mut self,
+        prepared: PreparedQuoteRefresh,
+        orders: Vec<(LegId, ExecutionOrder)>,
+    ) -> Result<IntentState, ExecutionError> {
+        let mut order_ids = Vec::with_capacity(orders.len());
+        for (leg_id, order) in orders {
+            self.attach_plan_order(
+                prepared.request.intent_id.as_str(),
+                &leg_id,
+                &order.order_id,
+            )?;
+            order_ids.push(order.order_id);
+        }
+        self.actor.update_quote_refresh(
+            prepared.request.intent_id.as_str(),
+            prepared.version,
+            prepared.prepared_at_unix_nanos,
+        );
+        let current = self
+            .actor
+            .intent(prepared.request.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: prepared.request.intent_id,
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::Executing,
+            order_ids,
+            completed_quantity: current.completed_quantity,
+            occurred_at_unix_nanos: prepared.prepared_at_unix_nanos.into(),
+            reason: if prepared.request.reason.trim().is_empty() {
+                "maker quote refreshed".into()
+            } else {
+                prepared.request.reason
+            },
+            dependency_watermarks: current.dependency_watermarks.clone(),
+        })?;
+        self.persist_snapshot()?;
+        self.actor
+            .intent(current.intent.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("quote intent disappeared".into()))
+    }
+
     /// Pull current projected quotes through the intent-planning port and
     /// automatically refresh changed QuoteProvisioning intents.  The market
     /// projection is advisory; every replacement still goes through the
     /// normal order validation, reservation and lifecycle path.
     pub fn refresh_maker_quotes(&mut self) -> Result<usize, ExecutionError> {
+        let requests = self.maker_quote_refresh_requests()?;
+        let mut refreshed = 0;
+        for request in requests {
+            match self.refresh_quote_intent(request) {
+                Ok(_) => refreshed += 1,
+                Err(error) => warn!(
+                    event = "maker_quote_refresh_skipped",
+                    component = "execution",
+                    error = %error,
+                    "maker quote refresh was rejected by execution guardrails"
+                ),
+            }
+        }
+        Ok(refreshed)
+    }
+
+    pub(crate) fn maker_quote_refresh_requests(
+        &mut self,
+    ) -> Result<Vec<RefreshQuoteIntent>, ExecutionError> {
         let targets = self
             .actor
             .intents()
@@ -888,7 +1207,7 @@ impl ExecutionApplication {
             })
             .collect::<Vec<_>>();
         if targets.is_empty() || self.intent_planner.is_none() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
         let observations = {
             let planner = self
@@ -905,7 +1224,7 @@ impl ExecutionApplication {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(ExecutionError::Invalid)?
         };
-        let mut refreshed = 0;
+        let mut requests = Vec::new();
         for (intent_id, quote) in observations {
             let Some(quote) = quote else {
                 continue;
@@ -934,23 +1253,15 @@ impl ExecutionApplication {
             if !changed {
                 continue;
             }
-            match self.refresh_quote_intent(RefreshQuoteIntent {
+            requests.push(RefreshQuoteIntent {
                 intent_id,
                 bid_price: bid,
                 ask_price: ask,
                 quote_observed_at: quote.observed_at_unix_nanos,
                 reason: "projected market quote changed".into(),
-            }) {
-                Ok(_) => refreshed += 1,
-                Err(error) => warn!(
-                    event = "maker_quote_refresh_skipped",
-                    component = "execution",
-                    error = %error,
-                    "maker quote refresh was rejected by execution guardrails"
-                ),
-            }
+            });
         }
-        Ok(refreshed)
+        Ok(requests)
     }
 
     pub(super) fn commit(&mut self, event: ExecutionEvent) -> Result<(), ExecutionError> {

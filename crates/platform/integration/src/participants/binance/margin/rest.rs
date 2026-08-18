@@ -1,3 +1,4 @@
+use super::super::{history, BinanceCancelAllScope, BinanceHistoryQuery, BinanceTradeRecord};
 use crate::services::participants::binance::{account, execution};
 use crate::{
     AccountQuery, CommandResult, ExternalAccountSegment, ExternalAccountSnapshot, ExternalOrder,
@@ -17,6 +18,41 @@ impl AccountQuery for BinanceMarginRestConnection {
             .signed_get("/sapi/v1/margin/account", &[])
             .await?;
         account::margin(segment, &value)
+    }
+}
+
+impl BinanceMarginRestConnection {
+    pub async fn cancel_all_open_orders(
+        &mut self,
+        scope: &BinanceCancelAllScope,
+    ) -> CommandResult<BinanceCancelAllScope> {
+        match self
+            .service
+            .signed_delete_command(
+                "/sapi/v1/margin/openOrders",
+                &[("symbol", scope.symbol.to_string())],
+            )
+            .await?
+        {
+            crate::CommandOutcome::Confirmed(_) => {
+                Ok(crate::CommandOutcome::Confirmed(scope.clone()))
+            }
+            crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
+            crate::CommandOutcome::Indeterminate(error) => {
+                Ok(crate::CommandOutcome::Indeterminate(error))
+            }
+        }
+    }
+
+    pub async fn fetch_account_trades(
+        &mut self,
+        query: &BinanceHistoryQuery,
+    ) -> Result<Vec<BinanceTradeRecord>, IntegrationError> {
+        let payload = self
+            .service
+            .signed_get("/sapi/v1/margin/myTrades", &query.params(true, false)?)
+            .await?;
+        history::trades(&payload)
     }
 }
 
@@ -64,7 +100,7 @@ impl OrderQuery for BinanceMarginRestConnection {
             .service
             .signed_get("/sapi/v1/margin/openOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
 
     async fn order_history(
@@ -76,7 +112,7 @@ impl OrderQuery for BinanceMarginRestConnection {
             .service
             .signed_get("/sapi/v1/margin/allOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
 
     async fn order_detail(
@@ -88,9 +124,11 @@ impl OrderQuery for BinanceMarginRestConnection {
             .service
             .signed_get("/sapi/v1/margin/order", &params)
             .await?;
-        Ok(execution::orders(&self.descriptor().binding_id, &value)?
-            .into_iter()
-            .next())
+        Ok(
+            execution::orders(&self.descriptor().connection_key, &value)?
+                .into_iter()
+                .next(),
+        )
     }
 }
 

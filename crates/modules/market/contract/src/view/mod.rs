@@ -26,13 +26,20 @@ pub use quote::QuoteLatestView;
 pub use rate::RateLatestView;
 pub use ticker_24h::Ticker24hLatestView;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kairos_transport::{
     ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
 };
 
 use crate::{ContractError, ContractResult};
+
+pub fn market_view_path(
+    root: impl AsRef<Path>,
+    key: &MarketViewKey,
+) -> ContractResult<PathBuf> {
+    Ok(key.resource_path(root))
+}
 
 pub struct ViewFrame {
     metadata: SnapshotEnvelopeMetadata,
@@ -107,8 +114,15 @@ pub struct MarketViewReader {
 }
 
 impl MarketViewReader {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &MarketViewKey,
+    ) -> ContractResult<PathBuf> {
+        market_view_path(root, key)
+    }
+
     pub fn open(root: impl AsRef<Path>, key: MarketViewKey) -> ContractResult<Self> {
-        let reader = SharedSnapshotReader::open(key.resource_path(root))
+        let reader = SharedSnapshotReader::open(market_view_path(root, &key)?)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, reader })
     }
@@ -141,12 +155,19 @@ pub struct MarketViewPublisher {
 }
 
 impl MarketViewPublisher {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &MarketViewKey,
+    ) -> ContractResult<PathBuf> {
+        market_view_path(root, key)
+    }
+
     pub fn create(
         root: impl AsRef<Path>,
         key: MarketViewKey,
         slot_size: usize,
     ) -> ContractResult<Self> {
-        let writer = ReplacementSnapshotStorage::create(key.resource_path(root), slot_size)
+        let writer = ReplacementSnapshotStorage::create(market_view_path(root, &key)?, slot_size)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, writer })
     }

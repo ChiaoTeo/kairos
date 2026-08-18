@@ -6,8 +6,9 @@ use crate::services::participants::ibkr::{
 };
 use crate::{
     AccountQuery, AccountStream, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
-    ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionState, ExternalAccountEventEnvelope,
-    ExternalAccountSegment, ExternalAccountSnapshot, IntegrationError,
+    ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, ConnectionState,
+    ExternalAccountEventEnvelope, ExternalAccountSegment, ExternalAccountSnapshot,
+    IntegrationError, MaintenanceOutcome,
 };
 
 pub struct IbkrAccountQueryConnection {
@@ -17,12 +18,15 @@ pub struct IbkrAccountQueryConnection {
 }
 
 impl IbkrAccountQueryConnection {
-    pub fn new(config: IbkrAccountQueryConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: IbkrAccountQueryConfig,
+    ) -> Result<Self, IntegrationError> {
         require_account(&config.account_id)?;
         let options = IbkrOptions::new(config.host, config.port, config.client_id)
             .map_err(IntegrationError::InvalidRequest)?;
         let descriptor = descriptor(
-            config.binding_id,
+            connection_key,
             config.environment,
             config.client_id,
             "account.query",
@@ -48,7 +52,10 @@ pub struct IbkrAccountStreamConnection {
 }
 
 impl IbkrAccountStreamConnection {
-    pub fn new(config: IbkrAccountStreamConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: IbkrAccountStreamConfig,
+    ) -> Result<Self, IntegrationError> {
         require_account(&config.account_id)?;
         if config.segment_key.trim().is_empty() {
             return Err(IntegrationError::InvalidRequest(
@@ -58,7 +65,7 @@ impl IbkrAccountStreamConnection {
         let options = IbkrOptions::new(config.host, config.port, config.client_id)
             .map_err(IntegrationError::InvalidRequest)?;
         let descriptor = descriptor(
-            config.binding_id,
+            connection_key,
             config.environment,
             config.client_id,
             "account.stream",
@@ -66,7 +73,7 @@ impl IbkrAccountStreamConnection {
         let session = SessionService::new(options, config.account_id.clone());
         let stream = AccountStreamService::new(
             session.clone(),
-            descriptor.binding_id.clone(),
+            descriptor.connection_key.clone(),
             config.account_id,
             config.segment_key,
         )?;
@@ -116,9 +123,12 @@ impl ConnectionHealthQuery for IbkrAccountStreamConnection {
 impl ConnectionLifecycleCommand for IbkrAccountStreamConnection {
     async fn connect(&mut self) -> Result<(), IntegrationError> {
         self.state.lifecycle = ConnectionLifecycle::Starting;
-        self.session
-            .connect()
-            .await
+        let result = async {
+            self.session.connect().await?;
+            self.stream.connect().await
+        }
+        .await;
+        result
             .inspect(|()| self.state.mark_ready(true))
             .inspect_err(|error| self.state.mark_failed(error.to_string()))
     }
@@ -137,6 +147,27 @@ impl ConnectionLifecycleCommand for IbkrAccountStreamConnection {
     }
 }
 
+macro_rules! passive_maintenance {
+    ($connection:ty) => {
+        impl ConnectionMaintenance for $connection {
+            fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+                None
+            }
+
+            fn poll_maintenance(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+                _now: tokio::time::Instant,
+            ) -> std::task::Poll<Result<MaintenanceOutcome, IntegrationError>> {
+                std::task::Poll::Ready(Ok(MaintenanceOutcome::Healthy))
+            }
+        }
+    };
+}
+
+passive_maintenance!(IbkrAccountQueryConnection);
+passive_maintenance!(IbkrAccountStreamConnection);
+
 impl AccountQuery for IbkrAccountQueryConnection {
     async fn fetch_account(
         &mut self,
@@ -146,8 +177,11 @@ impl AccountQuery for IbkrAccountQueryConnection {
     }
 }
 impl AccountStream for IbkrAccountStreamConnection {
-    async fn next(&mut self) -> Result<ExternalAccountEventEnvelope, IntegrationError> {
-        self.stream.next().await
+    fn poll_next(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<ExternalAccountEventEnvelope, IntegrationError>> {
+        self.stream.poll_next(cx)
     }
 }
 

@@ -12,12 +12,7 @@ mod routing;
 pub(crate) use connections::install as install_connections;
 pub(crate) use routing::{binding_provider_product, binding_supports_canonical_market};
 
-pub(crate) use activation::{attach_binance_snapshot, attach_stream};
-pub use activation::{
-    attach_hyperliquid_live_source, attach_hyperliquid_snapshot_source,
-    attach_massive_market_source, attach_okx_live_source, attach_okx_snapshot_source,
-    default_endpoint, MarketProduct,
-};
+pub use activation::default_endpoint;
 pub use replay::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
 };

@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ...system import UnixRestClient
 from ...workspace import Workspace
@@ -90,3 +91,13 @@ class LaunchControlApplication:
         if action not in allowed:
             raise ValueError(f"unsupported strategy control: {action}")
         return self.request(target, "POST", f"/v1/{action}")
+
+    def decision(
+        self, target: InstanceControlTarget, strategy_decision_id: str
+    ) -> dict[str, Any]:
+        decision_id = strategy_decision_id.strip()
+        if not decision_id:
+            raise ValueError("strategy_decision_id is required")
+        return self.request(
+            target, "GET", f"/v1/decisions/{quote(decision_id, safe='')}"
+        )

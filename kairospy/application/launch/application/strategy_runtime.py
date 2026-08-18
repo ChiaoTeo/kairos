@@ -23,8 +23,10 @@ class StrategyLaunchConfig:
     allow_trading: bool
     max_order_notional: Decimal | None
     require_limit_orders: bool
+    replay_start: datetime | None
     replay_end: datetime | None
     authoritative: bool
+    notifications: Mapping[str, object]
 
     @classmethod
     def load(
@@ -86,11 +88,17 @@ class StrategyLaunchConfig:
         max_order_notional = _optional_positive_decimal(
             raw_max_notional, "live_safety.max_order_notional"
         )
+        backtest_market = _mapping(raw.get("backtest_market"), "backtest_market")
+        replay_start = _optional_datetime(
+            os.environ.get("KAIROS_BACKTEST_START") or backtest_market.get("start"),
+            "backtest_market.start",
+        )
         replay_end = _optional_datetime(
             os.environ.get("KAIROS_BACKTEST_END")
-            or _mapping(raw.get("backtest_market"), "backtest_market").get("end"),
+            or backtest_market.get("end"),
             "backtest_market.end",
         )
+        notifications = _mapping(raw.get("notifications"), "notifications")
         return cls(
             identity=LaunchIdentity(actual_launch_id, actual_mode),
             market_scope=cast(Literal["shared", "instance"], scope_value),
@@ -98,8 +106,10 @@ class StrategyLaunchConfig:
             allow_trading=allow_trading,
             max_order_notional=max_order_notional,
             require_limit_orders=require_limit_orders,
+            replay_start=replay_start if mode == "backtest" else None,
             replay_end=replay_end if mode == "backtest" else None,
             authoritative=authoritative,
+            notifications=dict(notifications),
         )
 
 

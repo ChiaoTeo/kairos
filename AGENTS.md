@@ -167,6 +167,67 @@ collaboration belongs in application orchestration or composition.
   compatibility facade before checking whether an existing Domain,
   Application, Actor, Monitor, or composition boundary already owns it.
 
+## Documentation rules
+
+Routine development tasks must not create a proposal, design document, or
+generated report under `docs/`. The task discussion, change description, code,
+and tests are the normal record of implementation work.
+
+Agents may store temporary analysis, plans, generated reports, and other
+working material under `.agent-work/<task>/`. The entire directory is ignored
+by Git, is not project documentation, and must never be referenced by committed
+files. Do not store credentials, provider payloads containing secrets, or the
+only copy of evidence required to maintain the project there.
+
+Committed documentation is organized by its durable audience and owner:
+
+- `docs/guides/` explains user workflows;
+- `docs/architecture/` describes current cross-module architecture;
+- `docs/integrations/` records current provider coverage, upstream provenance,
+  certification evidence, and license obligations;
+- `docs/decisions/` records accepted, long-lived architectural decisions;
+- `schemas/` owns machine-readable wire contracts and protocol semantics;
+- an owning crate's `README.md` owns module-specific boundaries.
+
+Do not create `docs/proposal/` or a generic `docs/reference/` directory. An
+unresolved design stays in the task, an issue, or `.agent-work/`. Once a
+significant decision is made, write a concise Decision containing its context,
+choice, and consequences; do not preserve the full implementation plan. The
+capitalized name `Reference` is reserved for the Reference business module.
+
+Generated documentation is never committed. Local API pages and similar
+artifacts belong under `target/docs/`; CI may publish them as disposable build
+artifacts. Code and schemas remain the source of truth, and committed prose
+must link to them rather than copy generated inventories.
+
+## Cargo dependency rules
+
+The root `Cargo.toml` is the single source of truth for workspace package
+metadata, direct dependency versions, dependency sources, and internal crate
+paths.
+
+- Every workspace member inherits `version`, `edition`, and `license` from
+  `[workspace.package]`.
+- Every direct dependency, development dependency, build dependency, and
+  target-specific dependency of a workspace member must be declared in
+  `[workspace.dependencies]` and referenced with `workspace = true`.
+- Every workspace member package has a path entry in
+  `[workspace.dependencies]`. Member manifests must not repeat relative paths
+  to other workspace crates.
+- The root declaration owns versions, sources, disabled default features, and
+  features that are required by every caller. A member manifest owns only its
+  additional feature selection and whether a dependency is optional.
+- Do not enable a broad feature set at the workspace level for the convenience
+  of one caller. In particular, blocking runtimes, database migrations, macros,
+  and provider-specific transport features stay with the member that uses
+  them.
+- A workspace dependency entry does not authorize a dependency edge. Each
+  member must still list every dependency it uses, so its architectural
+  boundary remains visible in its own manifest.
+- Adding or changing a dependency requires running
+  `python3 scripts/check/check_workspace_dependencies.py` and committing the
+  resulting `Cargo.lock` change when dependency resolution changes.
+
 ## Ownership rules
 
 Before changing code, identify the business owner, mutable state owner,
@@ -207,8 +268,6 @@ better evidence—not a larger number of layers or abstractions.
   optimize for uniform file layouts when responsibility is already clear.
 - Introduce shared domain types only when the semantic meaning is genuinely
   shared. Do not create universal types merely to remove every primitive.
-- Migrate one business slice at a time. After migration, delete obsolete
-  concepts, compatibility paths, and duplicate state owners.
 - Keep primitive representations at wire, persistence, and integration
   boundaries. Use explicit conversions into domain types rather than implicit
   primitive conversions.
@@ -225,8 +284,7 @@ description or design note:
 2. Who is its current caller?
 3. Which existing owner or boundary is insufficient?
 4. What is the simplest implementation that preserves the boundary?
-5. Which old concept will be removed after migration?
-6. What test or measurement will demonstrate that the change is useful?
+5. What test or measurement will demonstrate that the change is useful?
 
 ## Change workflow
 
@@ -238,8 +296,6 @@ description or design note:
 6. Put reusable process/control behavior in `application/process.rs`; keep
    transport-only details private to the binary.
 7. Keep binaries limited to input adaptation, composition, and invocation.
-8. Delete obsolete concepts after migration; do not preserve an abstraction
-   without a current caller or boundary.
 
 ## Verification before handoff
 
@@ -252,84 +308,10 @@ uv run pytest -q
 cargo fmt --all -- --check
 git diff --check
 python3 scripts/check/check_crate_layout.py
+python3 scripts/check/check_workspace_dependencies.py
+python3 scripts/check/check_documentation.py
+make docs-check
 ```
-
-Also run static searches for cross-module imports from `services/` or private
-files, vendor payloads crossing application boundaries, duplicate state
-owners, unnecessary protocol mirrors, and generic orchestration layers.
-Audit every trait defined under `application/`: require evidence that it is
-owned by an already-integrated lower-level capability; otherwise replace it
-with a direct concrete dependency or move business behavior into Application
-or Domain. Explicitly search for generic `ports`, `capabilities`, `gateways`,
-and test-only implementations before handoff.
-Search active business publisher composition for JSON model adapters (for
-example, `serde_json::to_value` or `serde_json::from_value`) and either remove
-every match from event/snapshot publication paths or document why the matched
-boundary is intentionally JSON.
 
 If an unrelated pre-existing failure blocks a full-repository check, report
 the exact failure and still run the narrowest meaningful checks.
-
-## Integration adapter migration
-
-`docs/integration-session-and-operation-design.md` is the authoritative
-design for Integration connection and operation migration. When this section
-and an older implementation disagree, follow the design document and record
-the migration status there.
-
-Treat mature upstream adapters, including NautilusTrader, as a reference
-implementation and engineering asset. Use them to recover provider behavior,
-failure handling, protocol details, and test cases. Do not copy their domain
-model, event bus, cache, engine runtime, Python bindings, or application
-architecture into Kairos.
-
-Migrate one provider/product/capability slice at a time:
-
-1. Read the official provider documentation and define the capability
-   inventory.
-2. Inspect the corresponding upstream adapter and record the repository,
-   branch or commit, relevant paths, and license.
-3. Build a provider-native concrete connection and separate provider/principal
-   contexts where the provider requires them.
-4. Expose independent capability projections such as order entry, order
-   query, order events, account, market data, or historical data.
-5. Map provider payloads into Kairos-owned application/domain types and retain
-   Kairos command, query, stream, error, and delivery-certainty semantics.
-6. Add focused normalizer, recovery, backpressure, and failure-path tests.
-7. Wire the slice through business composition.
-8. Delete the migrated slice's legacy registry, `ConnectionSpec`, or generic
-   lifecycle path after the new path passes its exit criteria.
-
-The existing generic `Connection` is a migration compatibility boundary, not
-the target abstraction for every new provider. Do not make HTTP clients look
-like sessions, do not hide command/query/stream semantics behind
-`start/stop/reconnect` or `execute(operation, payload)`, and do not introduce
-a universal provider adapter, session registry, or operation facade without a
-current caller and a documented boundary.
-
-Use the following semantic rules from the integration design:
-
-- commands must not be transparently retried after they may have been sent;
-- queries may use bounded retries when safe;
-- streams must define ordering, reconnect, backpressure, and resync behavior;
-- async APIs are the default and blocking APIs belong under
-  `kairos_integration::blocking`;
-- provider-native connections are defined by Integration, while route/source
-  selection and business state remain owned by business composition and its
-  Actor.
-
-For every upstream adapter used during migration, create or update a note
-under `docs/integration-adapter-references/`. Record the source repository and
-commit, copied or rewritten logic, Kairos mapping, deliberately uncopied
-areas, tests used, and license obligations. Preserve third-party copyright
-and license notices when source code is reused.
-
-A slice is not complete until the new path is tested and the old path for the
-same slice is removed. Refresh the migration baseline with:
-
-```text
-rg -l "Integration::new" crates
-rg -l "ConnectionSpec" crates
-rg -l "IntegrationCapability" crates
-rg -l "dyn Connection" crates
-```

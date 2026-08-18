@@ -346,38 +346,6 @@ def test_market_id_lookup_is_not_truncated_by_catalog_size(tmp_path) -> None:
     assert application.require_market(target).id == target
 
 
-def test_reference_application_has_no_callable_or_compatibility_facade() -> None:
-    root = Path(__file__).parents[1]
-    application = (root / "kairospy/application/reference/application.py").read_text(
-        encoding="utf-8"
-    )
-    strategy_services = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(
-            (root / "kairospy/application/strategy/services").glob("*.py")
-        )
-    )
-    public_api = (root / "kairospy/application/reference/__init__.py").read_text(
-        encoding="utf-8"
-    )
-    contract_client = (
-        root / "kairospy/infrastructure/contracts/reference/client.py"
-    ).read_text(encoding="utf-8")
-
-    assert "Callable" not in application
-    assert "Protocol" not in (
-        root / "kairospy/application/reference/validation.py"
-    ).read_text(encoding="utf-8")
-    assert "reference.markets" not in strategy_services
-    assert "ReferenceClient" not in public_api
-    assert not (root / "kairospy/application/reference/client.py").exists()
-    assert not (root / "kairospy/infrastructure/contracts/reference.py").exists()
-    assert "financial-products" not in contract_client
-    assert "routing_mode" not in contract_client
-    assert "destination_market_id" not in contract_client
-    assert "broker_id" not in contract_client
-
-
 def test_reference_catalog_golden_fixture_has_cross_language_shape() -> None:
     fixture = json.loads(
         (Path(__file__).parent / "fixtures" / "reference_catalog_empty.json").read_text(

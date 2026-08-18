@@ -5,12 +5,12 @@ use super::*;
 pub struct HyperliquidSource {
     id: String,
     product: HyperliquidProduct,
-    connection: HyperliquidInfoRestConnection,
+    connection: ConnectionRef<HyperliquidInfoRestConnection>,
 }
 impl HyperliquidSource {
-    pub(crate) fn from_connection(
+    pub(crate) fn from_key(
         product: HyperliquidProduct,
-        connection: HyperliquidInfoRestConnection,
+        key: kairos_conflux::ConnectionKey,
     ) -> Self {
         let id = match product {
             HyperliquidProduct::Perpetual => "hyperliquid-perpetual",
@@ -19,7 +19,7 @@ impl HyperliquidSource {
         Self {
             id: id.into(),
             product,
-            connection,
+            connection: ConnectionRef::managed(key),
         }
     }
 
@@ -33,15 +33,17 @@ impl HyperliquidSource {
         endpoint: impl Into<String>,
         product: HyperliquidProduct,
     ) -> ReferenceResult<Self> {
-        let connection = HyperliquidInfoRestConnection::new(HyperliquidRestConfig {
-            binding_id: match product {
-                HyperliquidProduct::Perpetual => "reference-hyperliquid-perpetual",
-                HyperliquidProduct::Spot => "reference-hyperliquid-spot",
-            }
-            .into(),
-            environment: "public".into(),
-            endpoint: endpoint.into(),
-        })
+        let connection_key = match product {
+            HyperliquidProduct::Perpetual => "reference-hyperliquid-perpetual",
+            HyperliquidProduct::Spot => "reference-hyperliquid-spot",
+        };
+        let connection = HyperliquidInfoRestConnection::new(
+            kairos_conflux::ConnectionKey::new(connection_key).map_err(ReferenceError::Provider)?,
+            HyperliquidRestConfig {
+                environment: "public".into(),
+                endpoint: endpoint.into(),
+            },
+        )
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         let id = match product {
             HyperliquidProduct::Perpetual => "hyperliquid-perpetual",
@@ -50,21 +52,52 @@ impl HyperliquidSource {
         Ok(Self {
             id: id.into(),
             product,
-            connection,
+            connection: ConnectionRef::Owned(connection),
         })
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for HyperliquidSource {
     fn source_id(&self) -> &str {
         &self.id
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let facts = match self.product {
-            HyperliquidProduct::Perpetual => self.connection.fetch_perpetual_instruments().await,
-            HyperliquidProduct::Spot => self.connection.fetch_spot_instruments().await,
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
+            .await
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let facts = match (&mut self.connection, self.product) {
+            (ConnectionRef::Managed(key, _), HyperliquidProduct::Perpetual) => {
+                connections
+                    .hyperliquid_info_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_perpetual_instruments()
+                    .await
+            }
+            (ConnectionRef::Managed(key, _), HyperliquidProduct::Spot) => {
+                connections
+                    .hyperliquid_info_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_spot_instruments()
+                    .await
+            }
+            #[cfg(test)]
+            (ConnectionRef::Owned(connection), HyperliquidProduct::Perpetual) => {
+                connection.fetch_perpetual_instruments().await
+            }
+            #[cfg(test)]
+            (ConnectionRef::Owned(connection), HyperliquidProduct::Spot) => {
+                connection.fetch_spot_instruments().await
+            }
         };
         let facts = facts.map_err(|error| ReferenceError::Provider(error.to_string()))?;
         hyperliquid_provider_catalog(facts, self.product)

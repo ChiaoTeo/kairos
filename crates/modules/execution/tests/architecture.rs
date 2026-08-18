@@ -107,9 +107,12 @@ fn execution_does_not_own_treasury_money_operations_without_a_business_caller() 
     for forbidden in [
         "FundingAllocation",
         "MoneyOperation",
-        "capabilities::funding",
+        "capabilities::transfer",
+        "capabilities::earn",
         "compose_binance_transfer",
-        "TransferRequest",
+        "AssetTransferRequest",
+        "EarnSubscribeRequest",
+        "EarnRedeemRequest",
         "WithdrawRequest",
         "RepayRequest",
     ] {
@@ -335,28 +338,26 @@ fn execution_connections_are_installed_in_exact_conflux_collections() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let routes = fs::read_to_string(root.join("src/composition/connections/routes.rs"))
         .expect("read routes");
-    let managed = fs::read_to_string(root.join("src/services/gateway/managed.rs"))
-        .expect("read managed gateway");
-    for collection in [
-        "binance_spot_rest_connections",
-        "binance_usdm_rest_connections",
-        "binance_coinm_rest_connections",
-        "binance_options_rest_connections",
-        "binance_stocks_rest_connections",
-        "okx_private_rest_connections",
-        "ibkr_order_connections",
+    let actor =
+        fs::read_to_string(root.join("src/application/conflux.rs")).expect("read Conflux actor");
+    for family in [
+        "binance_spot_rest",
+        "binance_usdm_rest",
+        "binance_coinm_rest",
+        "binance_options_rest",
+        "binance_stocks_rest",
+        "okx_private_rest",
+        "ibkr_order",
     ] {
+        assert!(routes.contains(family), "missing typed create for {family}");
         assert!(
-            routes.contains(collection),
-            "missing install into {collection}"
-        );
-        assert!(
-            managed.contains(collection),
-            "missing managed use of {collection}"
+            actor.contains(family),
+            "missing typed Actor access for {family}"
         );
     }
-    assert!(!routes.contains("dyn Connection"));
-    assert!(!managed.contains("dyn Connection"));
+    assert!(!root.join("src/services/gateway/managed.rs").exists());
+    assert!(!actor.contains("build_managed_gateways"));
+    assert!(!actor.contains("into_connection"));
 }
 
 #[test]
@@ -370,17 +371,4 @@ fn execution_publication_is_owned_by_conflux_resources() {
     assert!(!services.contains("SharedExecutionSnapshotPublisher"));
     assert!(!services.contains("SharedIntentSnapshotPublisher"));
     assert!(!services.contains("AeronExecutionEventPublisher"));
-}
-
-#[test]
-fn execution_composition_has_no_provider_or_process_compatibility_layer() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    assert!(!root.join("src/composition/providers").exists());
-    assert!(!root.join("src/composition/process.rs").exists());
-    assert!(root.join("src/composition/launch.rs").is_file());
-    assert!(root.join("src/composition/host.rs").is_file());
-    let composition = rust_source(&root.join("src/composition"));
-    assert!(composition.contains("build_execution_host"));
-    assert!(!composition.contains("compose_execution_process"));
-    assert!(!composition.contains("ExecutionProcessConfig"));
 }

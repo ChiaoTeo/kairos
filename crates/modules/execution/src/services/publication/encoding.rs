@@ -1,5 +1,62 @@
 use super::*;
 
+pub(super) fn encode_dependency_evidence<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    watermarks: &crate::application::DependencyWatermarks,
+) -> flatbuffers::WIPOffset<
+    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<common_fb::EvidenceRef<'a>>>,
+> {
+    let mut values = Vec::new();
+    for (account_id, watermark) in &watermarks.account {
+        let snapshot_id = builder.create_string(&format!("account:{account_id}"));
+        values.push(common_fb::EvidenceRef::create(
+            builder,
+            &common_fb::EvidenceRefArgs {
+                owner: common_fb::DependencyOwner::ACCOUNT,
+                kind: common_fb::EvidenceKind::CURRENT_VIEW,
+                snapshot_id: Some(snapshot_id),
+                generation: Some(watermark.generation.get()),
+                sequence: Some(watermark.event_sequence.get()),
+                ..Default::default()
+            },
+        ));
+    }
+    for (owner, snapshot_id_value, watermark) in [
+        (
+            common_fb::DependencyOwner::MARKET,
+            "market",
+            watermarks.market.as_ref(),
+        ),
+        (
+            common_fb::DependencyOwner::REFERENCE,
+            "reference",
+            watermarks.reference.as_ref(),
+        ),
+        (
+            common_fb::DependencyOwner::RISK,
+            "risk",
+            watermarks.risk.as_ref(),
+        ),
+    ] {
+        let Some(watermark) = watermark else {
+            continue;
+        };
+        let snapshot_id = builder.create_string(snapshot_id_value);
+        values.push(common_fb::EvidenceRef::create(
+            builder,
+            &common_fb::EvidenceRefArgs {
+                owner,
+                kind: common_fb::EvidenceKind::CURRENT_VIEW,
+                snapshot_id: Some(snapshot_id),
+                generation: Some(watermark.generation.get()),
+                sequence: Some(watermark.event_sequence.get()),
+                ..Default::default()
+            },
+        ));
+    }
+    builder.create_vector(&values)
+}
+
 pub(crate) fn encode_active_orders(
     actor_id: &str,
     identity: &InstanceIdentity,
@@ -318,6 +375,10 @@ pub(super) fn encode_intent_event_state<'a>(
     let order_ids = builder.create_vector(&order_ids);
     let completed_quantity = decimal(event.completed_quantity);
     let reason = (!event.reason.is_empty()).then(|| builder.create_string(&event.reason));
+    let strategy_decision_id = event
+        .strategy_decision_id
+        .as_ref()
+        .map(|value| builder.create_string(value));
     fb::IntentLifecycleEventState::create(
         builder,
         &fb::IntentLifecycleEventStateArgs {
@@ -328,6 +389,11 @@ pub(super) fn encode_intent_event_state<'a>(
             completed_quantity: Some(&completed_quantity),
             occurred_at_unix_nanos: event.occurred_at_unix_nanos.get(),
             reason,
+            strategy_decision_id,
+            previous_lifecycle: event
+                .previous_status
+                .map(intent_lifecycle)
+                .unwrap_or(fb::IntentLifecycle::UNSPECIFIED),
         },
     )
 }
@@ -783,44 +849,8 @@ pub(super) fn encode_intent_state<'a>(
     builder: &mut FlatBufferBuilder<'a>,
     state: &crate::application::IntentState,
 ) -> Result<flatbuffers::WIPOffset<fb::IntentState<'a>>, String> {
-    let intent = &state.intent;
-    let intent_id = builder.create_string(&intent.intent_id.to_string());
-    let strategy_id = builder.create_string(&intent.strategy_id);
-    let launch_id = builder.create_string(&intent.launch_id);
-    let instance_id = builder.create_string(&intent.instance_id);
-    let reason = (!intent.reason.is_empty()).then(|| builder.create_string(&intent.reason));
-    let leg_offsets = intent
-        .legs
-        .iter()
-        .map(|leg| encode_intent_leg(builder, leg))
-        .collect::<Result<Vec<_>, _>>()?;
-    let legs = builder.create_vector(&leg_offsets);
-    let evidence = builder.create_vector::<flatbuffers::WIPOffset<
-        kairos_protocol::generated::kairos::common::v_2::EvidenceRef,
-    >>(&[]);
-    let intent_offset = fb::ExecutionIntent::create(
-        builder,
-        &fb::ExecutionIntentArgs {
-            intent_id: Some(intent_id),
-            strategy_id: Some(strategy_id),
-            launch_id: Some(launch_id),
-            instance_id: Some(instance_id),
-            intent_type: intent_type(intent.intent_type),
-            legs: Some(legs),
-            completion_policy: completion_policy(intent.completion_policy),
-            failure_policy: failure_policy(intent.failure_policy),
-            hedge_policy: None,
-            deadline_unix_nanos: intent.deadline_unix_nanos.map(|value| value.get()),
-            min_edge_bps: intent.min_edge_bps,
-            max_slippage_bps: intent.max_slippage_bps,
-            estimated_fee_bps: intent.estimated_fee_bps,
-            evidence: Some(evidence),
-            reason,
-        },
-    );
-    let dependency_evidence = builder.create_vector::<flatbuffers::WIPOffset<
-        kairos_protocol::generated::kairos::common::v_2::EvidenceRef,
-    >>(&[]);
+    let intent_offset = encode_execution_intent(builder, &state.intent)?;
+    let dependency_evidence = encode_dependency_evidence(builder, &state.dependency_watermarks);
     let state_reason = (!state.reason.is_empty()).then(|| builder.create_string(&state.reason));
     let plan = state
         .plan
@@ -839,6 +869,51 @@ pub(super) fn encode_intent_state<'a>(
             quote_version: Some(state.quote_version),
             last_quote_refresh_unix_nanos: state.last_quote_refresh_unix_nanos.map(|v| v.get()),
             compensation_attempts: state.compensation_attempts,
+        },
+    ))
+}
+
+pub(super) fn encode_execution_intent<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    intent: &crate::application::ExecuteStrategyIntent,
+) -> Result<flatbuffers::WIPOffset<fb::ExecutionIntent<'a>>, String> {
+    let intent_id = builder.create_string(&intent.intent_id.to_string());
+    let strategy_decision_id = intent
+        .strategy_decision_id
+        .as_ref()
+        .map(|value| builder.create_string(value));
+    let strategy_id = builder.create_string(&intent.strategy_id);
+    let launch_id = builder.create_string(&intent.launch_id);
+    let instance_id = builder.create_string(&intent.instance_id);
+    let reason = (!intent.reason.is_empty()).then(|| builder.create_string(&intent.reason));
+    let leg_offsets = intent
+        .legs
+        .iter()
+        .map(|leg| encode_intent_leg(builder, leg))
+        .collect::<Result<Vec<_>, _>>()?;
+    let legs = builder.create_vector(&leg_offsets);
+    let evidence = builder.create_vector::<flatbuffers::WIPOffset<
+        kairos_protocol::generated::kairos::common::v_2::EvidenceRef,
+    >>(&[]);
+    Ok(fb::ExecutionIntent::create(
+        builder,
+        &fb::ExecutionIntentArgs {
+            intent_id: Some(intent_id),
+            strategy_id: Some(strategy_id),
+            launch_id: Some(launch_id),
+            instance_id: Some(instance_id),
+            intent_type: intent_type(intent.intent_type),
+            legs: Some(legs),
+            completion_policy: completion_policy(intent.completion_policy),
+            failure_policy: failure_policy(intent.failure_policy),
+            hedge_policy: None,
+            deadline_unix_nanos: intent.deadline_unix_nanos.map(|value| value.get()),
+            min_edge_bps: intent.min_edge_bps,
+            max_slippage_bps: intent.max_slippage_bps,
+            estimated_fee_bps: intent.estimated_fee_bps,
+            evidence: Some(evidence),
+            reason,
+            strategy_decision_id,
         },
     ))
 }

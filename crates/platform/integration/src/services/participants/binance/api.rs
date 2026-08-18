@@ -40,13 +40,14 @@ impl ApiReply {
 
 impl ApiService {
     pub(crate) fn new(
+        connection_key: crate::ConnectionKey,
         config: BinanceWebSocketConfig,
         domain: &str,
     ) -> Result<Self, IntegrationError> {
         let credential = config.credential.clone().ok_or_else(|| {
             IntegrationError::Authentication("Binance WebSocket API credential is required".into())
         })?;
-        let descriptor = config.descriptor(domain)?;
+        let descriptor = config.descriptor(connection_key, domain)?;
         Ok(Self {
             socket: SocketService::new(descriptor, config.endpoint, config.event_capacity)?,
             credential,

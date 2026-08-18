@@ -108,13 +108,15 @@ pub fn build_execution_host(
         ExecutionAudit::from(audit),
         settlement,
     )?;
-    let publisher = kairos_transport::AeronBytePublisher::connect(
+    let event_endpoint = kairos_execution_contract::AeronEndpoint::from_parts(
         config.aeron_dir.as_deref(),
-        &config.aeron_channel,
+        config.aeron_channel.clone(),
         config.execution_events_stream_id,
     )?;
+    let publisher =
+        kairos_execution_contract::ExecutionEventPublisher::connect(&event_endpoint)?;
     system
-        .aeron_publishers
+        .execution_event_publishers
         .ensure_with("execution-events".to_owned(), 1, || publisher)?;
 
     // The typed Conflux views replace both legacy snapshot files. Keep these

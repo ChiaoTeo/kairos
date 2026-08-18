@@ -54,7 +54,14 @@ def test_launch_owns_strategy_process_control_and_strategy_owns_composition() ->
 
 def test_business_applications_do_not_import_composition_or_infrastructure() -> None:
     root = Path(__file__).parents[1]
-    for module in ("reference", "market", "account", "risk", "execution"):
+    for module in (
+        "reference",
+        "market",
+        "account",
+        "risk",
+        "execution",
+        "notification",
+    ):
         source = (root / f"kairospy/application/{module}/application.py").read_text(
             encoding="utf-8"
         )
@@ -68,7 +75,14 @@ def test_business_applications_do_not_mirror_dependencies_as_private_protocols()
     None
 ):
     root = Path(__file__).parents[1]
-    for module in ("reference", "market", "account", "risk", "execution"):
+    for module in (
+        "reference",
+        "market",
+        "account",
+        "risk",
+        "execution",
+        "notification",
+    ):
         source = (root / f"kairospy/application/{module}/application.py").read_text(
             encoding="utf-8"
         )

@@ -51,6 +51,41 @@ def test_project_init_help_exposes_runnable_backtest_template() -> None:
     assert "backtest" in output.getvalue()
 
 
+def test_notifications_cli_exposes_validation_and_explicit_test() -> None:
+    output = StringIO()
+
+    assert execute_argv(["notifications", "--help"], output) == 0
+    assert "validate" in output.getvalue()
+    assert "test" in output.getvalue()
+
+
+def test_notifications_validate_reads_workspace_resources(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="n")
+    output = StringIO()
+
+    assert (
+        execute_argv(
+            [
+                "notifications",
+                "validate",
+                "--mode",
+                "backtest",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {
+        "valid": True,
+        "path": str(workspace.paths.notification_config()),
+        "issues": [],
+    }
+
+
 def test_project_scaffold_cli_recovers_an_existing_empty_project(tmp_path) -> None:
     project = tmp_path / "demo"
     WorkspaceApplication().init_project(project, workspace_id="demo")
@@ -360,10 +395,51 @@ def test_launch_control_commands_do_not_require_mode_flag() -> None:
     assert execute_argv(["launch", "attach", "--help"], output) == 0
     assert "--python" in output.getvalue()
 
-    for command in ("status", "enable", "pause", "resume", "refresh"):
+    for command in ("status", "decision", "enable", "pause", "resume", "refresh"):
         output = StringIO()
         assert execute_argv(["launch", "strategy", command, "--help"], output) == 0
         assert "--mode" not in output.getvalue()
+
+
+def test_launch_strategy_decision_queries_instance_control(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="decision"
+    )
+    LaunchRegistryApplication(workspace).add("btc", mode="paper", instance_id="run-1")
+
+    def decision(_self, target, strategy_decision_id):
+        return {
+            "launch_id": target.launch_id,
+            "instance_id": target.instance_id,
+            "strategy_decision_id": strategy_decision_id,
+        }
+
+    monkeypatch.setattr(LaunchControlApplication, "decision", decision)
+    output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "launch",
+                "strategy",
+                "decision",
+                "btc",
+                "decision:1",
+                "--workspace",
+                str(workspace.paths.root),
+                "--format",
+                "json",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert json.loads(output.getvalue()) == {
+        "launch_id": "btc",
+        "instance_id": "run-1",
+        "strategy_decision_id": "decision:1",
+    }
 
 
 def test_launch_diagnose_uses_config_identity_without_runtime_flags() -> None:

@@ -3,10 +3,9 @@ use std::convert::Infallible;
 use std::time::{Duration, Instant};
 
 use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, ManagedConnections, RestContract, SystemEvent,
-};
-use kairos_integration::{
-    AccountQuery, ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalParticipantEvent,
+    AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, ExternalAccountEvent,
+    ExternalAccountEventEnvelope, ExternalParticipantEvent, RestContract, SystemEvent,
+    ResourceOperationError, TypedConnectionCollection,
 };
 use kairos_primitives::SegmentKey;
 use kairos_protocol::InstanceIdentity;
@@ -98,7 +97,7 @@ impl ConfluxActor for AccountApplication {
     type LocalEvent = Infallible;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
-        self.spawn_streams(context)?;
+        self.register_streams(context)?;
         self.refresh_from_system(context, Vec::new()).await?;
         self.publish(context)?;
         context.spawn_timer("refresh", self.conflux.refresh_interval);
@@ -114,7 +113,10 @@ impl ConfluxActor for AccountApplication {
             ConfluxEvent::Rest(request) => self.handle_rest(request, context).await.map(Some),
             ConfluxEvent::Integration(event) => {
                 if let ExternalParticipantEvent::Account(envelope) = event.event {
-                    self.handle_account_event(&event.connection, envelope)?;
+                    self.handle_account_event(
+                        event.identity.descriptor.connection_key.as_str(),
+                        envelope,
+                    )?;
                 }
                 Ok(None)
             }
@@ -160,22 +162,15 @@ impl ConfluxActor for AccountApplication {
 }
 
 impl AccountApplication {
-    fn spawn_streams(&mut self, context: &mut Context<'_, Self>) -> Result<(), AccountError> {
-        macro_rules! spawn {
-            ($field:ident) => {{
-                let keys = context
-                    .system()
-                    .$field
-                    .iter()
-                    .map(|(key, _)| key.clone())
+    fn register_streams(&mut self, context: &mut Context<'_, Self>) -> Result<(), AccountError> {
+        macro_rules! register {
+            ($connections:expr) => {{
+                let keys = $connections
+                    .keys()
+                    .into_iter()
+                    .map(|key| key.to_string())
                     .collect::<Vec<_>>();
                 for key in keys {
-                    let connection = context
-                        .system()
-                        .$field
-                        .remove(&key)
-                        .expect("collected connection key")
-                        .into_connection();
                     let segment = SegmentKey::new(key.clone())
                         .map_err(|error| AccountError::Invalid(error.to_string()))?;
                     self.conflux
@@ -187,17 +182,17 @@ impl AccountApplication {
                             ))
                         })?
                         .add_stream(key.clone());
-                    context.spawn_integration_account_events(key, connection);
                 }
             }};
         }
-        spawn!(binance_spot_user_websocket_connections);
-        spawn!(binance_margin_user_websocket_connections);
-        spawn!(binance_usdm_user_websocket_connections);
-        spawn!(binance_coinm_user_websocket_connections);
-        spawn!(binance_options_user_websocket_connections);
-        spawn!(okx_private_websocket_connections);
-        spawn!(ibkr_account_stream_connections);
+        let connections = context.connections();
+        register!(connections.binance_spot_user_websocket);
+        register!(connections.binance_margin_user_websocket);
+        register!(connections.binance_usdm_user_websocket);
+        register!(connections.binance_coinm_user_websocket);
+        register!(connections.binance_options_user_websocket);
+        register!(connections.okx_private_websocket);
+        register!(connections.ibkr_account_stream);
         Ok(())
     }
 
@@ -255,67 +250,25 @@ impl AccountApplication {
             .map(|segment| (segment.segment_key.to_string(), segment))
             .collect::<BTreeMap<_, _>>();
         let resolver = self.conflux.resolver.clone();
-        let system = context.system();
+        let mut connections = context.connections();
         let mut fetches = Vec::new();
+        fetches
+            .extend(fetch_accounts(&mut connections.binance_spot_rest, &by_key, &resolver).await);
         fetches.extend(
-            fetch_accounts(
-                &mut system.binance_spot_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
+            fetch_accounts(&mut connections.binance_funding_rest, &by_key, &resolver).await,
         );
+        fetches
+            .extend(fetch_accounts(&mut connections.binance_margin_rest, &by_key, &resolver).await);
+        fetches
+            .extend(fetch_accounts(&mut connections.binance_usdm_rest, &by_key, &resolver).await);
+        fetches
+            .extend(fetch_accounts(&mut connections.binance_coinm_rest, &by_key, &resolver).await);
         fetches.extend(
-            fetch_accounts(
-                &mut system.binance_funding_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
+            fetch_accounts(&mut connections.binance_options_rest, &by_key, &resolver).await,
         );
-        fetches.extend(
-            fetch_accounts(
-                &mut system.binance_margin_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
-        );
-        fetches.extend(
-            fetch_accounts(
-                &mut system.binance_usdm_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
-        );
-        fetches.extend(
-            fetch_accounts(
-                &mut system.binance_coinm_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
-        );
-        fetches.extend(
-            fetch_accounts(
-                &mut system.binance_options_rest_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
-        );
-        fetches.extend(
-            fetch_accounts(&mut system.okx_private_rest_connections, &by_key, &resolver).await,
-        );
-        fetches.extend(
-            fetch_accounts(
-                &mut system.ibkr_account_query_connections,
-                &by_key,
-                &resolver,
-            )
-            .await,
-        );
+        fetches.extend(fetch_accounts(&mut connections.okx_private_rest, &by_key, &resolver).await);
+        fetches
+            .extend(fetch_accounts(&mut connections.ibkr_account_query, &by_key, &resolver).await);
 
         let fetched = fetches
             .iter()
@@ -513,7 +466,10 @@ impl AccountApplication {
         envelope: ExternalAccountEventEnvelope,
     ) -> Result<usize, AccountError> {
         validate_segment(segment, &envelope.payload).map_err(AccountError::Source)?;
-        let channel = (envelope.binding_id.clone(), envelope.channel_id.clone());
+        let channel = (
+            envelope.connection_key.to_string(),
+            envelope.channel_id.clone(),
+        );
         let state = self
             .conflux
             .segments
@@ -524,7 +480,7 @@ impl AccountApplication {
             .as_ref()
             .is_some_and(|event_id| {
                 state.event_ids.contains(&(
-                    envelope.binding_id.clone(),
+                    envelope.connection_key.to_string(),
                     envelope.channel_id.clone(),
                     event_id.clone(),
                 ))
@@ -555,7 +511,7 @@ impl AccountApplication {
         let applied = self.apply_event_with_provenance(
             event,
             AccountFactProvenance {
-                source_id: format!("{}:{}", envelope.participant.id, envelope.binding_id),
+                source_id: format!("{}:{}", envelope.participant.id, envelope.connection_key),
                 provider_event_id: envelope.participant_event_id.clone(),
                 provider_sequence: envelope.participant_sequence,
                 provider_occurred_at_unix_nanos: Some(envelope.observed_at_unix_nanos.get()),
@@ -572,7 +528,11 @@ impl AccountApplication {
             (envelope.channel_epoch, envelope.participant_sequence),
         );
         if let Some(event_id) = envelope.participant_event_id {
-            let key = (envelope.binding_id, envelope.channel_id, event_id);
+            let key = (
+                envelope.connection_key.to_string(),
+                envelope.channel_id,
+                event_id,
+            );
             if state.event_ids.insert(key.clone()) {
                 state.event_id_order.push_back(key);
                 if state.event_id_order.len() > RETAINED_EVENT_IDS {
@@ -608,9 +568,6 @@ impl AccountApplication {
 
         while let Some(event) = self.pending_business_event().cloned() {
             let event_key = EVENTS.to_owned();
-            let Some(publisher) = context.system().aeron_publishers.get_mut(&event_key) else {
-                break;
-            };
             for (index, change) in event.changes.iter().enumerate() {
                 let bytes = encode_business_change(
                     self.actor_id(),
@@ -620,10 +577,17 @@ impl AccountApplication {
                     change,
                 )
                 .map_err(AccountError::Publication)?;
-                publisher
-                    .resource_mut()
-                    .publish(&bytes)
-                    .map_err(|error| AccountError::Publication(error.to_string()))?;
+                match context
+                    .system()
+                    .account_event_publishers
+                    .try_with(&event_key, |publisher| publisher.publish(&bytes))
+                {
+                    Ok(()) => {}
+                    Err(ResourceOperationError::NotFound) => return Ok(()),
+                    Err(ResourceOperationError::Operation(error)) => {
+                        return Err(AccountError::Publication(error.to_string()))
+                    }
+                }
             }
             self.acknowledge_business_event()?;
         }
@@ -641,27 +605,31 @@ impl AccountApplication {
             published_at_unix_nanos: now_unix_nanos(),
         };
         let current_key = CURRENT.to_owned();
-        if let Some(writer) = context.system().mmap_writers.get_mut(&current_key) {
-            let bytes = encode_account_current_view(self.actor_id(), &self.conflux.identity, &view)
-                .map_err(AccountError::Publication)?;
-            writer
-                .resource_mut()
-                .publish_with_metadata(metadata, &bytes)
-                .map_err(|error| AccountError::Publication(error.to_string()))?;
-        }
-        let orders_key = OBSERVED_ORDERS.to_owned();
-        if let Some(writer) = context
+        let bytes = encode_account_current_view(self.actor_id(), &self.conflux.identity, &view)
+            .map_err(AccountError::Publication)?;
+        match context
             .system()
             .account_view_publishers
-            .get_mut(&orders_key)
+            .try_with(&current_key, |publisher| publisher.publish(metadata, &bytes))
         {
-            let bytes =
-                encode_observed_orders_current_view(self.actor_id(), &self.conflux.identity, &view)
-                    .map_err(AccountError::Publication)?;
-            writer
-                .resource_mut()
-                .publish(metadata, &bytes)
-                .map_err(|error| AccountError::Publication(error.to_string()))?;
+            Ok(()) | Err(ResourceOperationError::NotFound) => {}
+            Err(ResourceOperationError::Operation(error)) => {
+                return Err(AccountError::Publication(error.to_string()))
+            }
+        }
+        let orders_key = OBSERVED_ORDERS.to_owned();
+        let bytes =
+            encode_observed_orders_current_view(self.actor_id(), &self.conflux.identity, &view)
+                .map_err(AccountError::Publication)?;
+        match context
+            .system()
+            .account_view_publishers
+            .try_with(&orders_key, |publisher| publisher.publish(metadata, &bytes))
+        {
+            Ok(()) | Err(ResourceOperationError::NotFound) => {}
+            Err(ResourceOperationError::Operation(error)) => {
+                return Err(AccountError::Publication(error.to_string()))
+            }
         }
         self.conflux.published_generation = Some(view.generation.get());
         Ok(())
@@ -727,19 +695,20 @@ impl AccountApplication {
     }
 }
 
-async fn fetch_accounts<C: AccountQuery>(
-    connections: &mut ManagedConnections<String, C>,
+async fn fetch_accounts<C: AccountQuery, P>(
+    connections: &mut TypedConnectionCollection<'_, C, P>,
     segments: &BTreeMap<String, crate::domain::AccountSegment>,
     resolver: &AccountInstrumentResolver,
 ) -> Vec<RefreshFetch> {
     let mut fetches = Vec::new();
-    for (key, managed) in connections.iter_mut() {
-        let Some(segment) = segments.get(key).cloned() else {
+    for key in connections.keys() {
+        let Some(segment) = segments.get(key.as_str()).cloned() else {
             continue;
         };
         let started = Instant::now();
-        let result = managed
-            .connection_mut()
+        let result = connections
+            .get(&key)
+            .expect("key returned by typed connection collection")
             .fetch_account(&external_segment(&segment))
             .await
             .map_err(|error| error.to_string())

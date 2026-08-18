@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from kairospy.application.execution.models import (
     CommitmentStatus,
     ExecutionIntent,
+    Fill,
     IntentStatus,
     Order,
     OrderSide,
@@ -18,7 +20,14 @@ from kairospy.application.execution.models import (
 )
 from kairospy.application.reference import InstrumentRef
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId, SegmentKey
+from kairospy.domain_types import (
+    AccountId,
+    FillId,
+    InstrumentId,
+    IntentId,
+    OrderId,
+    SegmentKey,
+)
 
 from .view import ExecutionViewKey, ExecutionViewKind, ExecutionViewReader
 
@@ -35,10 +44,14 @@ class ExecutionProjection:
 
     def orders(self) -> tuple[Order, ...]:
         value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
-        return tuple(_order(value.Orders(index)) for index in range(value.OrdersLength()))
+        return tuple(
+            _order(value.Orders(index)) for index in range(value.OrdersLength())
+        )
 
     def get_order(self, order_id: str) -> Order | None:
-        return next((value for value in self.orders() if str(value.id) == order_id), None)
+        return next(
+            (value for value in self.orders() if str(value.id) == order_id), None
+        )
 
     def commitments(self) -> tuple[OrderCommitment, ...]:
         value = self._read(ExecutionViewKind.ACTIVE_ORDERS)
@@ -71,10 +84,94 @@ class ExecutionProjection:
 
     def intents(self) -> tuple[ExecutionIntent, ...]:
         value = self._read(ExecutionViewKind.ACTIVE_INTENTS)
-        return tuple(_intent(value.Intents(index)) for index in range(value.IntentsLength()))
+        return tuple(
+            _intent(value.Intents(index)) for index in range(value.IntentsLength())
+        )
 
     def get_intent(self, intent_id: str) -> ExecutionIntent | None:
-        return next((value for value in self.intents() if str(value.id) == intent_id), None)
+        return next(
+            (value for value in self.intents() if str(value.id) == intent_id), None
+        )
+
+    def recovery_snapshot(
+        self,
+    ) -> tuple[int, tuple[ExecutionIntent, ...], tuple[Fill, ...], bool]:
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
+        metadata = value.Metadata()
+        if metadata is None:
+            raise ValueError("Execution current view metadata is missing")
+        return (
+            int(metadata.AppliedRevision() or 0),
+            tuple(
+                _intent(value.Intents(index)) for index in range(value.IntentsLength())
+            ),
+            tuple(_fill(value.Fills(index)) for index in range(value.FillsLength())),
+            bool(value.FillHistoryTruncated()),
+        )
+
+    def diagnostic_intent(self, intent_id: str) -> dict[str, object] | None:
+        value = self._read(ExecutionViewKind.CURRENT_EXECUTION)
+        state = None
+        for index in range(value.IntentsLength()):
+            candidate = value.Intents(index)
+            candidate_intent = candidate.Intent()
+            if (
+                candidate_intent is not None
+                and _text(candidate_intent.IntentId()) == intent_id
+            ):
+                state = candidate
+                break
+        if state is None:
+            return None
+        intent = _intent(state)
+        plan = state.Plan()
+        metadata = value.Metadata()
+        return {
+            "intent": {
+                "intent_id": str(intent.id),
+                "strategy_id": intent.strategy_id,
+                "strategy_decision_id": intent.strategy_decision_id,
+                "account_ids": [str(account_id) for account_id in intent.account_ids],
+                "instrument_id": str(intent.instrument.id),
+                "status": intent.status.value,
+                "reason": intent.reason,
+                "order_ids": [str(order_id) for order_id in intent.order_ids],
+                "updated_at_unix_nanos": intent.updated_at_unix_nanos,
+            },
+            "plan": None if plan is None else _diagnostic_plan(plan),
+            "orders": [
+                _diagnostic_order(value.Orders(index))
+                for index in range(value.OrdersLength())
+                if _text(value.Orders(index).IntentId()) == intent_id
+            ],
+            "fills": [
+                _diagnostic_fill(value.Fills(index))
+                for index in range(value.FillsLength())
+                if _text(value.Fills(index).IntentId()) == intent_id
+            ],
+            "lifecycle_transitions": [
+                _diagnostic_intent_event(value.IntentEvents(index))
+                for index in range(value.IntentEventsLength())
+                if _text(value.IntentEvents(index).IntentId()) == intent_id
+            ],
+            "order_transitions": [
+                _diagnostic_order_event(value.OrderEvents(index))
+                for index in range(value.OrderEventsLength())
+                if _text(value.OrderEvents(index).IntentId()) == intent_id
+            ],
+            "view": {
+                "applied_event_sequence": (
+                    None if metadata is None else int(metadata.AppliedRevision() or 0)
+                ),
+                "fill_history_truncated": bool(value.FillHistoryTruncated()),
+                "order_event_history_truncated": bool(
+                    value.OrderEventHistoryTruncated()
+                ),
+                "intent_event_history_truncated": bool(
+                    value.IntentEventHistoryTruncated()
+                ),
+            },
+        }
 
     def _read(self, kind: ExecutionViewKind) -> Any:
         key = ExecutionViewKey(
@@ -93,11 +190,15 @@ def _order(value: Any) -> Order:
         id=OrderId(_required_text(value.OrderId(), "order_id")),
         strategy_id=_required_text(value.StrategyId(), "order strategy_id"),
         intent_id=_optional_id(value.IntentId(), IntentId),
-        instrument=InstrumentRef(InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]),
+        instrument=InstrumentRef(
+            InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
+        ),
         account_id=AccountId(_required_text(value.AccountId(), "order account_id")),
         side=OrderSide.BUY if int(value.Side()) == 1 else OrderSide.SELL,
         quantity=_required_decimal(value.Quantity(), "order quantity"),
-        filled_quantity=_required_decimal(value.FilledQuantity(), "order filled_quantity"),
+        filled_quantity=_required_decimal(
+            value.FilledQuantity(), "order filled_quantity"
+        ),
         limit_price=_decimal(value.LimitPrice()),
         status=status,
         updated_at=None,
@@ -108,17 +209,163 @@ def _intent(value: Any) -> ExecutionIntent:
     intent = value.Intent()
     if intent is None:
         raise ValueError("Execution intent state payload is missing")
-    instrument_id = _required_text(intent.Legs(0).InstrumentId(), "intent instrument_id")
+    if intent.LegsLength() == 0:
+        raise ValueError("Execution intent requires at least one leg")
+    instrument_id = _required_text(
+        intent.Legs(0).InstrumentId(), "intent instrument_id"
+    )
     accounts = tuple(
         AccountId(_required_text(intent.Legs(index).AccountId(), "intent account_id"))
         for index in range(intent.LegsLength())
     )
+    plan = value.Plan()
+    order_ids = tuple(
+        dict.fromkeys(
+            OrderId(_required_text(leg.OrderIds(index), "intent order_id"))
+            for leg_index in range(0 if plan is None else plan.LegsLength())
+            for leg in (plan.Legs(leg_index),)
+            for index in range(leg.OrderIdsLength())
+        )
+    )
+    first_leg = intent.Legs(0)
+    return ExecutionIntent(
+        id=IntentId(_required_text(intent.IntentId(), "intent_id")),
+        strategy_id=_required_text(intent.StrategyId(), "intent strategy_id"),
+        instrument=InstrumentRef(
+            InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
+        ),
+        account_ids=accounts,
+        target_quantity=_required_decimal(
+            first_leg.Quantity(), "intent target quantity"
+        ),
+        status=_intent_status(int(value.Lifecycle())),
+        reason=_text(value.Reason()) or "",
+        order_ids=order_ids,
+        strategy_decision_id=_text(intent.StrategyDecisionId()),
+        updated_at_unix_nanos=int(value.UpdatedAtUnixNanos()),
+    )
+
+
+def _diagnostic_plan(value: Any) -> dict[str, object]:
+    return {
+        "plan_id": _required_text(value.PlanId(), "plan_id"),
+        "intent_id": _required_text(value.IntentId(), "plan intent_id"),
+        "intent_type": int(value.IntentType()),
+        "completion_policy": int(value.CompletionPolicy()),
+        "failure_policy": int(value.FailurePolicy()),
+        "created_at_unix_nanos": int(value.CreatedAtUnixNanos()),
+        "legs": [
+            {
+                "leg_id": _required_text(value.Legs(index).LegId(), "plan leg_id"),
+                "account_id": _required_text(
+                    value.Legs(index).AccountId(), "plan leg account_id"
+                ),
+                "instrument_id": _required_text(
+                    value.Legs(index).InstrumentId(), "plan leg instrument_id"
+                ),
+                "market_id": _text(value.Legs(index).MarketId()),
+                "lifecycle": int(value.Legs(index).Lifecycle()),
+                "order_ids": [
+                    _required_text(
+                        value.Legs(index).OrderIds(order_index), "plan order_id"
+                    )
+                    for order_index in range(value.Legs(index).OrderIdsLength())
+                ],
+                "completed_quantity": _decimal_text(
+                    value.Legs(index).CompletedQuantity()
+                ),
+            }
+            for index in range(value.LegsLength())
+        ],
+    }
+
+
+def _diagnostic_order(value: Any) -> dict[str, object]:
+    return {
+        "order_id": _required_text(value.OrderId(), "order_id"),
+        "plan_id": _text(value.PlanId()),
+        "leg_id": _text(value.LegId()),
+        "account_id": _required_text(value.AccountId(), "order account_id"),
+        "instrument_id": _required_text(value.InstrumentId(), "order instrument_id"),
+        "lifecycle": _order_status(int(value.Lifecycle())).value,
+        "quantity": _decimal_text(value.Quantity()),
+        "filled_quantity": _decimal_text(value.FilledQuantity()),
+        "average_fill_price": _decimal_text(value.AverageFillPrice()),
+        "remote_order_id": _text(value.RemoteOrderId()),
+        "updated_at_unix_nanos": int(value.UpdatedAtUnixNanos()),
+        "reason": _text(value.Reason()) or "",
+    }
+
+
+def _diagnostic_fill(value: Any) -> dict[str, object]:
+    return {
+        "fill_id": _required_text(value.FillId(), "fill_id"),
+        "order_id": _required_text(value.OrderId(), "fill order_id"),
+        "plan_id": _text(value.PlanId()),
+        "leg_id": _text(value.LegId()),
+        "account_id": _required_text(value.AccountId(), "fill account_id"),
+        "instrument_id": _required_text(value.InstrumentId(), "fill instrument_id"),
+        "quantity": _decimal_text(value.Quantity()),
+        "price": _decimal_text(value.Price()),
+        "fee": _decimal_text(value.Fee()),
+        "fee_asset_id": _text(value.FeeAssetId()),
+        "source_filled_at_unix_nanos": int(value.SourceFilledAtUnixNanos()),
+    }
+
+
+def _fill(value: Any) -> Fill:
+    instrument_id = _required_text(value.InstrumentId(), "fill instrument_id")
+    occurred_at_unix_nanos = int(value.SourceFilledAtUnixNanos())
+    return Fill(
+        id=FillId(_required_text(value.FillId(), "fill_id")),
+        order_id=OrderId(_required_text(value.OrderId(), "fill order_id")),
+        instrument=InstrumentRef(
+            InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]
+        ),
+        quantity=_required_decimal(value.Quantity(), "fill quantity"),
+        price=_required_decimal(value.Price(), "fill price"),
+        occurred_at=datetime.fromtimestamp(
+            occurred_at_unix_nanos / 1_000_000_000, tz=timezone.utc
+        ),
+        intent_id=_optional_id(value.IntentId(), IntentId),
+    )
+
+
+def _diagnostic_intent_event(value: Any) -> dict[str, object]:
+    return {
+        "event_sequence": int(value.EventSequence()),
+        "previous_status": _intent_status(int(value.PreviousLifecycle())).value,
+        "status": _intent_status(int(value.Lifecycle())).value,
+        "order_ids": [
+            _required_text(value.OrderIds(index), "intent event order_id")
+            for index in range(value.OrderIdsLength())
+        ],
+        "completed_quantity": _decimal_text(value.CompletedQuantity()),
+        "occurred_at_unix_nanos": int(value.OccurredAtUnixNanos()),
+        "reason": _text(value.Reason()) or "",
+    }
+
+
+def _diagnostic_order_event(value: Any) -> dict[str, object]:
+    return {
+        "order_id": _required_text(value.OrderId(), "order event order_id"),
+        "plan_id": _text(value.PlanId()),
+        "leg_id": _text(value.LegId()),
+        "status": _order_status(int(value.Lifecycle())).value,
+        "remote_order_id": _text(value.RemoteOrderId()),
+        "occurred_at_unix_nanos": int(value.OccurredAtUnixNanos()),
+        "reason": _text(value.Reason()) or "",
+        "fill_id": _text(value.FillId()),
+        "filled_quantity": _decimal_text(value.FilledQuantity()),
+    }
 
 
 def _commitment(value: Any) -> OrderCommitment:
     return OrderCommitment(
         order_id=OrderId(_required_text(value.OrderId(), "commitment order_id")),
-        account_id=AccountId(_required_text(value.AccountId(), "commitment account_id")),
+        account_id=AccountId(
+            _required_text(value.AccountId(), "commitment account_id")
+        ),
         segment_key=SegmentKey(
             _required_text(value.SegmentKey(), "commitment segment_key")
         ),
@@ -181,17 +428,6 @@ def _risk_reservation(value: Any) -> RiskReservationSaga:
         expires_at_unix_nanos=int(value.ExpiresAtUnixNanos()),
         updated_at_unix_nanos=int(value.UpdatedAtUnixNanos()),
     )
-    order_ids: tuple[OrderId, ...] = ()
-    return ExecutionIntent(
-        id=IntentId(_required_text(intent.IntentId(), "intent_id")),
-        strategy_id=_required_text(intent.StrategyId(), "intent strategy_id"),
-        instrument=InstrumentRef(InstrumentId(instrument_id), instrument_id.rsplit(":", 1)[-1]),
-        account_ids=accounts,
-        target_quantity=None,
-        status=_intent_status(int(value.Lifecycle())),
-        reason=_text(value.Reason()) or "",
-        order_ids=order_ids,
-    )
 
 
 def _order_status(value: int) -> OrderStatus:
@@ -217,7 +453,7 @@ def _intent_status(value: int) -> IntentStatus:
         4: IntentStatus.EXECUTING,
         5: IntentStatus.PARTIALLY_FILLED,
         6: IntentStatus.CANCEL_REQUESTED,
-        7: IntentStatus.COMPLETED,
+        7: IntentStatus.SATISFIED,
         8: IntentStatus.REJECTED,
         9: IntentStatus.CANCELED,
         10: IntentStatus.EXPIRED,
@@ -240,6 +476,11 @@ def _required_decimal(value: object | None, name: str) -> Decimal:
     if result is None:
         raise ValueError(f"{name} is required")
     return result
+
+
+def _decimal_text(value: object | None) -> str | None:
+    result = _decimal(value)
+    return None if result is None else format(result, "f")
 
 
 def _text(value: bytes | None) -> str | None:

@@ -5,9 +5,10 @@ use crate::services::participants::ibkr::{
 };
 use crate::{
     CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
-    ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionState, ExecutionStream,
-    ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
-    IntegrationError, OrderCommand, OrderEntryEvent, OrderEntryRequest, OrderQuery,
+    ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, ConnectionState,
+    ExecutionStream, ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder,
+    ExternalOrderQuery, IntegrationError, MaintenanceOutcome, OrderCommand, OrderEntryEvent,
+    OrderEntryRequest, OrderQuery,
 };
 
 pub struct IbkrOrderConnection {
@@ -17,12 +18,15 @@ pub struct IbkrOrderConnection {
     query: OrderQueryService,
 }
 impl IbkrOrderConnection {
-    pub fn new(config: IbkrOrderConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: IbkrOrderConfig,
+    ) -> Result<Self, IntegrationError> {
         require_account(&config.account_id)?;
         let options = IbkrOptions::new(config.host, config.port, config.client_id)
             .map_err(IntegrationError::InvalidRequest)?;
         let descriptor = descriptor(
-            config.binding_id,
+            connection_key,
             config.environment,
             config.client_id,
             "order",
@@ -52,12 +56,15 @@ pub struct IbkrExecutionStreamConnection {
     stream: ExecutionStreamService,
 }
 impl IbkrExecutionStreamConnection {
-    pub fn new(config: IbkrExecutionStreamConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: IbkrExecutionStreamConfig,
+    ) -> Result<Self, IntegrationError> {
         require_account(&config.account_id)?;
         let options = IbkrOptions::new(config.host, config.port, config.client_id)
             .map_err(IntegrationError::InvalidRequest)?;
         let descriptor = descriptor(
-            config.binding_id,
+            connection_key,
             config.environment,
             config.client_id,
             "execution.stream",
@@ -115,9 +122,12 @@ impl ConnectionHealthQuery for IbkrExecutionStreamConnection {
 impl ConnectionLifecycleCommand for IbkrExecutionStreamConnection {
     async fn connect(&mut self) -> Result<(), IntegrationError> {
         self.state.lifecycle = ConnectionLifecycle::Starting;
-        self.session
-            .connect()
-            .await
+        let result = async {
+            self.session.connect().await?;
+            self.stream.connect().await
+        }
+        .await;
+        result
             .inspect(|()| self.state.mark_ready(true))
             .inspect_err(|error| self.state.mark_failed(error.to_string()))
     }
@@ -135,6 +145,26 @@ impl ConnectionLifecycleCommand for IbkrExecutionStreamConnection {
         Ok(())
     }
 }
+macro_rules! passive_maintenance {
+    ($connection:ty) => {
+        impl ConnectionMaintenance for $connection {
+            fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+                None
+            }
+
+            fn poll_maintenance(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+                _now: tokio::time::Instant,
+            ) -> std::task::Poll<Result<MaintenanceOutcome, IntegrationError>> {
+                std::task::Poll::Ready(Ok(MaintenanceOutcome::Healthy))
+            }
+        }
+    };
+}
+
+passive_maintenance!(IbkrOrderConnection);
+passive_maintenance!(IbkrExecutionStreamConnection);
 impl OrderCommand for IbkrOrderConnection {
     async fn submit_order(
         &mut self,
@@ -178,10 +208,12 @@ impl OrderQuery for IbkrOrderConnection {
     }
 }
 impl ExecutionStream for IbkrExecutionStreamConnection {
-    async fn next(
+    fn poll_next(
         &mut self,
-    ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
-        self.stream.next_event().await
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError>>
+    {
+        self.stream.poll_next_event(cx)
     }
 }
 fn require_account(value: &str) -> Result<(), IntegrationError> {

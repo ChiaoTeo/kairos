@@ -8,16 +8,16 @@ use super::*;
 /// source only maps the neutral integration payload into Reference-owned
 /// domain records.
 pub struct BinanceSpotSource {
-    connection: BinanceSpotRestConnection,
+    connection: ConnectionRef<BinanceSpotRestConnection>,
 }
 
 pub struct BinanceOptionsSource {
-    connection: BinanceOptionsRestConnection,
+    connection: ConnectionRef<BinanceOptionsRestConnection>,
 }
 
 enum BinanceDerivativesConnection {
-    UsdM(BinanceUsdMRestConnection),
-    CoinM(BinanceCoinMRestConnection),
+    UsdM(ConnectionRef<BinanceUsdMRestConnection>),
+    CoinM(ConnectionRef<BinanceCoinMRestConnection>),
 }
 
 pub struct BinanceDerivativesSource {
@@ -27,52 +27,60 @@ pub struct BinanceDerivativesSource {
 }
 
 pub struct BinanceEquitySource {
-    connection: BinanceStocksRestConnection,
+    connection: ConnectionRef<BinanceStocksRestConnection>,
 }
 impl BinanceSpotSource {
-    pub(crate) fn from_connection(connection: BinanceSpotRestConnection) -> Self {
-        Self { connection }
+    pub(crate) fn from_key(key: kairos_conflux::ConnectionKey) -> Self {
+        Self {
+            connection: ConnectionRef::managed(key),
+        }
     }
 
     #[cfg(test)]
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
         Ok(Self {
-            connection: BinanceSpotRestConnection::new(binance_rest_config(
-                "reference-binance-spot",
-                endpoint,
-                None,
-            ))
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?,
+            connection: ConnectionRef::Owned(
+                BinanceSpotRestConnection::new(
+                    kairos_conflux::ConnectionKey::new("reference-binance-spot")
+                        .map_err(|error| ReferenceError::Provider(error.to_string()))?,
+                    binance_rest_config(endpoint, None),
+                )
+                .map_err(|error| ReferenceError::Provider(error.to_string()))?,
+            ),
         })
     }
 }
 
 impl BinanceOptionsSource {
-    pub(crate) fn from_connection(connection: BinanceOptionsRestConnection) -> Self {
-        Self { connection }
+    pub(crate) fn from_key(key: kairos_conflux::ConnectionKey) -> Self {
+        Self {
+            connection: ConnectionRef::managed(key),
+        }
     }
 }
 
 impl BinanceEquitySource {
-    pub(crate) fn from_connection(connection: BinanceStocksRestConnection) -> Self {
-        Self { connection }
+    pub(crate) fn from_key(key: kairos_conflux::ConnectionKey) -> Self {
+        Self {
+            connection: ConnectionRef::managed(key),
+        }
     }
 }
 
 impl BinanceDerivativesSource {
-    pub(crate) fn from_usdm(connection: BinanceUsdMRestConnection) -> Self {
+    pub(crate) fn from_usdm_key(key: kairos_conflux::ConnectionKey) -> Self {
         Self {
             id: "binance-usdm-futures",
             product: BinanceProduct::UsdMFutures,
-            connection: BinanceDerivativesConnection::UsdM(connection),
+            connection: BinanceDerivativesConnection::UsdM(ConnectionRef::managed(key)),
         }
     }
 
-    pub(crate) fn from_coinm(connection: BinanceCoinMRestConnection) -> Self {
+    pub(crate) fn from_coinm_key(key: kairos_conflux::ConnectionKey) -> Self {
         Self {
             id: "binance-coinm-futures",
             product: BinanceProduct::CoinMFutures,
-            connection: BinanceDerivativesConnection::CoinM(connection),
+            connection: BinanceDerivativesConnection::CoinM(ConnectionRef::managed(key)),
         }
     }
 }
@@ -93,78 +101,158 @@ fn binance_public_base_url(endpoint: impl Into<String>) -> String {
 
 #[cfg(test)]
 fn binance_rest_config(
-    binding_id: impl Into<String>,
     endpoint: impl Into<String>,
     credential: Option<BinanceCredential>,
 ) -> BinanceRestConfig {
     BinanceRestConfig {
-        binding_id: binding_id.into(),
         environment: "public".into(),
         endpoint: binance_public_base_url(endpoint),
         credential,
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for BinanceSpotSource {
     fn source_id(&self) -> &str {
         "binance-spot"
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let facts = self
-            .connection
-            .fetch_instruments()
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
             .await
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let facts = match &mut self.connection {
+            ConnectionRef::Managed(key, _) => {
+                connections
+                    .binance_spot_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments()
+                    .await
+            }
+            #[cfg(test)]
+            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
+        }
+        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Spot)
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for BinanceOptionsSource {
     fn source_id(&self) -> &str {
         "binance-options"
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let facts = self
-            .connection
-            .fetch_instruments()
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
             .await
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let facts = match &mut self.connection {
+            ConnectionRef::Managed(key, _) => {
+                connections
+                    .binance_options_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments()
+                    .await
+            }
+            #[cfg(test)]
+            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
+        }
+        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Option)
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for BinanceDerivativesSource {
     fn source_id(&self) -> &str {
         self.id
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
+            .await
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            BinanceDerivativesConnection::UsdM(connection) => connection.fetch_instruments().await,
-            BinanceDerivativesConnection::CoinM(connection) => connection.fetch_instruments().await,
+            BinanceDerivativesConnection::UsdM(ConnectionRef::Managed(key, _)) => {
+                connections
+                    .binance_usdm_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments()
+                    .await
+            }
+            BinanceDerivativesConnection::CoinM(ConnectionRef::Managed(key, _)) => {
+                connections
+                    .binance_coinm_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments()
+                    .await
+            }
+            #[cfg(test)]
+            BinanceDerivativesConnection::UsdM(ConnectionRef::Owned(connection)) => {
+                connection.fetch_instruments().await
+            }
+            #[cfg(test)]
+            BinanceDerivativesConnection::CoinM(ConnectionRef::Owned(connection)) => {
+                connection.fetch_instruments().await
+            }
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, self.product)
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for BinanceEquitySource {
     fn source_id(&self) -> &str {
         "binance-equity"
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let facts = self
-            .connection
-            .fetch_instruments()
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
             .await
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
+        let facts = match &mut self.connection {
+            ConnectionRef::Managed(key, _) => {
+                connections
+                    .binance_stocks_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments()
+                    .await
+            }
+            #[cfg(test)]
+            ConnectionRef::Owned(connection) => connection.fetch_instruments().await,
+        }
+        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_equity_provider_catalog(facts)
     }
 }

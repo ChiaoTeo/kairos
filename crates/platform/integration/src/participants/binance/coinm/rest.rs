@@ -4,3 +4,4 @@ futures_rest_capabilities!(
     "/dapi/v1",
     crate::ExternalInstrumentKind::Future
 );
+futures_native_order_extensions!(BinanceCoinMRestConnection, "/dapi/v1");

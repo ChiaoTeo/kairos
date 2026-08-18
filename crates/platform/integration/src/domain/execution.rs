@@ -208,7 +208,7 @@ pub struct ExternalOrderQuery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalOrder {
-    pub binding_id: String,
+    pub connection_key: crate::ConnectionKey,
     pub order_id: OrderId,
     pub client_order_id: Option<ClientOrderId>,
     pub symbol: Symbol,

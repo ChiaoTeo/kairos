@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) fn account_event(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     segment_key: &str,
     channel_epoch: u64,
     value: &Value,
@@ -26,11 +26,16 @@ pub(crate) fn account_event(
         "executionReport" | "ORDER_TRADE_UPDATE" => order_account(segment_key, value)?,
         _ => return Ok(None),
     };
-    Ok(Some(envelope(binding_id, channel_epoch, value, account)))
+    Ok(Some(envelope(
+        connection_key,
+        channel_epoch,
+        value,
+        account,
+    )))
 }
 
 pub(crate) fn execution_event(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     channel_epoch: u64,
     value: &Value,
 ) -> Result<Option<ExternalEventEnvelope<ExternalExecutionEvent>>, IntegrationError> {
@@ -56,11 +61,12 @@ pub(crate) fn execution_event(
         .map_err(payload)?;
     Ok(Some(ExternalEventEnvelope {
         participant: participant(),
-        binding_id: binding_id.into(),
-        channel_id: format!("{binding_id}.user"),
+        connection_key: connection_key.clone(),
+        channel_id: format!("{connection_key}.user"),
         channel_epoch,
         participant_event_id: execution_id.as_ref().map(ToString::to_string),
         participant_sequence: None,
+        delivery: crate::ExternalEventDelivery::Incremental,
         observed_at_unix_nanos: observed,
         received_at_unix_nanos: now(),
         payload: ExternalExecutionEvent {
@@ -350,7 +356,7 @@ fn snapshot(
 }
 
 fn envelope<T>(
-    binding_id: &str,
+    connection_key: &crate::ConnectionKey,
     channel_epoch: u64,
     value: &Value,
     payload: T,
@@ -358,11 +364,12 @@ fn envelope<T>(
     let observed = UnixNanos::from(event_millis(value).saturating_mul(1_000_000));
     ExternalEventEnvelope {
         participant: participant(),
-        binding_id: binding_id.into(),
-        channel_id: format!("{binding_id}.user"),
+        connection_key: connection_key.clone(),
+        channel_id: format!("{connection_key}.user"),
         channel_epoch,
         participant_event_id: None,
         participant_sequence: None,
+        delivery: crate::ExternalEventDelivery::Incremental,
         observed_at_unix_nanos: observed,
         received_at_unix_nanos: now(),
         payload,

@@ -6,6 +6,12 @@ mod lifecycle;
 mod planning;
 mod submission;
 
+pub(crate) struct PreparedCompensatingHedge {
+    pub(crate) intent_id: IntentId,
+    pub(crate) leg_id: LegId,
+    pub(crate) request: SubmitOrder,
+}
+
 impl ExecutionApplication {
     pub fn intents(&self) -> Vec<IntentState> {
         self.actor.intents().cloned().collect()
@@ -119,14 +125,27 @@ impl ExecutionApplication {
         &mut self,
         intent_id: &str,
     ) -> Result<(), ExecutionError> {
-        let Some(state) = self.actor.intent(intent_id).cloned() else {
+        let Some(prepared) = self.prepare_compensating_hedge(intent_id)? else {
             return Ok(());
+        };
+        match self.submit(prepared.request.clone()) {
+            Ok(order) => self.complete_compensating_hedge(&prepared, &order),
+            Err(error) => self.fail_compensating_hedge(&prepared, &error),
+        }
+    }
+
+    pub(crate) fn prepare_compensating_hedge(
+        &mut self,
+        intent_id: &str,
+    ) -> Result<Option<PreparedCompensatingHedge>, ExecutionError> {
+        let Some(state) = self.actor.intent(intent_id).cloned() else {
+            return Ok(None);
         };
         let Some(policy) = state.intent.hedge_policy.clone() else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(plan) = state.plan.clone() else {
-            return Ok(());
+            return Ok(None);
         };
         let requirement = self
             .hedge_requirement(intent_id)?
@@ -158,12 +177,14 @@ impl ExecutionApplication {
             .saturating_sub(requirement.hedge_filled_quantity.mantissa())
             .saturating_sub(active_quantity);
         if missing <= requirement.max_unhedged_quantity.mantissa() {
-            return Ok(());
+            return Ok(None);
         }
         if state.compensation_attempts >= policy.max_compensation_attempts {
             self.commit_intent(IntentEvent {
                 intent_id: typed_intent_id(intent_id),
+                strategy_decision_id: None,
                 event_sequence: 0.into(),
+                previous_status: None,
                 status: IntentStatus::ReconciliationRequired,
                 order_ids: Vec::new(),
                 completed_quantity: state.completed_quantity,
@@ -174,7 +195,7 @@ impl ExecutionApplication {
                 ),
                 dependency_watermarks: state.dependency_watermarks,
             })?;
-            return Ok(());
+            return Ok(None);
         }
         if !policy.compensate_on_failure {
             let current = self
@@ -184,7 +205,9 @@ impl ExecutionApplication {
                 .ok_or_else(|| ExecutionError::Invalid("hedge intent disappeared".into()))?;
             self.commit_intent(IntentEvent {
                 intent_id: typed_intent_id(intent_id),
+                strategy_decision_id: None,
                 event_sequence: 0.into(),
+                previous_status: None,
                 status: IntentStatus::ReconciliationRequired,
                 order_ids: Vec::new(),
                 completed_quantity: current.completed_quantity,
@@ -192,7 +215,7 @@ impl ExecutionApplication {
                 reason: "hedge exposure exceeds tolerance and compensation is disabled".into(),
                 dependency_watermarks: current.dependency_watermarks,
             })?;
-            return Ok(());
+            return Ok(None);
         }
         let template_id = hedge_leg
             .order_ids
@@ -210,7 +233,7 @@ impl ExecutionApplication {
             requirement.required_hedge_quantity.mantissa()
         );
         if self.actor.order_map().contains_key(order_id.as_str()) {
-            return Ok(());
+            return Ok(None);
         }
         let options = state
             .intent
@@ -237,38 +260,64 @@ impl ExecutionApplication {
             submitted_at_unix_nanos: Some(template.submitted_at_unix_nanos),
         };
         self.actor.increment_compensation_attempts(intent_id);
-        match self.submit(request) {
-            Ok(order) => {
-                self.attach_plan_order(intent_id, &policy.hedge_leg_id, &order.order_id)?;
-                let state =
-                    self.actor.intent(intent_id).cloned().ok_or_else(|| {
-                        ExecutionError::Invalid("hedge intent disappeared".into())
-                    })?;
-                self.commit_intent(IntentEvent {
-                    intent_id: typed_intent_id(intent_id),
-                    event_sequence: 0.into(),
-                    status: IntentStatus::Compensating,
-                    order_ids: vec![order.order_id.clone()],
-                    completed_quantity: state.completed_quantity,
-                    occurred_at_unix_nanos: now_nanos().into(),
-                    reason: "leader fill exceeded active hedge quantity".into(),
-                    dependency_watermarks: state.dependency_watermarks,
-                })?;
-            }
-            Err(error) => {
-                self.commit_intent(IntentEvent {
-                    intent_id: typed_intent_id(intent_id),
-                    event_sequence: 0.into(),
-                    status: IntentStatus::ReconciliationRequired,
-                    order_ids: Vec::new(),
-                    completed_quantity: state.completed_quantity,
-                    occurred_at_unix_nanos: now_nanos().into(),
-                    reason: format!("compensating hedge failed: {error}"),
-                    dependency_watermarks: state.dependency_watermarks,
-                })?;
-            }
-        }
-        Ok(())
+        Ok(Some(PreparedCompensatingHedge {
+            intent_id: typed_intent_id(intent_id),
+            leg_id: policy.hedge_leg_id,
+            request,
+        }))
+    }
+
+    pub(crate) fn complete_compensating_hedge(
+        &mut self,
+        prepared: &PreparedCompensatingHedge,
+        order: &ExecutionOrder,
+    ) -> Result<(), ExecutionError> {
+        self.attach_plan_order(
+            prepared.intent_id.as_str(),
+            &prepared.leg_id,
+            &order.order_id,
+        )?;
+        let state = self
+            .actor
+            .intent(prepared.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("hedge intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: prepared.intent_id.clone(),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::Compensating,
+            order_ids: vec![order.order_id.clone()],
+            completed_quantity: state.completed_quantity,
+            occurred_at_unix_nanos: now_nanos().into(),
+            reason: "leader fill exceeded active hedge quantity".into(),
+            dependency_watermarks: state.dependency_watermarks,
+        })
+    }
+
+    pub(crate) fn fail_compensating_hedge(
+        &mut self,
+        prepared: &PreparedCompensatingHedge,
+        error: &ExecutionError,
+    ) -> Result<(), ExecutionError> {
+        let state = self
+            .actor
+            .intent(prepared.intent_id.as_str())
+            .cloned()
+            .ok_or_else(|| ExecutionError::Invalid("hedge intent disappeared".into()))?;
+        self.commit_intent(IntentEvent {
+            intent_id: prepared.intent_id.clone(),
+            strategy_decision_id: None,
+            event_sequence: 0.into(),
+            previous_status: None,
+            status: IntentStatus::ReconciliationRequired,
+            order_ids: Vec::new(),
+            completed_quantity: state.completed_quantity,
+            occurred_at_unix_nanos: now_nanos().into(),
+            reason: format!("compensating hedge failed: {error}"),
+            dependency_watermarks: state.dependency_watermarks,
+        })
     }
 
     pub fn drain_intent_events(&mut self) -> Vec<IntentEvent> {

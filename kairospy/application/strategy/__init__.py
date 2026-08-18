@@ -5,7 +5,13 @@ This package is for runtime composition and lifecycle control.
 """
 
 from .application import (
+    DecisionEffectEvaluation,
+    DecisionHorizon,
+    DecisionLifecycle,
+    EffectEvidence,
     Strategy,
+    StrategyDecision,
+    StrategyDecisionApplication,
     StrategyEntrypoint,
     StrategyApplication,
     StrategyStatus,
@@ -15,6 +21,12 @@ from .domain.lifecycle import StrategyLifecycle
 
 __all__ = [
     "Strategy",
+    "DecisionEffectEvaluation",
+    "DecisionHorizon",
+    "DecisionLifecycle",
+    "EffectEvidence",
+    "StrategyDecision",
+    "StrategyDecisionApplication",
     "StrategyEntrypoint",
     "StrategyApplication",
     "StrategyStatus",

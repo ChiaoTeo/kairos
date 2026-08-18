@@ -124,7 +124,7 @@ impl OrderQuery for BinanceStocksRestConnection {
             .service
             .signed_get("/sapi/v1/equity/order/open-orders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, rows(&value))
+        execution::orders(&self.descriptor().connection_key, rows(&value))
     }
 
     async fn order_history(
@@ -136,7 +136,7 @@ impl OrderQuery for BinanceStocksRestConnection {
             .service
             .signed_get("/sapi/v1/equity/order/history", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, rows(&value))
+        execution::orders(&self.descriptor().connection_key, rows(&value))
     }
 
     async fn order_detail(
@@ -148,9 +148,11 @@ impl OrderQuery for BinanceStocksRestConnection {
             .service
             .signed_get("/sapi/v1/equity/order/detail", &params)
             .await?;
-        Ok(execution::orders(&self.descriptor().binding_id, &value)?
-            .into_iter()
-            .next())
+        Ok(
+            execution::orders(&self.descriptor().connection_key, &value)?
+                .into_iter()
+                .next(),
+        )
     }
 }
 

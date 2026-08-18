@@ -26,7 +26,7 @@ impl crate::OrderQuery for BinanceSpotWebSocketApiConnection {
             .await?
             .into_query_result()?;
         crate::services::participants::binance::execution::orders(
-            &self.descriptor().binding_id,
+            &self.descriptor().connection_key,
             &value,
         )
     }
@@ -42,7 +42,7 @@ impl crate::OrderQuery for BinanceSpotWebSocketApiConnection {
             .await?
             .into_query_result()?;
         crate::services::participants::binance::execution::orders(
-            &self.descriptor().binding_id,
+            &self.descriptor().connection_key,
             &value,
         )
     }
@@ -58,7 +58,7 @@ impl crate::OrderQuery for BinanceSpotWebSocketApiConnection {
             .await?
             .into_query_result()?;
         Ok(crate::services::participants::binance::execution::orders(
-            &self.descriptor().binding_id,
+            &self.descriptor().connection_key,
             &value,
         )?
         .into_iter()

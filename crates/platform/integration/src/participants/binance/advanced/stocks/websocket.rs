@@ -4,6 +4,7 @@
 //! desired set is confirmed by a successful replacement socket handshake.
 
 use std::collections::BTreeMap;
+use std::task::{Context, Poll};
 
 use crate::participants::binance::BinanceWebSocketConfig;
 use crate::services::participants::binance::{socket::SocketService, stream};
@@ -26,7 +27,10 @@ pub struct BinanceStocksWebSocketConnection {
 }
 
 impl BinanceStocksWebSocketConnection {
-    pub fn new(config: BinanceWebSocketConfig) -> Result<Self, IntegrationError> {
+    pub fn new(
+        connection_key: crate::ConnectionKey,
+        config: BinanceWebSocketConfig,
+    ) -> Result<Self, IntegrationError> {
         if !(config.endpoint.starts_with("ws://") || config.endpoint.starts_with("wss://")) {
             return Err(IntegrationError::InvalidRequest(
                 "Binance Stocks WebSocket endpoint must start with ws:// or wss://".into(),
@@ -38,7 +42,7 @@ impl BinanceStocksWebSocketConnection {
             ));
         }
         Ok(Self {
-            descriptor: config.descriptor("advanced.stocks.websocket")?,
+            descriptor: config.descriptor(connection_key, "advanced.stocks.websocket")?,
             endpoint: config.endpoint.trim_end_matches('/').into(),
             event_capacity: config.event_capacity,
             socket: None,
@@ -162,29 +166,60 @@ impl MarketSubscriptionCommand for BinanceStocksWebSocketConnection {
 }
 
 impl MarketDataStream for BinanceStocksWebSocketConnection {
-    async fn next(&mut self) -> Result<MarketEvent, IntegrationError> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Result<MarketEvent, IntegrationError>> {
         if let Some(event) = self.pending.pop() {
-            return Ok(event);
+            return Poll::Ready(Ok(event));
         }
         loop {
-            let message = self
-                .socket
-                .as_mut()
-                .ok_or(IntegrationError::NotReady)?
-                .next()
-                .await?;
+            let socket = match self.socket.as_mut() {
+                Some(socket) => socket,
+                None => return Poll::Ready(Err(IntegrationError::NotReady)),
+            };
+            let message = match socket.poll_next(cx) {
+                Poll::Ready(Ok(message)) => message,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Pending => return Poll::Pending,
+            };
             let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
                 continue;
             };
-            let value = serde_json::from_str(&text)
-                .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?;
-            let mut events = stream::normalize(&value)?;
+            let value = match serde_json::from_str(&text) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Poll::Ready(Err(IntegrationError::InvalidPayload(error.to_string())))
+                }
+            };
+            let mut events = match stream::normalize(&value) {
+                Ok(events) => events,
+                Err(error) => return Poll::Ready(Err(error)),
+            };
             let Some(first) = events.pop_front() else {
                 continue;
             };
-            self.pending.extend(events)?;
-            return Ok(first);
+            if let Err(error) = self.pending.extend(events) {
+                return Poll::Ready(Err(error));
+            }
+            return Poll::Ready(Ok(first));
         }
+    }
+}
+
+impl crate::ConnectionMaintenance for BinanceStocksWebSocketConnection {
+    fn next_maintenance_at(&self) -> Option<tokio::time::Instant> {
+        self.socket
+            .as_ref()
+            .and_then(|socket| socket.next_maintenance_at())
+    }
+
+    fn poll_maintenance(
+        &mut self,
+        _cx: &mut Context<'_>,
+        now: tokio::time::Instant,
+    ) -> Poll<Result<crate::MaintenanceOutcome, IntegrationError>> {
+        self.socket.as_ref().map_or_else(
+            || Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy)),
+            |socket| socket.poll_maintenance(now),
+        )
     }
 }
 

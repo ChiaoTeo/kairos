@@ -38,7 +38,6 @@ def test_aeron_sources_use_the_generated_native_stream_spec(
     (
         AeronMarketEventSource,
         AeronAccountEventSource,
-        AeronExecutionEventSource,
         AeronRiskEventSource,
     ),
 )
@@ -63,3 +62,24 @@ def test_live_aeron_source_readiness_opens_and_closes_native_subscription(
     assert len(opened) == 1
     assert opened[0][1:] == ("/workspace/run/aeron/media", 1024)
     assert source._subscription is None
+
+
+def test_execution_readiness_retains_subscription_for_snapshot_live_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opened = []
+
+    class Subscription:
+        def __init__(self, spec, *, aeron_dir, queue_capacity) -> None:
+            opened.append(self)
+
+        def close(self) -> None:
+            raise AssertionError("Execution readiness must retain the subscription")
+
+    monkeypatch.setattr(native_event.native, "AeronSubscription", Subscription)
+    source = AeronExecutionEventSource(aeron_dir="/workspace/run/aeron/media")
+
+    source.check_ready()
+
+    assert len(opened) == 1
+    assert source._subscription is opened[0]

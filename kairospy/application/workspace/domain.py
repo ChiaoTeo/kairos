@@ -151,6 +151,9 @@ class WorkspacePaths(ResourceScopePaths):
     def credential_config(self) -> Path:
         return self.child("config", "credentials", "credentials.toml")
 
+    def notification_config(self) -> Path:
+        return self.child("config", "notifications", "notifications.toml")
+
     def account_state(self) -> Path:
         return self.child("state", "account", "account-state.json")
 
@@ -280,6 +283,9 @@ class InstanceWorkspace:
 
     def normalized_config(self) -> Path:
         return self.paths.child("config", "normalized.json")
+
+    def artifact(self, *parts: str) -> Path:
+        return self.paths.child("artifacts", *self._parts(parts))
 
     def launch_status(self) -> Path:
         return self.state("launch", "status.json")

@@ -1,6 +1,7 @@
 //! Async order entry, order query, and execution stream capabilities.
 
 use std::future::Future;
+use std::task::{Context, Poll};
 
 use crate::domain::{
     ExternalEventEnvelope, ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery,
@@ -37,8 +38,8 @@ pub trait OrderQuery: Send {
 }
 
 pub trait ExecutionStream: Send {
-    fn next(
+    fn poll_next(
         &mut self,
-    ) -> impl Future<Output = Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError>>
-           + Send;
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError>>;
 }

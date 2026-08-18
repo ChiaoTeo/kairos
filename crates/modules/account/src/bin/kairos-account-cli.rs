@@ -14,9 +14,10 @@ use kairos_account::domain::{AccountFill, AccountModel};
 use kairos_account_contract::{
     AccountRestRequest, AccountRestResponse, DecimalValue, SimulatedSettlement,
 };
-use kairos_conflux::{Conflux, ConfluxConfig, ConfluxEvent, ShutdownMode};
-use kairos_integration::composition::credentials::{CredentialRecord, CredentialStore};
-use kairos_integration::ExternalAccountCredentialProfile;
+use kairos_conflux::{
+    Conflux, ConfluxConfig, ConfluxEvent, CredentialRecord, CredentialStore,
+    ExternalAccountCredentialProfile, ShutdownMode,
+};
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
 use kairos_transport::SharedSnapshotReader;
 use kairos_workspace::cli::{render, OutputFormat};
@@ -1518,14 +1519,8 @@ fn read_mmap_query(
     let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
     let socket_name =
         resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
-    let snapshot_path = instance.service_snapshot(&socket_name)?;
-
     if let Command::OpenOrders { symbol, limit } = command {
-        let view_root = snapshot_path
-            .parent()
-            .ok_or("Account snapshot path has no parent")?
-            .join("snapshots")
-            .join("v2");
+        let view_root = instance.snapshot(&[])?;
         let key = kairos_account_contract::AccountViewKey::new(
             format!("account:{account_id}"),
             account_id,

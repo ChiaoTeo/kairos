@@ -114,6 +114,12 @@ pub struct ExecutionFillReport {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecuteStrategyIntent {
     pub intent_id: IntentId,
+    /// Opaque identity of the Strategy-owned decision that caused this Intent.
+    ///
+    /// This remains optional while legacy and non-Strategy control callers are
+    /// migrated. Execution preserves the value but never interprets it.
+    #[serde(default)]
+    pub strategy_decision_id: Option<String>,
     pub strategy_id: String,
     pub launch_id: String,
     pub instance_id: String,
@@ -152,6 +158,7 @@ impl Default for ExecuteStrategyIntent {
     fn default() -> Self {
         Self {
             intent_id: IntentId::new("intent:default").expect("valid default intent ID"),
+            strategy_decision_id: None,
             strategy_id: String::new(),
             launch_id: String::new(),
             instance_id: String::new(),

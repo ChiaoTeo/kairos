@@ -1,6 +1,6 @@
 //! Provider event normalization into Market-owned facts.
 
-use kairos_integration::{MarketEvent, MarketEventKind};
+use kairos_conflux::{MarketEvent, MarketEventKind};
 use kairos_primitives::Money;
 
 use super::messages::{SourceInput, SourceOrderBookUpdate};
@@ -12,12 +12,12 @@ use crate::domain::observation::{
 };
 use crate::domain::source::{SourceEpoch, SourceId};
 
-pub(super) enum Normalized {
+pub(crate) enum Normalized {
     Observation(MarketObservation),
     OrderBook(SourceOrderBookUpdate),
 }
 
-pub(super) fn with_epoch(
+pub(crate) fn with_epoch(
     value: Normalized,
     source_id: SourceId,
     epoch: SourceEpoch,
@@ -36,7 +36,7 @@ pub(super) fn with_epoch(
     }
 }
 
-pub(super) fn normalize(
+pub(crate) fn normalize(
     source_id: &SourceId,
     market: &ResolvedMarket,
     event: MarketEvent,
@@ -242,7 +242,7 @@ pub(super) fn normalize(
 
 fn trade_scope(
     market: &ResolvedMarket,
-    evidence: &kairos_integration::MarketVenueEvidence,
+    evidence: &kairos_conflux::MarketVenueEvidence,
 ) -> Result<crate::ObservationScope, String> {
     if !market.route.provider_id.eq_ignore_ascii_case("massive") {
         return Ok(market.scope.clone());
@@ -286,7 +286,7 @@ fn trade_scope(
 mod tests {
     use super::{normalize, Normalized};
     use crate::{MarketDataRoute, ObservationScope, ResolvedMarket, SourceId};
-    use kairos_integration::{
+    use kairos_conflux::{
         Bar as IntegrationBar, MarketEvent, MarketEventKind, MarketVenueEvidence,
     };
 

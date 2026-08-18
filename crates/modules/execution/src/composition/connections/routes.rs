@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::services::gateway::ExecutionConnectionPlan;
-use kairos_integration::participants::{binance, ibkr, okx};
 
 pub(crate) fn install_execution_connections(
     system: &mut kairos_conflux::ConfluxSystem,
@@ -19,14 +18,7 @@ pub(crate) fn install_execution_connections(
             continue;
         }
         let instrument_type = instrument_type(option)?;
-        let (entry, query, stream, entry_descriptor) = concrete_route(option)?;
-        let query_descriptor = query_descriptor(&query);
-        let entry_key = entry_descriptor.binding_id.clone();
-        let query_key = query_descriptor.binding_id.clone();
-        let stream_key = stream_descriptor(&stream).binding_id.clone();
-        install_entry(system, entry_key.clone(), entry)?;
-        install_query(system, query_key.clone(), query)?;
-        install_stream(system, stream_key.clone(), stream)?;
+        let installed = concrete_route(system, option)?;
         plans.push(ExecutionConnectionPlan {
             route_id: option.route_id.clone(),
             required: option.required,
@@ -35,152 +27,32 @@ pub(crate) fn install_execution_connections(
             segment_key: kairos_primitives::SegmentKey::new(&option.segment_key)
                 .map_err(|e| e.to_string())?,
             instrument_type,
-            entry_key,
-            query_key,
-            stream_key,
-            entry_descriptor: entry_descriptor.clone(),
-            query_descriptor,
+            entry_key: installed.entry_descriptor.connection_key.to_string(),
+            query_key: installed.query_descriptor.connection_key.to_string(),
+            stream_key: installed.stream_descriptor.connection_key.to_string(),
         });
-        descriptors.push(entry_descriptor);
+        descriptors.push(installed.entry_descriptor);
     }
     Ok((plans, descriptors))
 }
 
-fn query_descriptor(value: &ExecutionAsyncOrderQuery) -> ConnectionDescriptor {
-    match value {
-        ExecutionAsyncOrderQuery::BinanceSpot(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::BinanceMargin(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::BinanceUsdM(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::BinanceCoinM(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::BinanceOptions(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::BinanceStocks(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::OkxTrading(v) => v.descriptor(),
-        ExecutionAsyncOrderQuery::Ibkr(v) => v.descriptor(),
-    }
-    .clone()
-}
-
-fn stream_descriptor(value: &ExecutionAsyncEventSource) -> &ConnectionDescriptor {
-    match value {
-        ExecutionAsyncEventSource::BinanceSpot(v) => v.descriptor(),
-        ExecutionAsyncEventSource::BinanceMargin(v) => v.descriptor(),
-        ExecutionAsyncEventSource::BinanceUsdM(v) => v.descriptor(),
-        ExecutionAsyncEventSource::BinanceCoinM(v) => v.descriptor(),
-        ExecutionAsyncEventSource::BinanceOptions(v) => v.descriptor(),
-        ExecutionAsyncEventSource::BinanceStocks(v) => v.descriptor(),
-        ExecutionAsyncEventSource::OkxTrading(v) => v.descriptor(),
-        ExecutionAsyncEventSource::Ibkr(v) => v.descriptor(),
-    }
-}
-
-fn install_entry(
-    system: &mut kairos_conflux::ConfluxSystem,
-    key: String,
-    value: ExecutionAsyncOrderEntry,
-) -> Result<(), String> {
-    macro_rules! put {
-        ($field:ident, $value:expr) => {
-            system
-                .$field
-                .ensure_with(key, 1, || $value)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        };
-    }
-    match value {
-        ExecutionAsyncOrderEntry::BinanceSpot(v) => put!(binance_spot_rest_connections, v),
-        ExecutionAsyncOrderEntry::BinanceMargin(v) => put!(binance_margin_rest_connections, v),
-        ExecutionAsyncOrderEntry::BinanceUsdM(v) => put!(binance_usdm_rest_connections, v),
-        ExecutionAsyncOrderEntry::BinanceCoinM(v) => put!(binance_coinm_rest_connections, v),
-        ExecutionAsyncOrderEntry::BinanceOptions(v) => put!(binance_options_rest_connections, v),
-        ExecutionAsyncOrderEntry::BinanceStocks(v) => put!(binance_stocks_rest_connections, v),
-        ExecutionAsyncOrderEntry::OkxTrading(v) => put!(okx_private_rest_connections, v),
-        ExecutionAsyncOrderEntry::Ibkr(v) => put!(ibkr_order_connections, v),
-    }
-}
-
-fn install_query(
-    system: &mut kairos_conflux::ConfluxSystem,
-    key: String,
-    value: ExecutionAsyncOrderQuery,
-) -> Result<(), String> {
-    macro_rules! put {
-        ($field:ident, $value:expr) => {
-            system
-                .$field
-                .ensure_with(key, 1, || $value)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        };
-    }
-    match value {
-        ExecutionAsyncOrderQuery::BinanceSpot(v) => put!(binance_spot_rest_connections, v),
-        ExecutionAsyncOrderQuery::BinanceMargin(v) => put!(binance_margin_rest_connections, v),
-        ExecutionAsyncOrderQuery::BinanceUsdM(v) => put!(binance_usdm_rest_connections, v),
-        ExecutionAsyncOrderQuery::BinanceCoinM(v) => put!(binance_coinm_rest_connections, v),
-        ExecutionAsyncOrderQuery::BinanceOptions(v) => put!(binance_options_rest_connections, v),
-        ExecutionAsyncOrderQuery::BinanceStocks(v) => put!(binance_stocks_rest_connections, v),
-        ExecutionAsyncOrderQuery::OkxTrading(v) => put!(okx_private_rest_connections, v),
-        ExecutionAsyncOrderQuery::Ibkr(v) => put!(ibkr_order_connections, v),
-    }
-}
-
-fn install_stream(
-    system: &mut kairos_conflux::ConfluxSystem,
-    key: String,
-    value: ExecutionAsyncEventSource,
-) -> Result<(), String> {
-    macro_rules! put {
-        ($field:ident, $value:expr) => {
-            system
-                .$field
-                .ensure_with(key, 1, || $value)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        };
-    }
-    match value {
-        ExecutionAsyncEventSource::BinanceSpot(v) => {
-            put!(binance_spot_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::BinanceMargin(v) => {
-            put!(binance_margin_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::BinanceUsdM(v) => {
-            put!(binance_usdm_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::BinanceCoinM(v) => {
-            put!(binance_coinm_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::BinanceOptions(v) => {
-            put!(binance_options_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::BinanceStocks(v) => {
-            put!(binance_stocks_user_websocket_connections, v)
-        }
-        ExecutionAsyncEventSource::OkxTrading(v) => put!(okx_private_websocket_connections, v),
-        ExecutionAsyncEventSource::Ibkr(v) => put!(ibkr_execution_stream_connections, v),
-    }
+struct InstalledRoute {
+    entry_descriptor: ConnectionDescriptor,
+    query_descriptor: ConnectionDescriptor,
+    stream_descriptor: ConnectionDescriptor,
 }
 
 fn concrete_route(
+    system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
-) -> Result<
-    (
-        ExecutionAsyncOrderEntry,
-        ExecutionAsyncOrderQuery,
-        ExecutionAsyncEventSource,
-        ConnectionDescriptor,
-    ),
-    String,
-> {
+) -> Result<InstalledRoute, String> {
     let provider = option.participant_id.trim().to_ascii_lowercase();
     let product = normalize(&option.product);
     let binding_id = format!("execution.{}", option.route_id);
     match provider.as_str() {
-        "binance" => binance_route(option, &product, binding_id),
-        "okx" | "okex" => okx_route(option, &product, binding_id),
-        "ibkr" => ibkr_route(option, &product, binding_id),
+        "binance" => binance_route(system, option, &product, binding_id),
+        "okx" | "okex" => okx_route(system, option, &product, binding_id),
+        "ibkr" => ibkr_route(system, option, &product, binding_id),
         _ => Err(format!(
             "production execution route is not available for {} {}",
             option.participant_id, option.product
@@ -189,26 +61,21 @@ fn concrete_route(
 }
 
 fn binance_route(
+    system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
     product: &str,
     binding_id: String,
-) -> Result<
-    (
-        ExecutionAsyncOrderEntry,
-        ExecutionAsyncOrderQuery,
-        ExecutionAsyncEventSource,
-        ConnectionDescriptor,
-    ),
-    String,
-> {
-    let rest = |suffix: &str| binance::BinanceRestConfig {
-        binding_id: format!("{binding_id}.{suffix}"),
+) -> Result<InstalledRoute, String> {
+    let key = |suffix: &str| {
+        kairos_conflux::ConnectionKey::new(format!("{binding_id}.{suffix}"))
+            .map_err(|error| error.to_string())
+    };
+    let rest = || kairos_conflux::BinanceRestConfig {
         environment: environment(option),
         endpoint: option.base_url.clone(),
         credential: Some(binance_credential(option)),
     };
-    let user = |suffix: &str| binance::BinanceUserWebSocketConfig {
-        binding_id: format!("{binding_id}.{suffix}"),
+    let user = || kairos_conflux::BinanceUserWebSocketConfig {
         environment: environment(option),
         rest_endpoint: option.base_url.clone(),
         websocket_endpoint: option.websocket_url.clone(),
@@ -218,32 +85,56 @@ fn binance_route(
     };
 
     macro_rules! family {
-        ($rest:path, $stream:path, $entry:ident, $query:ident, $event:ident, $name:literal) => {{
-            let entry_connection = <$rest>::new(rest(concat!($name, ".command")))
+        ($rest:ident, $stream:ident, $name:literal) => {{
+            let entry_key = key(concat!($name, ".command"))?;
+            let query_key = key(concat!($name, ".query"))?;
+            let stream_key = key(concat!($name, ".stream"))?;
+            system
+                .connections()
+                .$rest
+                .create(entry_key.clone(), rest())
                 .map_err(|error| error.to_string())?;
-            let descriptor = entry_connection.descriptor().clone();
-            let query_connection =
-                <$rest>::new(rest(concat!($name, ".query"))).map_err(|error| error.to_string())?;
-            let stream_connection = <$stream>::new(user(concat!($name, ".stream")))
+            let entry_descriptor = system
+                .connections()
+                .$rest
+                .get(&entry_key)
+                .map_err(|error| error.to_string())?
+                .descriptor()
+                .clone();
+            system
+                .connections()
+                .$rest
+                .create(query_key.clone(), rest())
                 .map_err(|error| error.to_string())?;
-            Ok((
-                ExecutionAsyncOrderEntry::$entry(entry_connection),
-                ExecutionAsyncOrderQuery::$query(query_connection),
-                ExecutionAsyncEventSource::$event(stream_connection),
-                descriptor,
-            ))
+            let query_descriptor = system
+                .connections()
+                .$rest
+                .get(&query_key)
+                .map_err(|error| error.to_string())?
+                .descriptor()
+                .clone();
+            system
+                .connections()
+                .$stream
+                .create(stream_key.clone(), user())
+                .map_err(|error| error.to_string())?;
+            let stream_descriptor = system
+                .connections()
+                .$stream
+                .get(&stream_key)
+                .map_err(|error| error.to_string())?
+                .descriptor()
+                .clone();
+            Ok(InstalledRoute {
+                entry_descriptor,
+                query_descriptor,
+                stream_descriptor,
+            })
         }};
     }
 
     match product {
-        "spot" => family!(
-            binance::spot::BinanceSpotRestConnection,
-            binance::spot::BinanceSpotUserWebSocketConnection,
-            BinanceSpot,
-            BinanceSpot,
-            BinanceSpot,
-            "spot"
-        ),
+        "spot" => family!(binance_spot_rest, binance_spot_user_websocket, "spot"),
         "cross-margin" | "isolated-margin" => {
             if product == "isolated-margin"
                 && option
@@ -253,156 +144,178 @@ fn binance_route(
             {
                 return Err("Binance isolated-margin route requires isolated_symbol".into());
             }
-            family!(
-                binance::margin::BinanceMarginRestConnection,
-                binance::margin::BinanceMarginUserWebSocketConnection,
-                BinanceMargin,
-                BinanceMargin,
-                BinanceMargin,
-                "margin"
-            )
+            family!(binance_margin_rest, binance_margin_user_websocket, "margin")
         }
-        "usd-m-futures" => family!(
-            binance::usdm::BinanceUsdMRestConnection,
-            binance::usdm::BinanceUsdMUserWebSocketConnection,
-            BinanceUsdM,
-            BinanceUsdM,
-            BinanceUsdM,
-            "usdm"
-        ),
-        "coin-m-futures" => family!(
-            binance::coinm::BinanceCoinMRestConnection,
-            binance::coinm::BinanceCoinMUserWebSocketConnection,
-            BinanceCoinM,
-            BinanceCoinM,
-            BinanceCoinM,
-            "coinm"
-        ),
+        "usd-m-futures" => family!(binance_usdm_rest, binance_usdm_user_websocket, "usdm"),
+        "coin-m-futures" => family!(binance_coinm_rest, binance_coinm_user_websocket, "coinm"),
         "options" => family!(
-            binance::options::BinanceOptionsRestConnection,
-            binance::options::BinanceOptionsUserWebSocketConnection,
-            BinanceOptions,
-            BinanceOptions,
-            BinanceOptions,
+            binance_options_rest,
+            binance_options_user_websocket,
             "options"
         ),
-        "equity" | "stocks" => family!(
-            binance::advanced::stocks::BinanceStocksRestConnection,
-            binance::advanced::stocks::BinanceStocksUserWebSocketConnection,
-            BinanceStocks,
-            BinanceStocks,
-            BinanceStocks,
-            "stocks"
-        ),
+        "equity" | "stocks" => {
+            family!(binance_stocks_rest, binance_stocks_user_websocket, "stocks")
+        }
         _ => Err(format!("unsupported Binance execution product: {product}")),
     }
 }
 
 fn okx_route(
+    system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
     product: &str,
     binding_id: String,
-) -> Result<
-    (
-        ExecutionAsyncOrderEntry,
-        ExecutionAsyncOrderQuery,
-        ExecutionAsyncEventSource,
-        ConnectionDescriptor,
-    ),
-    String,
-> {
+) -> Result<InstalledRoute, String> {
     let trading_mode = okx_trading_mode(product, option.trading_mode.as_deref())?;
     let credential = okx_credential(option);
-    let rest_config = |suffix: &str| okx::OkxPrivateRestConfig {
-        connection: okx::OkxRestConfig {
-            binding_id: format!("{binding_id}.{suffix}"),
+    let rest_config = |_suffix: &str| kairos_conflux::OkxPrivateRestConfig {
+        connection: kairos_conflux::OkxRestConfig {
             environment: environment(option),
             endpoint: option.base_url.clone(),
         },
         credential: credential.clone(),
     };
-    let entry = okx::private::OkxPrivateRestConnection::new(rest_config("command"))
+    let entry_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.command"))?;
+    let query_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.query"))?;
+    let stream_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.stream"))?;
+    system
+        .connections()
+        .okx_private_rest
+        .create(entry_key.clone(), rest_config("command"))
         .map_err(|error| error.to_string())?;
-    let descriptor = entry.descriptor().clone();
-    let query = okx::private::OkxPrivateRestConnection::new(rest_config("query"))
+    let entry_descriptor = system
+        .connections()
+        .okx_private_rest
+        .get(&entry_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    system
+        .connections()
+        .okx_private_rest
+        .create(query_key.clone(), rest_config("query"))
         .map_err(|error| error.to_string())?;
-    let stream = okx::private::OkxPrivateWebSocketConnection::new(okx::OkxPrivateWebSocketConfig {
-        connection: okx::OkxWebSocketConfig {
-            binding_id: format!("{binding_id}.stream"),
-            environment: environment(option),
-            endpoint: option.websocket_url.clone(),
-            event_capacity: option.order_event_queue_capacity.max(1),
-        },
-        credential,
-        segment_key: option.segment_key.clone(),
-        trading_mode,
+    let query_descriptor = system
+        .connections()
+        .okx_private_rest
+        .get(&query_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    system
+        .connections()
+        .okx_private_websocket
+        .create(
+            stream_key.clone(),
+            kairos_conflux::OkxPrivateWebSocketConfig {
+                connection: kairos_conflux::OkxWebSocketConfig {
+                    environment: environment(option),
+                    endpoint: option.websocket_url.clone(),
+                    event_capacity: option.order_event_queue_capacity.max(1),
+                },
+                rest_endpoint: option.base_url.clone(),
+                credential,
+                segment_key: option.segment_key.clone(),
+                trading_mode,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let stream_descriptor = system
+        .connections()
+        .okx_private_websocket
+        .get(&stream_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    Ok(InstalledRoute {
+        entry_descriptor,
+        query_descriptor,
+        stream_descriptor,
     })
-    .map_err(|error| error.to_string())?;
-    Ok((
-        ExecutionAsyncOrderEntry::OkxTrading(entry),
-        ExecutionAsyncOrderQuery::OkxTrading(query),
-        ExecutionAsyncEventSource::OkxTrading(stream),
-        descriptor,
-    ))
 }
 
 fn ibkr_route(
+    system: &mut kairos_conflux::ConfluxSystem,
     option: &ExecutionConnectionOptions,
     product: &str,
     binding_id: String,
-) -> Result<
-    (
-        ExecutionAsyncOrderEntry,
-        ExecutionAsyncOrderQuery,
-        ExecutionAsyncEventSource,
-        ConnectionDescriptor,
-    ),
-    String,
-> {
+) -> Result<InstalledRoute, String> {
     if !matches!(product, "equity" | "stocks" | "spot") {
         return Err(format!("unsupported IBKR execution product: {product}"));
     }
-    let order_config = || ibkr::IbkrOrderConfig {
-        binding_id: format!("{binding_id}.order"),
+    let order_config = || kairos_conflux::IbkrOrderConfig {
         environment: environment(option),
         host: option.host.clone(),
         port: option.port,
         client_id: option.client_id,
         account_id: option.account_id.clone(),
     };
-    let entry =
-        ibkr::IbkrOrderConnection::new(order_config()).map_err(|error| error.to_string())?;
-    let descriptor = entry.descriptor().clone();
-    let query =
-        ibkr::IbkrOrderConnection::new(order_config()).map_err(|error| error.to_string())?;
-    let stream = ibkr::IbkrExecutionStreamConnection::new(ibkr::IbkrExecutionStreamConfig {
-        binding_id: format!("{binding_id}.stream"),
-        environment: environment(option),
-        host: option.host.clone(),
-        port: option.port,
-        client_id: option.client_id.saturating_add(1),
-        account_id: option.account_id.clone(),
-        symbol: None,
+    let entry_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.command"))?;
+    let query_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.query"))?;
+    let stream_key = kairos_conflux::ConnectionKey::new(format!("{binding_id}.stream"))?;
+    system
+        .connections()
+        .ibkr_order
+        .create(entry_key.clone(), order_config())
+        .map_err(|error| error.to_string())?;
+    let entry_descriptor = system
+        .connections()
+        .ibkr_order
+        .get(&entry_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    system
+        .connections()
+        .ibkr_order
+        .create(query_key.clone(), order_config())
+        .map_err(|error| error.to_string())?;
+    let query_descriptor = system
+        .connections()
+        .ibkr_order
+        .get(&query_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    system
+        .connections()
+        .ibkr_execution_stream
+        .create(
+            stream_key.clone(),
+            kairos_conflux::IbkrExecutionStreamConfig {
+                environment: environment(option),
+                host: option.host.clone(),
+                port: option.port,
+                client_id: option.client_id.saturating_add(1),
+                account_id: option.account_id.clone(),
+                symbol: None,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let stream_descriptor = system
+        .connections()
+        .ibkr_execution_stream
+        .get(&stream_key)
+        .map_err(|error| error.to_string())?
+        .descriptor()
+        .clone();
+    Ok(InstalledRoute {
+        entry_descriptor,
+        query_descriptor,
+        stream_descriptor,
     })
-    .map_err(|error| error.to_string())?;
-    Ok((
-        ExecutionAsyncOrderEntry::Ibkr(entry),
-        ExecutionAsyncOrderQuery::Ibkr(query),
-        ExecutionAsyncEventSource::Ibkr(stream),
-        descriptor,
-    ))
 }
 
-fn binance_credential(option: &ExecutionConnectionOptions) -> binance::BinanceCredential {
-    binance::BinanceCredential {
+fn binance_credential(option: &ExecutionConnectionOptions) -> kairos_conflux::BinanceCredential {
+    kairos_conflux::BinanceCredential {
         principal_id: option.principal_scope_id.clone(),
         api_key: option.api_key.clone(),
         secret: option.secret.clone(),
     }
 }
 
-fn okx_credential(option: &ExecutionConnectionOptions) -> okx::OkxCredential {
-    okx::OkxCredential {
+fn okx_credential(option: &ExecutionConnectionOptions) -> kairos_conflux::OkxCredential {
+    kairos_conflux::OkxCredential {
         principal_id: option.principal_scope_id.clone(),
         api_key: option.api_key.clone(),
         secret: option.secret.clone(),

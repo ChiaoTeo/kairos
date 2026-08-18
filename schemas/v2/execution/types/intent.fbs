@@ -157,4 +157,7 @@ table ExecutionIntent {
   estimated_fee_bps:uint = null;
   evidence:[kairos.common.v2.EvidenceRef] (required);
   reason:string;
+  // Opaque Strategy-owned causal decision identity. Optional for legacy and
+  // non-Strategy callers during migration.
+  strategy_decision_id:string;
 }

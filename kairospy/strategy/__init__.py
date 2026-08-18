@@ -87,6 +87,12 @@ from kairospy.application.market import (
     Trade,
     TradeEvent,
 )
+from kairospy.application.notification import (
+    NotificationApplication,
+    NotificationReceipt,
+    NotificationRequest,
+    NotificationSeverity,
+)
 from kairospy.application.reference import (
     AmbiguousReferenceError,
     Asset,
@@ -149,5 +155,29 @@ from .selection import (
 )
 from .state import StrategyState
 from .validation import StrategyContractError, validate_strategy
+
+# Decision lifecycle values live in the Strategy application because that
+# application owns their persistence and progress.  Resolve them lazily here
+# so user strategies have a stable public import without creating an import
+# cycle while the Strategy runtime itself is being assembled.
+_DECISION_EXPORTS = frozenset(
+    {
+        "DecisionEffectEvaluation",
+        "DecisionHorizon",
+        "DecisionLifecycle",
+        "EffectEvidence",
+        "EffectOutcome",
+        "StrategyDecision",
+    }
+)
+
+
+def __getattr__(name: str):
+    if name not in _DECISION_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from kairospy.application.strategy.application import decisions
+
+    return getattr(decisions, name)
+
 
 CommandHandle = CommandResult

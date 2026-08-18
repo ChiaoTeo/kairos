@@ -11,22 +11,12 @@ use crate::services::integration::{
     AccountSnapshotGateway,
 };
 use crate::services::persistence::JsonAccountStore;
-use kairos_integration::participants::binance::{
-    coinm::{BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection},
-    funding::BinanceFundingRestConnection,
-    margin::{BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection},
-    options::{BinanceOptionsRestConnection, BinanceOptionsUserWebSocketConnection},
-    spot::{BinanceSpotRestConnection, BinanceSpotUserWebSocketConnection},
-    usdm::{BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection},
-    BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig,
+use kairos_conflux::{
+    AccountCredentialQuery, BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig,
+    ConnectionKey, ExternalAccountCredentialProfile, IbkrAccountQueryConfig,
+    IbkrAccountStreamConfig, OkxCredential, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
+    OkxRestConfig, OkxWebSocketConfig,
 };
-use kairos_integration::participants::ibkr;
-use kairos_integration::participants::okx::{
-    private::{OkxPrivateRestConnection, OkxPrivateWebSocketConnection},
-    OkxCredential, OkxPrivateRestConfig, OkxPrivateWebSocketConfig, OkxRestConfig,
-    OkxWebSocketConfig,
-};
-use kairos_integration::{AccountCredentialQuery, ExternalAccountCredentialProfile};
 use secrecy::SecretString;
 
 #[derive(Clone, Debug)]
@@ -105,10 +95,10 @@ fn account_system(
 ) -> Result<kairos_conflux::ConfluxSystem, String> {
     let mut system = kairos_conflux::ConfluxSystem::new();
     for (key, connection) in connections {
-        connection.into_conflux(key, &mut system)?;
+        connection.into_conflux(key, &mut system.connections())?;
     }
     for stream in streams {
-        stream.into_conflux(&mut system)?;
+        stream.into_conflux(&mut system.connections())?;
     }
     Ok(system)
 }
@@ -123,10 +113,9 @@ fn binance_credential(options: &AccountOptions) -> BinanceCredential {
 
 fn binance_rest_config(
     options: &AccountOptions,
-    binding_id: impl Into<String>,
+    _connection_key: impl Into<String>,
 ) -> BinanceRestConfig {
     BinanceRestConfig {
-        binding_id: binding_id.into(),
         environment: options.environment.clone(),
         endpoint: options.base_url.clone(),
         credential: Some(binance_credential(options)),
@@ -135,13 +124,12 @@ fn binance_rest_config(
 
 fn binance_user_config(
     options: &AccountOptions,
-    binding_id: impl Into<String>,
+    _connection_key: impl Into<String>,
     rest_endpoint: String,
     websocket_endpoint: impl Into<String>,
     segment_key: impl Into<String>,
 ) -> BinanceUserWebSocketConfig {
     BinanceUserWebSocketConfig {
-        binding_id: binding_id.into(),
         environment: options.environment.clone(),
         rest_endpoint,
         websocket_endpoint: websocket_endpoint.into(),
@@ -261,59 +249,48 @@ pub fn compose_binance_async_account_application(
                 streams.push(AccountAsyncEventSource::BinanceSpot {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceSpotUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.spot.{segment_key}"),
                         rest_endpoint.clone(),
                         websocket_api_url,
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceSpot(
-                    BinanceSpotRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.spot.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceSpot(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.spot.rest.{segment_key}"),
+                ))
             }
             "funding" => {
                 let mut rest_options = options.clone();
                 rest_options.base_url = binance_rest_base_url(options, "spot");
-                AccountAsyncSnapshotConnection::BinanceFunding(
-                    BinanceFundingRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.funding.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceFunding(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.funding.rest.{segment_key}"),
+                ))
             }
             "cross-margin" => {
                 let rest_endpoint = binance_rest_base_url(options, "spot");
                 streams.push(AccountAsyncEventSource::BinanceMargin {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceMarginUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.cross-margin.{segment_key}"),
                         rest_endpoint.clone(),
                         "wss://stream.binance.com:9443/ws",
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceMargin(
-                    BinanceMarginRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.cross-margin.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceMargin(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.cross-margin.rest.{segment_key}"),
+                ))
             }
             "isolated-margin" => {
                 let provider_symbol =
@@ -325,96 +302,80 @@ pub fn compose_binance_async_account_application(
                 streams.push(AccountAsyncEventSource::BinanceMargin {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceMarginUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.isolated-margin.{provider_symbol}.{segment_key}"),
                         rest_endpoint.clone(),
                         "wss://stream.binance.com:9443/ws",
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceMargin(
-                    BinanceMarginRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.isolated-margin.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceMargin(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.isolated-margin.rest.{segment_key}"),
+                ))
             }
             "usd-m-futures" => {
                 let rest_endpoint = binance_rest_base_url(options, "usd-m-futures");
                 streams.push(AccountAsyncEventSource::BinanceUsdM {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceUsdMUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.usdm.{segment_key}"),
                         rest_endpoint.clone(),
                         "wss://fstream.binance.com/ws",
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceUsdM(
-                    BinanceUsdMRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.usdm.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceUsdM(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.usdm.rest.{segment_key}"),
+                ))
             }
             "coin-m-futures" => {
                 let rest_endpoint = binance_rest_base_url(options, "coin-m-futures");
                 streams.push(AccountAsyncEventSource::BinanceCoinM {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceCoinMUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.coinm.{segment_key}"),
                         rest_endpoint.clone(),
                         "wss://dstream.binance.com/ws",
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceCoinM(
-                    BinanceCoinMRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.coinm.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceCoinM(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.coinm.rest.{segment_key}"),
+                ))
             }
             "options" => {
                 let rest_endpoint = binance_rest_base_url(options, "options");
                 streams.push(AccountAsyncEventSource::BinanceOptions {
                     segment_key: SegmentKey::new(segment_key.clone())
                         .expect("validated Account segment key"),
-                    source: BinanceOptionsUserWebSocketConnection::new(binance_user_config(
+                    parameters: binance_user_config(
                         options,
                         format!("account.binance.options.{segment_key}"),
                         rest_endpoint.clone(),
                         "wss://nbstream.binance.com/eoptions/private/stream",
                         segment_key.clone(),
-                    ))
-                    .map_err(|error| error.to_string())?,
+                    ),
                 });
                 let mut rest_options = options.clone();
                 rest_options.base_url = rest_endpoint;
-                AccountAsyncSnapshotConnection::BinanceOptions(
-                    BinanceOptionsRestConnection::new(binance_rest_config(
-                        &rest_options,
-                        format!("account.binance.options.rest.{segment_key}"),
-                    ))
-                    .map_err(|error| error.to_string())?,
-                )
+                AccountAsyncSnapshotConnection::BinanceOptions(binance_rest_config(
+                    &rest_options,
+                    format!("account.binance.options.rest.{segment_key}"),
+                ))
             }
             _ => unreachable!("validated Binance Account segment"),
         };
@@ -484,37 +445,32 @@ pub fn compose_okx_async_account_application(
 
         sources.insert(
             segment_key.clone(),
-            AccountAsyncSnapshotConnection::OkxTrading(
-                OkxPrivateRestConnection::new(OkxPrivateRestConfig {
-                    connection: OkxRestConfig {
-                        binding_id: format!("account.okx.rest.{segment_key}"),
-                        environment: options.environment.clone(),
-                        endpoint: options.base_url.clone(),
-                    },
-                    credential: okx_credential(options),
-                })
-                .map_err(|error| error.to_string())?,
-            ),
+            AccountAsyncSnapshotConnection::OkxTrading(OkxPrivateRestConfig {
+                connection: OkxRestConfig {
+                    environment: options.environment.clone(),
+                    endpoint: options.base_url.clone(),
+                },
+                credential: okx_credential(options),
+            }),
         );
         if let Some(websocket_url) = private_websocket_url {
             streams.push(AccountAsyncEventSource::OkxTrading {
                 segment_key: SegmentKey::new(segment_key.clone())
                     .expect("validated Account segment key"),
-                source: OkxPrivateWebSocketConnection::new(OkxPrivateWebSocketConfig {
+                parameters: OkxPrivateWebSocketConfig {
                     connection: OkxWebSocketConfig {
-                        binding_id: format!("account.okx.websocket.{segment_key}"),
                         environment: options.environment.clone(),
                         endpoint: websocket_url.to_owned(),
                         event_capacity: 256,
                     },
+                    rest_endpoint: options.base_url.clone(),
                     credential: okx_credential(options),
                     segment_key: segment_key.clone(),
                     trading_mode: configured_segment
                         .trading_mode
                         .clone()
                         .unwrap_or_else(|| "cash".into()),
-                })
-                .map_err(|error| error.to_string())?,
+                },
             });
         }
     }
@@ -557,15 +513,13 @@ pub fn compose_ibkr_async_account_application(
         return Err("IBKR Account requires exactly one equity segment per client session".into());
     }
     let segment_key = segments[0].segment_key.clone();
-    let query = ibkr::IbkrAccountQueryConnection::new(ibkr::IbkrAccountQueryConfig {
-        binding_id: "account.ibkr.equity.query".into(),
+    let query = IbkrAccountQueryConfig {
         environment: options.environment.clone(),
         host: options.host.clone(),
         port: options.port,
         client_id: options.client_id,
         account_id: options.account_id.clone(),
-    })
-    .map_err(|error| error.to_string())?;
+    };
     let identity = ExternalAccountIdentity::new("ibkr", options.account_id.clone())
         .map_err(|error| error.to_string())?;
     let account_segments = vec![AccountSegment {
@@ -585,16 +539,14 @@ pub fn compose_ibkr_async_account_application(
         state.map(JsonAccountStore::new),
     )
     .map_err(|error| error.to_string())?;
-    let source = ibkr::IbkrAccountStreamConnection::new(ibkr::IbkrAccountStreamConfig {
-        binding_id: format!("account.ibkr.equity.{segment_key}"),
+    let source = IbkrAccountStreamConfig {
         environment: options.environment.clone(),
         host: options.host.clone(),
         port: options.port,
         client_id: options.client_id.saturating_add(1),
         account_id: options.account_id.clone(),
         segment_key: segment_key.clone(),
-    })
-    .map_err(|error| error.to_string())?;
+    };
     let system = account_system(
         std::collections::BTreeMap::from([(
             segment_key.clone(),
@@ -603,7 +555,7 @@ pub fn compose_ibkr_async_account_application(
         vec![AccountAsyncEventSource::Ibkr {
             segment_key: SegmentKey::new(segment_key.clone())
                 .expect("validated Account segment key"),
-            source,
+            parameters: source,
         }],
     )?;
     Ok(AccountComposition {
@@ -635,16 +587,26 @@ pub async fn inspect_account_credential(
         ));
     }
     if provider == "okx" {
-        let mut inspection = OkxPrivateRestConnection::new(OkxPrivateRestConfig {
-            connection: OkxRestConfig {
-                binding_id: "account.okx.inspect".into(),
-                environment: options.environment.clone(),
-                endpoint: options.base_url.clone(),
-            },
-            credential: okx_credential(options),
-        })
-        .map_err(|error| error.to_string())?;
-        return inspection
+        let key = ConnectionKey::new("account.okx.inspect")?;
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        let mut connections = system.connections();
+        connections
+            .okx_private_rest
+            .create(
+                key.clone(),
+                OkxPrivateRestConfig {
+                    connection: OkxRestConfig {
+                        environment: options.environment.clone(),
+                        endpoint: options.base_url.clone(),
+                    },
+                    credential: okx_credential(options),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        return connections
+            .okx_private_rest
+            .get(&key)
+            .map_err(|error| error.to_string())?
             .inspect_credential()
             .await
             .map_err(|error| error.to_string());
@@ -823,25 +785,27 @@ mod secret_tests {
         compose_okx_async_account_application, AccountOptions, AccountSegmentBinding,
     };
 
-    fn account_stream_count(system: &kairos_conflux::ConfluxSystem) -> usize {
-        system.binance_spot_user_websocket_connections.len()
-            + system.binance_margin_user_websocket_connections.len()
-            + system.binance_usdm_user_websocket_connections.len()
-            + system.binance_coinm_user_websocket_connections.len()
-            + system.binance_options_user_websocket_connections.len()
-            + system.okx_private_websocket_connections.len()
-            + system.ibkr_account_stream_connections.len()
+    fn account_stream_count(system: &mut kairos_conflux::ConfluxSystem) -> usize {
+        let connections = system.connections();
+        connections.binance_spot_user_websocket.keys().len()
+            + connections.binance_margin_user_websocket.keys().len()
+            + connections.binance_usdm_user_websocket.keys().len()
+            + connections.binance_coinm_user_websocket.keys().len()
+            + connections.binance_options_user_websocket.keys().len()
+            + connections.okx_private_websocket.keys().len()
+            + connections.ibkr_account_stream.keys().len()
     }
 
-    fn account_query_count(system: &kairos_conflux::ConfluxSystem) -> usize {
-        system.binance_spot_rest_connections.len()
-            + system.binance_funding_rest_connections.len()
-            + system.binance_margin_rest_connections.len()
-            + system.binance_usdm_rest_connections.len()
-            + system.binance_coinm_rest_connections.len()
-            + system.binance_options_rest_connections.len()
-            + system.okx_private_rest_connections.len()
-            + system.ibkr_account_query_connections.len()
+    fn account_query_count(system: &mut kairos_conflux::ConfluxSystem) -> usize {
+        let connections = system.connections();
+        connections.binance_spot_rest.keys().len()
+            + connections.binance_funding_rest.keys().len()
+            + connections.binance_margin_rest.keys().len()
+            + connections.binance_usdm_rest.keys().len()
+            + connections.binance_coinm_rest.keys().len()
+            + connections.binance_options_rest.keys().len()
+            + connections.okx_private_rest.keys().len()
+            + connections.ibkr_account_query.keys().len()
     }
 
     fn binding(value: &str) -> AccountSegmentBinding {
@@ -880,7 +844,7 @@ mod secret_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn binance_spot_server_composes_one_shared_async_principal_context() {
-        let composition = compose_binance_async_account_application(
+        let mut composition = compose_binance_async_account_application(
             &options(),
             &[binding("spot")],
             None,
@@ -889,8 +853,8 @@ mod secret_tests {
             "test-egress",
         )
         .unwrap();
-        assert_eq!(account_stream_count(&composition.system), 1);
-        assert_eq!(account_query_count(&composition.system), 1);
+        assert_eq!(account_stream_count(&mut composition.system), 1);
+        assert_eq!(account_query_count(&mut composition.system), 1);
         assert_eq!(composition.provider, "binance");
     }
 
@@ -906,13 +870,14 @@ mod secret_tests {
         )
         .unwrap();
 
-        let (application, system) = composition
+        let (application, mut system) = composition
             .into_conflux(std::time::Duration::from_secs(30))
             .unwrap();
 
-        assert_eq!(system.binance_spot_rest_connections.len(), 1);
-        assert_eq!(system.binance_funding_rest_connections.len(), 1);
-        assert_eq!(system.binance_spot_user_websocket_connections.len(), 1);
+        let connections = system.connections();
+        assert_eq!(connections.binance_spot_rest.keys().len(), 1);
+        assert_eq!(connections.binance_funding_rest.keys().len(), 1);
+        assert_eq!(connections.binance_spot_user_websocket.keys().len(), 1);
         assert_eq!(
             application.runtime_mode(),
             crate::application::AccountRuntimeMode::Live
@@ -921,7 +886,7 @@ mod secret_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn account_segment_key_is_not_parsed_as_provider_product() {
-        let composition = compose_binance_async_account_application(
+        let mut composition = compose_binance_async_account_application(
             &options(),
             &[AccountSegmentBinding::new("cash-main", "spot")],
             None,
@@ -931,12 +896,12 @@ mod secret_tests {
         )
         .unwrap();
 
-        assert_eq!(account_query_count(&composition.system), 1);
+        assert_eq!(account_query_count(&mut composition.system), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn binance_spot_and_funding_share_one_principal_without_fake_funding_stream() {
-        let composition = compose_binance_async_account_application(
+        let mut composition = compose_binance_async_account_application(
             &options(),
             &[binding("spot"), binding("funding")],
             None,
@@ -945,8 +910,8 @@ mod secret_tests {
             "test-egress",
         )
         .unwrap();
-        assert_eq!(account_stream_count(&composition.system), 1);
-        assert_eq!(account_query_count(&composition.system), 2);
+        assert_eq!(account_stream_count(&mut composition.system), 1);
+        assert_eq!(account_query_count(&mut composition.system), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -957,7 +922,7 @@ mod secret_tests {
             ("coin_m_futures", 1),
             ("options", 1),
         ] {
-            let composition = compose_binance_async_account_application(
+            let mut composition = compose_binance_async_account_application(
                 &options(),
                 &[binding(segment)],
                 None,
@@ -967,11 +932,11 @@ mod secret_tests {
             )
             .unwrap();
             assert_eq!(
-                account_stream_count(&composition.system),
+                account_stream_count(&mut composition.system),
                 stream_count,
                 "{segment}"
             );
-            assert_eq!(account_query_count(&composition.system), 1);
+            assert_eq!(account_query_count(&mut composition.system), 1);
         }
     }
 
@@ -1007,7 +972,7 @@ mod secret_tests {
 
     #[test]
     fn binance_account_supports_segments_from_different_endpoint_families() {
-        let composition = compose_binance_async_account_application(
+        let mut composition = compose_binance_async_account_application(
             &options(),
             &[
                 binding("spot"),
@@ -1020,8 +985,8 @@ mod secret_tests {
             "test-egress",
         )
         .expect("one Account must compose all configured Binance segments");
-        assert_eq!(account_query_count(&composition.system), 3);
-        assert_eq!(account_stream_count(&composition.system), 2);
+        assert_eq!(account_query_count(&mut composition.system), 3);
+        assert_eq!(account_stream_count(&mut composition.system), 2);
     }
 
     #[test]
@@ -1040,7 +1005,7 @@ mod secret_tests {
 
         let mut configured = options();
         configured.isolated_margin_symbol = Some("btcusdt".into());
-        let composition = compose_binance_async_account_application(
+        let mut composition = compose_binance_async_account_application(
             &configured,
             &[binding("isolated_margin")],
             None,
@@ -1049,8 +1014,8 @@ mod secret_tests {
             "test-egress",
         )
         .unwrap();
-        assert_eq!(account_stream_count(&composition.system), 1);
-        assert_eq!(account_query_count(&composition.system), 1);
+        assert_eq!(account_stream_count(&mut composition.system), 1);
+        assert_eq!(account_query_count(&mut composition.system), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1058,7 +1023,7 @@ mod secret_tests {
         let mut options = options();
         options.provider = "okx".into();
         options.passphrase = "passphrase".into();
-        let composition = compose_okx_async_account_application(
+        let mut composition = compose_okx_async_account_application(
             &options,
             &[binding("spot"), binding("swap").with_trading_mode("cross")],
             None,
@@ -1068,8 +1033,8 @@ mod secret_tests {
         )
         .unwrap();
         assert_eq!(composition.provider, "okx");
-        assert_eq!(account_stream_count(&composition.system), 2);
-        assert_eq!(account_query_count(&composition.system), 2);
+        assert_eq!(account_stream_count(&mut composition.system), 2);
+        assert_eq!(account_query_count(&mut composition.system), 2);
     }
 
     #[test]
@@ -1106,10 +1071,10 @@ mod secret_tests {
         options.provider = "ibkr".into();
         options.product = "equity".into();
         options.segment = "equity".into();
-        let composition =
+        let mut composition =
             compose_ibkr_async_account_application(&options, &[binding("equity")], None).unwrap();
         assert_eq!(composition.provider, "ibkr");
-        assert_eq!(account_stream_count(&composition.system), 1);
-        assert_eq!(account_query_count(&composition.system), 1);
+        assert_eq!(account_stream_count(&mut composition.system), 1);
+        assert_eq!(account_query_count(&mut composition.system), 1);
     }
 }

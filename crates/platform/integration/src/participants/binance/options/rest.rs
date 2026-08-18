@@ -1,6 +1,10 @@
 use kairos_primitives::{ParticipantSymbol, Rate, UnixNanos};
 use serde_json::Value;
 
+use super::super::{
+    history, BinanceCancelAllScope, BinanceCancelOrderRequest, BinanceHistoryQuery,
+    BinanceTradeRecord,
+};
 use crate::services::participants::binance::{execution, market};
 use crate::{
     AccountQuery, CommandResult, ExternalAccountSegment, ExternalAccountSnapshot,
@@ -13,6 +17,80 @@ use crate::{
 };
 
 rest_connection!(BinanceOptionsRestConnection, "options.rest");
+
+impl BinanceOptionsRestConnection {
+    pub async fn submit_orders(
+        &mut self,
+        requests: &[OrderEntryRequest],
+    ) -> CommandResult<Vec<crate::CommandOutcome<OrderEntryEvent>>> {
+        let batch = execution::batch_order_parameter(requests)?;
+        let outcome = self
+            .service
+            .signed_post_command("/eapi/v1/batchOrders", &[("batchOrders", batch)])
+            .await?;
+        execution::submitted_batch_outcome(requests, outcome)
+    }
+
+    pub async fn cancel_orders(
+        &mut self,
+        requests: &[BinanceCancelOrderRequest],
+    ) -> CommandResult<Vec<crate::CommandOutcome<OrderEntryEvent>>> {
+        let first = requests.first().ok_or_else(|| {
+            IntegrationError::InvalidRequest("Binance Options cancel batch cannot be empty".into())
+        })?;
+        let symbol = first.order.participant_instrument.source_symbol.as_str();
+        if requests
+            .iter()
+            .any(|request| request.order.participant_instrument.source_symbol.as_str() != symbol)
+        {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance Options cancel batch must use one symbol".into(),
+            ));
+        }
+        let ids = execution::cancel_id_parameter(requests)?;
+        let outcome = self
+            .service
+            .signed_delete_command(
+                "/eapi/v1/batchOrders",
+                &[("symbol", symbol.into()), ("orderIds", ids)],
+            )
+            .await?;
+        execution::canceled_batch_outcome(requests, outcome)
+    }
+
+    pub async fn cancel_all_open_orders(
+        &mut self,
+        scope: &BinanceCancelAllScope,
+    ) -> CommandResult<BinanceCancelAllScope> {
+        match self
+            .service
+            .signed_delete_command(
+                "/eapi/v1/allOpenOrders",
+                &[("symbol", scope.symbol.to_string())],
+            )
+            .await?
+        {
+            crate::CommandOutcome::Confirmed(_) => {
+                Ok(crate::CommandOutcome::Confirmed(scope.clone()))
+            }
+            crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
+            crate::CommandOutcome::Indeterminate(error) => {
+                Ok(crate::CommandOutcome::Indeterminate(error))
+            }
+        }
+    }
+
+    pub async fn fetch_account_trades(
+        &mut self,
+        query: &BinanceHistoryQuery,
+    ) -> Result<Vec<BinanceTradeRecord>, IntegrationError> {
+        let payload = self
+            .service
+            .signed_get("/eapi/v1/userTrades", &query.params(true, false)?)
+            .await?;
+        history::trades(&payload)
+    }
+}
 
 impl AccountQuery for BinanceOptionsRestConnection {
     async fn fetch_account(
@@ -227,7 +305,7 @@ impl OrderQuery for BinanceOptionsRestConnection {
             .service
             .signed_get("/eapi/v1/openOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
 
     async fn order_history(
@@ -239,7 +317,7 @@ impl OrderQuery for BinanceOptionsRestConnection {
             .service
             .signed_get("/eapi/v1/historyOrders", &params)
             .await?;
-        execution::orders(&self.descriptor().binding_id, &value)
+        execution::orders(&self.descriptor().connection_key, &value)
     }
 
     async fn order_detail(
@@ -248,9 +326,11 @@ impl OrderQuery for BinanceOptionsRestConnection {
     ) -> Result<Option<ExternalOrder>, IntegrationError> {
         let params = query_params(query, true)?;
         let value = self.service.signed_get("/eapi/v1/order", &params).await?;
-        Ok(execution::orders(&self.descriptor().binding_id, &value)?
-            .into_iter()
-            .next())
+        Ok(
+            execution::orders(&self.descriptor().connection_key, &value)?
+                .into_iter()
+                .next(),
+        )
     }
 }
 

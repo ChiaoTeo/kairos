@@ -23,6 +23,7 @@ impl<'a> IntentAccepted<'a> {
     pub const VT_METADATA: ::flatbuffers::VOffsetT = 4;
     pub const VT_INTENT_ID: ::flatbuffers::VOffsetT = 6;
     pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 8;
+    pub const VT_INTENT: ::flatbuffers::VOffsetT = 10;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -39,6 +40,9 @@ impl<'a> IntentAccepted<'a> {
         args: &'args IntentAcceptedArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<IntentAccepted<'bldr>> {
         let mut builder = IntentAcceptedBuilder::new(_fbb);
+        if let Some(x) = args.intent {
+            builder.add_intent(x);
+        }
         if let Some(x) = args.intent_id {
             builder.add_intent_id(x);
         }
@@ -88,6 +92,19 @@ impl<'a> IntentAccepted<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn intent(&self) -> Option<ExecutionIntent<'a>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<ExecutionIntent>>(
+                    IntentAccepted::VT_INTENT,
+                    None,
+                )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for IntentAccepted<'_> {
@@ -100,6 +117,7 @@ impl ::flatbuffers::Verifiable for IntentAccepted<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<super::super::common::v_2::EventMetadata>>("metadata", Self::VT_METADATA, true)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("intent_id", Self::VT_INTENT_ID, true)?
      .visit_field::<IntentLifecycle>("lifecycle", Self::VT_LIFECYCLE, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<ExecutionIntent>>("intent", Self::VT_INTENT, false)?
      .finish();
         Ok(())
     }
@@ -108,6 +126,7 @@ pub struct IntentAcceptedArgs<'a> {
     pub metadata: Option<::flatbuffers::WIPOffset<super::super::common::v_2::EventMetadata<'a>>>,
     pub intent_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub lifecycle: IntentLifecycle,
+    pub intent: Option<::flatbuffers::WIPOffset<ExecutionIntent<'a>>>,
 }
 impl<'a> Default for IntentAcceptedArgs<'a> {
     #[inline]
@@ -116,6 +135,7 @@ impl<'a> Default for IntentAcceptedArgs<'a> {
             metadata: None,  // required field
             intent_id: None, // required field
             lifecycle: IntentLifecycle::ACCEPTED,
+            intent: None,
         }
     }
 }
@@ -152,6 +172,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentAcceptedBuilder<'a, 'b,
         );
     }
     #[inline]
+    pub fn add_intent(&mut self, intent: ::flatbuffers::WIPOffset<ExecutionIntent<'b>>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<ExecutionIntent>>(
+                IntentAccepted::VT_INTENT,
+                intent,
+            );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> IntentAcceptedBuilder<'a, 'b, A> {
@@ -178,6 +206,7 @@ impl ::core::fmt::Debug for IntentAccepted<'_> {
         ds.field("metadata", &self.metadata());
         ds.field("intent_id", &self.intent_id());
         ds.field("lifecycle", &self.lifecycle());
+        ds.field("intent", &self.intent());
         ds.finish()
     }
 }

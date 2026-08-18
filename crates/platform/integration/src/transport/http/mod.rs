@@ -4,6 +4,8 @@
 //! FlatBuffers. Exchange-specific crates convert its JSON result into their
 //! own provider records.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::Method;
@@ -17,7 +19,11 @@ pub enum ExchangeError {
     #[error("HTTP request failed: {0}")]
     Transport(#[from] reqwest::Error),
     #[error("exchange returned HTTP status {status}: {body}")]
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+        metadata: HttpResponseMetadata,
+    },
     #[error("invalid exchange response: {0}")]
     Response(#[from] serde_json::Error),
     #[error("exchange returned invalid JSON: {message}; body: {body}")]
@@ -38,13 +44,13 @@ pub(crate) fn command_error_outcome<T>(
     match error {
         ExchangeError::Authentication(message) => Err(IntegrationError::Authentication(message)),
         ExchangeError::InvalidRequest(message) => Err(IntegrationError::InvalidRequest(message)),
-        ExchangeError::Http { status: 401, body } => {
-            Err(IntegrationError::Authentication(diagnostic_body(&body)))
-        }
-        ExchangeError::Http { status: 403, body } => {
-            Err(IntegrationError::Authorization(diagnostic_body(&body)))
-        }
-        ExchangeError::Http { status, body }
+        ExchangeError::Http {
+            status: 401, body, ..
+        } => Err(IntegrationError::Authentication(diagnostic_body(&body))),
+        ExchangeError::Http {
+            status: 403, body, ..
+        } => Err(IntegrationError::Authorization(diagnostic_body(&body))),
+        ExchangeError::Http { status, body, .. }
             if status == 200
                 || (400..500).contains(&status) && !matches!(status, 408 | 409 | 425 | 429) =>
         {
@@ -82,6 +88,20 @@ fn provider_rejection(status: u16, body: &str) -> ParticipantRejection {
 #[derive(Clone, Debug)]
 pub struct HttpJsonResponse {
     pub body: Value,
+    pub metadata: HttpResponseMetadata,
+}
+
+/// Sanitized provider response evidence. Only rate-limit and timing headers
+/// are retained; authentication and cookie headers are never copied.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpResponseMetadata {
+    pub retry_after: Option<Duration>,
+    pub rate_limit_headers: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpClientDiagnostics {
+    pub last_rate_limit_headers: BTreeMap<String, String>,
 }
 
 /// Retry semantics are selected by the Integration capability, not inferred
@@ -109,6 +129,7 @@ impl HttpRequestSemantics {
 #[derive(Clone)]
 pub struct HttpClient {
     client: reqwest::Client,
+    diagnostics: Arc<Mutex<HttpClientDiagnostics>>,
 }
 
 impl HttpClient {
@@ -117,8 +138,27 @@ impl HttpClient {
             .user_agent(user_agent)
             .timeout(Duration::from_secs(120))
             .build()
-            .map(|client| Self { client })
+            .map(|client| Self {
+                client,
+                diagnostics: Arc::new(Mutex::new(HttpClientDiagnostics::default())),
+            })
             .map_err(ExchangeError::Transport)
+    }
+
+    pub fn diagnostics(&self) -> HttpClientDiagnostics {
+        self.diagnostics
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    fn observe(&self, metadata: &HttpResponseMetadata) {
+        if metadata.rate_limit_headers.is_empty() {
+            return;
+        }
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            diagnostics.last_rate_limit_headers = metadata.rate_limit_headers.clone();
+        }
     }
 
     pub async fn get_json_response_with_headers_and_query(
@@ -169,6 +209,22 @@ impl HttpClient {
         .await
     }
 
+    pub async fn put_command_json_response_with_headers_and_query(
+        &self,
+        endpoint: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, String)],
+    ) -> Result<HttpJsonResponse, ExchangeError> {
+        self.request_json_response(
+            Method::PUT,
+            endpoint,
+            query,
+            headers,
+            HttpRequestSemantics::Command,
+        )
+        .await
+    }
+
     /// Sends a semantically read-only provider query represented as a JSON
     /// POST body. The caller runtime drives retries and response parsing.
     pub async fn post_query_json_with_headers(
@@ -187,20 +243,42 @@ impl HttpClient {
                 Ok(response) if response.status().is_success() => {
                     return parse_async_response_with_metadata(response)
                         .await
-                        .map(|response| response.body)
+                        .map(|response| {
+                            self.observe(&response.metadata);
+                            response.body
+                        });
                 }
                 Ok(response) => {
                     let status = response.status().as_u16();
+                    let metadata = response_metadata(response.headers());
+                    self.observe(&metadata);
                     let body = response.text().await.unwrap_or_default();
                     if status < 500 && status != 429 {
-                        return Err(ExchangeError::Http { status, body });
+                        return Err(ExchangeError::Http {
+                            status,
+                            body,
+                            metadata,
+                        });
                     }
-                    last_error = Some(ExchangeError::Http { status, body });
+                    last_error = Some(ExchangeError::Http {
+                        status,
+                        body,
+                        metadata: metadata.clone(),
+                    });
+                    if attempt + 1 < HttpRequestSemantics::Query.max_attempts() {
+                        tokio::time::sleep(query_retry_delay(endpoint, attempt, &metadata)).await;
+                        continue;
+                    }
                 }
                 Err(error) => last_error = Some(ExchangeError::Transport(error)),
             }
             if attempt + 1 < HttpRequestSemantics::Query.max_attempts() {
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(query_retry_delay(
+                    endpoint,
+                    attempt,
+                    &HttpResponseMetadata::default(),
+                ))
+                .await;
             }
         }
         Err(last_error.expect("at least one HTTP attempt"))
@@ -221,12 +299,20 @@ impl HttpClient {
         );
         match request.send().await {
             Ok(response) if response.status().is_success() => {
-                parse_async_response_with_metadata(response).await
+                parse_async_response_with_metadata(response)
+                    .await
+                    .inspect(|response| self.observe(&response.metadata))
             }
             Ok(response) => {
                 let status = response.status().as_u16();
+                let metadata = response_metadata(response.headers());
+                self.observe(&metadata);
                 let body = response.text().await.unwrap_or_default();
-                Err(ExchangeError::Http { status, body })
+                Err(ExchangeError::Http {
+                    status,
+                    body,
+                    metadata,
+                })
             }
             Err(error) => Err(ExchangeError::Transport(error)),
         }
@@ -264,20 +350,41 @@ impl HttpClient {
             );
             match request.send().await {
                 Ok(response) if response.status().is_success() => {
-                    return parse_async_response_with_metadata(response).await
+                    return parse_async_response_with_metadata(response)
+                        .await
+                        .inspect(|response| self.observe(&response.metadata));
                 }
                 Ok(response) => {
                     let status = response.status().as_u16();
+                    let metadata = response_metadata(response.headers());
+                    self.observe(&metadata);
                     let body = response.text().await.unwrap_or_default();
                     if status < 500 && status != 429 {
-                        return Err(ExchangeError::Http { status, body });
+                        return Err(ExchangeError::Http {
+                            status,
+                            body,
+                            metadata,
+                        });
                     }
-                    last_error = Some(ExchangeError::Http { status, body });
+                    last_error = Some(ExchangeError::Http {
+                        status,
+                        body,
+                        metadata: metadata.clone(),
+                    });
+                    if attempt + 1 < semantics.max_attempts() {
+                        tokio::time::sleep(query_retry_delay(endpoint, attempt, &metadata)).await;
+                        continue;
+                    }
                 }
                 Err(error) => last_error = Some(ExchangeError::Transport(error)),
             }
             if attempt + 1 < semantics.max_attempts() {
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(query_retry_delay(
+                    endpoint,
+                    attempt,
+                    &HttpResponseMetadata::default(),
+                ))
+                .await;
             }
         }
         Err(last_error.expect("at least one HTTP attempt"))
@@ -287,6 +394,7 @@ impl HttpClient {
 async fn parse_async_response_with_metadata(
     response: reqwest::Response,
 ) -> Result<HttpJsonResponse, ExchangeError> {
+    let metadata = response_metadata(response.headers());
     let body = response.text().await?;
     let body = if body.trim().is_empty() {
         Value::Null
@@ -296,7 +404,48 @@ async fn parse_async_response_with_metadata(
             body: diagnostic_body(&body),
         })?
     };
-    Ok(HttpJsonResponse { body })
+    Ok(HttpJsonResponse { body, metadata })
+}
+
+fn response_metadata(headers: &reqwest::header::HeaderMap) -> HttpResponseMetadata {
+    let mut metadata = HttpResponseMetadata::default();
+    for (name, value) in headers {
+        let name = name.as_str().to_ascii_lowercase();
+        if name == "retry-after" {
+            metadata.retry_after = value
+                .to_str()
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .map(Duration::from_secs);
+        }
+        if is_rate_limit_header(&name) {
+            if let Ok(value) = value.to_str() {
+                metadata.rate_limit_headers.insert(name, value.to_owned());
+            }
+        }
+    }
+    metadata
+}
+
+fn is_rate_limit_header(name: &str) -> bool {
+    name == "retry-after"
+        || name.starts_with("x-ratelimit-")
+        || name.starts_with("x-rate-limit-")
+        || name.starts_with("x-mbx-used-weight")
+        || name.starts_with("x-mbx-order-count")
+}
+
+fn query_retry_delay(endpoint: &str, attempt: usize, metadata: &HttpResponseMetadata) -> Duration {
+    const MAX_DELAY: Duration = Duration::from_secs(10);
+    if let Some(delay) = metadata.retry_after {
+        return delay.min(MAX_DELAY);
+    }
+    let exponential_millis = 250_u64.saturating_mul(1_u64 << attempt.min(5));
+    let endpoint_hash = endpoint.bytes().fold(0_u64, |hash, byte| {
+        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+    });
+    let jitter_millis = endpoint_hash.wrapping_add(attempt as u64 * 17) % 126;
+    Duration::from_millis(exponential_millis + jitter_millis).min(MAX_DELAY)
 }
 
 fn diagnostic_body(body: &str) -> String {
@@ -318,6 +467,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn json_server(statuses: Vec<u16>) -> (String, Arc<AtomicUsize>, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test server binds");
@@ -337,7 +487,7 @@ mod tests {
                 };
                 write!(
                     stream,
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nRetry-After: 0\r\nX-MBX-USED-WEIGHT-1M: 42\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .expect("test response written");
@@ -369,6 +519,21 @@ mod tests {
 
         let error = client
             .post_json_response_with_headers_and_query(&endpoint, &[], &[])
+            .await
+            .expect_err("command returns the first provider error");
+
+        assert!(matches!(error, ExchangeError::Http { status: 500, .. }));
+        server.join().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn put_command_is_never_transparently_retried() {
+        let (endpoint, count, server) = json_server(vec![500]);
+        let client = HttpClient::new("kairos-async-http-put-command-test").unwrap();
+
+        let error = client
+            .put_command_json_response_with_headers_and_query(&endpoint, &[], &[])
             .await
             .expect_err("command returns the first provider error");
 
@@ -428,6 +593,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn async_query_preserves_sanitized_rate_limit_evidence() {
+        let (endpoint, count, server) = json_server(vec![200]);
+        let client = HttpClient::new("kairos-http-rate-evidence-test").unwrap();
+
+        let response = client
+            .get_json_response_with_headers_and_query(&endpoint, &[], &[])
+            .await
+            .unwrap();
+
+        assert_eq!(response.metadata.retry_after, Some(Duration::ZERO));
+        assert_eq!(
+            response
+                .metadata
+                .rate_limit_headers
+                .get("x-mbx-used-weight-1m")
+                .map(String::as_str),
+            Some("42")
+        );
+        assert_eq!(
+            client
+                .diagnostics()
+                .last_rate_limit_headers
+                .get("x-mbx-used-weight-1m")
+                .map(String::as_str),
+            Some("42")
+        );
+        server.join().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn read_only_post_retries_only_when_explicitly_marked_as_query() {
         let (endpoint, count, server) = json_server(vec![429, 200]);
         let client = HttpClient::new("kairos-http-post-query-test").unwrap();
@@ -447,6 +643,7 @@ mod tests {
         let outcome = command_error_outcome::<()>(ExchangeError::Http {
             status: 400,
             body: r#"{"code":-1013,"msg":"invalid quantity"}"#.into(),
+            metadata: Default::default(),
         })
         .unwrap();
 
@@ -462,6 +659,7 @@ mod tests {
         let error = command_error_outcome::<()>(ExchangeError::Http {
             status: 401,
             body: r#"{"code":"invalid-api-key"}"#.into(),
+            metadata: Default::default(),
         })
         .unwrap_err();
 
@@ -473,6 +671,7 @@ mod tests {
         let outcome = command_error_outcome::<()>(ExchangeError::Http {
             status: 500,
             body: r#"{"error":"temporary"}"#.into(),
+            metadata: Default::default(),
         })
         .unwrap();
 

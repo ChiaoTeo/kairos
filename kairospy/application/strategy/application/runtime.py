@@ -9,14 +9,19 @@ from typing import Mapping
 from ..domain.lifecycle import StrategyDataHealth, StrategyLifecycle, StrategyReadiness
 from ..domain.messages import LifecycleRecord
 from ..protocol import Strategy
+from .decisions import StrategyDecisionApplication
+from ..services.decision_journal import StrategyDecisionJournal
 from ..services.journal import StrategyLifecycleJournal
 from kairospy.application.account import AccountApplication
 from kairospy.application.execution import (
     ExecutionApplication,
     ExecutionBacktestResult,
     Fill,
+    FillEvent,
+    IntentUpdateEvent,
 )
 from kairospy.application.market import MarketApplication
+from kairospy.application.notification import NotificationApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
 from ..services.context import StrategyContext
@@ -79,6 +84,9 @@ class StrategyApplication:
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        notifications: NotificationApplication | None = None,
+        decision_journal: StrategyDecisionJournal | None = None,
+        decision_notification_routes: tuple[str, ...] = (),
         journal: StrategyLifecycleJournal,
         state_path=None,
         backtest=None,
@@ -108,6 +116,7 @@ class StrategyApplication:
             account=account,
             risk=risk,
             execution=execution,
+            notifications=notifications,
             launch_id=launch_id,
             instance_id=instance_id,
             params=params,
@@ -136,6 +145,23 @@ class StrategyApplication:
         self._system_sequence = 0
         self._clock = StrategyClock(self._timers.schedule, self._timers.cancel)
         self.context.clock = self._clock
+        self.decisions = StrategyDecisionApplication(
+            strategy_id=strategy.strategy_id,
+            instance_id=instance_id,
+            journal=decision_journal
+            or StrategyDecisionJournal(
+                (
+                    getattr(journal, "path").parent / "strategy-decisions.jsonl"
+                    if getattr(journal, "path", None) is not None
+                    else None
+                )
+            ),
+            notifications=self.context.notifications,
+            clock=self._clock,
+            notification_routes=decision_notification_routes,
+        )
+        self.context.decisions = self.decisions
+        self.context.execution.bind_decisions(self.decisions)
         self._replay_end = replay_end
         self._pending_bar_event: MarketEvent | None = None
         self._last_data_event: MarketEvent | None = None
@@ -149,6 +175,41 @@ class StrategyApplication:
     @property
     def status(self) -> StrategyStatus:
         return self._status
+
+    def decision_trace(self, strategy_decision_id: str) -> dict[str, object] | None:
+        """Aggregate Strategy progress with authoritative Execution and delivery facts."""
+
+        trace = self.decisions.trace(strategy_decision_id)
+        if trace is None:
+            return None
+        execution = trace.get("execution")
+        if isinstance(execution, dict):
+            intents = execution.get("intents")
+            if isinstance(intents, list):
+                for intent in intents:
+                    if not isinstance(intent, dict):
+                        continue
+                    intent_id = intent.get("intent_id")
+                    if not isinstance(intent_id, str):
+                        continue
+                    authoritative = self.context.execution.diagnostic_intent(intent_id)
+                    intent["authoritative_execution"] = authoritative
+        notifications = trace.get("notifications")
+        notification_ids = (
+            tuple(
+                notification_id
+                for record in notifications
+                if isinstance(record, Mapping)
+                and isinstance(notification_id := record.get("notification_id"), str)
+                and notification_id
+            )
+            if isinstance(notifications, list)
+            else ()
+        )
+        trace["notification_deliveries"] = list(
+            self.context.notifications.deliveries(notification_ids)
+        )
+        return trace
 
     def start(self) -> StrategyStatus:
         if self._status.state is not StrategyLifecycle.CREATED:
@@ -289,6 +350,7 @@ class StrategyApplication:
             self._dispatch_timer(timer)
 
     def _dispatch_timer(self, timer: TimerEvent) -> None:
+        self.decisions.observe_timer(timer)
         self._timer_sequence = (
             max(self._timer_sequence, self._status.dispatch_sequence) + 1
         )
@@ -319,6 +381,8 @@ class StrategyApplication:
         if self._status.state is not StrategyLifecycle.RUNNING:
             return
         route = self.ingress.route(event)
+        if isinstance(event, (IntentUpdateEvent, FillEvent)):
+            self.decisions.observe_execution(event)
         domain, hook = route.domain, route.hook
         metadata = getattr(event, "metadata")
         previous_sequence = self._stream_sequences.get(metadata.stream_id, 0)

@@ -120,9 +120,9 @@ impl ReferenceApplication {
 
     pub async fn activate_sources(
         &mut self,
-        system: &mut kairos_conflux::ConfluxSystem,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<()> {
-        self.actor.activate_sources(system).await
+        self.actor.activate_sources(connections).await
     }
 
     pub fn actor_id(&self) -> &str {
@@ -178,10 +178,11 @@ impl ReferenceApplication {
         &mut self,
         underlying: &str,
         enabled: bool,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ReferenceRefreshResult> {
         let result = self
             .actor
-            .set_option_underlying(underlying, enabled)
+            .set_option_underlying(underlying, enabled, connections)
             .await?;
         Ok(ReferenceRefreshResult {
             generation: result.generation,
@@ -193,11 +194,14 @@ impl ReferenceApplication {
     }
 
     #[cfg(not(test))]
-    pub(crate) fn massive_option_connection(
+    pub(crate) fn massive_option_connection_plan(
         &self,
         underlying: &str,
-    ) -> ReferenceResult<kairos_integration::participants::massive::MassiveRestConnection> {
-        self.actor.massive_option_connection(underlying)
+    ) -> ReferenceResult<(
+        kairos_conflux::ConnectionKey,
+        kairos_conflux::MassiveRestConfig,
+    )> {
+        self.actor.massive_option_connection_plan(underlying)
     }
 
     #[cfg(not(test))]
@@ -205,11 +209,12 @@ impl ReferenceApplication {
         &mut self,
         underlying: &str,
         enabled: bool,
-        connection: Option<kairos_integration::participants::massive::MassiveRestConnection>,
+        connection_key: Option<kairos_conflux::ConnectionKey>,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ReferenceRefreshResult> {
         let result = self
             .actor
-            .set_managed_option_underlying(underlying, enabled, connection)
+            .set_managed_option_underlying(underlying, enabled, connection_key, connections)
             .await?;
         Ok(ReferenceRefreshResult {
             generation: result.generation,
@@ -221,23 +226,35 @@ impl ReferenceApplication {
     }
 
     /// Refresh provider data, reconcile lifecycle changes, persist and publish.
+    pub async fn refresh_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ReferenceRefreshResult> {
+        self.refresh_inner(None, connections).await
+    }
+
+    #[cfg(test)]
     pub async fn refresh(&mut self) -> ReferenceResult<ReferenceRefreshResult> {
-        self.refresh_inner(None).await
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.refresh_with_connections(&mut system.connections())
+            .await
     }
 
     /// Advance one configured provider without re-querying unrelated sources.
     /// A completed provider candidate is reconciled through the normal global
     /// refresh path before it becomes visible.
-    pub async fn refresh_source(
+    pub async fn refresh_source_with_connections(
         &mut self,
         source_id: &str,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ReferenceRefreshResult> {
-        self.refresh_inner(Some(source_id)).await
+        self.refresh_inner(Some(source_id), connections).await
     }
 
     async fn refresh_inner(
         &mut self,
         source_id: Option<&str>,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ReferenceRefreshResult> {
         let started = std::time::Instant::now();
         let requested_source = source_id.unwrap_or_else(|| self.source_id());
@@ -248,8 +265,12 @@ impl ReferenceApplication {
             "reference refresh started"
         );
         let result = match source_id {
-            Some(source_id) => self.actor.refresh_source(source_id).await,
-            None => self.actor.refresh().await,
+            Some(source_id) => {
+                self.actor
+                    .refresh_source_with_connections(source_id, connections)
+                    .await
+            }
+            None => self.actor.refresh_with_connections(connections).await,
         };
         let result = match result {
             Ok(result) => result,

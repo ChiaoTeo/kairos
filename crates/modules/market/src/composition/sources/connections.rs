@@ -1,26 +1,9 @@
 use std::path::Path;
 
-use kairos_conflux::ConfluxSystem;
-use kairos_integration::composition::credentials::load_workspace_credential;
-use kairos_integration::participants::binance::{
-    advanced::stocks::BinanceStocksRestConnection,
-    coinm::{BinanceCoinMRestConnection, BinanceCoinMWebSocketConnection},
-    options::{BinanceOptionsRestConnection, BinanceOptionsWebSocketConnection},
-    spot::{BinanceSpotRestConnection, BinanceSpotWebSocketConnection},
-    usdm::{BinanceUsdMRestConnection, BinanceUsdMWebSocketConnection},
-    BinanceCredential, BinanceRestConfig, BinanceWebSocketConfig,
-};
-use kairos_integration::participants::hyperliquid::{
-    info::HyperliquidInfoRestConnection, HyperliquidRestConfig, HyperliquidWebSocketConfig,
-    HyperliquidWebSocketConnection,
-};
-use kairos_integration::participants::ibkr::{IbkrMarketDataConfig, IbkrMarketDataConnection};
-use kairos_integration::participants::massive::{
-    MassiveOptionsWebSocketConnection, MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
-};
-use kairos_integration::participants::okx::{
-    public::{OkxPublicRestConnection, OkxPublicWebSocketConnection},
-    OkxRestConfig, OkxWebSocketConfig,
+use kairos_conflux::{
+    load_workspace_credential, BinanceCredential, BinanceRestConfig, BinanceWebSocketConfig,
+    ConfluxSystem, ConnectionKey, HyperliquidRestConfig, HyperliquidWebSocketConfig,
+    IbkrMarketDataConfig, MassiveWebSocketConfig, OkxRestConfig, OkxWebSocketConfig,
 };
 
 use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
@@ -81,18 +64,19 @@ fn install_one(
             let descriptor = descriptor(source_id, "binance", "spot", "crypto", stream_kinds())?;
             match transport {
                 BinanceSpotTransport::Rest => {
-                    let connection = BinanceSpotRestConnection::new(BinanceRestConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("binance-spot-rest").into()),
-                        credential: None,
-                    })
-                    .map_err(|error| error.to_string())?;
                     system
-                        .binance_spot_rest_connections
-                        .ensure_with(key, 1, || connection)
+                        .connections()
+                        .binance_spot_rest
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            BinanceRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone().unwrap_or_else(|| {
+                                    default_endpoint("binance-spot-rest").into()
+                                }),
+                                credential: None,
+                            },
+                        )
                         .map_err(|error| error.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor: descriptor
@@ -104,19 +88,20 @@ fn install_one(
                     });
                 }
                 BinanceSpotTransport::Websocket => {
-                    let connection = BinanceSpotWebSocketConnection::new(BinanceWebSocketConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("binance-spot-websocket").into()),
-                        credential: None,
-                        event_capacity: 4_096,
-                    })
-                    .map_err(|error| error.to_string())?;
                     system
-                        .binance_spot_websocket_connections
-                        .ensure_with(key, 1, || connection)
+                        .connections()
+                        .binance_spot_websocket
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            BinanceWebSocketConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone().unwrap_or_else(|| {
+                                    default_endpoint("binance-spot-websocket").into()
+                                }),
+                                credential: None,
+                                event_capacity: 4_096,
+                            },
+                        )
                         .map_err(|error| error.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor,
@@ -136,22 +121,23 @@ fn install_one(
                     .ok_or_else(|| {
                         format!("Market source {source_id} requires a Binance credential")
                     })?;
-            let connection = BinanceStocksRestConnection::new(BinanceRestConfig {
-                binding_id: key.clone(),
-                environment: "public".into(),
-                endpoint: endpoint
-                    .clone()
-                    .unwrap_or_else(|| default_endpoint("binance-equity").into()),
-                credential: Some(BinanceCredential {
-                    principal_id: credential_id.clone(),
-                    api_key: secrecy::SecretString::from(credential.api_key),
-                    secret: credential.secret,
-                }),
-            })
-            .map_err(|error| error.to_string())?;
             system
-                .binance_stocks_rest_connections
-                .ensure_with(key, 1, || connection)
+                .connections()
+                .binance_stocks_rest
+                .create(
+                    ConnectionKey::new(key.clone())?,
+                    BinanceRestConfig {
+                        environment: "public".into(),
+                        endpoint: endpoint
+                            .clone()
+                            .unwrap_or_else(|| default_endpoint("binance-equity").into()),
+                        credential: Some(BinanceCredential {
+                            principal_id: credential_id.clone(),
+                            api_key: secrecy::SecretString::from(credential.api_key),
+                            secret: credential.secret,
+                        }),
+                    },
+                )
                 .map_err(|error| error.to_string())?;
             plans.push(MarketSourcePlan {
                 descriptor: descriptor(
@@ -196,7 +182,6 @@ fn install_one(
             match transport {
                 BinanceDerivativeTransport::Rest => {
                     let config = BinanceRestConfig {
-                        binding_id: key.clone(),
                         environment: "public".into(),
                         endpoint: endpoint
                             .clone()
@@ -204,27 +189,18 @@ fn install_one(
                         credential: None,
                     };
                     match product {
-                        BinanceDerivativeProduct::UsdMFutures => {
-                            let value = BinanceUsdMRestConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_usdm_rest_connections
-                                .ensure_with(key, 1, || value)
-                        }
-                        BinanceDerivativeProduct::CoinMFutures => {
-                            let value = BinanceCoinMRestConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_coinm_rest_connections
-                                .ensure_with(key, 1, || value)
-                        }
-                        BinanceDerivativeProduct::Options => {
-                            let value = BinanceOptionsRestConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_options_rest_connections
-                                .ensure_with(key, 1, || value)
-                        }
+                        BinanceDerivativeProduct::UsdMFutures => system
+                            .connections()
+                            .binance_usdm_rest
+                            .create(ConnectionKey::new(key.clone())?, config),
+                        BinanceDerivativeProduct::CoinMFutures => system
+                            .connections()
+                            .binance_coinm_rest
+                            .create(ConnectionKey::new(key.clone())?, config),
+                        BinanceDerivativeProduct::Options => system
+                            .connections()
+                            .binance_options_rest
+                            .create(ConnectionKey::new(key.clone())?, config),
                     }
                     .map_err(|error| error.to_string())?;
                     let kinds = if matches!(product, BinanceDerivativeProduct::Options) {
@@ -242,7 +218,6 @@ fn install_one(
                 }
                 BinanceDerivativeTransport::Websocket => {
                     let config = BinanceWebSocketConfig {
-                        binding_id: key.clone(),
                         environment: "public".into(),
                         endpoint: endpoint
                             .clone()
@@ -251,27 +226,18 @@ fn install_one(
                         event_capacity: 4_096,
                     };
                     match product {
-                        BinanceDerivativeProduct::UsdMFutures => {
-                            let value = BinanceUsdMWebSocketConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_usdm_websocket_connections
-                                .ensure_with(key, 1, || value)
-                        }
-                        BinanceDerivativeProduct::CoinMFutures => {
-                            let value = BinanceCoinMWebSocketConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_coinm_websocket_connections
-                                .ensure_with(key, 1, || value)
-                        }
-                        BinanceDerivativeProduct::Options => {
-                            let value = BinanceOptionsWebSocketConnection::new(config)
-                                .map_err(|e| e.to_string())?;
-                            system
-                                .binance_options_websocket_connections
-                                .ensure_with(key, 1, || value)
-                        }
+                        BinanceDerivativeProduct::UsdMFutures => system
+                            .connections()
+                            .binance_usdm_websocket
+                            .create(ConnectionKey::new(key.clone())?, config),
+                        BinanceDerivativeProduct::CoinMFutures => system
+                            .connections()
+                            .binance_coinm_websocket
+                            .create(ConnectionKey::new(key.clone())?, config),
+                        BinanceDerivativeProduct::Options => system
+                            .connections()
+                            .binance_options_websocket
+                            .create(ConnectionKey::new(key.clone())?, config),
                     }
                     .map_err(|error| error.to_string())?;
                     plans.push(MarketSourcePlan {
@@ -296,17 +262,18 @@ fn install_one(
             };
             match transport {
                 PublicMarketTransport::Rest => {
-                    let value = OkxPublicRestConnection::new(OkxRestConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("okx-spot-rest").into()),
-                    })
-                    .map_err(|e| e.to_string())?;
                     system
-                        .okx_public_rest_connections
-                        .ensure_with(key, 1, || value)
+                        .connections()
+                        .okx_public_rest
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            OkxRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint
+                                    .clone()
+                                    .unwrap_or_else(|| default_endpoint("okx-spot-rest").into()),
+                            },
+                        )
                         .map_err(|e| e.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor: descriptor(
@@ -323,18 +290,19 @@ fn install_one(
                     });
                 }
                 PublicMarketTransport::Websocket => {
-                    let value = OkxPublicWebSocketConnection::new(OkxWebSocketConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("okx-public-websocket").into()),
-                        event_capacity: 4_096,
-                    })
-                    .map_err(|e| e.to_string())?;
                     system
-                        .okx_public_websocket_connections
-                        .ensure_with(key, 1, || value)
+                        .connections()
+                        .okx_public_websocket
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            OkxWebSocketConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone().unwrap_or_else(|| {
+                                    default_endpoint("okx-public-websocket").into()
+                                }),
+                                event_capacity: 4_096,
+                            },
+                        )
                         .map_err(|e| e.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor: descriptor(
@@ -362,17 +330,18 @@ fn install_one(
             };
             match transport {
                 PublicMarketTransport::Rest => {
-                    let value = HyperliquidInfoRestConnection::new(HyperliquidRestConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("hyperliquid-info").into()),
-                    })
-                    .map_err(|e| e.to_string())?;
                     system
-                        .hyperliquid_info_rest_connections
-                        .ensure_with(key, 1, || value)
+                        .connections()
+                        .hyperliquid_info_rest
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            HyperliquidRestConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint
+                                    .clone()
+                                    .unwrap_or_else(|| default_endpoint("hyperliquid-info").into()),
+                            },
+                        )
                         .map_err(|e| e.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor: descriptor(
@@ -389,19 +358,20 @@ fn install_one(
                     });
                 }
                 PublicMarketTransport::Websocket => {
-                    let value = HyperliquidWebSocketConnection::new(HyperliquidWebSocketConfig {
-                        binding_id: key.clone(),
-                        environment: "public".into(),
-                        endpoint: endpoint
-                            .clone()
-                            .unwrap_or_else(|| default_endpoint("hyperliquid-websocket").into()),
-                        event_capacity: 4_096,
-                        user: None,
-                    })
-                    .map_err(|e| e.to_string())?;
                     system
-                        .hyperliquid_websocket_connections
-                        .ensure_with(key, 1, || value)
+                        .connections()
+                        .hyperliquid_websocket
+                        .create(
+                            ConnectionKey::new(key.clone())?,
+                            HyperliquidWebSocketConfig {
+                                environment: "public".into(),
+                                endpoint: endpoint.clone().unwrap_or_else(|| {
+                                    default_endpoint("hyperliquid-websocket").into()
+                                }),
+                                event_capacity: 4_096,
+                                user: None,
+                            },
+                        )
                         .map_err(|e| e.to_string())?;
                     plans.push(MarketSourcePlan {
                         descriptor: descriptor(
@@ -432,7 +402,6 @@ fn install_one(
                 MassiveMarketProduct::Options => ("options", "massive-options-websocket"),
             };
             let config = MassiveWebSocketConfig {
-                binding_id: key.clone(),
                 environment: "public".into(),
                 endpoint: endpoint
                     .clone()
@@ -440,21 +409,16 @@ fn install_one(
                 api_key: secrecy::SecretString::new(credential.api_key.into()),
                 event_capacity: 4_096,
             };
+            let connection_key = ConnectionKey::new(key.clone())?;
             match product {
-                MassiveMarketProduct::Equity => {
-                    let value =
-                        MassiveStocksWebSocketConnection::new(config).map_err(|e| e.to_string())?;
-                    system
-                        .massive_stocks_websocket_connections
-                        .ensure_with(key, 1, || value)
-                }
-                MassiveMarketProduct::Options => {
-                    let value = MassiveOptionsWebSocketConnection::new(config)
-                        .map_err(|e| e.to_string())?;
-                    system
-                        .massive_options_websocket_connections
-                        .ensure_with(key, 1, || value)
-                }
+                MassiveMarketProduct::Equity => system
+                    .connections()
+                    .massive_stocks_websocket
+                    .create(connection_key, config),
+                MassiveMarketProduct::Options => system
+                    .connections()
+                    .massive_options_websocket
+                    .create(connection_key, config),
             }
             .map_err(|error| error.to_string())?;
             let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
@@ -484,19 +448,20 @@ fn install_one(
             snapshot_interval_ms,
             ..
         } => {
-            let value = IbkrMarketDataConnection::new(IbkrMarketDataConfig {
-                binding_id: key.clone(),
-                environment: "tws".into(),
-                host: host.clone(),
-                port: *port,
-                client_id: *client_id,
-                exchange: exchange.clone(),
-                currency: currency.clone(),
-            })
-            .map_err(|error| error.to_string())?;
             system
-                .ibkr_market_data_connections
-                .ensure_with(key, 1, || value)
+                .connections()
+                .ibkr_market_data
+                .create(
+                    ConnectionKey::new(key.clone())?,
+                    IbkrMarketDataConfig {
+                        environment: "tws".into(),
+                        host: host.clone(),
+                        port: *port,
+                        client_id: *client_id,
+                        exchange: exchange.clone(),
+                        currency: currency.clone(),
+                    },
+                )
                 .map_err(|error| error.to_string())?;
             let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
             descriptor.market_type = Some(

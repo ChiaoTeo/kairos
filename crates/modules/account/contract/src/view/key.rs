@@ -46,7 +46,7 @@ impl AccountViewKey {
             self.kind.as_str()
         )
     }
-    pub fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
+    pub(crate) fn resource_path(&self, root: impl AsRef<Path>) -> PathBuf {
         root.as_ref()
             .join("account")
             .join("views")

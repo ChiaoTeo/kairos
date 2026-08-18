@@ -144,14 +144,19 @@ pub struct RiskAeronEventPublisher {
 
 impl RiskAeronEventPublisher {
     pub fn connect(
-        aeron_dir: Option<&str>,
-        channel: &str,
-        stream_id: i32,
+        endpoint: &kairos_transport::AeronEndpoint,
         actor_id: impl Into<String>,
         identity: kairos_protocol::InstanceIdentity,
     ) -> crate::ContractResult<Self> {
+        if endpoint.stream_id() != kairos_transport::stream_ids::RISK_EVENTS {
+            return Err(crate::ContractError::Invalid(format!(
+                "Risk events require stream id {}, received {}",
+                kairos_transport::stream_ids::RISK_EVENTS,
+                endpoint.stream_id()
+            )));
+        }
         Ok(Self {
-            publisher: kairos_transport::AeronBytePublisher::connect(aeron_dir, channel, stream_id)
+            publisher: kairos_transport::AeronBytePublisher::connect_endpoint(endpoint)
                 .map_err(|error| crate::ContractError::Transport(error.to_string()))?,
             encoder: FlatbuffersRiskEventWriter::new_with_identity(actor_id, identity),
         })

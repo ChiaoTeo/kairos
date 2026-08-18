@@ -14,7 +14,14 @@ use crate::{ContractError, ContractResult};
 use kairos_transport::{
     ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub fn execution_view_path(
+    root: impl AsRef<Path>,
+    key: &ExecutionViewKey,
+) -> ContractResult<PathBuf> {
+    Ok(key.resource_path(root))
+}
 
 pub struct ViewFrame {
     metadata: SnapshotEnvelopeMetadata,
@@ -49,8 +56,15 @@ pub struct ExecutionViewReader {
     reader: SharedSnapshotReader,
 }
 impl ExecutionViewReader {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &ExecutionViewKey,
+    ) -> ContractResult<PathBuf> {
+        execution_view_path(root, key)
+    }
+
     pub fn open(root: impl AsRef<Path>, key: ExecutionViewKey) -> ContractResult<Self> {
-        let reader = SharedSnapshotReader::open(key.resource_path(root))
+        let reader = SharedSnapshotReader::open(execution_view_path(root, &key)?)
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         Ok(Self { key, reader })
     }
@@ -80,6 +94,13 @@ pub struct ExecutionViewPublisher {
     writer: ReplacementSnapshotStorage,
 }
 impl ExecutionViewPublisher {
+    pub fn resolved_path(
+        root: impl AsRef<Path>,
+        key: &ExecutionViewKey,
+    ) -> ContractResult<PathBuf> {
+        execution_view_path(root, key)
+    }
+
     pub fn create(
         root: impl AsRef<Path>,
         key: ExecutionViewKey,
@@ -87,7 +108,10 @@ impl ExecutionViewPublisher {
     ) -> ContractResult<Self> {
         Ok(Self {
             key: key.clone(),
-            writer: ReplacementSnapshotStorage::create(key.resource_path(root), slot_size)
+            writer: ReplacementSnapshotStorage::create(
+                execution_view_path(root, &key)?,
+                slot_size,
+            )
                 .map_err(|error| ContractError::Transport(error.to_string()))?,
         })
     }

@@ -3,6 +3,14 @@
 //! These tests intentionally exercise private application wiring. Keeping them in
 //! the crate avoids turning test doubles into a public Application API.
 
+use kairos_conflux::{
+    BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
+    ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError,
+};
+use kairos_conflux::{
+    OrderEntryEvent, OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef,
+    ParticipantKind, ParticipantRef,
+};
 use kairos_execution::application::RiskCommandFailure;
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
@@ -20,14 +28,6 @@ use kairos_execution::{
     OrderSide, OrderType, UnknownRemoteOrderResolution,
 };
 use kairos_execution::{MarketObservation, Quote};
-use kairos_integration::blocking::{OrderCommand, OrderQuery};
-use kairos_integration::{
-    CommandOutcome, ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError,
-};
-use kairos_integration::{
-    OrderEntryEvent, OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef,
-    ParticipantKind, ParticipantRef,
-};
 use kairos_primitives::{
     AccountId, ClientOrderId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId,
     MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
@@ -95,6 +95,7 @@ fn strategy_intent(
 ) -> ExecuteStrategyIntent {
     ExecuteStrategyIntent {
         intent_id: IntentId::new(intent_id).unwrap(),
+        strategy_decision_id: Some(format!("decision:{intent_id}")),
         strategy_id: "strategy".into(),
         launch_id: "launch".into(),
         instance_id: "instance".into(),
@@ -532,9 +533,9 @@ impl OrderQuery for RecoveryOrderQuery {
     }
 }
 
-fn decimal(value: &str) -> kairos_integration::DecimalValue {
+fn decimal(value: &str) -> kairos_conflux::DecimalValue {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    kairos_integration::DecimalValue {
+    kairos_conflux::DecimalValue {
         mantissa: format!("{whole}{fraction}").parse().unwrap(),
         scale: fraction.len() as u8,
     }
@@ -643,12 +644,12 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("execution.json");
     let remote = ExternalOrder {
-        binding_id: "execution.fixture.query".into(),
+        connection_key: kairos_conflux::ConnectionKey::new("execution.fixture.query").unwrap(),
         order_id: OrderId::new("exchange-unknown-1").unwrap(),
         client_order_id: None,
         symbol: Symbol::new("BTCUSDT").unwrap(),
-        side: kairos_integration::OrderSide::Buy,
-        order_type: kairos_integration::OrderType::Limit,
+        side: kairos_conflux::OrderSide::Buy,
+        order_type: kairos_conflux::OrderType::Limit,
         status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
@@ -677,12 +678,12 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("execution.json");
     let remote = ExternalOrder {
-        binding_id: "execution.fixture.query".into(),
+        connection_key: kairos_conflux::ConnectionKey::new("execution.fixture.query").unwrap(),
         order_id: OrderId::new("exchange-recovered-fill").unwrap(),
         client_order_id: Some(ClientOrderId::new("local-recovered-fill").unwrap()),
         symbol: Symbol::new("BTCUSDT").unwrap(),
-        side: kairos_integration::OrderSide::Buy,
-        order_type: kairos_integration::OrderType::Limit,
+        side: kairos_conflux::OrderSide::Buy,
+        order_type: kairos_conflux::OrderType::Limit,
         status: kairos_primitives::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
@@ -1478,6 +1479,15 @@ fn strategy_intent_is_execution_owned_and_restored_with_events() {
     }));
     assert_eq!(first.intents().len(), 1);
     assert_eq!(first.intent_events(None).len(), 3);
+    assert_eq!(
+        first.intents()[0].intent.strategy_decision_id.as_deref(),
+        Some("decision:strategy:intent:1")
+    );
+    assert_eq!(first.intent_events(None)[0].previous_status, None);
+    assert!(first
+        .intent_events(None)
+        .iter()
+        .all(|event| event.strategy_decision_id.as_deref() == Some("decision:strategy:intent:1")));
 
     let second = application(&path);
     assert_eq!(
@@ -1489,6 +1499,47 @@ fn strategy_intent_is_execution_owned_and_restored_with_events() {
     );
     assert_eq!(second.intents()[0].plan.as_ref().unwrap().legs.len(), 2);
     assert_eq!(second.intent_events(Some("strategy:intent:1")).len(), 3);
+}
+
+#[test]
+fn rejected_strategy_intent_is_durable_and_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    let mut intent = strategy_intent("intent:rejected", 1, None);
+    intent.min_edge_bps = Some(1_000_001);
+
+    let first = app
+        .submit_intent_with_idempotency(intent.clone(), "rejected-command".into())
+        .unwrap_err();
+    assert!(first.to_string().contains("out of range"));
+    let state = app
+        .intent("intent:rejected")
+        .expect("rejected state is durable");
+    assert_eq!(state.status, kairos_execution::IntentStatus::Rejected);
+    assert_eq!(
+        state.intent.strategy_decision_id.as_deref(),
+        Some("decision:intent:rejected")
+    );
+    let events = app.intent_events(Some("intent:rejected"));
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].previous_status, None);
+    assert_eq!(events[0].status, kairos_execution::IntentStatus::Rejected);
+
+    let replay = app
+        .submit_intent_with_idempotency(intent, "rejected-command".into())
+        .unwrap_err();
+    assert_eq!(replay.to_string(), first.to_string());
+    assert_eq!(app.intent_events(Some("intent:rejected")).len(), 1);
+
+    let restored = application(&path);
+    assert_eq!(
+        restored
+            .intent("intent:rejected")
+            .expect("rejected state restores")
+            .status,
+        kairos_execution::IntentStatus::Rejected
+    );
 }
 
 #[test]

@@ -68,9 +68,9 @@ impl MarketActor {
     }
 
     pub(crate) fn source_command_closed(&self, source_id: &SourceId) -> bool {
-        self.attached_sources
-            .get(source_id)
-            .is_some_and(|source| source.commands.is_closed())
+        self.attached_sources.get(source_id).is_some_and(|source| {
+            (source.inputs.is_some() || source.task.is_some()) && source.commands.is_closed()
+        })
     }
 
     pub(crate) fn apply_source_status(

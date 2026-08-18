@@ -20,7 +20,11 @@ pub use control::{
 };
 pub use encode::{event_metadata, EncodeContext, ReferenceEncoder};
 pub use error::{ContractError, ContractResult};
-pub use event::{decode_event, ReferenceEvent, ReferenceEventFrame, ReferenceEventStream};
+pub use event::{
+    decode_event, ReferenceEvent, ReferenceEventFrame, ReferenceEventPublisher,
+    ReferenceEventStream,
+};
+pub use kairos_transport::AeronEndpoint;
 pub use transport::{
     Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
     ReferenceProjectionSnapshot,
@@ -38,17 +42,13 @@ use std::path::PathBuf;
 pub struct ReferenceClient {
     database: PathBuf,
     actor_id: String,
-    aeron_dir: Option<String>,
-    aeron_channel: String,
-    event_stream_id: i32,
+    events: AeronEndpoint,
 }
 
 pub struct ReferenceEndpoint {
     pub database: PathBuf,
     pub actor_id: String,
-    pub aeron_dir: Option<String>,
-    pub aeron_channel: String,
-    pub event_stream_id: i32,
+    pub events: AeronEndpoint,
 }
 
 impl ReferenceClient {
@@ -56,19 +56,12 @@ impl ReferenceClient {
         Self {
             database: endpoint.database,
             actor_id: endpoint.actor_id,
-            aeron_dir: endpoint.aeron_dir,
-            aeron_channel: endpoint.aeron_channel,
-            event_stream_id: endpoint.event_stream_id,
+            events: endpoint.events,
         }
     }
 
     pub fn events(&self, capacity: usize) -> ContractResult<ReferenceEventStream> {
-        ReferenceEventStream::connect(
-            self.aeron_dir.as_deref(),
-            &self.aeron_channel,
-            self.event_stream_id,
-            capacity,
-        )
+        ReferenceEventStream::connect(&self.events, capacity)
     }
 
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {

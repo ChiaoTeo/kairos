@@ -176,6 +176,17 @@ impl ExecutionActor {
             .intents
             .get_mut(event.intent_id.as_str())
             .ok_or_else(|| "intent event references unknown intent".to_string())?;
+        if event.strategy_decision_id.is_none() {
+            event.strategy_decision_id = state.intent.strategy_decision_id.clone();
+        } else if event.strategy_decision_id != state.intent.strategy_decision_id {
+            return Err("intent event strategy decision identity changed".to_string());
+        }
+        event.previous_status = self
+            .intent_events
+            .iter()
+            .rev()
+            .find(|existing| existing.intent_id == event.intent_id)
+            .map(|_| state.status);
         state.status = event.status;
         state.order_ids.extend(event.order_ids.iter().cloned());
         state.order_ids.sort();

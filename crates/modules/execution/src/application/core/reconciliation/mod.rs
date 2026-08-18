@@ -80,6 +80,20 @@ impl ExecutionApplication {
         }
         let mut remote = self.remote_open_orders(query.clone())?;
         remote.extend(self.remote_history(query)?);
+        self.reconcile_remote_order_facts(remote)
+    }
+
+    pub(crate) fn reconcile_external_orders(
+        &mut self,
+        remote: Vec<kairos_conflux::ExternalOrder>,
+    ) -> Result<usize, ExecutionError> {
+        self.reconcile_remote_order_facts(remote.into_iter().map(remote_order).collect())
+    }
+
+    fn reconcile_remote_order_facts(
+        &mut self,
+        mut remote: Vec<RemoteOrder>,
+    ) -> Result<usize, ExecutionError> {
         remote.sort_by(|left, right| left.order_id.cmp(&right.order_id));
         remote.dedup_by(|left, right| left.order_id == right.order_id);
 
@@ -263,12 +277,9 @@ impl ExecutionApplication {
         Ok(changed)
     }
 
+    #[cfg(test)]
     pub(crate) fn install_order_entry(&mut self, connection: Box<dyn BlockingOrderCommand>) {
         self.order_entry = Some(connection);
-    }
-
-    pub(crate) fn install_order_query(&mut self, connection: Box<dyn BlockingOrderQuery>) {
-        self.order_query = Some(connection);
     }
 
     pub fn has_order_query(&self) -> bool {
@@ -281,6 +292,21 @@ impl ExecutionApplication {
     pub fn apply_remote_execution_event(
         &mut self,
         event: RemoteOrderUpdate,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        self.apply_remote_execution_event_with_compensation(event, true)
+    }
+
+    pub(crate) fn apply_remote_execution_event_deferred(
+        &mut self,
+        event: RemoteOrderUpdate,
+    ) -> Result<ExecutionOrder, ExecutionError> {
+        self.apply_remote_execution_event_with_compensation(event, false)
+    }
+
+    fn apply_remote_execution_event_with_compensation(
+        &mut self,
+        event: RemoteOrderUpdate,
+        compensate: bool,
     ) -> Result<ExecutionOrder, ExecutionError> {
         info!(event = "remote_execution_event_received", component = "execution", remote_order_id = %event.order_id, status = ?event.status, "remote execution event received");
         self.actor
@@ -316,7 +342,7 @@ impl ExecutionApplication {
                 ))
                 .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
             );
-            let fill = self.record_fill(ExecutionFillReport {
+            let report = ExecutionFillReport {
                 fill_id,
                 order_id: local.order_id.clone(),
                 quantity: Quantity::new(quantity.0, quantity.1)
@@ -343,7 +369,12 @@ impl ExecutionApplication {
                     RemoteOrderId::new(event.order_id.to_string())
                         .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
                 ),
-            })?;
+            };
+            let fill = if compensate {
+                self.record_fill(report)?
+            } else {
+                self.record_fill_deferred(report)?
+            };
             return Ok(fill);
         }
         let occurred_at = event.occurred_at_unix_nanos.get();

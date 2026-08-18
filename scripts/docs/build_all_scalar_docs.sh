@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-output_dir="${repo_root}/docs/generated/api"
-openapi_bundler_version="${OPENAPI_BUNDLER_VERSION:-latest}"
+output_dir="${repo_root}/target/docs/api"
+openapi_bundler_version="${OPENAPI_BUNDLER_VERSION:-2.46.1}"
 check_only=0
 
 if [[ "${1:-}" == "--check" ]]; then

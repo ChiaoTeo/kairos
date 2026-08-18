@@ -5,18 +5,18 @@ use super::*;
 pub struct OkxSource {
     id: String,
     product: OkxProduct,
-    connection: OkxPublicRestConnection,
+    connection: ConnectionRef<OkxPublicRestConnection>,
 }
 impl OkxSource {
-    pub(crate) fn from_connection(
+    pub(crate) fn from_key(
         id: impl Into<String>,
         product: OkxProduct,
-        connection: OkxPublicRestConnection,
+        key: kairos_conflux::ConnectionKey,
     ) -> Self {
         Self {
             id: id.into(),
             product,
-            connection,
+            connection: ConnectionRef::managed(key),
         }
     }
 
@@ -27,27 +27,39 @@ impl OkxSource {
         endpoint: impl Into<String>,
     ) -> ReferenceResult<Self> {
         let id = id.into();
-        let connection = OkxPublicRestConnection::new(OkxRestConfig {
-            binding_id: format!("reference-{id}"),
-            environment: "public".into(),
-            endpoint: endpoint.into(),
-        })
+        let connection = OkxPublicRestConnection::new(
+            kairos_conflux::ConnectionKey::new(format!("reference-{id}"))
+                .map_err(ReferenceError::Provider)?,
+            OkxRestConfig {
+                environment: "public".into(),
+                endpoint: endpoint.into(),
+            },
+        )
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         Ok(Self {
             id,
             product,
-            connection,
+            connection: ConnectionRef::Owned(connection),
         })
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for OkxSource {
     fn source_id(&self) -> &str {
         &self.id
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut system = kairos_conflux::ConfluxSystem::new();
+        self.fetch_catalog_with_connections(&mut system.connections())
+            .await
+    }
+
+    async fn fetch_catalog_with_connections(
+        &mut self,
+        connections: &mut kairos_conflux::ConnectionCollections<'_>,
+    ) -> ReferenceResult<ProviderCatalog> {
         let instrument_type = match self.product {
             OkxProduct::Spot => "SPOT",
             OkxProduct::Margin => "MARGIN",
@@ -55,11 +67,21 @@ impl ReferenceSource for OkxSource {
             OkxProduct::Futures => "FUTURES",
             OkxProduct::Option => "OPTION",
         };
-        let facts = self
-            .connection
-            .fetch_instruments_by_type(instrument_type)
-            .await
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+        let facts = match &mut self.connection {
+            ConnectionRef::Managed(key, _) => {
+                connections
+                    .okx_public_rest
+                    .get(key)
+                    .map_err(|error| ReferenceError::Provider(error.to_string()))?
+                    .fetch_instruments_by_type(instrument_type)
+                    .await
+            }
+            #[cfg(test)]
+            ConnectionRef::Owned(connection) => {
+                connection.fetch_instruments_by_type(instrument_type).await
+            }
+        }
+        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         okx_provider_catalog(facts)
     }
 }

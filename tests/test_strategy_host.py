@@ -144,8 +144,18 @@ class UserStrategy(Strategy):
         if not isinstance(event, BarEvent):
             return
         self.events.append(event.metadata.sequence)
+        decision = context.decisions.record(
+            strategy_decision_id=(
+                f"{self.strategy_id}:decision:market:{event.metadata.sequence}"
+            ),
+            reason="bar-driven target update",
+            expected_outcome="move the account toward the target position",
+        )
         context.execution.target_position(
-            event.data.instrument, Decimal("1"), account="main"
+            event.data.instrument,
+            Decimal("1"),
+            account="main",
+            strategy_decision_id=decision.strategy_decision_id,
         )
 
 
@@ -736,8 +746,16 @@ def test_execution_application_uses_strategy_scoped_command_surface(
 ) -> None:
     host, _, bus, _ = _host(tmp_path)
 
+    decision = host.context.decisions.record(
+        strategy_decision_id="user-sma:decision:test",
+        reason="test target update",
+        expected_outcome="reach the requested target",
+    )
     receipt = host.context.execution.target_position(
-        _MARKET.instrument, Decimal("2"), account="main"
+        _MARKET.instrument,
+        Decimal("2"),
+        account="main",
+        strategy_decision_id=decision.strategy_decision_id,
     )
 
     assert receipt.request_id == bus.requests[-1].request_id
@@ -798,7 +816,9 @@ def test_non_market_event_gap_also_fails_strategy_lifecycle(
     bus.resolve(bus.requests[0].request_id)
     host.refresh()
     host.enable()
-    sources = {domain: EmptySource() for domain in ("market", "account", "risk", "execution")}
+    sources = {
+        domain: EmptySource() for domain in ("market", "account", "risk", "execution")
+    }
     sources[failed_domain] = GapSource()
     host.ingress = StrategyEventIngress(**sources)  # type: ignore[arg-type]
 
@@ -930,6 +950,12 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             host.start()
             bus.resolve(bus.requests[0].request_id)
             host.refresh()
+            decision = host.decisions.record(
+                strategy_decision_id="user-sma:decision:diagnostic",
+                reason="diagnostic test",
+                expected_outcome="trace is queryable",
+                expected_intent_count=0,
+            )
             status = await UnixRestClient(socket).request("GET", "/v1/health")
             assert status["launch_id"] == "btc-paper"
             assert status["status"] == "ready"
@@ -937,6 +963,13 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             assert status["data_health"] == "not_started"
             assert status["subscription_count"] == 1
             assert status["subscriptions"][0]["status"] == "ready"
+            assert status["decisions"]["decision_count"] == 1
+            trace = await UnixRestClient(socket).request(
+                "GET", f"/v1/decisions/{decision.strategy_decision_id}"
+            )
+            assert trace["reason"] == "diagnostic test"
+            assert trace["lifecycle"] == "not_submitted"
+            assert trace["notification_deliveries"] == []
             enabled = await UnixRestClient(socket).request("POST", "/v1/enable")
             assert enabled["status"] == "running"
             stopped = await UnixRestClient(socket).request("POST", "/v1/stop")
@@ -945,6 +978,44 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             await server.close()
 
     asyncio.run(scenario())
+
+
+def test_decision_trace_joins_authoritative_execution_and_delivery_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host, _, _, _ = _host(tmp_path)
+    monkeypatch.setattr(
+        host.decisions,
+        "trace",
+        lambda _decision_id: {
+            "strategy_decision_id": "decision-1",
+            "execution": {"intents": [{"intent_id": "intent-1"}]},
+            "notifications": [{"notification_id": "notification-1"}],
+        },
+    )
+    monkeypatch.setattr(
+        host.context.execution,
+        "diagnostic_intent",
+        lambda _intent_id: {
+            "plan": {"plan_id": "plan-1"},
+            "orders": [{"order_id": "order-1"}],
+            "fills": [{"fill_id": "fill-1"}],
+        },
+    )
+    monkeypatch.setattr(
+        host.context.notifications,
+        "deliveries",
+        lambda _notification_ids: (
+            {"notification_id": "notification-1", "outcome": "delivered"},
+        ),
+    )
+
+    trace = host.decision_trace("decision-1")
+
+    assert trace is not None
+    intent = trace["execution"]["intents"][0]
+    assert intent["authoritative_execution"]["plan"]["plan_id"] == "plan-1"
+    assert trace["notification_deliveries"][0]["outcome"] == "delivered"
 
 
 def test_strategy_control_dispatches_command_to_optional_strategy_hook(

@@ -1,12 +1,13 @@
 //! Unified consumption for one physical provider stream carrying multiple
 //! normalized event domains.
 
-use std::future::Future;
+use std::task::{Context, Poll};
 
 use crate::{ExternalParticipantEvent, IntegrationError};
 
 pub trait ParticipantEventStream: Send {
-    fn next(
+    fn poll_next(
         &mut self,
-    ) -> impl Future<Output = Result<ExternalParticipantEvent, IntegrationError>> + Send;
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<ExternalParticipantEvent, IntegrationError>>;
 }

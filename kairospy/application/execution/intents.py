@@ -17,6 +17,7 @@ class TargetPositionRequest:
     limit_price: Decimal | None = None
     reason: str = ""
     intent_id: str | None = None
+    strategy_decision_id: str | None = None
     source_snapshot_id: str | None = None
     source_event_sequence: int | None = None
     source_event_time_unix_nanos: int | None = None
@@ -39,6 +40,11 @@ class TargetPositionRequest:
             raise ValueError("segment_key is required")
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
+        if (
+            self.strategy_decision_id is not None
+            and not self.strategy_decision_id.strip()
+        ):
+            raise ValueError("strategy_decision_id cannot be blank")
         if self.source_snapshot_id is not None and not self.source_snapshot_id.strip():
             raise ValueError("source_snapshot_id cannot be blank")
         if (
@@ -79,6 +85,7 @@ class PairArbitrageRequest:
     second: ArbitrageLegRequest
     reason: str = ""
     intent_id: str | None = None
+    strategy_decision_id: str | None = None
     completion_policy: str = "AllLegsSatisfied"
     failure_policy: str = "Compensate"
     max_wait_nanos: int | None = None
@@ -86,6 +93,15 @@ class PairArbitrageRequest:
     max_slippage_bps: int | None = None
     estimated_fee_bps: int | None = None
     hedge_policy: "HedgePolicy | None" = None
+
+    def __post_init__(self) -> None:
+        if self.intent_id is not None and not self.intent_id.strip():
+            raise ValueError("intent_id cannot be blank")
+        if (
+            self.strategy_decision_id is not None
+            and not self.strategy_decision_id.strip()
+        ):
+            raise ValueError("strategy_decision_id cannot be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +140,7 @@ class OptionSpreadRequest:
     account_id: str = "main"
     reason: str = ""
     intent_id: str | None = None
+    strategy_decision_id: str | None = None
     source_snapshot_id: str | None = None
     source_event_sequence: int | None = None
     source_event_time_unix_nanos: int | None = None
@@ -157,6 +174,11 @@ class OptionSpreadRequest:
                 raise ValueError(f"{name} cannot be negative")
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
+        if (
+            self.strategy_decision_id is not None
+            and not self.strategy_decision_id.strip()
+        ):
+            raise ValueError("strategy_decision_id cannot be blank")
         if self.source_snapshot_id is not None and not self.source_snapshot_id.strip():
             raise ValueError("source_snapshot_id cannot be blank")
         if self.completion_policy != "AllOrNothing":
@@ -254,6 +276,7 @@ class QuoteProvisioningRequest:
     maker: MakerExecutionPolicy | None = None
     reason: str = ""
     intent_id: str | None = None
+    strategy_decision_id: str | None = None
     execution_route_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -274,6 +297,11 @@ class QuoteProvisioningRequest:
             )
         if self.bid_price >= self.ask_price:
             raise ValueError("quote provisioning bid must be below ask")
+        if (
+            self.strategy_decision_id is not None
+            and not self.strategy_decision_id.strip()
+        ):
+            raise ValueError("strategy_decision_id cannot be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +352,7 @@ class PortfolioRebalanceRequest:
     targets: tuple[PortfolioRebalanceTarget, ...]
     reason: str = ""
     intent_id: str | None = None
+    strategy_decision_id: str | None = None
     completion_policy: str = "BestEffort"
     failure_policy: str = "ContinueOtherLegs"
 
@@ -331,3 +360,8 @@ class PortfolioRebalanceRequest:
         if not self.targets:
             raise ValueError("portfolio rebalance requires at least one target")
         object.__setattr__(self, "targets", tuple(self.targets))
+        if (
+            self.strategy_decision_id is not None
+            and not self.strategy_decision_id.strip()
+        ):
+            raise ValueError("strategy_decision_id cannot be blank")

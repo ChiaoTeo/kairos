@@ -94,8 +94,22 @@ class IntentLifecycleEventState(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # IntentLifecycleEventState
+    def StrategyDecisionId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # IntentLifecycleEventState
+    def PreviousLifecycle(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
 def IntentLifecycleEventStateStart(builder):
-    builder.StartObject(7)
+    builder.StartObject(9)
 
 def Start(builder):
     IntentLifecycleEventStateStart(builder)
@@ -147,6 +161,18 @@ def IntentLifecycleEventStateAddReason(builder, reason):
 
 def AddReason(builder, reason):
     IntentLifecycleEventStateAddReason(builder, reason)
+
+def IntentLifecycleEventStateAddStrategyDecisionId(builder, strategyDecisionId):
+    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(strategyDecisionId), 0)
+
+def AddStrategyDecisionId(builder, strategyDecisionId):
+    IntentLifecycleEventStateAddStrategyDecisionId(builder, strategyDecisionId)
+
+def IntentLifecycleEventStateAddPreviousLifecycle(builder, previousLifecycle):
+    builder.PrependUint8Slot(8, previousLifecycle, 0)
+
+def AddPreviousLifecycle(builder, previousLifecycle):
+    IntentLifecycleEventStateAddPreviousLifecycle(builder, previousLifecycle)
 
 def IntentLifecycleEventStateEnd(builder):
     return builder.EndObject()

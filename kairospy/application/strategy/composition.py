@@ -20,6 +20,10 @@ from kairospy.application.market.composition import (
     MarketAccessConfig,
     build_strategy_access as build_market_access,
 )
+from kairospy.application.notification.composition import (
+    NotificationProcessComposition,
+    compose_notifications,
+)
 from kairospy.application.reference.composition import (
     build_strategy_access as build_reference_access,
 )
@@ -28,6 +32,7 @@ from kairospy.application.risk.composition import (
 )
 from kairospy.application.workspace import Workspace
 from kairospy.strategy import StrategyIdentity, StrategyLogger
+from .services.decision_journal import StrategyDecisionJournal
 
 from .application.runtime import StrategyApplication
 from .services.journal import StrategyLifecycleJournal
@@ -42,6 +47,7 @@ class StrategyProcessComposition:
     entrypoint: StrategyEntrypoint
     application: StrategyApplication
     control: StrategyControlServer
+    notifications: NotificationProcessComposition
 
 
 def compose_strategy_process(
@@ -127,6 +133,28 @@ def compose_strategy_process(
         ),
     )
 
+    logger = StrategyLogger(
+        fields={
+            "launch_id": launch_id,
+            "instance_id": instance_id,
+            "strategy_id": entrypoint.strategy.strategy_id,
+            "component": "strategy",
+            "process_id": "strategy",
+            "workspace_id": workspace.identity.workspace_id,
+        },
+        stream=sys.stdout,
+    )
+    notifications = compose_notifications(
+        workspace=workspace,
+        instance=instance,
+        identity=identity,
+        mode=mode,
+        config=config.notifications,
+        logger=logger,
+    )
+    if config.replay_start is not None:
+        notifications.application.bind_event(config.replay_start)
+
     application = StrategyApplication(
         entrypoint.strategy,
         launch_id=launch_id,
@@ -136,6 +164,14 @@ def compose_strategy_process(
         account=account,
         risk=risk,
         execution=execution,
+        notifications=notifications.application,
+        decision_journal=StrategyDecisionJournal(
+            instance.artifact("strategy-decisions.jsonl")
+        ),
+        decision_notification_routes=tuple(
+            str(route)
+            for route in config.notifications.get("lifecycle_routes", ())
+        ),
         journal=StrategyLifecycleJournal(instance.lifecycle_journal()),
         state_path=instance.state("strategy", "state.json"),
         backtest=build_backtest_driver(
@@ -144,17 +180,7 @@ def compose_strategy_process(
             execution_enabled=config.execution_enabled,
         ),
         params=params,
-        logger=StrategyLogger(
-            fields={
-                "launch_id": launch_id,
-                "instance_id": instance_id,
-                "strategy_id": entrypoint.strategy.strategy_id,
-                "component": "strategy",
-                "process_id": "strategy",
-                "workspace_id": workspace.identity.workspace_id,
-            },
-            stream=sys.stdout,
-        ),
+        logger=logger,
         replay_end=config.replay_end,
     )
     return StrategyProcessComposition(
@@ -164,4 +190,5 @@ def compose_strategy_process(
             application,
             workspace.paths.launch_socket(mode, launch_id, instance_id),
         ),
+        notifications,
     )

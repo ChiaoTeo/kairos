@@ -7,7 +7,7 @@ use super::{
 use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
 use crate::services::actor::ReferenceActor;
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
-use kairos_integration::{
+use kairos_conflux::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ParticipantKind,
     ParticipantRef,
 };
@@ -84,7 +84,7 @@ test_source_from!(FixedSource, Fixed);
 test_source_from!(CountingSource, Counting);
 test_source_from!(BarrierSource, Barrier);
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for TestProviderSource {
     fn source_id(&self) -> &str {
         match self {
@@ -123,7 +123,7 @@ impl ReferenceSource for TestProviderSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for FlakySource {
     fn source_id(&self) -> &str {
         "test-flaky"
@@ -222,7 +222,7 @@ async fn actor_commits_normalized_composite_facts_without_catalog_materializatio
     assert!(reader.record("provider:a").unwrap().is_some());
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for PagedSource {
     fn source_id(&self) -> &str {
         "test-paged"
@@ -258,7 +258,7 @@ impl ReferenceSource for PagedSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for RefreshingPagedSource {
     fn source_id(&self) -> &str {
         "test-refreshing-paged"
@@ -291,7 +291,7 @@ impl ReferenceSource for RefreshingPagedSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for AlwaysFailSource {
     fn source_id(&self) -> &str {
         "test-flaky"
@@ -304,7 +304,7 @@ impl ReferenceSource for AlwaysFailSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for FixedSource {
     fn source_id(&self) -> &str {
         self.id
@@ -315,7 +315,7 @@ impl ReferenceSource for FixedSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for CountingSource {
     fn source_id(&self) -> &str {
         self.id
@@ -327,7 +327,7 @@ impl ReferenceSource for CountingSource {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl ReferenceSource for BarrierSource {
     fn source_id(&self) -> &str {
         self.id
