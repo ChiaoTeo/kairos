@@ -1,19 +1,48 @@
 # Kairos shared primitives
 
-`kairos-primitives` contains small, infrastructure-free value objects whose
-meaning and invariants are genuinely shared by multiple business modules.
-It is not a general common-types crate and it does not own business workflows.
+`kairos-primitives` is the project's shared semantic kernel. It contains
+small, infrastructure-free value objects whose meaning and invariants are
+genuinely shared by multiple business modules. It is not a general
+common-types or utilities crate and it does not own business workflows.
+
+Business types are grouped by their governing vocabulary: account, execution,
+market, reference, risk, and integration. Genuinely cross-cutting value
+mechanics such as decimal and time remain separate groups. The current broad
+`identity` and `trading` files are migration sources, not the desired final
+taxonomy: their members should move into the governing group without changing
+their meaning or wire representations. The target public paths are namespaced,
+for example `kairos_primitives::account::AccountId` and
+`kairos_primitives::execution::OrderId`; broad root wildcard re-exports should
+be removed as callers migrate. These groups make ownership visible; they are
+not miniature domain modules and do not transfer workflows or mutable state
+into this crate.
+
+```text
+src/
+  account.rs
+  capital.rs
+  execution.rs
+  integration.rs
+  market.rs
+  reference.rs
+  risk.rs
+  decimal.rs       cross-cutting exact values
+  time.rs          cross-cutting time units
+```
 
 ## Admission rule
 
 A type belongs here only when all of the following are true:
 
-1. At least two business modules independently use the value with the same
-   meaning and invariants. Merely consuming another module's event does not
-   count as independent ownership.
-2. Removing the module name leaves the meaning complete. Commands, events,
-   snapshots, lifecycle state machines, and module-specific policies remain
-   owned by their module.
+1. The value is currently needed across its owner's domain/contract boundary,
+   or at least two business modules use it with the same meaning and
+   invariants. A purely internal domain value does not qualify, and merely
+   consuming a complete event does not move that event into primitives.
+2. The type is a semantic atom that contracts and domains can use directly.
+   A business module may still govern its meaning, but the type does not carry
+   that module's workflow, mutable state, or lifecycle behavior. Commands,
+   events, snapshots, lifecycle state machines, and module-specific policies
+   remain owned by their module.
 3. The type is free of transports, persistence records, SDK payloads, runtime
    handles, and provider clients.
 4. Conversions at wire, persistence, and integration boundaries remain
@@ -21,10 +50,16 @@ A type belongs here only when all of the following are true:
 5. Moving the type removes an existing duplicate definition or serves a
    current cross-module caller. Prospective uniformity is not sufficient.
 
-Module-owned data that must cross a process boundary belongs in
-`crates/modules/<owner>/contract`; contract fields may use these primitives.
-In short: primitives share vocabulary atoms, while contracts share what a
-module says.
+Module-owned data that must cross a package or process boundary belongs in
+`crates/modules/<owner>/contract`; contract messages should use these
+primitives whenever a field has the established shared meaning. This keeps a
+canonical identity or value usable across contracts without introducing
+contract-to-contract dependency cycles. In short: primitives share the words;
+contracts define what a module says with those words.
+
+Do not admit generic collection helpers, string manipulation, logging,
+configuration convenience, serialization utilities, or other meaning-free
+code. Those are utilities even when many crates could reuse them.
 
 ## Current ownership decisions
 

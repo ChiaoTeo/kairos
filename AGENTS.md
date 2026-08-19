@@ -14,7 +14,7 @@ crates/
       contract/     optional, independently depend-able process contract crate
       src/          application, composition, domain, services, and binaries
   platform/         infrastructure and system capabilities
-  primitives/       infrastructure-free values genuinely shared by modules
+  primitives/       grouped, infrastructure-free shared business vocabulary
 ```
 
 The main crate lives directly at `crates/modules/<module>`; do not add a
@@ -25,9 +25,23 @@ importing the main module crate. Directory nesting never implies a Cargo
 dependency.
 
 Platform crates live under `crates/platform/<capability>`. Do not put business
-state or module-owned vocabulary in platform crates. `crates/primitives` is
-not a generic common-types bucket: add a type only when its meaning and
-invariants are genuinely shared by multiple modules.
+state or module-owned vocabulary in platform crates. `crates/primitives` is a
+shared semantic kernel, not a generic common-types or utilities bucket. It may
+contain business identities, exact values, units, and closed vocabulary whose
+meaning and invariants are stable and genuinely shared by multiple modules.
+Organize business primitives by their governing business vocabulary, such as
+account, execution, market, reference, risk, and integration. Keep genuinely
+cross-cutting value mechanics such as decimal and time in their own groups.
+These groups clarify ownership; they are not miniature domain modules.
+Expose business primitives through those owner namespaces and prefer imports
+such as `kairos_primitives::execution::OrderId` over an undifferentiated crate
+root. Do not add new wildcard root re-exports that erase the grouping.
+
+A primitive may still have a business governance owner. Ownership determines
+who may change its meaning; placement in primitives allows contracts and
+domains to use the same small value without contract-to-contract dependency
+cycles or duplicate canonical definitions. Commands, queries, events,
+snapshots, lifecycle models, policies, and workflows never become primitives.
 
 ## Standard module layout
 
@@ -37,7 +51,7 @@ Every main module crate should converge on these first-level directories:
 src/
   bin/             compiled server and CLI entry points
   composition/     concrete integrations, stores, publishers, and mode setup
-  application/     public use-case facade and optional process facade
+  application/     main-package use-case facade and optional process facade
   services/        private actors, persistence, adapters, and publishers
   domain/          entities, value objects, and business invariants
 ```
@@ -58,6 +72,12 @@ composition. `bin` invokes composition. Composition selects concrete
 implementations and builds the application. Application orchestrates use
 cases through private services. Domain is a sibling business core used by
 application and services, and must remain free of infrastructure concerns.
+
+The boundary is defined by Cargo packages. Within one module's main package,
+its binary targets, composition, process adapters, and package tests enter
+business behavior through that package's application. A different business
+package under `crates/modules` must not import the main package or its
+application; it enters exclusively through the owner's contract package.
 
 ## Layer responsibilities
 
@@ -84,16 +104,41 @@ Composition owns concrete choices and wiring:
 - mapping external integration facts into module-owned business facts;
 - construction of the application and its services.
 
-Application must not import composition. Cross-module callers must not import
-another module's services or private files; they enter through that module's
-application API.
+Application must not import composition. Composition may construct and adapt
+its own package's application. It must not use composition as a shortcut to
+call another business package's application; cross-business access uses the
+owner's contract.
 
-### `application/`: public facade
+### `contract/`: cross-business facade
 
-Application is the module's public use-case boundary. It exposes
-business-oriented commands, queries, results, and errors. It must not expose
-SDK clients, raw vendor payloads, persistence records, composition records, or
-service instances.
+The optional `contract/` directory is a separate Cargo package and is the only
+public business boundary for other packages under `crates/modules`. It owns
+the commands, queries, events, snapshots, capability clients, and wire
+adapters that another business package may use. It composes those module-owned
+messages from shared primitives where the field has project-wide semantics;
+the use of a primitive does not transfer ownership of the message itself.
+
+A contract must not depend on its owner's main package or expose domain
+entities, service instances, provider payloads, or persistence records. The
+owner's server or transport adapter maps contract-owned input into its
+application API and maps application/domain results into contract-owned
+output. Contract crates may use primitives and platform protocol/transport
+capabilities without transferring business ownership to those lower layers.
+
+Contract-to-contract dependencies are not the default. Shared identity and
+value atoms should normally come from primitives, allowing contracts to use a
+common Rust type without depending on one another. Add a contract dependency
+only when a current contract genuinely consumes the other module's complete
+message or capability and the dependency direction is stable and acyclic.
+
+### `application/`: main-package facade
+
+Application is the main package's internal use-case boundary. It exposes
+business-oriented commands, queries, results, and errors to that package's
+binary targets, composition, process adapters, and package tests. It is not a
+cross-business API: another package under `crates/modules` must use the
+owner's contract instead. Application must not expose SDK clients, raw vendor
+payloads, persistence records, composition records, or service instances.
 
 An optional `application/process.rs` is the module runtime facade when a
 reusable process owns an application instance and exposes control, lifecycle,
@@ -121,17 +166,36 @@ Actor through application APIs but must not become a second state owner.
 
 Domain contains entities, value objects, validation, and business invariants.
 It must not depend on another business module's application, services,
-protocols, infrastructure, SDK, or external implementation. Cross-module
-collaboration belongs in application orchestration or composition.
+contract, protocols, infrastructure, SDK, or external implementation. A
+consumer application may adapt facts obtained through another module's
+contract into its own domain vocabulary; the domain itself remains unaware of
+the foreign package.
 
 ## Dependency and abstraction rules
 
-- `application/` is the only public entry point for other modules, servers,
-  CLIs, scheduled jobs, and external test fixtures.
-- `services/` and other private files are never cross-module imports.
-- Direct dependency is the default. Application may directly depend on its
-  module's Domain, Actor, and concrete private services, and may directly use
-  another module's application API or independently depend-able contract.
+- `primitives` is the common dependency for small, validated business values
+  whose semantics are shared across modules. Contracts and main packages may
+  depend on it; primitives must not depend on a business or platform crate.
+- Admission to primitives requires current use across an owner domain/contract
+  boundary or by multiple modules with the same meaning and invariants, an
+  infrastructure-free representation, and a stable validation path. A purely
+  internal type stays in its domain. Similar field names or identical Rust
+  representations are not sufficient.
+- Do not put DTOs, orchestration, lifecycle state, persistence/wire records,
+  SDK types, generic helpers, or convenience utilities in primitives.
+- `application/` is the use-case entry point for targets and tests belonging
+  to the same main Cargo package, including its server, CLI, composition, and
+  reusable process facade.
+- `contract/` is the only public business entry point for a different package
+  under `crates/modules`.
+- A business main package must not depend on another business main package.
+  It may depend on the other module's independently depend-able contract.
+- `application/`, `domain/`, `services/`, composition records, and persistence
+  records are never imports across business package boundaries.
+- Direct dependency inside one main package is the default. Application may
+  directly depend on its package's Domain, Actor, and concrete private
+  services. Cross-business calls use the owner contract directly; do not
+  mirror it with an application-owned port or call the owner application.
 - Do not create an application-owned dependency-inversion trait merely to hide
   a concrete service, make dependency injection uniform, provide test doubles,
   or anticipate future implementations. A wrapper, queued worker, socket
@@ -143,8 +207,9 @@ collaboration belongs in application orchestration or composition.
   do not mirror it with a second application `port`, `capability`, `gateway`,
   or `protocol` trait.
 - If no such lower-level abstraction exists, keep the business rule in
-  Application or Domain and call the concrete service/application/contract
-  directly. Do not introduce a `ports/` layer as an architectural default.
+  Application or Domain and call the same-package concrete service or the
+  foreign owner contract directly. Do not introduce a `ports/` layer as an
+  architectural default.
 - `protocol` is optional, not a mandatory layer.
 - Prefer an existing `kairos-integration` application capability directly when
   the business module is intentionally coupled to integration.
@@ -154,8 +219,10 @@ collaboration belongs in application orchestration or composition.
   business reason, or add a protocol only for uniform dependency injection.
 - Concrete connectors, stores, publishers, and mode-specific implementations
   are selected in composition or test fixtures.
-- Application APIs use business request/result types and do not expose vendor
-  payloads or persistence records.
+- Application APIs use package-owned business request/result types and do not
+  expose vendor payloads or persistence records. Contract APIs use
+  contract-owned request/result/event/snapshot types and do not re-export the
+  owner's application or domain models.
 - Cross-process business event and snapshot publishers must map application or
   domain models directly into contract-owned types and encode those types with
   the declared wire format (normally FlatBuffers). Do not use
@@ -252,7 +319,10 @@ For the current business modules:
 - Integration owns provider authentication and normalized external facts.
 - Workspace/System owns paths, process lifecycle, instance resources, and
   launch coordination.
-- Cross-business orchestration belongs in application or system composition.
+- Cross-business orchestration belongs in the consuming package's application
+  and uses owner contracts. System composition may construct processes and
+  connect contract clients, transports, and resources, but must not bypass a
+  contract to invoke another business package's application directly.
 
 ## Engineering quality and anti-overdesign rules
 
@@ -290,12 +360,17 @@ description or design note:
 
 1. Apply the architecture and ownership rules in this file.
 2. Identify ownership and verify the domain rule.
-3. Define or verify the application request/result API.
-4. Assign mutable state to exactly one Actor.
-5. Select concrete implementations in composition.
-6. Put reusable process/control behavior in `application/process.rs`; keep
+3. Decide whether the caller belongs to the same main Cargo package or a
+   different business package.
+4. For a cross-package capability, define or verify the owner contract first;
+   for same-package invocation, define or verify the application API.
+5. Map contract input/output explicitly at the owner process boundary; do not
+   expose application or domain types through the contract.
+6. Assign mutable state to exactly one Actor.
+7. Select concrete implementations in composition.
+8. Put reusable process/control behavior in `application/process.rs`; keep
    transport-only details private to the binary.
-7. Keep binaries limited to input adaptation, composition, and invocation.
+9. Keep binaries limited to input adaptation, composition, and invocation.
 
 ## Verification before handoff
 
