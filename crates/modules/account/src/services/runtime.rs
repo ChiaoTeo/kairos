@@ -541,7 +541,9 @@ fn event_requires_durability(event: &AccountEvent) -> bool {
     match event {
         AccountEvent::Fill(_) | AccountEvent::ObservedFill(_) => true,
         AccountEvent::Batch(events) => events.iter().any(event_requires_durability),
-        AccountEvent::Snapshot(_) | AccountEvent::OrderObserved(_) => false,
+        AccountEvent::Snapshot(_)
+        | AccountEvent::EarnHoldings(_)
+        | AccountEvent::OrderObserved(_) => false,
     }
 }
 

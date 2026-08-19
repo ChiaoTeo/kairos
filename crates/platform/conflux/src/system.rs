@@ -16,6 +16,7 @@ use kairos_integration::participants::{
             BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
             BinanceCoinMWebSocketConnection,
         },
+        earn::BinanceSimpleEarnRestConnection,
         funding::BinanceFundingRestConnection,
         margin::{
             BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection,
@@ -184,6 +185,18 @@ impl ConnectionDriverState {
     fn clear_retry(&mut self, source: &str) {
         self.lifecycle_retry_at.remove(source);
         self.lifecycle_attempts.remove(source);
+    }
+
+    fn pending_maintenance_deadline(
+        &self,
+        source: &str,
+        deadline: Option<Instant>,
+    ) -> Option<Instant> {
+        if self.maintenance_in_progress.contains(source) {
+            None
+        } else {
+            deadline
+        }
     }
 
     pub(crate) fn purge_integration_identity(&mut self, identity: &ManagedConnectionIdentity) {
@@ -410,6 +423,8 @@ pub struct ConnectionCollections<'a> {
         TypedConnectionCollection<'a, BinanceSpotRestConnection, BinanceRestConfig>,
     pub binance_funding_rest:
         TypedConnectionCollection<'a, BinanceFundingRestConnection, BinanceRestConfig>,
+    pub binance_earn_rest:
+        TypedConnectionCollection<'a, BinanceSimpleEarnRestConnection, BinanceRestConfig>,
     pub binance_margin_rest:
         TypedConnectionCollection<'a, BinanceMarginRestConnection, BinanceRestConfig>,
     pub binance_usdm_rest:
@@ -545,6 +560,8 @@ pub struct ConfluxSystem {
         ManagedConnections<String, BinanceSpotUserWebSocketConnection>,
     pub(crate) binance_funding_rest_connections:
         ManagedConnections<String, BinanceFundingRestConnection>,
+    pub(crate) binance_earn_rest_connections:
+        ManagedConnections<String, BinanceSimpleEarnRestConnection>,
     pub(crate) binance_margin_rest_connections:
         ManagedConnections<String, BinanceMarginRestConnection>,
     pub(crate) binance_margin_websocket_connections:
@@ -637,6 +654,7 @@ impl ConfluxSystem {
             binance_spot_websocket_connections: ManagedConnections::new(),
             binance_spot_user_websocket_connections: ManagedConnections::new(),
             binance_funding_rest_connections: ManagedConnections::new(),
+            binance_earn_rest_connections: ManagedConnections::new(),
             binance_margin_rest_connections: ManagedConnections::new(),
             binance_margin_websocket_connections: ManagedConnections::new(),
             binance_margin_user_websocket_connections: ManagedConnections::new(),
@@ -674,130 +692,167 @@ impl ConfluxSystem {
             binance_spot_rest: TypedConnectionCollection::new(
                 &mut self.binance_spot_rest_connections,
                 BinanceSpotRestConnection::new,
+                false,
             ),
             binance_funding_rest: TypedConnectionCollection::new(
                 &mut self.binance_funding_rest_connections,
                 BinanceFundingRestConnection::new,
+                false,
+            ),
+            binance_earn_rest: TypedConnectionCollection::new(
+                &mut self.binance_earn_rest_connections,
+                BinanceSimpleEarnRestConnection::new,
+                false,
             ),
             binance_margin_rest: TypedConnectionCollection::new(
                 &mut self.binance_margin_rest_connections,
                 BinanceMarginRestConnection::new,
+                false,
             ),
             binance_usdm_rest: TypedConnectionCollection::new(
                 &mut self.binance_usdm_rest_connections,
                 BinanceUsdMRestConnection::new,
+                false,
             ),
             binance_coinm_rest: TypedConnectionCollection::new(
                 &mut self.binance_coinm_rest_connections,
                 BinanceCoinMRestConnection::new,
+                false,
             ),
             binance_options_rest: TypedConnectionCollection::new(
                 &mut self.binance_options_rest_connections,
                 BinanceOptionsRestConnection::new,
+                false,
             ),
             binance_stocks_rest: TypedConnectionCollection::new(
                 &mut self.binance_stocks_rest_connections,
                 BinanceStocksRestConnection::new,
+                false,
             ),
             binance_spot_websocket: TypedConnectionCollection::new(
                 &mut self.binance_spot_websocket_connections,
                 BinanceSpotWebSocketConnection::new,
+                true,
             ),
             binance_usdm_websocket: TypedConnectionCollection::new(
                 &mut self.binance_usdm_websocket_connections,
                 BinanceUsdMWebSocketConnection::new,
+                true,
             ),
             binance_coinm_websocket: TypedConnectionCollection::new(
                 &mut self.binance_coinm_websocket_connections,
                 BinanceCoinMWebSocketConnection::new,
+                true,
             ),
             binance_options_websocket: TypedConnectionCollection::new(
                 &mut self.binance_options_websocket_connections,
                 BinanceOptionsWebSocketConnection::new,
+                true,
             ),
             binance_stocks_websocket: TypedConnectionCollection::new(
                 &mut self.binance_stocks_websocket_connections,
                 BinanceStocksWebSocketConnection::new,
+                true,
             ),
             binance_spot_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_spot_user_websocket_connections,
                 BinanceSpotUserWebSocketConnection::new,
+                true,
             ),
             binance_margin_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_margin_user_websocket_connections,
                 BinanceMarginUserWebSocketConnection::new,
+                true,
             ),
             binance_usdm_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_usdm_user_websocket_connections,
                 BinanceUsdMUserWebSocketConnection::new,
+                true,
             ),
             binance_coinm_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_coinm_user_websocket_connections,
                 BinanceCoinMUserWebSocketConnection::new,
+                true,
             ),
             binance_options_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_options_user_websocket_connections,
                 BinanceOptionsUserWebSocketConnection::new,
+                true,
             ),
             binance_stocks_user_websocket: TypedConnectionCollection::new(
                 &mut self.binance_stocks_user_websocket_connections,
                 BinanceStocksUserWebSocketConnection::new,
+                true,
             ),
             ibkr_account_query: TypedConnectionCollection::new(
                 &mut self.ibkr_account_query_connections,
                 IbkrAccountQueryConnection::new,
+                true,
             ),
             ibkr_account_stream: TypedConnectionCollection::new(
                 &mut self.ibkr_account_stream_connections,
                 IbkrAccountStreamConnection::new,
+                true,
             ),
             ibkr_order: TypedConnectionCollection::new(
                 &mut self.ibkr_order_connections,
                 IbkrOrderConnection::new,
+                true,
             ),
             ibkr_execution_stream: TypedConnectionCollection::new(
                 &mut self.ibkr_execution_stream_connections,
                 IbkrExecutionStreamConnection::new,
+                true,
             ),
             ibkr_market_data: TypedConnectionCollection::new(
                 &mut self.ibkr_market_data_connections,
                 IbkrMarketDataConnection::new,
+                true,
             ),
             hyperliquid_info_rest: TypedConnectionCollection::new(
                 &mut self.hyperliquid_info_rest_connections,
                 HyperliquidInfoRestConnection::new,
+                false,
             ),
             massive_rest: TypedConnectionCollection::new(
                 &mut self.massive_rest_connections,
                 MassiveRestConnection::new,
+                false,
             ),
             massive_stocks_websocket: TypedConnectionCollection::new(
                 &mut self.massive_stocks_websocket_connections,
                 MassiveStocksWebSocketConnection::new,
+                true,
             ),
             massive_options_websocket: TypedConnectionCollection::new(
                 &mut self.massive_options_websocket_connections,
                 MassiveOptionsWebSocketConnection::new,
+                true,
             ),
             hyperliquid_websocket: TypedConnectionCollection::new(
                 &mut self.hyperliquid_websocket_connections,
                 HyperliquidWebSocketConnection::new,
+                true,
             ),
             okx_public_rest: TypedConnectionCollection::new(
                 &mut self.okx_public_rest_connections,
                 OkxPublicRestConnection::new,
+                false,
             ),
             okx_public_websocket: TypedConnectionCollection::new(
                 &mut self.okx_public_websocket_connections,
                 OkxPublicWebSocketConnection::new,
+                true,
             ),
             okx_private_rest: TypedConnectionCollection::new(
                 &mut self.okx_private_rest_connections,
                 OkxPrivateRestConnection::new,
+                false,
             ),
             okx_private_websocket: TypedConnectionCollection::new(
                 &mut self.okx_private_websocket_connections,
                 OkxPrivateWebSocketConnection::new,
+                true,
             ),
         }
     }
@@ -1697,44 +1752,67 @@ impl ConfluxSystem {
             Some(Instant::now())
         };
         macro_rules! visit {
-            ($field:ident) => {
-                for (_, managed) in self.$field.iter() {
+            ($field:ident, $family:literal) => {
+                for (key, managed) in self.$field.iter() {
                     if managed.state() != ResourceState::Ready || managed.lifecycle_in_progress() {
                         continue;
                     }
-                    if let Some(candidate) =
+                    let source = format!("maintenance:{}:{}", $family, key);
+                    if let Some(candidate) = connection_driver.pending_maintenance_deadline(
+                        &source,
                         kairos_integration::ConnectionMaintenance::next_maintenance_at(
                             managed.connection(),
-                        )
-                    {
+                        ),
+                    ) {
                         deadline =
                             Some(deadline.map_or(candidate, |value: Instant| value.min(candidate)));
                     }
                 }
             };
         }
-        visit!(binance_spot_websocket_connections);
-        visit!(binance_spot_user_websocket_connections);
-        visit!(binance_margin_websocket_connections);
-        visit!(binance_margin_user_websocket_connections);
-        visit!(binance_usdm_websocket_connections);
-        visit!(binance_usdm_user_websocket_connections);
-        visit!(binance_coinm_websocket_connections);
-        visit!(binance_coinm_user_websocket_connections);
-        visit!(binance_options_websocket_connections);
-        visit!(binance_options_user_websocket_connections);
-        visit!(binance_stocks_websocket_connections);
-        visit!(binance_stocks_user_websocket_connections);
-        visit!(okx_public_websocket_connections);
-        visit!(okx_private_websocket_connections);
-        visit!(hyperliquid_websocket_connections);
-        visit!(ibkr_account_query_connections);
-        visit!(ibkr_account_stream_connections);
-        visit!(ibkr_order_connections);
-        visit!(ibkr_execution_stream_connections);
-        visit!(ibkr_market_data_connections);
-        visit!(massive_stocks_websocket_connections);
-        visit!(massive_options_websocket_connections);
+        visit!(binance_spot_websocket_connections, "binance.spot.market");
+        visit!(binance_spot_user_websocket_connections, "binance.spot.user");
+        visit!(
+            binance_margin_websocket_connections,
+            "binance.margin.market"
+        );
+        visit!(
+            binance_margin_user_websocket_connections,
+            "binance.margin.user"
+        );
+        visit!(binance_usdm_websocket_connections, "binance.usdm.market");
+        visit!(binance_usdm_user_websocket_connections, "binance.usdm.user");
+        visit!(binance_coinm_websocket_connections, "binance.coinm.market");
+        visit!(
+            binance_coinm_user_websocket_connections,
+            "binance.coinm.user"
+        );
+        visit!(
+            binance_options_websocket_connections,
+            "binance.options.market"
+        );
+        visit!(
+            binance_options_user_websocket_connections,
+            "binance.options.user"
+        );
+        visit!(
+            binance_stocks_websocket_connections,
+            "binance.stocks.market"
+        );
+        visit!(
+            binance_stocks_user_websocket_connections,
+            "binance.stocks.user"
+        );
+        visit!(okx_public_websocket_connections, "okx.public.market");
+        visit!(okx_private_websocket_connections, "okx.private");
+        visit!(hyperliquid_websocket_connections, "hyperliquid.websocket");
+        visit!(ibkr_account_query_connections, "ibkr.account.query");
+        visit!(ibkr_account_stream_connections, "ibkr.account");
+        visit!(ibkr_order_connections, "ibkr.order");
+        visit!(ibkr_execution_stream_connections, "ibkr.execution");
+        visit!(ibkr_market_data_connections, "ibkr.market");
+        visit!(massive_stocks_websocket_connections, "massive.stocks");
+        visit!(massive_options_websocket_connections, "massive.options");
         deadline
     }
 }
@@ -1747,6 +1825,7 @@ impl Default for ConfluxSystem {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::{ParticipantSymbol, UnixNanos};
     use kairos_transport::SnapshotEnvelopeMetadata;
 
     use super::*;
@@ -1774,6 +1853,17 @@ mod tests {
     }
 
     #[test]
+    fn authentication_failure_is_permanent_and_transport_failure_is_recoverable() {
+        let authentication = kairos_integration::IntegrationError::Authentication("denied".into());
+        assert!(is_permanent_connection_error(&authentication));
+        assert!(!is_recoverable_connection_error(&authentication));
+
+        let transport = kairos_integration::IntegrationError::Transport("closed".into());
+        assert!(!is_permanent_connection_error(&transport));
+        assert!(is_recoverable_connection_error(&transport));
+    }
+
+    #[test]
     fn lifecycle_retry_honors_custom_backoff_and_attempt_limit() {
         let mut state = ConnectionDriverState::new();
         let now = Instant::now();
@@ -1791,6 +1881,121 @@ mod tests {
         assert!(state.retry_due("lifecycle:test", now + Duration::from_millis(15)));
         assert!(!state.schedule_retry("lifecycle:test", now, policy));
         assert!(!state.retry_due("lifecycle:test", now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn context_access_waits_for_managed_connections_but_not_bounded_clients() {
+        struct FakeConnection;
+
+        fn create_fake(
+            _: ConnectionKey,
+            _: (),
+        ) -> Result<FakeConnection, kairos_integration::IntegrationError> {
+            Ok(FakeConnection)
+        }
+
+        let key = ConnectionKey::new("readiness-test").unwrap();
+        let mut managed = ManagedConnections::new();
+        let mut view = TypedConnectionCollection::new(&mut managed, create_fake, true);
+        view.create(key.clone(), ()).unwrap();
+        assert!(matches!(
+            view.get(&key),
+            Err(ConnectionAccessError::NotReady(value)) if value == key
+        ));
+        drop(view);
+        managed
+            .get_mut(&key.to_string())
+            .unwrap()
+            .set_state(ResourceState::Ready);
+        assert!(
+            TypedConnectionCollection::new(&mut managed, create_fake, true)
+                .get(&key)
+                .is_ok()
+        );
+
+        let mut bounded = ManagedConnections::new();
+        let mut view = TypedConnectionCollection::new(&mut bounded, create_fake, false);
+        view.create(key.clone(), ()).unwrap();
+        assert!(view.get(&key).is_ok());
+    }
+
+    #[test]
+    fn maintenance_in_progress_does_not_reuse_an_expired_timer_deadline() {
+        let mut state = ConnectionDriverState::new();
+        let source = "maintenance:test:key";
+        let expired = Instant::now() - Duration::from_secs(1);
+
+        assert_eq!(
+            state.pending_maintenance_deadline(source, Some(expired)),
+            Some(expired)
+        );
+        state.maintenance_in_progress.insert(source.into());
+        assert_eq!(
+            state.pending_maintenance_deadline(source, Some(expired)),
+            None
+        );
+    }
+
+    #[test]
+    fn retiring_identity_purges_only_its_queued_generation() {
+        fn market_event() -> kairos_integration::MarketEvent {
+            kairos_integration::MarketEvent {
+                symbol: ParticipantSymbol::new("BTC-USDT").unwrap(),
+                kind: kairos_integration::MarketEventKind::Trade,
+                price: None,
+                quantity: None,
+                rate: None,
+                ask_price: None,
+                ask_quantity: None,
+                bids: Vec::new(),
+                asks: Vec::new(),
+                bar: None,
+                greeks: None,
+                first_sequence: None,
+                last_sequence: None,
+                sequence: None,
+                observed_at_unix_nanos: UnixNanos::from(1),
+                venue: Default::default(),
+            }
+        }
+
+        let descriptor = kairos_integration::ConnectionDescriptor::new(
+            "shared-key",
+            kairos_integration::ParticipantRef::new(
+                kairos_integration::ParticipantKind::Exchange,
+                "test",
+            )
+            .unwrap(),
+            "market.websocket",
+        )
+        .unwrap();
+        let old = ManagedConnectionIdentity {
+            descriptor: descriptor.clone(),
+            generation: 1,
+        };
+        let current = ManagedConnectionIdentity {
+            descriptor,
+            generation: 2,
+        };
+        let mut state = ConnectionDriverState::new();
+        for (source, identity) in [("old", old.clone()), ("current", current.clone())] {
+            state.push(
+                source.into(),
+                ConnectionDriverOutput::Integration(IntegrationEvent {
+                    identity,
+                    event: kairos_integration::ExternalParticipantEvent::Market(market_event()),
+                }),
+            );
+        }
+
+        state.purge_integration_identity(&old);
+
+        assert_eq!(state.ready.len(), 1);
+        assert!(matches!(
+            state.pop(),
+            Some(ConnectionDriverOutput::Integration(IntegrationEvent { identity, .. }))
+                if identity == current
+        ));
     }
 
     #[test]

@@ -112,7 +112,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/CommandEnvelope'
         - type: object
-          required: [request_id, reservation_id, account_id, strategy_id, instrument_id, usages, context]
+          required: [request_id, reservation_id, account_id, strategy_id, instrument_id, exchange_id, proposal, reservation_ttl_nanos, dependency_generation, dependency_event_sequence]
           properties:
             request_id: {type: string, minLength: 1}
             reservation_id: {type: string, minLength: 1}
@@ -121,18 +121,16 @@ components:
             instrument_id: {type: string, minLength: 1}
             exchange_id: {type: string, minLength: 1}
             reservation_ttl_nanos: {type: integer, minimum: 1}
-            usages:
-              type: array
-              minItems: 1
-              maxItems: 64
-              items: {$ref: '#/components/schemas/RiskUsage'}
+            proposal: {$ref: '#/components/schemas/TradeRiskProposal'}
             context: {$ref: '#/components/schemas/RiskContext'}
-    RiskUsage:
+    TradeRiskProposal:
       type: object
-      required: [metric, amount]
+      required: [notional, initial_margin_rate_bps, reduce_only, margin_rule_id]
       properties:
-        metric: {type: string, minLength: 1}
-        amount: {type: string, minLength: 1}
+        notional: {type: string, minLength: 1}
+        initial_margin_rate_bps: {type: integer, minimum: 0}
+        reduce_only: {type: boolean}
+        margin_rule_id: {type: string, minLength: 1}
     RiskContext:
       type: object
       required: [current_exposure, current_margin, available_margin, current_pnl, current_drawdown, stress_loss]
@@ -166,6 +164,14 @@ components:
           items: {type: object, additionalProperties: true}
         reservation: {type: object, additionalProperties: true}
         policy_version: {type: integer, minimum: 0}
+        funding_requirement:
+          type: object
+          required: [required_margin, available_margin, shortfall, margin_rule_id]
+          properties:
+            required_margin: {type: string, minLength: 1}
+            available_margin: {type: string, minLength: 1}
+            shortfall: {type: string, minLength: 1}
+            margin_rule_id: {type: string, minLength: 1}
     CleanupRequest:
       allOf:
         - $ref: '#/components/schemas/CommandEnvelope'

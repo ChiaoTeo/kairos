@@ -23,8 +23,11 @@ impl Amount {
     };
 
     pub fn new(mantissa: i64, scale: u8) -> Result<Self, String> {
-        if mantissa < 0 || scale > 18 {
+        if mantissa < 0 {
             return Err("risk amounts cannot be negative".into());
+        }
+        if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+            return Err("risk amount scale exceeds 18 digits".into());
         }
         let value = RustDecimal::try_new(mantissa, u32::from(scale))
             .map_err(|_| "risk amount overflow".to_string())?
@@ -48,6 +51,29 @@ impl Amount {
         if value.is_sign_negative() {
             return Err("risk amount cannot become negative".into());
         }
+        Self::from_decimal(value)
+    }
+
+    pub fn checked_mul_bps(self, basis_points: BasisPoints) -> Result<Self, String> {
+        let value = self
+            .as_decimal()?
+            .checked_mul(RustDecimal::from(basis_points.get()))
+            .and_then(|value| value.checked_div(RustDecimal::from(10_000_u64)))
+            .ok_or_else(|| "risk amount overflow".to_string())?
+            .normalize();
+        Self::from_decimal(value)
+    }
+
+    pub fn checked_mul_ratio(self, numerator: Self, denominator: Self) -> Result<Self, String> {
+        if denominator == Self::ZERO {
+            return Err("risk ratio denominator must be positive".into());
+        }
+        let value = self
+            .as_decimal()?
+            .checked_mul(numerator.as_decimal()?)
+            .and_then(|value| value.checked_div(denominator.as_decimal().ok()?))
+            .ok_or_else(|| "risk amount overflow".to_string())?
+            .normalize();
         Self::from_decimal(value)
     }
 
@@ -75,6 +101,9 @@ impl Amount {
         let mantissa =
             i64::try_from(value.mantissa()).map_err(|_| "risk amount overflow".to_string())?;
         let scale = u8::try_from(value.scale()).map_err(|_| "risk amount overflow".to_string())?;
+        if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+            return Err("risk amount scale exceeds 18 digits".into());
+        }
         Ok(Self { mantissa, scale })
     }
 }
@@ -99,11 +128,10 @@ impl<'de> Deserialize<'de> for Amount {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        let value = RustDecimal::from_str_exact(&value).map_err(serde::de::Error::custom)?;
-        if value.is_sign_negative() {
-            return Err(serde::de::Error::custom("risk amounts cannot be negative"));
-        }
-        Self::from_decimal(value.normalize()).map_err(serde::de::Error::custom)
+        let value = value
+            .parse::<kairos_primitives::DecimalParts>()
+            .map_err(serde::de::Error::custom)?;
+        Self::new(value.mantissa(), value.scale()).map_err(serde::de::Error::custom)
     }
 }
 
@@ -264,8 +292,10 @@ pub struct AuthorizeRequest {
     pub strategy_id: StrategyId,
     pub instrument_id: InstrumentId,
     pub exchange_id: Exchange,
-    pub metric: Metric,
-    pub amount: Amount,
+    /// Normalized trade facts supplied by Execution. Risk derives every
+    /// budget usage from this proposal; callers do not choose one policy
+    /// metric and thereby bypass the others.
+    pub proposal: TradeRiskProposal,
     pub at_unix_nanos: UnixNanos,
     pub reservation_ttl_nanos: DurationNanos,
     pub dependency_generation: Generation,
@@ -276,11 +306,63 @@ pub struct AuthorizeRequest {
 
 impl AuthorizeRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.amount == Amount::ZERO || self.reservation_ttl_nanos.get() == 0 {
-            return Err("amount and reservation TTL must be positive".into());
+        if self.proposal.notional == Amount::ZERO || self.reservation_ttl_nanos.get() == 0 {
+            return Err("notional and reservation TTL must be positive".into());
+        }
+        if !self.proposal.reduce_only && self.proposal.initial_margin_rate_bps.get() == 0 {
+            return Err("opening trades require a positive initial margin rate".into());
         }
         Ok(())
     }
+
+    pub fn usages(&self) -> Result<Vec<RequestedUsage>, String> {
+        let mut usages = vec![
+            RequestedUsage {
+                metric: Metric::Notional,
+                amount: self.proposal.notional,
+            },
+            RequestedUsage {
+                metric: Metric::GrossExposure,
+                amount: self.proposal.notional,
+            },
+            RequestedUsage {
+                metric: Metric::Turnover,
+                amount: self.proposal.notional,
+            },
+            RequestedUsage {
+                metric: Metric::OrderRate,
+                amount: Amount::new(1, 0)?,
+            },
+        ];
+        if !self.proposal.reduce_only {
+            usages.push(RequestedUsage {
+                metric: Metric::Margin,
+                amount: self
+                    .proposal
+                    .notional
+                    .checked_mul_bps(self.proposal.initial_margin_rate_bps)?,
+            });
+        }
+        Ok(usages)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TradeRiskProposal {
+    pub notional: Amount,
+    /// Initial margin requirement for this concrete product/account route.
+    /// Execution supplies the normalized rule; Risk owns the calculation.
+    pub initial_margin_rate_bps: BasisPoints,
+    #[serde(default)]
+    pub reduce_only: bool,
+    /// Identifies the Reference/configuration rule used for audit and replay.
+    pub margin_rule_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RequestedUsage {
+    pub metric: Metric,
+    pub amount: Amount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

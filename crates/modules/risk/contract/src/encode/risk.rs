@@ -344,7 +344,7 @@ fn metadata<'a>(
     )
 }
 fn decimal(value: crate::Amount) -> Decimal64 {
-    Decimal64::new(value.mantissa, value.scale)
+    Decimal64::new(value.mantissa(), value.scale())
 }
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -598,10 +598,7 @@ fn decision_fb<'a>(
         .as_ref()
         .map(|x| reservation_fb(b, x))
         .transpose()?;
-    let zero = crate::Amount {
-        mantissa: 0,
-        scale: 0,
-    };
+    let zero = crate::Amount::default();
     let fallback = crate::RiskContext {
         account_snapshot_watermark: 0,
         market_freshness_watermark: 0,
@@ -617,6 +614,25 @@ fn decision_fb<'a>(
         stress_loss: zero,
     };
     let context = context_fb(b, value.context.as_ref().unwrap_or(&fallback))?;
+    let funding_requirement = value
+        .funding_requirement
+        .as_ref()
+        .map(|value| {
+            let required_margin = decimal(value.required_margin);
+            let available_margin = decimal(value.available_margin);
+            let shortfall = decimal(value.shortfall);
+            let margin_rule_id = b.create_string(&value.margin_rule_id);
+            Ok::<_, String>(fb::FundingRequirement::create(
+                b,
+                &fb::FundingRequirementArgs {
+                    required_margin: Some(&required_margin),
+                    available_margin: Some(&available_margin),
+                    shortfall: Some(&shortfall),
+                    margin_rule_id: Some(margin_rule_id),
+                },
+            ))
+        })
+        .transpose()?;
     Ok(fb::RiskDecision::create(
         b,
         &fb::RiskDecisionArgs {
@@ -639,6 +655,7 @@ fn decision_fb<'a>(
             reservation,
             policy_version: value.policy_version,
             context: Some(context),
+            funding_requirement,
             evaluated_at_unix_nanos: value.evaluated_at_unix_nanos,
         },
     ))

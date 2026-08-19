@@ -381,6 +381,7 @@ def _status(row: Mapping[str, object]) -> ReferenceStatus:
         else ReferenceStatus.UNKNOWN
     )
 
+
 def _entity_from_row(row: Mapping[str, object]) -> Entity:
     return Entity(
         id=_required(row, "entityId", "entity_id"),

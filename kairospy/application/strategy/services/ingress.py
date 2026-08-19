@@ -11,6 +11,7 @@ from kairospy.application.account import (
     EquityChangedEvent,
     PositionChangedEvent,
 )
+from kairospy.application.agent import AgentEvent
 from kairospy.application.execution import (
     ExecutionApplication,
     FillEvent,
@@ -70,6 +71,7 @@ class StrategyEventIngress:
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        agent_events: Callable[[], AsyncIterator[object]] | None = None,
         queue_size: int = 256,
     ) -> None:
         if queue_size <= 0:
@@ -80,12 +82,15 @@ class StrategyEventIngress:
             # production AccountApplication keeps event consumption internal
             # so user-authored strategies enter through on_account callbacks.
             account_events = getattr(account, "events")
-        self._sources: tuple[tuple[str, Callable[[], AsyncIterator[object]]], ...] = (
+        sources: list[tuple[str, Callable[[], AsyncIterator[object]]]] = [
             ("market", market.events),
             ("account", account_events),
             ("risk", risk.events),
             ("execution", execution.events),
-        )
+        ]
+        if agent_events is not None:
+            sources.append(("agent", agent_events))
+        self._sources = tuple(sources)
         self._queue_size = queue_size
 
     async def events(
@@ -115,6 +120,8 @@ class StrategyEventIngress:
 
     @staticmethod
     def route(event: object) -> StrategyDispatch:
+        if isinstance(event, AgentEvent):
+            return StrategyDispatch("agent", "on_agent", event)
         if isinstance(event, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent)):
             return StrategyDispatch("market", "on_market", event)
         if isinstance(

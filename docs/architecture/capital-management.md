@@ -20,13 +20,24 @@ The system must keep three kinds of state separate.
    in its capital group; Risk limits still apply within that isolation.
 3. **Capital-operation lifecycle** describes an intended change in physical
    placement, such as an internal account transfer, Earn subscription, or Earn
-   redemption. The Strategy instance's Capital application owns these durable
-   intents and their reconciliation; Integration only executes participant
-   primitives.
+   redemption. The authoritative Rust Capital application and Actor owned by
+   the Strategy instance own these durable intents and their reconciliation;
+   Integration only executes participant primitives.
 
 Never infer successful settlement from an acknowledged command. A transfer or
 redemption is complete only after its participant status is terminal and the
 expected Account facts have been observed.
+
+For a transfer operation, Capital persists `Prepared` before calling
+Integration. For a participant operation without a provider idempotency key,
+Capital then persists a delivery fence before entering the external call;
+recovery queries a fenced operation and never submits it again. A confirmed submission advances only to participant
+reconciliation; an indeterminate submission retains the same operation,
+idempotency key, and source reservation. Participant success advances to
+Account reconciliation, not completion. Completion requires newer complete
+Account watermarks that show both the expected source debit and destination
+credit. A definite participant rejection/failure releases the reservation;
+delivery ambiguity never does.
 
 ## Ownership
 
@@ -81,6 +92,32 @@ reservations, and operation plans. Account continues to own actual balances
 and positions. Paper and
 backtest create an instance-local simulated Capital runtime with the same
 group semantics.
+
+## Application and process boundary
+
+Capital has one business owner but two caller-facing layers:
+
+- `crates/modules/capital` is the authoritative business module. Its Actor is
+  the only mutable owner of funding objectives, effective targets,
+  reservations, plans, command attempts, and recovery state.
+- `crates/modules/capital/contract` is the minimal cross-process contract for
+  commands, queries, snapshots, and events used outside the Rust process.
+- `kairospy.application.capital` is the Strategy-side application facade. It
+  publishes or cancels a `FundingObjective`, queries Capital availability and
+  health, and maps `capital.enabled = false` to an explicit disabled outcome.
+
+The Python facade is a client, not a second Capital implementation. It must
+not calculate authoritative effective targets, select transfer routes, call
+Binance or another participant, persist transfer sagas, or infer settlement.
+The Rust application must expose business request/result types rather than
+Integration clients or vendor payloads. Cross-process snapshots and events
+use contract-owned FlatBuffers types; JSON is limited to an explicitly
+declared control/configuration boundary.
+
+When Capital is disabled, Strategy composition constructs the disabled Python
+facade without starting a Capital process. This preserves one Strategy API in
+single-account and multi-account deployments while ensuring pre-funded order
+execution has no synchronous Capital dependency.
 
 A CapitalGroup is the business identity of a body of capital, not an account.
 The model deliberately distinguishes two levels:
@@ -141,6 +178,15 @@ enabled route, an authorized Capital rebalance decision, sufficient
 unreserved balance, and applicable Risk/Capital limits. A Strategy lease authorizes its Execution
 to make permitted writes inside that Strategy account; it does not authorize
 arbitrary cross-account transfers.
+
+The Capital Actor revalidates group membership; a matching
+`capital_group_id` alone is not authority. Objective, policy, facts, route,
+plan, and reservation locations must all reference configured Account and
+Segment members. Recovered state is accepted only under the same versioned
+membership configuration. A route authorization atomically reserves both
+unreflected source balance and the still-unfilled destination deficit before
+an Integration command can be emitted, preventing concurrent plans from
+double-spending or overfunding the same target.
 
 For a transfer between distinct Accounts, authority is checked on the source
 side. Both Accounts and their endpoint Segments must be current members of the
@@ -316,6 +362,15 @@ minimum movement amount, deficit dwell time, cooldown, and hysteresis. The
 effective target cannot exceed either the policy maximum or Risk-permitted
 capacity. Static configuration supplies safe defaults when Strategy has no
 active objective.
+
+For objectives that target the same balance location, `desired_available`
+describes the total desired available balance rather than an additive claim.
+Capital therefore uses the highest active versioned target for that location,
+then applies the policy stress buffer and clamps the result to the policy
+maximum and Risk capacity. It must not sum overlapping objectives and create
+artificial demand. If Account facts are incomplete/stale, their watermarks
+move backwards, or Risk capacity is below the configured minimum, the
+location is degraded and exposes no actionable deficit.
 
 `CapitalDemandObserved` from a failed/deferred Execution plan is additional
 advisory evidence, not the only source of demand. Capital deduplicates,

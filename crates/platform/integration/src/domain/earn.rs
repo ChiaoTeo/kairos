@@ -358,6 +358,7 @@ pub enum EarnActionState {
     Pending,
     Succeeded,
     Failed,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

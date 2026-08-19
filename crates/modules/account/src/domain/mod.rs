@@ -120,6 +120,59 @@ pub struct Position {
     pub updated_at_unix_nanos: UnixNanos,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum EarnHoldingLiquidity {
+    Immediate,
+    Notice { notice_seconds: u64 },
+    FixedTerm { matures_at_unix_nanos: UnixNanos },
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum EarnHoldingState {
+    Active,
+    Redeeming,
+    Redeemed,
+    Unknown(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EarnAccruedReward {
+    pub asset: Currency,
+    pub amount: Quantity,
+}
+
+/// Account-owned observation of principal placed in a yield product. This is
+/// deliberately not a trading Position.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EarnHolding {
+    pub participant_position_id: Option<String>,
+    pub product_id: String,
+    pub asset: Currency,
+    pub principal: Quantity,
+    pub redeemable: Option<Quantity>,
+    pub accrued_rewards: Vec<EarnAccruedReward>,
+    pub liquidity: EarnHoldingLiquidity,
+    pub state: EarnHoldingState,
+    pub observed_at_unix_nanos: UnixNanos,
+}
+
+impl EarnHolding {
+    fn key(&self) -> String {
+        self.participant_position_id
+            .clone()
+            .unwrap_or_else(|| self.product_id.clone())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EarnHoldingsSnapshot {
+    pub segment_key: SegmentKey,
+    pub holdings: Vec<EarnHolding>,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub complete: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountStatus {
     #[default]
@@ -149,6 +202,8 @@ pub struct AccountState {
     balances: BTreeMap<AssetId, Balance>,
     collateral: BTreeMap<AssetId, Balance>,
     positions: BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position>,
+    #[serde(default)]
+    earn_holdings: BTreeMap<String, EarnHolding>,
     open_orders: BTreeMap<OrderId, OpenOrder>,
     status: AccountStatus,
     stale: bool,
@@ -165,6 +220,8 @@ pub struct AccountState {
     snapshot_watermark_unix_nanos: UnixNanos,
     #[serde(default)]
     fill_watermark_unix_nanos: UnixNanos,
+    #[serde(default)]
+    earn_watermark_unix_nanos: UnixNanos,
     #[serde(default)]
     order_watermarks_unix_nanos: BTreeMap<OrderId, UnixNanos>,
     #[serde(default)]
@@ -194,6 +251,14 @@ impl AccountState {
         &self,
     ) -> &BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position> {
         &self.positions
+    }
+
+    pub fn earn_holdings(&self) -> &BTreeMap<String, EarnHolding> {
+        &self.earn_holdings
+    }
+
+    pub fn earn_watermark_unix_nanos(&self) -> UnixNanos {
+        self.earn_watermark_unix_nanos
     }
 
     pub fn open_orders(&self) -> &BTreeMap<OrderId, OpenOrder> {
@@ -377,6 +442,45 @@ impl Account {
         self.state.event_sequence += 1;
         Ok(ApplyOutcome::Applied)
     }
+
+    pub fn apply_earn_snapshot(
+        &mut self,
+        snapshot: EarnHoldingsSnapshot,
+    ) -> Result<ApplyOutcome, AccountDomainError> {
+        if snapshot.segment_key != self.segment.segment_key {
+            return Err(AccountDomainError::SegmentMismatch {
+                expected: self.segment.segment_key.to_string(),
+                observed: snapshot.segment_key.to_string(),
+            });
+        }
+        if self.state.earn_watermark_unix_nanos > snapshot.observed_at_unix_nanos {
+            return Ok(ApplyOutcome::Stale);
+        }
+        if self.state.earn_watermark_unix_nanos == snapshot.observed_at_unix_nanos
+            && snapshot.observed_at_unix_nanos != UnixNanos::new(0)
+        {
+            return Ok(ApplyOutcome::Duplicate);
+        }
+        if snapshot.complete {
+            self.state.earn_holdings = snapshot
+                .holdings
+                .into_iter()
+                .map(|holding| (holding.key(), holding))
+                .collect();
+        } else {
+            for holding in snapshot.holdings {
+                self.state.earn_holdings.insert(holding.key(), holding);
+            }
+        }
+        self.state.earn_watermark_unix_nanos = snapshot.observed_at_unix_nanos;
+        self.state.observed_at_unix_nanos = self
+            .state
+            .observed_at_unix_nanos
+            .max(snapshot.observed_at_unix_nanos);
+        self.state.generation += 1;
+        self.state.event_sequence += 1;
+        Ok(ApplyOutcome::Applied)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -474,6 +578,7 @@ pub struct AccountObservedFill {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountEvent {
     Snapshot(AccountSnapshot),
+    EarnHoldings(EarnHoldingsSnapshot),
     Fill(AccountFill),
     ObservedFill(AccountObservedFill),
     OrderObserved(AccountOrderObservation),

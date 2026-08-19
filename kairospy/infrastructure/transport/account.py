@@ -44,6 +44,8 @@ def decode_account_event(payload: bytes) -> AccountEventRecord:
     roots = {
         b"ABU2": ("BalanceUpserted", "balance_changed"),
         b"ABR2": ("BalanceRemoved", "balance_removed"),
+        b"AEH2": ("EarnHoldingUpserted", "earn_holding_changed"),
+        b"AER2": ("EarnHoldingRemoved", "earn_holding_removed"),
         b"APU2": ("PositionUpserted", "position_changed"),
         b"APR2": ("PositionRemoved", "position_removed"),
         b"AVC2": ("ValuationChanged", "equity_changed"),
@@ -54,7 +56,9 @@ def decode_account_event(payload: bytes) -> AccountEventRecord:
     try:
         root_name, kind = roots[identifier]
     except KeyError as error:
-        raise ValueError(f"unsupported Account event identifier: {identifier!r}") from error
+        raise ValueError(
+            f"unsupported Account event identifier: {identifier!r}"
+        ) from error
     module = __import__(
         f"kairospy.infrastructure.transport.generated.kairos.account.v2.{root_name}",
         fromlist=[root_name],
@@ -78,7 +82,9 @@ def decode_account_event(payload: bytes) -> AccountEventRecord:
             None
             if raw_provenance is None
             else AccountFactProvenanceRecord(
-                source_id=_required_text(raw_provenance.SourceId(), "provenance.source_id"),
+                source_id=_required_text(
+                    raw_provenance.SourceId(), "provenance.source_id"
+                ),
                 provider_event_id=_optional_text(raw_provenance.ProviderEventId()),
                 provider_sequence=_optional_int(raw_provenance.ProviderSequence()),
                 provider_occurred_at_unix_nanos=_optional_int(
@@ -123,10 +129,36 @@ def _decode_v2_change(root: Any, kind: str) -> AccountChangeRecord:
         }
     elif kind == "position_removed":
         payload = {
-            "instrument_id": _required_text(root.InstrumentId(), "position.instrument_id"),
+            "instrument_id": _required_text(
+                root.InstrumentId(), "position.instrument_id"
+            ),
             "market_id": _optional_text(root.MarketId()),
             "position_side": _position_side(int(root.PositionSide())),
         }
+    elif kind == "earn_holding_changed":
+        value = cast(Any, root.Holding())
+        if value is None:
+            raise ValueError("Account Earn holding payload is missing")
+        payload = {
+            "holding_key": _required_text(value.HoldingKey(), "earn.holding_key"),
+            "participant_position_id": _optional_text(value.ParticipantPositionId()),
+            "product_id": _required_text(value.ProductId(), "earn.product_id"),
+            "asset": _required_text(value.Asset(), "earn.asset"),
+            "principal": _decimal(value.Principal()),
+            "redeemable": _decimal(value.Redeemable()),
+            "state": {1: "active", 2: "redeeming", 3: "redeemed"}.get(
+                int(value.State()), "unknown"
+            ),
+            "participant_state": _optional_text(value.ParticipantState()),
+            "liquidity": {1: "immediate", 2: "notice", 3: "fixed_term"}.get(
+                int(value.Liquidity()), "unknown"
+            ),
+            "notice_seconds": _optional_int(value.NoticeSeconds()),
+            "matures_at_unix_nanos": _optional_int(value.MaturesAtUnixNanos()),
+            "observed_at_unix_nanos": int(value.ObservedAtUnixNanos()),
+        }
+    elif kind == "earn_holding_removed":
+        payload = {"holding_key": _required_text(root.HoldingKey(), "earn.holding_key")}
     elif kind == "observed_order_changed":
         value = cast(Any, root.Order())
         if value is None:
@@ -134,7 +166,9 @@ def _decode_v2_change(root: Any, kind: str) -> AccountChangeRecord:
         payload = {
             "order_id": _optional_text(value.ExecutionOrderId()),
             "remote_order_id": _optional_text(value.RemoteOrderId()),
-            "instrument_id": _required_text(value.InstrumentId(), "order.instrument_id"),
+            "instrument_id": _required_text(
+                value.InstrumentId(), "order.instrument_id"
+            ),
             "market_id": _required_text(value.MarketId(), "order.market_id"),
             "quantity": _decimal(value.Quantity()),
             "filled_quantity": _decimal(value.FilledQuantity()),
@@ -142,7 +176,8 @@ def _decode_v2_change(root: Any, kind: str) -> AccountChangeRecord:
         }
     elif kind == "observed_order_removed":
         payload = {
-            "order_id": _optional_text(root.ExecutionOrderId()) or _required_text(root.ObservationId(), "order.observation_id"),
+            "order_id": _optional_text(root.ExecutionOrderId())
+            or _required_text(root.ObservationId(), "order.observation_id"),
             "remote_order_id": _optional_text(root.RemoteOrderId()),
         }
     elif kind == "equity_changed":
@@ -172,7 +207,13 @@ def _status_name(value: int) -> str:
 
 
 def _order_status_name(value: int) -> str:
-    return {1: "open", 2: "partially_filled", 3: "pending_cancel", 4: "closed", 5: "unknown"}.get(value, "unknown")
+    return {
+        1: "open",
+        2: "partially_filled",
+        3: "pending_cancel",
+        4: "closed",
+        5: "unknown",
+    }.get(value, "unknown")
 
 
 def _position_side(value: int) -> str:

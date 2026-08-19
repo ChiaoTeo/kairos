@@ -1,0 +1,21 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.account.v2;
+
+enum EarnHoldingState:ubyte { UNSPECIFIED = 0, ACTIVE = 1, REDEEMING = 2, REDEEMED = 3, UNKNOWN = 4 }
+enum EarnLiquidity:ubyte { UNSPECIFIED = 0, IMMEDIATE = 1, NOTICE = 2, FIXED_TERM = 3, UNKNOWN = 4 }
+
+table EarnHolding {
+  holding_key:string (required);
+  participant_position_id:string;
+  product_id:string (required);
+  asset:string (required);
+  principal:kairos.common.v2.Decimal64 (required);
+  redeemable:kairos.common.v2.Decimal64;
+  state:EarnHoldingState = UNSPECIFIED;
+  participant_state:string;
+  liquidity:EarnLiquidity = UNSPECIFIED;
+  notice_seconds:ulong;
+  matures_at_unix_nanos:ulong;
+  observed_at_unix_nanos:ulong;
+}

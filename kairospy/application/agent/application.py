@@ -14,6 +14,7 @@ from .models import (
     AgentModeReceipt,
     AgentModeStatus,
     DecisionAgentHealth,
+    _normalize_context_key,
 )
 
 
@@ -92,9 +93,7 @@ class AgentApplication:
             )
 
     def remove_context(self, key: str) -> AgentContextReceipt:
-        normalized = key.strip()
-        if not normalized:
-            raise ValueError("Agent context key is required")
+        normalized = _normalize_context_key(key)
         with self._lock:
             previous = self._documents.pop(normalized, None)
             if previous is None:

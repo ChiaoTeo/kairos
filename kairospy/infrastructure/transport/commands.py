@@ -192,9 +192,13 @@ class ExecutionCommandClient:
         self.require_limit_orders = require_limit_orders
         self.launch_id = launch_id
 
-    def _submit_v2_intent(self, envelope: Mapping[str, object]) -> tuple[int, dict[str, Any]]:
+    def _submit_v2_intent(
+        self, envelope: Mapping[str, object]
+    ) -> tuple[int, dict[str, Any]]:
         payload = envelope.get("payload")
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("intent"), Mapping):
+        if not isinstance(payload, Mapping) or not isinstance(
+            payload.get("intent"), Mapping
+        ):
             return 422, {"error": "execution intent payload is required"}
         body: dict[str, object] = {
             "command_id": envelope.get("command_id"),
@@ -957,9 +961,7 @@ def _original_intent_body(
         original["max_slippage_bps"] = request.max_slippage_bps
     elif isinstance(request, OptionSpreadRequest):
         original["deadline_unix_nanos"] = request.deadline_unix_nanos
-    elif not isinstance(
-        request, (PortfolioRebalanceRequest, QuoteProvisioningRequest)
-    ):
+    elif not isinstance(request, (PortfolioRebalanceRequest, QuoteProvisioningRequest)):
         raise TypeError("Unsupported original Intent admission evidence type")
     return original
 

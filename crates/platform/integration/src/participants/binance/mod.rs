@@ -1301,8 +1301,10 @@ fn binance_order_query(
 }
 
 pub mod advanced;
+pub mod capital;
 pub mod coinm;
 mod config;
+pub mod earn;
 pub mod funding;
 mod history;
 pub mod margin;

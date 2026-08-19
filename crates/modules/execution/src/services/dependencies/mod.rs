@@ -81,10 +81,15 @@ impl ExecutionOrderAdmissionService {
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
+        route: &crate::application::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         match self {
-            Self::Live(admission) => admission.risk_authorization_context(request),
-            Self::Simulated => Ok(RiskAuthorizationContext::default()),
+            Self::Live(admission) => admission.risk_authorization_context(request, route),
+            Self::Simulated => Ok(RiskAuthorizationContext {
+                initial_margin_rate_bps: route.initial_margin_rate_bps,
+                margin_rule_id: route.margin_rule_id.clone(),
+                ..RiskAuthorizationContext::default()
+            }),
         }
     }
 }
@@ -183,8 +188,9 @@ impl SocketExecutionOrderAdmission {
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
+        route: &crate::application::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
-        self.context.risk_authorization_context(request)
+        self.context.risk_authorization_context(request, route)
     }
 }
 
@@ -194,7 +200,7 @@ fn find_available(response: &[ProjectedBalance], asset: &str) -> Result<Option<D
         .find(|balance| balance.asset_code.eq_ignore_ascii_case(asset))
         .and_then(|balance| balance.available.as_ref())
         .map(|value| {
-            Decimal::try_new(value.mantissa, u32::from(value.scale))
+            Decimal::try_new(value.mantissa(), u32::from(value.scale()))
                 .map_err(|_| "available balance cannot be represented as a decimal".to_string())
         })
         .transpose()
@@ -209,8 +215,8 @@ fn find_position(
         .find(|position| position.instrument_id.eq_ignore_ascii_case(instrument))
         .map(|position| {
             Decimal::try_new(
-                position.quantity.mantissa,
-                u32::from(position.quantity.scale),
+                position.quantity.mantissa(),
+                u32::from(position.quantity.scale()),
             )
             .map_err(|_| "position quantity cannot be represented as a decimal".to_string())
         })
@@ -228,6 +234,6 @@ mod tests {
         let price = decimal_price(Price::new(1_005, 1).unwrap()).unwrap();
         let amount = risk_amount(quantity * price).unwrap();
 
-        assert_eq!((amount.mantissa, amount.scale), (201, 0));
+        assert_eq!((amount.mantissa(), amount.scale()), (201, 0));
     }
 }

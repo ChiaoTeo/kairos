@@ -26,7 +26,10 @@ from kairospy.infrastructure.contracts.market import (
     MarketViewReader,
 )
 from kairospy.infrastructure.transport.native_event import NativeEventSource
-from kairospy.infrastructure.transport.generated_spec import DEFAULT_CHANNEL, MARKET_EVENTS
+from kairospy.infrastructure.transport.generated_spec import (
+    DEFAULT_CHANNEL,
+    MARKET_EVENTS,
+)
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
 # for sibling imports. Keep that generated namespace private to this adapter
@@ -181,9 +184,7 @@ class MarketProjection:
         wrapper = cast(Any, frame.value.Quote())
         return None if wrapper is None else _quote_model(_decode_quote(wrapper.Value()))
 
-    def read_bar(
-        self, market_id: str, source_id: str, timeframe: str
-    ) -> Bar | None:
+    def read_bar(self, market_id: str, source_id: str, timeframe: str) -> Bar | None:
         frame = self.read_view(
             MarketViewKey(market_id, source_id, MarketViewKind.BAR, timeframe)
         )
@@ -202,7 +203,10 @@ class MarketProjection:
             MarketViewKey(market_id, source_id, MarketViewKind.GREEKS)
         )
         wrapper = cast(Any, frame.value.Greeks())
-        return None if wrapper is None else _greeks_model(_decode_greeks(wrapper.Value()))
+        return (
+            None if wrapper is None else _greeks_model(_decode_greeks(wrapper.Value()))
+        )
+
 
 def _instrument(value: str) -> InstrumentRef:
     identifier = InstrumentId(value)
@@ -444,7 +448,9 @@ class UnixMarketEventStream:
             raise ValueError("reconnect_delay cannot be negative")
         self.reconnect_delay = reconnect_delay
 
-    async def replay_from(self, after_sequence: int = 0) -> AsyncIterator[MarketEventRecord]:
+    async def replay_from(
+        self, after_sequence: int = 0
+    ) -> AsyncIterator[MarketEventRecord]:
         cursor = max(0, after_sequence)
         while True:
             try:
@@ -480,6 +486,7 @@ class AeronMarketEventSource(NativeEventSource[MarketEventRecord]):
     """Market-owned adapter over the native Aeron subscription bridge."""
 
     replayable = False
+
     def __init__(
         self,
         *,
@@ -489,7 +496,9 @@ class AeronMarketEventSource(NativeEventSource[MarketEventRecord]):
     ) -> None:
         super().__init__(
             decoder=decode_market_event,
-            aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
+            aeron_dir=aeron_dir,
+            channel=channel,
+            stream_id=stream_id,
         )
 
 

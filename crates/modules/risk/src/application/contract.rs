@@ -4,17 +4,13 @@
 //! tests. Event and view publication never use a JSON round trip.
 
 fn amount(value: crate::Amount) -> kairos_risk_contract::Amount {
-    kairos_risk_contract::Amount {
-        mantissa: value.mantissa(),
-        scale: value.scale(),
-    }
+    kairos_risk_contract::Amount::new(value.mantissa(), value.scale())
+        .expect("Risk domain amount satisfies contract decimal bounds")
 }
 
 fn money(value: kairos_primitives::Money) -> kairos_risk_contract::Amount {
-    kairos_risk_contract::Amount {
-        mantissa: value.mantissa(),
-        scale: value.scale(),
-    }
+    kairos_risk_contract::Amount::new(value.mantissa(), value.scale())
+        .expect("Money satisfies contract decimal bounds")
 }
 
 fn metric(value: crate::Metric) -> kairos_risk_contract::Metric {
@@ -162,6 +158,14 @@ pub(crate) fn decision(
             event_sequence: value.dependency_watermarks.event_sequence.get(),
         },
         context: value.context.as_ref().map(context),
+        funding_requirement: value.funding_requirement.as_ref().map(|requirement| {
+            kairos_risk_contract::FundingRequirement {
+                required_margin: amount(requirement.required_margin),
+                available_margin: amount(requirement.available_margin),
+                shortfall: amount(requirement.shortfall),
+                margin_rule_id: requirement.margin_rule_id.clone(),
+            }
+        }),
         evaluated_at_unix_nanos: value.evaluated_at_unix_nanos.get(),
     }
 }
@@ -226,8 +230,16 @@ pub(crate) fn authorize_from(
             .map_err(|e| e.to_string())?,
         exchange_id: kairos_primitives::Exchange::new(value.exchange_id)
             .map_err(|e| e.to_string())?,
-        metric: metric_from(value.metric),
-        amount: amount_from(value.amount)?,
+        proposal: crate::TradeRiskProposal {
+            notional: amount_from(value.proposal.notional)?,
+            initial_margin_rate_bps: value
+                .proposal
+                .initial_margin_rate_bps
+                .try_into()
+                .map_err(|_| "initial margin rate exceeds basis-point range".to_string())?,
+            reduce_only: value.proposal.reduce_only,
+            margin_rule_id: value.proposal.margin_rule_id,
+        },
         at_unix_nanos: value.at_unix_nanos.into(),
         reservation_ttl_nanos: value.reservation_ttl_nanos.into(),
         dependency_generation: value.dependency_generation.into(),
@@ -259,7 +271,7 @@ pub(crate) fn circuit_scope_from(
 }
 
 pub(crate) fn amount_from(value: kairos_risk_contract::Amount) -> Result<crate::Amount, String> {
-    crate::Amount::new(value.mantissa, value.scale)
+    crate::Amount::new(value.mantissa(), value.scale())
 }
 
 fn metric_from(value: kairos_risk_contract::Metric) -> crate::Metric {
@@ -287,8 +299,8 @@ fn context_from(value: kairos_risk_contract::RiskContext) -> Result<crate::RiskC
         current_margin: amount_from(value.current_margin)?,
         available_margin: amount_from(value.available_margin)?,
         current_pnl: kairos_primitives::Money::new(
-            value.current_pnl.mantissa,
-            value.current_pnl.scale,
+            value.current_pnl.mantissa(),
+            value.current_pnl.scale(),
         )
         .map_err(|e| e.to_string())?,
         current_drawdown: amount_from(value.current_drawdown)?,

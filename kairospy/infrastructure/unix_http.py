@@ -29,7 +29,9 @@ def request_sync(
         connection.settimeout(timeout)
         connection.connect(str(socket_path))
         with connection:
-            connection.sendall(_request_bytes(method, path, payload, extra_headers=headers))
+            connection.sendall(
+                _request_bytes(method, path, payload, extra_headers=headers)
+            )
             status, response_body = _read_response(connection)
     return _decode_json_response(status, response_body)
 

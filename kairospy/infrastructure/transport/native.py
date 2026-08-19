@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from kairospy import _native_transport as native
+from importlib import import_module
+from typing import Any
 
 from .generated_spec import TRANSPORT_FINGERPRINT
 
+
+native: Any = import_module("kairospy._native_transport")
 
 EXPECTED_API_VERSION = 1
 _build = native.build_info()

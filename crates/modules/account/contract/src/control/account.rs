@@ -19,32 +19,7 @@ pub struct Health {
     pub event_sequence: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DecimalValue {
-    pub mantissa: i64,
-    pub scale: u8,
-}
-
-impl Serialize for DecimalValue {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&format_decimal(self.mantissa, self.scale))
-    }
-}
-
-impl<'de> Deserialize<'de> for DecimalValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        parse_decimal(&value)
-            .map(|(mantissa, scale)| Self { mantissa, scale })
-            .map_err(serde::de::Error::custom)
-    }
-}
+pub type DecimalValue = kairos_primitives::DecimalParts;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SimulatedSettlement {
@@ -156,52 +131,6 @@ fn decode_response<T: DeserializeOwned>(
         .map_err(|error| ContractError::Invalid(format!("decode {path} response: {error}")))
 }
 
-fn format_decimal(mantissa: i64, scale: u8) -> String {
-    let sign = if mantissa < 0 { "-" } else { "" };
-    let digits = mantissa.unsigned_abs().to_string();
-    if scale == 0 {
-        return format!("{sign}{digits}");
-    }
-    let width = usize::from(scale) + 1;
-    let padded = format!("{digits:0>width$}");
-    format!(
-        "{sign}{}.{}",
-        &padded[..padded.len() - usize::from(scale)],
-        &padded[padded.len() - usize::from(scale)..]
-    )
-}
-
-fn parse_decimal(value: &str) -> Result<(i64, u8), String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err("decimal is empty".into());
-    }
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches(['-', '+']);
-    let mut parts = unsigned.split('.');
-    let whole = parts.next().unwrap_or_default();
-    let fraction = parts.next().unwrap_or_default();
-    if parts.next().is_some()
-        || whole.is_empty() && fraction.is_empty()
-        || !whole.chars().all(|c| c.is_ascii_digit())
-        || !fraction.chars().all(|c| c.is_ascii_digit())
-        || fraction.len() > usize::from(u8::MAX)
-    {
-        return Err(format!("invalid decimal: {value}"));
-    }
-    let scale = u8::try_from(fraction.len()).map_err(|_| "decimal scale is too large")?;
-    let digits = format!("{whole}{fraction}");
-    let mut mantissa = digits
-        .parse::<i64>()
-        .map_err(|_| format!("decimal is out of range: {value}"))?;
-    if negative {
-        mantissa = mantissa
-            .checked_neg()
-            .ok_or_else(|| format!("decimal is out of range: {value}"))?;
-    }
-    Ok((mantissa, scale))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{AdvanceAccountTimeRequest, DecimalValue, MarkToMarketRequest};
@@ -212,10 +141,7 @@ mod tests {
             segment_key: "spot".into(),
             instrument_id: "instrument:btc".into(),
             quote_asset: "USDT".into(),
-            mark_price: DecimalValue {
-                mantissa: 6_400_025,
-                scale: 2,
-            },
+            mark_price: DecimalValue::new(6_400_025, 2).unwrap(),
             observed_at_unix_nanos: 10,
         };
         assert_eq!(
@@ -235,5 +161,13 @@ mod tests {
             .unwrap(),
             serde_json::json!({"event_time_unix_nanos": 11})
         );
+    }
+
+    #[test]
+    fn decimal_contract_enforces_shared_scale_limit() {
+        let too_precise = format!("\"0.{}1\"", "0".repeat(18));
+        assert!(serde_json::from_str::<DecimalValue>(&too_precise).is_err());
+
+        assert!(DecimalValue::new(1, kairos_primitives::MAX_DECIMAL_SCALE + 1).is_err());
     }
 }

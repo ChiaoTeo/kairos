@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import hashlib
+import json
+
+from kairospy.application.execution import IntentAdmissionEvidence
 
 from kairospy.strategy import (
     ArbitrageLegRequest,
@@ -160,6 +164,47 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     assert body["intent"]["segment_key"] == "usd_m_futures"
 
 
+def test_execution_client_forwards_canonical_agent_admission_evidence() -> None:
+    client = RecordingClient()
+    port = ExecutionCommandClient(client)
+    original = TargetPositionRequest(
+        "BTCUSDT", Decimal("2"), account_id="main", intent_id="intent-1"
+    )
+    effective = TargetPositionRequest(
+        "BTCUSDT", Decimal("1"), account_id="main", intent_id="intent-1"
+    )
+    admission = IntentAdmissionEvidence(
+        decision_id="decision-1",
+        request_id="request-agent",
+        intent_id="intent-1",
+        source="decision_agent",
+        outcome="revised",
+        original_intent=original,
+        effective_intent=effective,
+    )
+
+    port.target_position(
+        effective,
+        strategy_id="sma",
+        instance_id="instance-1",
+        request_id="request-agent",
+        admission_evidence=admission,
+    )
+
+    body = client.calls[0][2]
+    evidence = body["admission_evidence"]
+    assert evidence["original_intent"]["target_quantity"] == "2"
+    assert evidence["effective_intent"]["target_quantity"] == "1"
+    for side in ("original", "effective"):
+        encoded = json.dumps(
+            evidence[f"{side}_intent"],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+        assert evidence[f"{side}_hash"] == hashlib.sha256(encoded).hexdigest()
+
+
 def test_execution_client_applies_launch_live_safety_before_owner_command() -> None:
     client = RecordingClient()
     port = ExecutionCommandClient(
@@ -236,7 +281,10 @@ def test_execution_client_cancels_replaces_and_scopes_bulk_cancel() -> None:
         request_id="bulk-request",
     )
     assert canceled.status == replaced.status == bulk.status == "accepted"
-    assert any(method == "PATCH" and path == "/v1/orders/order-1" for method, path, _ in client.calls)
+    assert any(
+        method == "PATCH" and path == "/v1/orders/order-1"
+        for method, path, _ in client.calls
+    )
     assert any(path == "/v1/open-orders?account_id=main" for _, path, _ in client.calls)
 
 

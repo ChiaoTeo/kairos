@@ -5,11 +5,10 @@ import hashlib
 from pathlib import Path
 import re
 import tomllib
-from typing import Callable, Mapping, cast
+from typing import Mapping, cast
 
-from kairospy.application.account import AccountApplication
+from kairospy.application.account import AccountApplication, SegmentCompleteness
 from kairospy.application.execution.intents import TargetPositionRequest
-from kairospy.application.execution.admission import IntentAdmissionEvidence
 from kairospy.application.workspace import InstanceWorkspace, Workspace
 from kairospy.domain_types import InstrumentId
 
@@ -17,11 +16,15 @@ from .application import AgentApplication
 from .configuration import AgentLaunchConfig
 from .models import AgentMode
 from .policy import DecisionPolicy
-from .services.controlled_execution import AgentControlledExecutionCommands
+from .services.controlled_execution import (
+    AgentControlledExecutionCommands,
+    UnavailableAgentExecutionCommands,
+)
+from .services.events import AgentEventStream
 from .services.fixture_runtime import FixtureDecisionRuntime
 from .services.openai_runtime import OpenAIDecisionRuntime
 from .services.records import DecisionRecordStore
-from .services.tools import build_mcp_servers
+from .services.tools import AgentToolScope, build_mcp_servers
 from .services.worker import AgentDecisionWorker
 
 
@@ -42,7 +45,9 @@ class AgentProcessComposition:
     application: AgentApplication
     worker: AgentDecisionWorker | None
     config: AgentLaunchConfig
+    workspace_id: str
     profile_hash: str = "disabled"
+    events: AgentEventStream | None = None
 
     def decorate_commands(
         self,
@@ -50,33 +55,58 @@ class AgentProcessComposition:
         *,
         launch_id: str,
         account: AccountApplication,
-        record_admission: Callable[[IntentAdmissionEvidence], None] | None = None,
     ) -> object:
         review = self.config.intent_review
-        if self.worker is None or review is None:
+        if review is None:
             return commands
+        classify_exposure = _exposure_classifier(account)
+        if self.worker is None:
+            if not self.config.enabled:
+                return commands
+            return UnavailableAgentExecutionCommands(
+                commands,
+                agent=self.application,
+                operations=review.operations,
+                classify_exposure=classify_exposure,
+            )
         return AgentControlledExecutionCommands(
             commands,
             agent=self.application,
             worker=self.worker,
+            workspace_id=self.workspace_id,
             launch_id=launch_id,
             profile_hash=self.profile_hash,
             runtime=self.config.runtime,
             model=None if self.config.model is None else self.config.model.model,
             tool_profiles=tuple(
-                f"{selection['server']}/{selection['profile']}"
+                f"{selection['server']}/{selection['profile']}@{_mcp_snapshot_hash(self.config)}"
                 for selection in self.config.mcp
             ),
             operations=review.operations,
             required_contexts=review.required_contexts,
             max_decision_age_seconds=review.max_decision_age_seconds,
-            classify_exposure=_exposure_classifier(account),
-            record_admission=record_admission,
+            classify_exposure=classify_exposure,
         )
 
     def close(self) -> None:
         if self.worker is not None:
             self.worker.close(timeout=self.config.shutdown_timeout_seconds)
+        if self.events is not None:
+            self.events.close()
+
+    def synchronize(self) -> tuple[object, ...]:
+        """Deterministic fixture barrier used only by the backtest driver."""
+
+        if self.worker is None or self.events is None:
+            return ()
+        review = self.config.intent_review
+        timeout = max(
+            self.config.shutdown_timeout_seconds,
+            1.0 + (0.0 if review is None else review.max_decision_age_seconds),
+        )
+        if not self.worker.wait_idle(timeout=timeout):
+            raise TimeoutError("Backtest Decision Agent did not reach an idle barrier")
+        return self.events.drain()
 
 
 def compose_agent(
@@ -84,14 +114,22 @@ def compose_agent(
     workspace: Workspace,
     instance: InstanceWorkspace,
     config: AgentLaunchConfig,
+    tool_scope: AgentToolScope,
 ) -> AgentProcessComposition:
     if not config.enabled:
-        return AgentProcessComposition(AgentApplication.disabled(), None, config)
+        return AgentProcessComposition(
+            AgentApplication.disabled(),
+            None,
+            config,
+            workspace.identity.workspace_id,
+            events=None,
+        )
     try:
         return _compose_enabled_agent(
             workspace=workspace,
             instance=instance,
             config=config,
+            tool_scope=tool_scope,
         )
     except Exception as error:
         if config.required:
@@ -109,7 +147,14 @@ def compose_agent(
         application._bind_health_provider(
             lambda: {"state": "degraded", "last_failure": failure}
         )
-        return AgentProcessComposition(application, None, config, "unavailable")
+        return AgentProcessComposition(
+            application,
+            None,
+            config,
+            workspace.identity.workspace_id,
+            "unavailable",
+            events=AgentEventStream(enabled=True),
+        )
 
 
 def _compose_enabled_agent(
@@ -117,6 +162,7 @@ def _compose_enabled_agent(
     workspace: Workspace,
     instance: InstanceWorkspace,
     config: AgentLaunchConfig,
+    tool_scope: AgentToolScope,
 ) -> AgentProcessComposition:
     review = config.intent_review
     if review is None or config.profile is None:
@@ -154,9 +200,15 @@ def _compose_enabled_agent(
             max_input_tokens=model.max_input_tokens,
             max_output_tokens=model.max_output_tokens,
             request_timeout_seconds=model.request_timeout_seconds,
-            mcp_servers=build_mcp_servers(workspace, config.mcp),
+            mcp_servers=build_mcp_servers(
+                workspace,
+                config.mcp,
+                scope=tool_scope,
+                snapshot=config.mcp_snapshot,
+            ),
         )
     records = DecisionRecordStore(instance.state("strategy", "agent-decisions.sqlite3"))
+    events = AgentEventStream(enabled=True)
     worker = AgentDecisionWorker(
         runtime=runtime,
         policy=DecisionPolicy(
@@ -166,6 +218,7 @@ def _compose_enabled_agent(
         ),
         records=records,
         queue_capacity=config.max_queue_size,
+        publish_terminal=events.publish,
     )
     application._bind_health_provider(worker.health)
     application._bind_runtime_metadata(
@@ -179,7 +232,9 @@ def _compose_enabled_agent(
         application,
         worker,
         config,
+        workspace.identity.workspace_id,
         profile.content_hash,
+        events,
     )
 
 
@@ -221,6 +276,16 @@ def _load_profile(workspace: Workspace, profile_id: str) -> AgentProfile:
         _strings(profile.get("risk_flags", ()), "Agent Profile risk_flags"),
         hashlib.sha256(raw).hexdigest(),
     )
+
+
+def _mcp_snapshot_hash(config: AgentLaunchConfig) -> str:
+    snapshot = config.mcp_snapshot
+    if snapshot is None:
+        return "unversioned"
+    value = snapshot.get("content_hash")
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError("Agent MCP snapshot content_hash is invalid")
+    return value
 
 
 def _profile_from_snapshot(
@@ -291,8 +356,6 @@ def _exposure_classifier(account: AccountApplication):
     def classify(request: object) -> str:
         if not isinstance(request, TargetPositionRequest):
             return "unknown"
-        if request.quantity == 0:
-            return "reduce"
         account_ids = (
             (request.account_id,)
             if request.account_id is not None
@@ -305,10 +368,17 @@ def _exposure_classifier(account: AccountApplication):
             segment = account.account(account_ids[0]).segment(request.segment_key)
         except (LookupError, ValueError):
             return "unknown"
+        if (
+            not segment.is_fresh
+            or segment.completeness is not SegmentCompleteness.COMPLETE
+        ):
+            return "unknown"
         position = segment.position(InstrumentId(request.instrument_id))
         current = 0 if position is None else position.quantity
         if current == request.quantity:
             return "neutral"
+        if request.quantity == 0:
+            return "reduce" if current != 0 else "neutral"
         if current != 0 and (current > 0) == (request.quantity > 0):
             return "reduce" if abs(request.quantity) < abs(current) else "increase"
         return "increase"

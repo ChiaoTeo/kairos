@@ -39,6 +39,7 @@ def _normalize(
         parsed = json.loads(line)
     except (json.JSONDecodeError, ValueError):
         parsed = None
+    event: dict[str, Any]
     if isinstance(parsed, dict):
         event = dict(parsed)
         if event.get("event") == "process_spawned" and isinstance(

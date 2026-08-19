@@ -31,6 +31,7 @@ impl<'a> RiskReservationSagaState<'a> {
     pub const VT_POLICY_VERSION: ::flatbuffers::VOffsetT = 20;
     pub const VT_EXPIRES_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
     pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 24;
+    pub const VT_FUNDING_REQUIREMENT: ::flatbuffers::VOffsetT = 26;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -52,6 +53,9 @@ impl<'a> RiskReservationSagaState<'a> {
         builder.add_policy_version(args.policy_version);
         builder.add_risk_event_sequence(args.risk_event_sequence);
         builder.add_risk_generation(args.risk_generation);
+        if let Some(x) = args.funding_requirement {
+            builder.add_funding_requirement(x);
+        }
         if let Some(x) = args.amount {
             builder.add_amount(x);
         }
@@ -210,6 +214,19 @@ impl<'a> RiskReservationSagaState<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn funding_requirement(&self) -> Option<ExecutionFundingRequirement<'a>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<ExecutionFundingRequirement>>(
+                    RiskReservationSagaState::VT_FUNDING_REQUIREMENT,
+                    None,
+                )
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for RiskReservationSagaState<'_> {
@@ -254,6 +271,11 @@ impl ::flatbuffers::Verifiable for RiskReservationSagaState<'_> {
                 Self::VT_UPDATED_AT_UNIX_NANOS,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<ExecutionFundingRequirement>>(
+                "funding_requirement",
+                Self::VT_FUNDING_REQUIREMENT,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -270,6 +292,7 @@ pub struct RiskReservationSagaStateArgs<'a> {
     pub policy_version: u64,
     pub expires_at_unix_nanos: u64,
     pub updated_at_unix_nanos: u64,
+    pub funding_requirement: Option<::flatbuffers::WIPOffset<ExecutionFundingRequirement<'a>>>,
 }
 impl<'a> Default for RiskReservationSagaStateArgs<'a> {
     #[inline]
@@ -286,6 +309,7 @@ impl<'a> Default for RiskReservationSagaStateArgs<'a> {
             policy_version: 0,
             expires_at_unix_nanos: 0,
             updated_at_unix_nanos: 0,
+            funding_requirement: None,
         }
     }
 }
@@ -380,6 +404,17 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RiskReservationSagaStateBuild
         );
     }
     #[inline]
+    pub fn add_funding_requirement(
+        &mut self,
+        funding_requirement: ::flatbuffers::WIPOffset<ExecutionFundingRequirement<'b>>,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<ExecutionFundingRequirement>>(
+                RiskReservationSagaState::VT_FUNDING_REQUIREMENT,
+                funding_requirement,
+            );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> RiskReservationSagaStateBuilder<'a, 'b, A> {
@@ -426,6 +461,7 @@ impl ::core::fmt::Debug for RiskReservationSagaState<'_> {
         ds.field("policy_version", &self.policy_version());
         ds.field("expires_at_unix_nanos", &self.expires_at_unix_nanos());
         ds.field("updated_at_unix_nanos", &self.updated_at_unix_nanos());
+        ds.field("funding_requirement", &self.funding_requirement());
         ds.finish()
     }
 }

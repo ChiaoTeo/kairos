@@ -65,6 +65,20 @@ class PositionSide(StrEnum):
     SHORT = "short"
 
 
+class EarnHoldingState(StrEnum):
+    ACTIVE = "active"
+    REDEEMING = "redeeming"
+    REDEEMED = "redeemed"
+    UNKNOWN = "unknown"
+
+
+class EarnLiquidity(StrEnum):
+    IMMEDIATE = "immediate"
+    NOTICE = "notice"
+    FIXED_TERM = "fixed_term"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class Balance:
     account_id: AccountId
@@ -85,6 +99,26 @@ class Position:
     average_price: Decimal | None = None
     market_value: Decimal | None = None
     unrealized_pnl: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EarnHolding:
+    """Account-owned non-trading yield position."""
+
+    account_id: AccountId
+    segment_key: SegmentKey
+    holding_key: str
+    product_id: str
+    asset: str
+    principal: Decimal
+    redeemable: Decimal | None
+    state: EarnHoldingState
+    liquidity: EarnLiquidity
+    participant_position_id: str | None = None
+    participant_state: str | None = None
+    notice_seconds: int | None = None
+    matures_at_unix_nanos: int | None = None
+    observed_at_unix_nanos: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +164,8 @@ class AccountSegmentSnapshot:
     positions: tuple[Position, ...]
     freshness: DataFreshness
     generation: int
+    earn_holdings: tuple[EarnHolding, ...] = ()
+    earn_watermark_unix_nanos: int | None = None
     sync_mode: SegmentSyncMode = SegmentSyncMode.UNKNOWN
     sync_lifecycle: SegmentSyncLifecycle = SegmentSyncLifecycle.CONFIGURED
     completeness: SegmentCompleteness = SegmentCompleteness.UNKNOWN

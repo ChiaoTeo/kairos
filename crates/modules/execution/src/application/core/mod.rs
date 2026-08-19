@@ -75,6 +75,7 @@ fn simulation_risk_reservation(
         policy_version: 0,
         expires_at_unix_nanos: u64::MAX.into(),
         updated_at_unix_nanos: now.into(),
+        funding_requirement: None,
     })
 }
 
@@ -97,6 +98,7 @@ fn planned_risk_reservation(
         policy_version: 0,
         expires_at_unix_nanos: UnixNanos::new(0),
         updated_at_unix_nanos: now.into(),
+        funding_requirement: None,
     }
 }
 use crate::services::persistence::{ExecutionOutboxEntry, ExecutionStateStore};
@@ -770,17 +772,11 @@ fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
 }
 
 fn parse_decimal(value: &str) -> Result<(i64, u8), ExecutionError> {
-    let value = value.trim();
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(|_| ExecutionError::Invalid(format!("invalid decimal value: {value}")))?;
-    Ok((
-        if negative { -mantissa } else { mantissa },
-        fraction.len() as u8,
-    ))
+    let value = value
+        .trim()
+        .parse::<kairos_primitives::DecimalParts>()
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
+    Ok((value.mantissa(), value.scale()))
 }
 
 fn audit_matches(event: &ExecutionAuditEvent, query: &ExecutionAuditQuery) -> bool {

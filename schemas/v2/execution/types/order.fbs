@@ -143,6 +143,19 @@ enum RiskReservationSagaLifecycle:ubyte {
   FAILED = 10
 }
 
+table ExecutionFundingRequirement {
+  required_margin:kairos.common.v2.Decimal64 (required);
+  available_margin:kairos.common.v2.Decimal64 (required);
+  shortfall:kairos.common.v2.Decimal64 (required);
+  margin_rule_id:string (required);
+  risk_decision_id:string (required);
+  risk_policy_version:ulong;
+  account_snapshot_watermark:ulong;
+  broker:string (required);
+  segment:string (required);
+  collateral_asset:string (required);
+}
+
 table RiskReservationSagaState {
   order_id:string (required);
   reservation_id:string (required);
@@ -155,4 +168,5 @@ table RiskReservationSagaState {
   policy_version:ulong;
   expires_at_unix_nanos:ulong;
   updated_at_unix_nanos:ulong;
+  funding_requirement:ExecutionFundingRequirement;
 }

@@ -1,6 +1,9 @@
 from .application import AgentApplication
 from .configuration import AgentLaunchConfig, AgentModelConfig, IntentReviewConfig
 from .models import (
+    AgentDecisionNotice,
+    AgentEvent,
+    AgentEventStatus,
     AgentContextDocument,
     AgentContextReceipt,
     AgentContextSnapshot,
@@ -27,6 +30,9 @@ from .models import (
 )
 
 __all__ = [
+    "AgentDecisionNotice",
+    "AgentEvent",
+    "AgentEventStatus",
     "AgentApplication",
     "AgentLaunchConfig",
     "AgentModelConfig",

@@ -34,9 +34,22 @@ from kairospy.application.agent import (
     AgentContextDocument,
     AgentContextReceipt,
     AgentContextStatus,
+    AgentDecisionNotice,
+    AgentEvent,
+    AgentEventStatus,
     AgentMode,
     AgentModeReceipt,
     AgentModeStatus,
+)
+from kairospy.application.capital import (
+    CapitalApplication,
+    CapitalAvailability,
+    CapitalReadiness,
+    FundingLocation,
+    FundingObjective,
+    FundingObjectiveReceipt,
+    FundingObjectiveStatus,
+    FundingPriority,
 )
 from kairospy.application.execution import (
     AccountExecution,
@@ -101,6 +114,18 @@ from kairospy.application.notification import (
     NotificationReceipt,
     NotificationRequest,
     NotificationSeverity,
+)
+from kairospy.application.portfolio import (
+    AccountWatermark,
+    PortfolioApplication,
+    PortfolioCash,
+    PortfolioEquity,
+    PortfolioFreshness,
+    PortfolioHistoryPoint,
+    PortfolioHolding,
+    PortfolioSnapshot,
+    SegmentWatermark,
+    ValuationWatermark,
 )
 from kairospy.application.reference import (
     AmbiguousReferenceError,

@@ -53,12 +53,13 @@ def acquire_launch_leases(
     launch_id: str,
     instance: str,
     mode: str,
-) -> None:
+) -> dict[str, str]:
     if mode == "live" and not account_ids:
         raise LaunchRuntimeError("live launch requires at least one account")
     accounts = AccountAdminApplication(workspace)
     leases = TradeLeaseApplication(workspace)
     acquired: list[tuple[str, str]] = []
+    fencing_tokens: dict[str, str] = {}
     try:
         for account_id in account_ids:
             account = accounts.show(account_id)
@@ -70,7 +71,7 @@ def acquire_launch_leases(
                     f"account {account_id} is not a live/testnet account"
                 )
             broker = str(account.get("broker") or "")
-            leases.acquire(
+            lease = leases.acquire(
                 broker=broker,
                 account_id=account_id,
                 environment=str(account.get("environment") or mode),
@@ -79,6 +80,7 @@ def acquire_launch_leases(
                 mode=mode,
             )
             acquired.append((broker, account_id))
+            fencing_tokens[account_id] = str(lease["fencing_token"])
     except Exception:
         for broker, account_id in reversed(acquired):
             try:
@@ -86,6 +88,7 @@ def acquire_launch_leases(
             except (FileNotFoundError, ValueError):
                 pass
         raise
+    return fencing_tokens
 
 
 def release_launch_leases(
@@ -193,7 +196,7 @@ def cleanup_instance_components(
         account_names = [
             account_component_name(value) for value in (account_ids or [])
         ] or ["account"]
-    for component in ("execution", "risk"):
+    for component in ("execution", "risk", "capital"):
         stopped[component] = stop_component_safely(
             components, component, instance_workspace=instance_workspace
         )
@@ -388,7 +391,7 @@ class LaunchRuntimeApplication:
             launch_id, mode=mode, instance_id=instance, state="starting"
         )
         try:
-            acquire_launch_leases(
+            account_lease_fences = acquire_launch_leases(
                 self.workspace,
                 lease_account_ids,
                 launch_id=launch_id,
@@ -491,7 +494,10 @@ class LaunchRuntimeApplication:
                     "health": str(instance_workspace.health(socket_name)),
                     "socket_name": socket_name,
                     "required_segments": list(required_segments),
+                    "permitted_segments": sorted(configured_segments),
                     "view_root": str(instance_workspace.snapshot()),
+                    "broker": str(account_records[bound_account_id].get("broker") or ""),
+                    "lease_fence": account_lease_fences[bound_account_id],
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
             component_endpoints: dict[str, dict[str, Any]] = {
@@ -532,6 +538,14 @@ class LaunchRuntimeApplication:
                 accounts=account_endpoints,
                 components=component_endpoints,
             )
+            if bool(plan.capital.get("enabled", False)):
+                components.ensure_running(
+                    "capital", instance_workspace=instance_workspace
+                )
+                component_endpoints["capital"] = {
+                    "socket": str(instance_workspace.socket("capital")),
+                    "health": str(instance_workspace.health("capital")),
+                }
             if execution_enabled:
                 components.ensure_running(
                     "execution",
@@ -724,7 +738,11 @@ class LaunchRuntimeApplication:
                 else None
             ),
         )
-        for name in ("risk", "execution"):
+        for name in ("risk", "execution", "capital"):
+            if name == "capital" and not (
+                isinstance(endpoints, dict) and name in endpoints
+            ):
+                continue
             result[name] = components.status(
                 name, instance_workspace=instance_workspace
             )
@@ -828,7 +846,7 @@ class LaunchRuntimeApplication:
                 "status": "stop_failed",
                 "error": str(error),
             }
-        for component in ("execution", "risk"):
+        for component in ("execution", "risk", "capital"):
             stopped[component] = stop_component_safely(
                 components, component, instance_workspace=instance_workspace
             )

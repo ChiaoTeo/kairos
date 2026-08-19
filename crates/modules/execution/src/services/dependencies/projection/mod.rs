@@ -406,19 +406,17 @@ pub(super) fn read_account_projection(
         }
         balances.extend(segment.balances().iter().map(|balance| ProjectedBalance {
             asset_code: balance.asset_code().unwrap_or_default().to_owned(),
-            available: balance.available().map(|value| AccountDecimal {
-                mantissa: value.mantissa(),
-                scale: value.scale(),
+            available: balance.available().map(|value| {
+                AccountDecimal::new(value.mantissa(), value.scale())
+                    .expect("Account balance satisfies contract decimal bounds")
             }),
         }));
         positions.extend(segment.positions().iter().map(|position| {
             let quantity = position.quantity();
             ProjectedPosition {
                 instrument_id: position.instrument_id().to_owned(),
-                quantity: AccountDecimal {
-                    mantissa: quantity.mantissa(),
-                    scale: quantity.scale(),
-                },
+                quantity: AccountDecimal::new(quantity.mantissa(), quantity.scale())
+                    .expect("Account position satisfies contract decimal bounds"),
             }
         }));
     }

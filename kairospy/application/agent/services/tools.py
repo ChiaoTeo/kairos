@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import json
 from pathlib import Path
 import re
 import tomllib
@@ -31,15 +32,51 @@ class MCPServerBinding:
     server: AsyncContextManager[Any]
     required: bool
     name: str
+    policies: tuple["MCPToolPolicy", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentToolScope:
+    workspace_id: str
+    launch_id: str
+    instance_id: str
+    strategy_id: str
+    account_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("workspace_id", "launch_id", "instance_id", "strategy_id"):
+            value = getattr(self, name)
+            if not value.strip() or len(value) > 256:
+                raise ValueError(f"Agent tool scope {name} is invalid")
+        if len(self.account_ids) > 128 or any(
+            not value.strip() or len(value) > 256 for value in self.account_ids
+        ):
+            raise ValueError("Agent tool scope account_ids are invalid")
+        object.__setattr__(self, "account_ids", tuple(dict.fromkeys(self.account_ids)))
+
+
+@dataclass(frozen=True, slots=True)
+class MCPToolPolicy:
+    tool_name: str
+    max_result_bytes: int
+    max_rows: int
+    max_age_seconds: float | None
 
 
 def build_mcp_servers(
     workspace: Workspace,
     selections: tuple[Mapping[str, object], ...],
+    *,
+    scope: AgentToolScope,
+    snapshot: Mapping[str, object] | None = None,
 ) -> tuple[MCPServerBinding, ...]:
     if not selections:
         return ()
-    values = _load_toml(workspace.paths.agent_mcp_config(), "Agent MCP config")
+    values = (
+        snapshot
+        if snapshot is not None
+        else _load_toml(workspace.paths.agent_mcp_config(), "Agent MCP config")
+    )
     servers = _mapping(values.get("servers"), "Agent MCP servers")
     profiles = _mapping(values.get("profiles"), "Agent MCP profiles")
     sdk = importlib.import_module("agents.mcp")
@@ -62,6 +99,47 @@ def build_mcp_servers(
             raise ValueError(
                 "MCP profile contains a non-approved tool: " + sorted(forbidden)[0]
             )
+        if profile.get("scope_enforced") is not True:
+            raise ValueError(f"MCP profile {profile_id} must enforce Strategy scope")
+        max_result_bytes = _integer(
+            profile.get("max_result_bytes", 65_536),
+            f"MCP profile {profile_id}.max_result_bytes",
+            minimum=1,
+            maximum=65_536,
+        )
+        max_rows = _integer(
+            profile.get("max_rows", 200),
+            f"MCP profile {profile_id}.max_rows",
+            minimum=1,
+            maximum=10_000,
+        )
+        freshness_required = frozenset(
+            _strings(
+                profile.get("freshness_required_tools", ()),
+                f"MCP profile {profile_id}.freshness_required_tools",
+            )
+        )
+        if not freshness_required.issubset(allowed):
+            raise ValueError(
+                f"MCP profile {profile_id} freshness tools must be allowed tools"
+            )
+        max_age_seconds = (
+            _number(
+                profile.get("max_age_seconds"),
+                f"MCP profile {profile_id}.max_age_seconds",
+            )
+            if freshness_required
+            else None
+        )
+        policies = tuple(
+            MCPToolPolicy(
+                tool_name,
+                max_result_bytes,
+                max_rows,
+                max_age_seconds if tool_name in freshness_required else None,
+            )
+            for tool_name in allowed
+        )
         tool_filter = sdk.create_static_tool_filter(allowed_tool_names=list(allowed))
         transport = _text(server.get("transport"), f"MCP server {server_id}.transport")
         common = {
@@ -75,11 +153,18 @@ def build_mcp_servers(
             "use_structured_content": True,
             "max_retry_attempts": 0,
             "require_approval": "never",
+            "failure_error_function": (
+                None if bool(selection.get("required", False)) else _optional_mcp_error
+            ),
         }
         if transport == "stdio":
             command = _text(server.get("command"), f"MCP server {server_id}.command")
             args = _strings(server.get("args", ()), f"MCP server {server_id}.args")
-            params: dict[str, object] = {"command": command, "args": list(args)}
+            params: dict[str, object] = {
+                "command": command,
+                "args": list(args),
+                "env": _scope_environment(scope),
+            }
             cwd = server.get("cwd")
             if cwd is not None:
                 params["cwd"] = str(_workspace_path(workspace, str(cwd)))
@@ -88,12 +173,15 @@ def build_mcp_servers(
             url = _text(server.get("url"), f"MCP server {server_id}.url")
             if not url.startswith(("https://", "http://127.0.0.1", "http://localhost")):
                 raise ValueError("Remote MCP URL must use HTTPS")
-            params = {"url": url}
+            params = {"url": url, "headers": _scope_headers(scope)}
             credential = server.get("credential")
             if credential is not None:
                 secret = _load_credential(workspace, str(credential))
                 token = _text(secret.get("token"), f"MCP credential {credential}.token")
-                params["headers"] = {"Authorization": f"Bearer {token}"}
+                params["headers"] = {
+                    **cast(dict[str, str], params["headers"]),
+                    "Authorization": f"Bearer {token}",
+                }
             instance = sdk.MCPServerStreamableHttp(params, **common)
         else:
             raise ValueError(f"MCP server {server_id} has unsupported transport")
@@ -102,6 +190,7 @@ def build_mcp_servers(
                 instance,
                 bool(selection.get("required", False)),
                 f"{server_id}/{profile_id}",
+                policies,
             )
         )
     return tuple(bindings)
@@ -162,4 +251,43 @@ def _number(value: object, name: str) -> float:
     return float(value)
 
 
-__all__ = ["MCPServerBinding", "build_mcp_servers"]
+def _integer(value: object, name: str, *, minimum: int, maximum: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _scope_environment(scope: AgentToolScope) -> dict[str, str]:
+    return {
+        "KAIROS_AGENT_WORKSPACE_ID": scope.workspace_id,
+        "KAIROS_AGENT_LAUNCH_ID": scope.launch_id,
+        "KAIROS_AGENT_INSTANCE_ID": scope.instance_id,
+        "KAIROS_AGENT_STRATEGY_ID": scope.strategy_id,
+        "KAIROS_AGENT_ACCOUNT_IDS": json.dumps(scope.account_ids),
+    }
+
+
+def _scope_headers(scope: AgentToolScope) -> dict[str, str]:
+    return {
+        "X-Kairos-Workspace-Id": scope.workspace_id,
+        "X-Kairos-Launch-Id": scope.launch_id,
+        "X-Kairos-Instance-Id": scope.instance_id,
+        "X-Kairos-Strategy-Id": scope.strategy_id,
+        "X-Kairos-Account-Ids": ",".join(scope.account_ids),
+    }
+
+
+def _optional_mcp_error(context: object, error: Exception) -> str:
+    # Never return the provider exception to the model: it may contain an URL,
+    # header, account identifier, or credential fragment.
+    return '{"kairos_tool_status":"unavailable"}'
+
+
+__all__ = [
+    "AgentToolScope",
+    "MCPServerBinding",
+    "MCPToolPolicy",
+    "build_mcp_servers",
+]

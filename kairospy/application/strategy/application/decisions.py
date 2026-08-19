@@ -9,15 +9,31 @@ from typing import Literal, Mapping
 
 from kairospy.application.execution import (
     ExecutionIntent,
+    Fill,
     FillEvent,
     IntentStatus,
     IntentUpdateEvent,
 )
-from kairospy.application.notification import NotificationApplication
+from kairospy.application.notification import (
+    NotificationApplication,
+    NotificationSeverity,
+)
 from kairospy.domain_types import EventMetadata
 from kairospy.strategy.clock import StrategyClock, TimerEvent, parse_duration
 
 from ..services.decision_journal import StrategyDecisionJournal
+
+
+def _items(value: object, name: str) -> tuple[object, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"decision journal {name} must be an array")
+    return tuple(value)
+
+
+def _integer(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"decision journal {name} must be an integer")
+    return value
 
 
 class DecisionLifecycle(StrEnum):
@@ -49,6 +65,23 @@ class EffectEvidence:
             raise ValueError("effect evidence sequence must be positive")
         if self.observed_at_unix_nanos is not None and self.observed_at_unix_nanos < 0:
             raise ValueError("effect evidence observed time cannot be negative")
+
+
+def _evidence_from_mapping(value: Mapping[str, object]) -> EffectEvidence:
+    event_sequence = value.get("event_sequence")
+    observed_at = value.get("observed_at_unix_nanos")
+    return EffectEvidence(
+        owner=str(value["owner"]),
+        reference_id=str(value["reference_id"]),
+        event_sequence=None
+        if event_sequence is None
+        else _integer(event_sequence, "evidence event_sequence"),
+        observed_at_unix_nanos=None
+        if observed_at is None
+        else _integer(observed_at, "evidence observed_at_unix_nanos"),
+        value=None if value.get("value") is None else str(value["value"]),
+        unit=None if value.get("unit") is None else str(value["unit"]),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,7 +424,9 @@ class StrategyDecisionApplication:
                 source_event_sequence=event.metadata.sequence,
             )
             return self._snapshot(state)
-        occurred_at = event.metadata.occurred_at_unix_nanos
+        occurred_at = event.metadata.occurred_at_unix_nanos or self._unix_nanos(
+            fill.occurred_at
+        )
         for horizon in revised_horizons:
             state.due_horizons.add(horizon)
             state.due_at_unix_nanos[horizon] = occurred_at
@@ -674,14 +709,15 @@ class StrategyDecisionApplication:
 
     def _notify_intent(self, event: IntentUpdateEvent) -> None:
         status = event.data.status
-        severity = {
+        severity_by_status: dict[IntentStatus, NotificationSeverity] = {
             IntentStatus.REJECTED: "warning",
             IntentStatus.CANCELED: "warning",
             IntentStatus.EXPIRED: "warning",
             IntentStatus.FAILED: "error",
             IntentStatus.COMPENSATING: "warning",
             IntentStatus.RECONCILIATION_REQUIRED: "critical",
-        }.get(status, "info")
+        }
+        severity = severity_by_status.get(status, "info")
         if status not in {
             IntentStatus.SATISFIED,
             IntentStatus.COMPLETED,
@@ -705,17 +741,27 @@ class StrategyDecisionApplication:
             },
         )
 
-    def _notify(self, **request: object) -> None:
+    def _notify(
+        self,
+        *,
+        title: str,
+        body: str,
+        severity: NotificationSeverity,
+        dedupe_key: str | None,
+        attributes: Mapping[str, str],
+    ) -> None:
         if not self._notification_routes:
             return
         receipt = self._notifications.publish(
-            routes=self._notification_routes, **request
+            title=title,
+            body=body,
+            severity=severity,
+            dedupe_key=dedupe_key,
+            attributes=attributes,
+            routes=self._notification_routes,
         )
-        attributes = request.get("attributes")
-        if not isinstance(attributes, Mapping):
-            return
         decision_id = attributes.get("strategy_decision_id")
-        if not isinstance(decision_id, str):
+        if decision_id is None:
             return
         state = self._states.get(decision_id)
         if state is None:
@@ -728,8 +774,8 @@ class StrategyDecisionApplication:
             routes=list(getattr(receipt, "routes", self._notification_routes)),
             accepted_destinations=getattr(receipt, "accepted_destinations", None),
             reason=getattr(receipt, "reason", None),
-            dedupe_key=request.get("dedupe_key"),
-            severity=request.get("severity"),
+            dedupe_key=dedupe_key,
+            severity=severity,
         )
 
     def _snapshot(self, state: _DecisionState) -> StrategyDecision:
@@ -771,7 +817,9 @@ class StrategyDecisionApplication:
 
     def _restore(self) -> None:
         for record in self._journal.records():
-            self._sequence = max(self._sequence, int(record.get("sequence", 0)))
+            self._sequence = max(
+                self._sequence, _integer(record.get("sequence", 0), "sequence")
+            )
             kind = str(record.get("record_type", ""))
             decision_id = str(record.get("strategy_decision_id", ""))
             if kind == "decision_recorded":
@@ -780,9 +828,14 @@ class StrategyDecisionApplication:
                         str(value["name"]),
                         None
                         if value.get("delay_nanos") is None
-                        else timedelta(microseconds=int(value["delay_nanos"]) / 1_000),
+                        else timedelta(
+                            microseconds=_integer(
+                                value["delay_nanos"], "horizon delay_nanos"
+                            )
+                            / 1_000
+                        ),
                     )
-                    for value in record.get("horizons", [])
+                    for value in _items(record.get("horizons", []), "horizons")
                     if isinstance(value, dict)
                 )
                 self._states[decision_id] = _DecisionState(
@@ -792,13 +845,15 @@ class StrategyDecisionApplication:
                     str(record["reason"]),
                     str(record["expected_outcome"]),
                     tuple(
-                        EffectEvidence(**value)
-                        for value in record.get("evidence", [])
-                        if isinstance(value, dict)
+                        _evidence_from_mapping(value)
+                        for value in _items(record.get("evidence", []), "evidence")
+                        if isinstance(value, Mapping)
                     ),
-                    int(record["expected_intent_count"]),
+                    _integer(record["expected_intent_count"], "expected_intent_count"),
                     horizons,
-                    int(record["occurred_at_unix_nanos"]),
+                    _integer(
+                        record["occurred_at_unix_nanos"], "occurred_at_unix_nanos"
+                    ),
                 )
                 continue
             state = self._states.get(decision_id)
@@ -817,15 +872,19 @@ class StrategyDecisionApplication:
             elif kind == "evaluation_due":
                 horizon = str(record["horizon"])
                 state.due_horizons.add(horizon)
-                state.due_at_unix_nanos[horizon] = int(record["occurred_at_unix_nanos"])
+                state.due_at_unix_nanos[horizon] = _integer(
+                    record["occurred_at_unix_nanos"], "occurred_at_unix_nanos"
+                )
             elif kind == "evaluation_pending":
-                for value in record.get("due_horizons", []):
+                for value in _items(record.get("due_horizons", []), "due_horizons"):
                     horizon = str(value)
                     state.due_horizons.add(horizon)
                     state.due_at_unix_nanos.setdefault(
                         horizon, state.recorded_at_unix_nanos
                     )
-                for value in record.get("scheduled_horizons", []):
+                for value in _items(
+                    record.get("scheduled_horizons", []), "scheduled_horizons"
+                ):
                     if not isinstance(value, dict):
                         continue
                     due_at = datetime.fromisoformat(str(value["due_at"]))
@@ -851,8 +910,10 @@ class StrategyDecisionApplication:
             elif kind in {"fill_observed", "effect_revision_required"}:
                 state.observed_fill_ids.add(str(record["fill_id"]))
                 if kind == "effect_revision_required":
-                    due_at = int(record["occurred_at_unix_nanos"])
-                    for value in record.get("horizons", []):
+                    due_at = _integer(
+                        record["occurred_at_unix_nanos"], "occurred_at_unix_nanos"
+                    )
+                    for value in _items(record.get("horizons", []), "horizons"):
                         horizon = str(value)
                         state.due_horizons.add(horizon)
                         state.due_at_unix_nanos[horizon] = due_at
@@ -889,18 +950,20 @@ class StrategyDecisionApplication:
     @staticmethod
     def _evaluation_from_dict(value: Mapping[str, object]) -> DecisionEffectEvaluation:
         evidence = tuple(
-            EffectEvidence(**item)
-            for item in value.get("evidence", [])
-            if isinstance(item, dict)
+            _evidence_from_mapping(item)
+            for item in _items(value.get("evidence", []), "evaluation evidence")
+            if isinstance(item, Mapping)
         )
         return DecisionEffectEvaluation(
             str(value["evaluation_id"]),
             str(value["strategy_decision_id"]),
-            tuple(str(item) for item in value.get("intent_ids", [])),
+            tuple(
+                str(item) for item in _items(value.get("intent_ids", []), "intent_ids")
+            ),
             str(value["horizon"]),
-            int(value["revision"]),
+            _integer(value["revision"], "evaluation revision"),
             str(value["outcome"]),  # type: ignore[arg-type]
-            int(value["evaluated_at_unix_nanos"]),
+            _integer(value["evaluated_at_unix_nanos"], "evaluated_at_unix_nanos"),
             str(value["summary"]),
             evidence,
         )

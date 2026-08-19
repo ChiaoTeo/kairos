@@ -235,6 +235,8 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut application = ExecutionApplication::assemble_for_test(
@@ -268,6 +270,8 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
                 "tokenize".into(),
             ],
             ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fully-funded".into()),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -306,6 +310,8 @@ fn configure_test_access(application: &mut ExecutionApplication) {
                 "tokenize".into(),
             ],
             ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fully-funded".into()),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -333,6 +339,8 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             supported_order_types: vec![OrderType::Market, OrderType::Limit],
             supported_options: Vec::new(),
             ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fully-funded".into()),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -377,6 +385,8 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
             ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fully-funded".into()),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Exchange, "simulated").unwrap(),
@@ -469,6 +479,26 @@ fn not_sent_authorization_risk() -> SimulatedRiskBehavior {
             "risk socket was unavailable before send".into(),
         )),
         reconciliation: SimulatedRiskReconciliation::Missing,
+        ..SimulatedRiskBehavior::default()
+    }
+}
+
+fn insufficient_funding_risk() -> SimulatedRiskBehavior {
+    SimulatedRiskBehavior {
+        authorization_failure: Some(RiskCommandFailure::DeferredInsufficientFunding {
+            requirement: kairos_execution::application::ExecutionFundingRequirement {
+                required_margin: Money::new(100, 0).unwrap(),
+                available_margin: Money::new(40, 0).unwrap(),
+                shortfall: Money::new(60, 0).unwrap(),
+                margin_rule_id: "binance-usdm-initial-margin:v1".into(),
+                risk_decision_id: "risk-decision:funding".into(),
+                risk_policy_version: 7,
+                account_snapshot_watermark: 11,
+                broker: "binance".into(),
+                segment: "usd-m".into(),
+                collateral_asset: "USDT".into(),
+            },
+        }),
         ..SimulatedRiskBehavior::default()
     }
 }
@@ -599,6 +629,8 @@ fn normalized_remote_execution_event_reconciles_a_fill() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut app = ExecutionApplication::assemble_for_test_with_query(
@@ -716,6 +748,8 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut app = ExecutionApplication::assemble_for_test_with_query(
@@ -973,6 +1007,8 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut first = ExecutionApplication::assemble_for_test(
@@ -1035,6 +1071,8 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut app = ExecutionApplication::assemble_for_test(
@@ -1177,6 +1215,53 @@ fn risk_authorization_not_sent_is_terminal_and_does_not_enter_uncertain_recovery
         kairos_execution::application::RiskReservationSagaStatus::Failed
     );
     assert!(!matches!(error, ExecutionError::Indeterminate(_)));
+}
+
+#[test]
+fn insufficient_funding_is_audited_and_releases_unsubmitted_capacity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut app = application(&path);
+    attach_simulated_risk(&mut app, insufficient_funding_risk());
+
+    let error = app
+        .submit(submit_order(
+            "risk-funding-shortfall",
+            None,
+            "main",
+            "BTCUSDT",
+            OrderSide::Buy,
+            OrderType::Limit,
+            1,
+            Some(100),
+            None,
+        ))
+        .unwrap_err();
+    assert!(matches!(error, ExecutionError::Invalid(_)));
+    assert_eq!(app.orders(None)[0].status, ExecutionOrderStatus::Rejected);
+    assert!(!app.commitments()[0].status.consumes_capacity());
+    let reservation = &app.risk_reservations()[0];
+    assert_eq!(
+        reservation.status,
+        kairos_execution::application::RiskReservationSagaStatus::Failed
+    );
+    let requirement = reservation.funding_requirement.as_ref().unwrap();
+    assert_eq!(requirement.shortfall, Money::new(60, 0).unwrap());
+    assert_eq!(requirement.account_snapshot_watermark, 11);
+
+    let restored = ExecutionApplication::assemble_for_test(
+        "execution",
+        None,
+        Some(Box::new(FileExecutionStore::new(&path))),
+    )
+    .unwrap();
+    assert_eq!(
+        restored.risk_reservations()[0]
+            .funding_requirement
+            .as_ref()
+            .unwrap(),
+        requirement
+    );
 }
 
 #[test]
@@ -1985,6 +2070,8 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        initial_margin_rate_bps: None,
+        margin_rule_id: None,
     })
     .unwrap();
     let mut app = ExecutionApplication::assemble_for_test(
@@ -2332,6 +2419,8 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
             ready: true,
+            initial_margin_rate_bps: Some(10_000),
+            margin_rule_id: Some("test:fully-funded".into()),
         },
         ParticipantInstrumentRef::new(
             ParticipantRef::new(ParticipantKind::Broker, "broker").unwrap(),

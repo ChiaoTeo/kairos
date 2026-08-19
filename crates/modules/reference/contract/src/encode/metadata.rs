@@ -433,29 +433,11 @@ fn decimal(value: Option<&str>) -> ContractResult<Option<Decimal64>> {
     let Some(value) = value else {
         return Ok(None);
     };
-    let value = value.trim();
-    let negative = value.starts_with('-');
-    let value = value.strip_prefix(['+', '-']).unwrap_or(value);
-    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    if whole.is_empty() && fraction.is_empty()
-        || fraction.len() > 18
-        || !whole.chars().all(|c| c.is_ascii_digit())
-        || !fraction.chars().all(|c| c.is_ascii_digit())
-    {
-        return Err(ContractError::Invalid(format!(
-            "invalid decimal value: {value}"
-        )));
-    }
-    let digits = format!("{whole}{fraction}");
-    let mut mantissa = digits
-        .parse::<i128>()
-        .map_err(|_| ContractError::Invalid(format!("decimal overflow: {value}")))?;
-    if negative {
-        mantissa = -mantissa;
-    }
-    let mantissa = i64::try_from(mantissa)
-        .map_err(|_| ContractError::Invalid(format!("decimal overflow: {value}")))?;
-    Ok(Some(Decimal64::new(mantissa, fraction.len() as u8)))
+    let value = value
+        .trim()
+        .parse::<kairos_primitives::DecimalParts>()
+        .map_err(|error| ContractError::Invalid(error.to_string()))?;
+    Ok(Some(Decimal64::new(value.mantissa(), value.scale())))
 }
 
 fn non_empty<'a, A: Allocator + 'a>(

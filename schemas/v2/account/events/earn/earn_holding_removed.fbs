@@ -1,0 +1,15 @@
+include "../../../common/metadata.fbs";
+include "../../types/provenance.fbs";
+
+namespace kairos.account.v2;
+
+table EarnHoldingRemoved {
+  metadata:kairos.common.v2.EventMetadata (required);
+  account_id:string (required);
+  segment_key:string (required);
+  holding_key:string (required);
+  provenance:AccountFactProvenance;
+}
+
+root_type EarnHoldingRemoved;
+file_identifier "AER2";

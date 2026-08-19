@@ -1,6 +1,6 @@
 use kairos_protocol::generated::kairos::risk::v_2::{
     reservation_reserved_buffer_has_identifier, risk_latest_view_buffer_has_identifier,
-    root_as_reservation_reserved, root_as_risk_latest_view,
+    root_as_reservation_reserved, root_as_risk_decision_made, root_as_risk_latest_view,
 };
 use kairos_risk::composition::{
     compose_risk_application, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
@@ -8,7 +8,7 @@ use kairos_risk::composition::{
 use kairos_risk::{
     Amount, AuthorizeRequest, CircuitScope, CloseCircuit, ConsumeReservation, EnforcementMode,
     Metric, OpenCircuit, PolicyScope, PublishPolicy, ReleaseReservation, ReservationStatus,
-    ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskPolicy,
+    ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskPolicy, TradeRiskProposal,
 };
 
 fn policy_id(value: &str) -> kairos_primitives::PolicyId {
@@ -72,8 +72,12 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
         strategy_id: strategy_id("strategy"),
         instrument_id: kairos_primitives::InstrumentId::new("instrument").unwrap(),
         exchange_id: kairos_primitives::Exchange::new("exchange").unwrap(),
-        metric: Metric::Notional,
-        amount: amount(value),
+        proposal: TradeRiskProposal {
+            notional: amount(value),
+            initial_margin_rate_bps: 10_000.into(),
+            reduce_only: false,
+            margin_rule_id: "test:fully-funded".into(),
+        },
         at_unix_nanos: 1.into(),
         reservation_ttl_nanos: 100.into(),
         dependency_generation: 1.into(),
@@ -112,7 +116,9 @@ fn consume_and_release_are_terminal_and_update_timestamp() {
         .unwrap();
     assert_eq!(consumed.status, ReservationStatus::Consumed);
     assert_eq!(consumed.updated_at_unix_nanos, 2.into());
-    assert_eq!(app.snapshot().limits[0].used, amount(40));
+    // Point-in-time budgets are replaced by the next Account observation;
+    // consuming an order must not accumulate them permanently.
+    assert_eq!(app.snapshot().limits[0].used, amount(0));
     assert_eq!(app.snapshot().limits[0].reserved, amount(0));
     assert!(app
         .release(ReleaseReservation {
@@ -301,7 +307,6 @@ fn pre_trade_rejects_stale_market_and_insufficient_margin() {
     )
     .unwrap();
     let mut request = request("margin-check", 120);
-    request.metric = Metric::Margin;
     request.context = Some(RiskContext {
         available_margin: amount(100),
         market_is_fresh: false,
@@ -355,9 +360,9 @@ fn exposure_context_is_checked_against_policy_before_reservation() {
     exposure_policy.metric = Metric::GrossExposure;
     let mut app = compose_risk_application("risk", vec![exposure_policy], None).unwrap();
     let mut order = request("exposure", 30);
-    order.metric = Metric::GrossExposure;
     order.context = Some(RiskContext {
         current_exposure: amount(80),
+        available_margin: amount(1_000),
         market_is_fresh: true,
         ..RiskContext::default()
     });
@@ -367,6 +372,94 @@ fn exposure_context_is_checked_against_policy_before_reservation() {
         .reason_codes
         .contains(&kairos_risk::ReasonCode::LimitExceeded));
     assert!(app.snapshot().reservations.is_empty());
+}
+
+#[test]
+fn proposal_calculates_margin_and_returns_a_structured_shortfall() {
+    let mut margin = policy("margin", 50, "main");
+    margin.metric = Metric::Margin;
+    let mut app = compose_risk_application(
+        "risk",
+        vec![policy("notional", 1_000, "main"), margin],
+        None,
+    )
+    .unwrap();
+    let mut order = request("funding-shortfall", 100);
+    order.proposal.initial_margin_rate_bps = 1_000.into();
+    order.proposal.margin_rule_id = "reference:binance-usdm:tier-1:v1".into();
+    order.context = Some(RiskContext {
+        available_margin: amount(9),
+        ..RiskContext::default()
+    });
+
+    let decision = app.authorize_and_reserve(order).unwrap();
+    assert!(!decision.allowed);
+    let funding = decision.funding_requirement.unwrap();
+    assert_eq!(funding.required_margin, amount(10));
+    assert_eq!(funding.available_margin, amount(9));
+    assert_eq!(funding.shortfall, amount(1));
+    assert_eq!(funding.margin_rule_id, "reference:binance-usdm:tier-1:v1");
+    assert!(app.snapshot().reservations.is_empty());
+
+    while !matches!(
+        app.pending_event(),
+        Some(kairos_risk::RiskEvent::DecisionEvaluated { .. })
+    ) {
+        app.acknowledge_event();
+    }
+    let mut writer = FlatbuffersRiskEventWriter::new("risk");
+    writer.publish(app.pending_event().unwrap()).unwrap();
+    let payload = writer.last_payload.unwrap();
+    let encoded = root_as_risk_decision_made(&payload)
+        .unwrap()
+        .decision()
+        .funding_requirement()
+        .unwrap();
+    assert_eq!(encoded.required_margin().mantissa(), 10);
+    assert_eq!(encoded.shortfall().mantissa(), 1);
+    assert_eq!(encoded.margin_rule_id(), "reference:binance-usdm:tier-1:v1");
+}
+
+#[test]
+fn proposal_reserves_all_configured_metrics_atomically() {
+    let mut margin = policy("margin", 10, "main");
+    margin.metric = Metric::Margin;
+    let mut app =
+        compose_risk_application("risk", vec![policy("notional", 100, "main"), margin], None)
+            .unwrap();
+    let mut order = request("multi-metric", 100);
+    order.proposal.initial_margin_rate_bps = 1_000.into();
+    order.context = Some(RiskContext {
+        available_margin: amount(10),
+        ..RiskContext::default()
+    });
+
+    let decision = app.authorize_and_reserve(order).unwrap();
+    assert!(decision.allowed);
+    let reservation = decision.reservation.unwrap();
+    assert!(reservation
+        .allocations
+        .iter()
+        .any(|value| value.metric == Metric::Notional && value.amount == amount(100)));
+    assert!(reservation
+        .allocations
+        .iter()
+        .any(|value| value.metric == Metric::Margin && value.amount == amount(10)));
+    let resized = app
+        .resize(ResizeReservation {
+            reservation_id: reservation.reservation_id,
+            amount: amount(50),
+            at_unix_nanos: 2.into(),
+        })
+        .unwrap();
+    assert!(resized
+        .allocations
+        .iter()
+        .any(|value| value.metric == Metric::Notional && value.amount == amount(50)));
+    assert!(resized
+        .allocations
+        .iter()
+        .any(|value| value.metric == Metric::Margin && value.amount == amount(5)));
 }
 
 #[test]
@@ -442,7 +535,6 @@ fn leverage_and_drawdown_policies_are_checked_from_context() {
     drawdown.metric = Metric::Drawdown;
     let mut app = compose_risk_application("risk", vec![leverage, drawdown], None).unwrap();
     let mut leverage_request = request("leverage", 1);
-    leverage_request.metric = Metric::Leverage;
     leverage_request.context = Some(RiskContext {
         leverage_bps: 2_500.into(),
         ..RiskContext::default()
@@ -454,7 +546,6 @@ fn leverage_and_drawdown_policies_are_checked_from_context() {
         .contains(&kairos_risk::ReasonCode::LeverageExceeded));
 
     let mut request = request("drawdown", 1);
-    request.metric = Metric::Drawdown;
     request.context = Some(RiskContext {
         current_drawdown: amount(600),
         ..RiskContext::default()
@@ -497,12 +588,10 @@ fn order_rate_policy_limits_requests_inside_its_window() {
     order_rate.window_nanos = Some(100.into());
     let mut app = compose_risk_application("risk", vec![order_rate], None).unwrap();
     for id in ["rate-1", "rate-2"] {
-        let mut order = request(id, 1);
-        order.metric = Metric::OrderRate;
+        let order = request(id, 1);
         assert!(app.authorize_and_reserve(order).unwrap().allowed);
     }
-    let mut rejected = request("rate-3", 1);
-    rejected.metric = Metric::OrderRate;
+    let rejected = request("rate-3", 1);
     let decision = app.authorize_and_reserve(rejected).unwrap();
     assert!(!decision.allowed);
     assert!(decision
@@ -519,7 +608,6 @@ fn price_deviation_and_stress_loss_policies_are_context_driven() {
     let mut app = compose_risk_application("risk", vec![price, stress], None).unwrap();
 
     let mut price_request = request("price", 1);
-    price_request.metric = Metric::PriceDeviation;
     price_request.context = Some(RiskContext {
         price_deviation_bps: 75.into(),
         ..RiskContext::default()
@@ -527,7 +615,6 @@ fn price_deviation_and_stress_loss_policies_are_context_driven() {
     assert!(!app.pre_trade_check(price_request).unwrap().allowed);
 
     let mut stress_request = request("stress", 1);
-    stress_request.metric = Metric::StressLoss;
     stress_request.context = Some(RiskContext {
         stress_loss: amount(150),
         ..RiskContext::default()

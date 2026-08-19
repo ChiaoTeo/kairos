@@ -13,7 +13,7 @@ class BtcusdtQuoteStrategy(Strategy):
     def on_start(self, ctx: StrategyContext) -> None:
         ctx.state.set_int("quote_count", 0)
         market = ctx.reference.require_market(
-            symbol="BTCUSDT", exchange="binance", market_type="spot"
+            symbol="BTCUSDT", exchange="binance", instrument_kind="spot"
         )
         ctx.market.subscribe_quotes(market)
 

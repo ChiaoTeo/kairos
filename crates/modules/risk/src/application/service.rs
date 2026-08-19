@@ -66,7 +66,19 @@ pub struct RiskDecision {
     pub dependency_watermarks: DependencyWatermarks,
     /// External account/market/portfolio facts used during evaluation.
     pub context: Option<crate::domain::RiskContext>,
+    /// Present when the proposal requires initial margin. It is returned for
+    /// both allowed and rejected decisions so Capital demand can be derived
+    /// without parsing a human-readable violation.
+    pub funding_requirement: Option<FundingRequirement>,
     pub evaluated_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FundingRequirement {
+    pub required_margin: crate::domain::Amount,
+    pub available_margin: crate::domain::Amount,
+    pub shortfall: crate::domain::Amount,
+    pub margin_rule_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -29,10 +29,17 @@ class DecisionRecordStore:
     def admit(self, candidate: IntentCandidate) -> tuple[DecisionReceipt, bool]:
         payload = _canonical_json(candidate.request)
         snapshot = candidate.snapshot
+        source_event_sequence = getattr(
+            candidate.request, "source_event_sequence", None
+        )
+        source_event_time_unix_nanos = getattr(
+            candidate.request, "source_event_time_unix_nanos", None
+        )
         candidate_hash = hashlib.sha256(
             _canonical_json(
                 {
                     "request": candidate.request,
+                    "workspace_id": candidate.workspace_id,
                     "profile_hash": candidate.profile_hash,
                     "runtime": candidate.runtime,
                     "model": candidate.model,
@@ -48,18 +55,20 @@ class DecisionRecordStore:
             cursor = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO decision_records (
-                    decision_id, request_id, intent_id, strategy_id, launch_id,
+                    decision_id, request_id, intent_id, workspace_id, strategy_id, launch_id,
                     instance_id, operation, exposure_effect, mode, mode_revision,
+                    source_event_sequence, source_event_time_unix_nanos,
                     context_watermark, context_snapshot_hash, profile_hash, candidate_hash,
                     runtime, model, tool_profiles_json, candidate_json,
                     submitted_at, deadline, status, created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.decision_id,
                     candidate.request_id,
                     candidate.intent_id,
+                    candidate.workspace_id,
                     candidate.strategy_id,
                     candidate.launch_id,
                     candidate.instance_id,
@@ -67,6 +76,8 @@ class DecisionRecordStore:
                     candidate.exposure_effect,
                     snapshot.mode.value,
                     snapshot.mode_revision,
+                    source_event_sequence,
+                    source_event_time_unix_nanos,
                     snapshot.context_watermark,
                     snapshot.context_snapshot_hash,
                     candidate.profile_hash,
@@ -119,6 +130,9 @@ class DecisionRecordStore:
         effective_json = (
             None if effective_request is None else _canonical_json(effective_request)
         )
+        completed_at = _now()
+        with self._lock:
+            started_at = self._require_row(decision_id)["started_at"]
         return self._transition(
             decision_id,
             status,
@@ -127,7 +141,8 @@ class DecisionRecordStore:
                 DecisionStatus.RUNNING,
                 DecisionStatus.SUBMITTING,
             ),
-            completed_at=_now(),
+            completed_at=completed_at,
+            latency_millis=_latency_millis(started_at, completed_at),
             result_json=None if result is None else _canonical_json(result),
             tool_evidence_json=_canonical_json(tool_evidence),
             effective_request_json=effective_json,
@@ -162,6 +177,22 @@ class DecisionRecordStore:
                 (limit,),
             ).fetchall()
             return tuple(_receipt(row) for row in rows)
+
+    def reason_codes(self, decision_id: str) -> tuple[str, ...]:
+        """Return only Profile-allowlisted codes for Strategy notification."""
+
+        with self._lock:
+            row = self._require_row(decision_id)
+            encoded = row["result_json"]
+        if not isinstance(encoded, str):
+            return ()
+        value = json.loads(encoded)
+        if not isinstance(value, dict):
+            return ()
+        codes = value.get("reason_codes")
+        if not isinstance(codes, list):
+            return ()
+        return tuple(code for code in codes if isinstance(code, str))
 
     def interrupt_nonterminal(self) -> int:
         now = _now()
@@ -263,6 +294,7 @@ class DecisionRecordStore:
                     decision_id TEXT PRIMARY KEY,
                     request_id TEXT NOT NULL,
                     intent_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL DEFAULT 'unknown',
                     strategy_id TEXT NOT NULL,
                     launch_id TEXT NOT NULL,
                     instance_id TEXT NOT NULL,
@@ -270,6 +302,8 @@ class DecisionRecordStore:
                     exposure_effect TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     mode_revision INTEGER NOT NULL,
+                    source_event_sequence INTEGER,
+                    source_event_time_unix_nanos INTEGER,
                     context_watermark INTEGER NOT NULL,
                     context_snapshot_hash TEXT NOT NULL,
                     profile_hash TEXT NOT NULL,
@@ -290,6 +324,7 @@ class DecisionRecordStore:
                     reason TEXT,
                     started_at TEXT,
                     completed_at TEXT,
+                    latency_millis REAL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -308,11 +343,15 @@ class DecisionRecordStore:
                 ).fetchall()
             }
             for column, declaration in (
+                ("workspace_id", "TEXT NOT NULL DEFAULT 'unknown'"),
+                ("source_event_sequence", "INTEGER"),
+                ("source_event_time_unix_nanos", "INTEGER"),
                 ("runtime", "TEXT NOT NULL DEFAULT 'unknown'"),
                 ("model", "TEXT"),
                 ("tool_profiles_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("tool_evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("effective_request_hash", "TEXT"),
+                ("latency_millis", "REAL"),
             ):
                 if column not in existing:
                     self._connection.execute(
@@ -359,6 +398,18 @@ def _jsonable(value: object) -> object:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _latency_millis(started_at: object, completed_at: str) -> float | None:
+    if not isinstance(started_at, str):
+        return None
+    return max(
+        0.0,
+        (
+            datetime.fromisoformat(completed_at) - datetime.fromisoformat(started_at)
+        ).total_seconds()
+        * 1_000,
+    )
 
 
 __all__ = ["DecisionRecordStore"]

@@ -14,13 +14,16 @@ use kairos_execution_contract::{
 };
 use kairos_protocol::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::{
     CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionError,
-    ExecutionOrderOptions, ExecutionRouteQuery, RemoteOrderQuery, SubmitOrder,
+    ExecutionOrderOptions, ExecutionRouteQuery, IntentAdmissionEvidence, RemoteOrderQuery,
+    SubmitOrder,
 };
 use crate::services::actor::RemoteOrderEvent;
-use crate::services::audit::ExecutionAudit;
+use crate::services::audit::{ExecutionAudit, IntentAdmissionAuditRecord};
 use crate::services::gateway::{ExecutionConnectionPlan, ExecutionWriterFence};
 use crate::services::persistence::ExecutionOutboxEvent;
 use crate::services::simulation::SimulatedAccountSettlement;
@@ -45,6 +48,7 @@ pub(crate) struct ExecutionConfluxState {
     producer_incarnation: u64,
     route_status: BTreeMap<String, (bool, String)>,
     audit: Option<ExecutionAudit>,
+    pending_admissions: Vec<IntentAdmissionAuditRecord>,
     simulated_account_settlement: Option<SimulatedAccountSettlement>,
 }
 
@@ -59,6 +63,7 @@ impl Default for ExecutionConfluxState {
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             route_status: BTreeMap::new(),
             audit: None,
+            pending_admissions: Vec::new(),
             simulated_account_settlement: None,
         }
     }
@@ -578,51 +583,80 @@ impl ExecutionApplication {
             }
             ExecutionRestRequest::SubmitIntent(request) => {
                 let command_id = request.envelope.command_id;
-                let result = match serde_json::from_value::<ExecuteStrategyIntent>(request.intent)
-                    .map_err(|error| ExecutionError::Invalid(error.to_string()))
-                {
-                    Ok(intent) => match request
-                        .envelope
-                        .idempotency_key
-                        .or(command_id.clone())
-                        .ok_or_else(|| {
-                            ExecutionError::Invalid("idempotency_key is required".into())
-                        }) {
-                        Ok(key) => {
-                            match self.accept_intent_with_idempotency_deferred(intent, key) {
-                                Ok((intent, duplicate)) => {
-                                    if !duplicate {
-                                        let business_now = self
-                                            .business_time_unix_nanos()
-                                            .unwrap_or_else(now_unix_nanos);
-                                        if let Err(error) = self
-                                            .advance_due_intent_orders_managed(
-                                                business_now,
-                                                usize::MAX,
-                                                context,
-                                            )
-                                            .await
-                                        {
-                                            return ExecutionRestResponse::SubmitIntent(Err(
-                                                control_error(error),
-                                            ));
-                                        }
+                let idempotency_key = request
+                    .envelope
+                    .idempotency_key
+                    .or(command_id.clone())
+                    .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
+                let intent_raw = request.intent;
+                let decoded = serde_json::from_value::<ExecuteStrategyIntent>(intent_raw.clone())
+                    .map_err(|error| ExecutionError::Invalid(error.to_string()));
+                let prepared = decoded.and_then(|intent| {
+                    let evidence = decode_intent_admission_evidence(
+                        request.admission_evidence,
+                        &intent_raw,
+                        &intent,
+                    )?;
+                    Ok((intent, evidence))
+                });
+                let mut admission_result = "rejected".to_owned();
+                let mut admission: Option<(IntentAdmissionEvidence, String, String)> = None;
+                let result = match (prepared, idempotency_key) {
+                    (Ok((intent, evidence)), Ok(key)) => {
+                        if let Some(evidence) = evidence {
+                            admission = Some((evidence, key.clone(), intent.intent_id.to_string()));
+                        }
+                        match self.accept_intent_with_idempotency_deferred(intent, key) {
+                            Ok((intent, duplicate)) => {
+                                admission_result =
+                                    if duplicate { "duplicate" } else { "accepted" }.into();
+                                if !duplicate {
+                                    let business_now = self
+                                        .business_time_unix_nanos()
+                                        .unwrap_or_else(now_unix_nanos);
+                                    if let Err(error) = self
+                                        .advance_due_intent_orders_managed(
+                                            business_now,
+                                            usize::MAX,
+                                            context,
+                                        )
+                                        .await
+                                    {
+                                        Err(error)
+                                    } else {
+                                        Ok(ExecutionCommandStatus {
+                                            status: "accepted".into(),
+                                            command_id: command_id.clone(),
+                                            intent_id: Some(intent.intent.intent_id.to_string()),
+                                            order_id: None,
+                                        })
                                     }
+                                } else {
                                     Ok(ExecutionCommandStatus {
-                                        status: if duplicate { "duplicate" } else { "accepted" }
-                                            .into(),
-                                        command_id,
+                                        status: "duplicate".into(),
+                                        command_id: command_id.clone(),
                                         intent_id: Some(intent.intent.intent_id.to_string()),
                                         order_id: None,
                                     })
                                 }
-                                Err(error) => Err(error),
                             }
+                            Err(error) => Err(error),
                         }
-                        Err(error) => Err(error),
-                    },
-                    Err(error) => Err(error),
+                    }
+                    (Err(error), _) | (_, Err(error)) => Err(error),
                 };
+                if let Some((evidence, idempotency_key, intent_id)) = admission {
+                    self.conflux
+                        .pending_admissions
+                        .push(IntentAdmissionAuditRecord {
+                            command_id,
+                            idempotency_key,
+                            intent_id,
+                            evidence,
+                            admission_result,
+                            created_at_unix_nanos: now_unix_nanos(),
+                        });
+                }
                 ExecutionRestResponse::SubmitIntent(result.map_err(control_error))
             }
             ExecutionRestRequest::CancelOrder { order_id, request } => {
@@ -848,14 +882,21 @@ impl ExecutionApplication {
             }
             acknowledged.push(entry.id);
         }
+        if self.conflux.audit.is_none() && !self.conflux.pending_admissions.is_empty() {
+            return Err(ExecutionError::Persistence(
+                "Intent admission evidence requires Execution audit persistence".into(),
+            ));
+        }
         if let Some(mut audit) = self.conflux.audit.take() {
             let order_events = self.drain_events();
             let intent_events = self.drain_intent_events();
+            let admissions = self.conflux.pending_admissions.clone();
             let result = audit
-                .publish_batch(&orders, &intents)
-                .and_then(|()| audit.publish_batch(&order_events, &intent_events));
+                .publish_batch(&orders, &intents, &admissions)
+                .and_then(|()| audit.publish_batch(&order_events, &intent_events, &[]));
             self.conflux.audit = Some(audit);
             result.map_err(ExecutionError::Persistence)?;
+            self.conflux.pending_admissions.clear();
         }
         self.acknowledge_outbox(&acknowledged)
     }
@@ -1083,6 +1124,114 @@ fn route_response(route: super::ExecutionRouteCandidate) -> ExecutionRouteCandid
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntentAdmissionEvidenceWire {
+    source: String,
+    decision_id: String,
+    outcome: String,
+    original_intent: ExecuteStrategyIntent,
+    effective_intent: ExecuteStrategyIntent,
+    original_hash: String,
+    effective_hash: String,
+}
+
+fn decode_intent_admission_evidence(
+    raw: Option<serde_json::Value>,
+    submitted_raw: &serde_json::Value,
+    submitted: &ExecuteStrategyIntent,
+) -> Result<Option<IntentAdmissionEvidence>, ExecutionError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let original_hash = canonical_value_hash(raw.get("original_intent").ok_or_else(|| {
+        ExecutionError::Invalid("Intent admission evidence original_intent is required".into())
+    })?)?;
+    let effective_hash = canonical_value_hash(raw.get("effective_intent").ok_or_else(|| {
+        ExecutionError::Invalid("Intent admission evidence effective_intent is required".into())
+    })?)?;
+    let wire: IntentAdmissionEvidenceWire = serde_json::from_value(raw)
+        .map_err(|error| ExecutionError::Invalid(format!("invalid admission evidence: {error}")))?;
+    if wire.source != "decision_agent" {
+        return Err(ExecutionError::Invalid(
+            "unsupported Intent admission evidence source".into(),
+        ));
+    }
+    if wire.decision_id.trim().is_empty() || wire.decision_id.len() > 256 {
+        return Err(ExecutionError::Invalid(
+            "Intent admission evidence decision_id is invalid".into(),
+        ));
+    }
+    if !matches!(wire.outcome.as_str(), "approved" | "revised") {
+        return Err(ExecutionError::Invalid(
+            "unsupported Intent admission evidence outcome".into(),
+        ));
+    }
+    if wire.original_hash != original_hash || wire.effective_hash != effective_hash {
+        return Err(ExecutionError::Invalid(
+            "Intent admission evidence hash mismatch".into(),
+        ));
+    }
+    if canonical_value_hash(submitted_raw)? != effective_hash {
+        return Err(ExecutionError::Invalid(
+            "Intent admission evidence effective Intent differs from submission".into(),
+        ));
+    }
+    let original = wire.original_intent;
+    let effective = wire.effective_intent;
+    if effective != *submitted {
+        return Err(ExecutionError::Invalid(
+            "Intent admission evidence effective Intent failed typed equality".into(),
+        ));
+    }
+    if !same_revision_identity(&original, &effective) {
+        return Err(ExecutionError::Invalid(
+            "Intent admission revision changed immutable Intent fields".into(),
+        ));
+    }
+    match wire.outcome.as_str() {
+        "approved" if original != effective || original_hash != effective_hash => {
+            return Err(ExecutionError::Invalid(
+                "approved Intent admission evidence contains a revision".into(),
+            ));
+        }
+        "revised" if original == effective => {
+            return Err(ExecutionError::Invalid(
+                "revised Intent admission evidence contains no revision".into(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(Some(IntentAdmissionEvidence {
+        source: wire.source,
+        decision_id: wire.decision_id,
+        outcome: wire.outcome,
+        original_intent: original,
+        effective_intent: effective,
+        original_hash: wire.original_hash,
+        effective_hash: wire.effective_hash,
+    }))
+}
+
+fn canonical_value_hash(value: &serde_json::Value) -> Result<String, ExecutionError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| ExecutionError::Invalid(format!("cannot canonicalize Intent: {error}")))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn same_revision_identity(
+    original: &ExecuteStrategyIntent,
+    effective: &ExecuteStrategyIntent,
+) -> bool {
+    let mut normalized = original.clone();
+    normalized.target_quantity = effective.target_quantity;
+    normalized.limit_price = effective.limit_price;
+    normalized.deadline_unix_nanos = effective.deadline_unix_nanos;
+    normalized.max_slippage_bps = effective.max_slippage_bps;
+    normalized.order_options = effective.order_options.clone();
+    normalized == *effective
+}
+
 fn command_status(status: &str, order_id: Option<String>) -> ExecutionCommandStatus {
     ExecutionCommandStatus {
         status: status.into(),
@@ -1103,4 +1252,76 @@ fn now_unix_nanos() -> u64 {
         .unwrap_or_default()
         .as_nanos()
         .min(u64::MAX as u128) as u64
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::{canonical_value_hash, decode_intent_admission_evidence};
+    use crate::application::ExecuteStrategyIntent;
+
+    fn evidence(
+        original: &ExecuteStrategyIntent,
+        effective: &ExecuteStrategyIntent,
+        outcome: &str,
+    ) -> serde_json::Value {
+        let original = serde_json::to_value(original).unwrap();
+        let effective = serde_json::to_value(effective).unwrap();
+        serde_json::json!({
+            "source": "decision_agent",
+            "decision_id": "decision-1",
+            "outcome": outcome,
+            "original_hash": canonical_value_hash(&original).unwrap(),
+            "effective_hash": canonical_value_hash(&effective).unwrap(),
+            "original_intent": original,
+            "effective_intent": effective,
+        })
+    }
+
+    #[test]
+    fn admission_evidence_accepts_approved_and_typed_revision() {
+        let original = ExecuteStrategyIntent::default();
+        let submitted = serde_json::to_value(&original).unwrap();
+        let approved = decode_intent_admission_evidence(
+            Some(evidence(&original, &original, "approved")),
+            &submitted,
+            &original,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(approved.original_intent, approved.effective_intent);
+
+        let mut effective = original.clone();
+        effective.target_quantity = kairos_primitives::Quantity::new(1, 0).unwrap();
+        let submitted = serde_json::to_value(&effective).unwrap();
+        let revised = decode_intent_admission_evidence(
+            Some(evidence(&original, &effective, "revised")),
+            &submitted,
+            &effective,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(revised.original_intent, revised.effective_intent);
+    }
+
+    #[test]
+    fn admission_evidence_rejects_hash_and_identity_changes() {
+        let original = ExecuteStrategyIntent::default();
+        let mut effective = original.clone();
+        effective.strategy_id = "different-strategy".into();
+        let submitted = serde_json::to_value(&effective).unwrap();
+        let error = decode_intent_admission_evidence(
+            Some(evidence(&original, &effective, "revised")),
+            &submitted,
+            &effective,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("immutable"));
+
+        let submitted = serde_json::to_value(&original).unwrap();
+        let mut corrupt = evidence(&original, &original, "approved");
+        corrupt["effective_hash"] = serde_json::Value::String("0".repeat(64));
+        let error =
+            decode_intent_admission_evidence(Some(corrupt), &submitted, &original).unwrap_err();
+        assert!(error.to_string().contains("hash mismatch"));
+    }
 }

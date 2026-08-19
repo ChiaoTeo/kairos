@@ -268,9 +268,7 @@ def record_gauge(name: str, value: int | float) -> None:
 
 
 _TELEGRAM_BOT_TOKEN = re.compile(r"/bot[^/]+(?=/)", re.IGNORECASE)
-_FEISHU_WEBHOOK_TOKEN = re.compile(
-    r"(/open-apis/bot/v2/hook/)[^/?#]+", re.IGNORECASE
-)
+_FEISHU_WEBHOOK_TOKEN = re.compile(r"(/open-apis/bot/v2/hook/)[^/?#]+", re.IGNORECASE)
 _SECRET_QUERY_KEYS = frozenset(
     {"api_key", "apikey", "key", "token", "access_token", "secret", "signature"}
 )

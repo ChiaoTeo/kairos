@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Protocol, TypeAlias, assert_never
+from typing import TYPE_CHECKING, Protocol, TypeAlias, Union, assert_never
 
 from kairospy.application.account import AccountApplication, AccountEvent
+from kairospy.application.capital import CapitalApplication
 from kairospy.application.execution import ExecutionApplication, ExecutionEvent
 from kairospy.application.market import (
     BarEvent,
@@ -14,6 +15,7 @@ from kairospy.application.market import (
     TradeEvent,
 )
 from kairospy.application.notification import NotificationApplication
+from kairospy.application.portfolio import PortfolioApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication, RiskEvent
 
@@ -26,15 +28,21 @@ from .results import CommandResult
 from .state import StrategyState
 
 if TYPE_CHECKING:
-    from kairospy.application.agent import AgentApplication
+    from kairospy.application.agent import AgentApplication, AgentEvent
     from kairospy.application.strategy.application.decisions import (
         StrategyDecisionApplication,
     )
 
 
-StrategyEvent: TypeAlias = (
-    MarketEvent | AccountEvent | RiskEvent | ExecutionEvent | ClockEvent | SystemEvent
-)
+StrategyEvent: TypeAlias = Union[
+    "AgentEvent",
+    MarketEvent,
+    AccountEvent,
+    RiskEvent,
+    ExecutionEvent,
+    ClockEvent,
+    SystemEvent,
+]
 
 
 class StrategyContext(Protocol):
@@ -50,6 +58,8 @@ class StrategyContext(Protocol):
     reference: ReferenceApplication
     market: MarketApplication
     account: AccountApplication
+    portfolio: PortfolioApplication
+    capital: CapitalApplication
     risk: RiskApplication
     execution: ExecutionApplication
     agent: "AgentApplication"
@@ -69,6 +79,7 @@ class StrategyProtocol(Protocol):
     def on_account(self, ctx: StrategyContext, event: AccountEvent) -> None: ...
     def on_risk(self, ctx: StrategyContext, event: RiskEvent) -> None: ...
     def on_execution(self, ctx: StrategyContext, event: ExecutionEvent) -> None: ...
+    def on_agent(self, ctx: StrategyContext, event: "AgentEvent") -> None: ...
     def on_clock(self, ctx: StrategyContext, event: ClockEvent) -> None: ...
     def on_system(self, ctx: StrategyContext, event: SystemEvent) -> None: ...
     async def on_command(
@@ -130,6 +141,9 @@ class Strategy:
         return None
 
     def on_execution(self, ctx: StrategyContext, event: ExecutionEvent) -> None:
+        return None
+
+    def on_agent(self, ctx: StrategyContext, event: "AgentEvent") -> None:
         return None
 
     def on_clock(self, ctx: StrategyContext, event: ClockEvent) -> None:

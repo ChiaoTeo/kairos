@@ -60,6 +60,8 @@ def test_business_applications_do_not_import_composition_or_infrastructure() -> 
         "account",
         "risk",
         "execution",
+        "portfolio",
+        "capital",
         "notification",
     ):
         source = (root / f"kairospy/application/{module}/application.py").read_text(
@@ -81,6 +83,7 @@ def test_business_applications_do_not_mirror_dependencies_as_private_protocols()
         "account",
         "risk",
         "execution",
+        "portfolio",
         "notification",
     ):
         source = (root / f"kairospy/application/{module}/application.py").read_text(

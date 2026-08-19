@@ -35,6 +35,7 @@ pub use kairos_integration::participants::binance::{
         BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
         BinanceCoinMWebSocketConnection,
     },
+    earn::BinanceSimpleEarnRestConnection,
     funding::BinanceFundingRestConnection,
     margin::{BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection},
     options::{
@@ -79,7 +80,8 @@ pub use kairos_integration::{
     AccountCredentialQuery, AccountMarketProfileQuery, AccountQuery, AccountStream, Bar,
     CommandOutcome, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionKey,
     ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, DecimalValue,
-    ExecutionStream, ExternalAccountCredentialProfile, ExternalAccountEvent,
+    EarnLiquidity, EarnPosition, EarnPositionState, EarnPositionsRequest, EarnProductFamily,
+    EarnProductQuery, ExecutionStream, ExternalAccountCredentialProfile, ExternalAccountEvent,
     ExternalAccountEventEnvelope, ExternalAccountIdentity, ExternalAccountModel,
     ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
     ExternalDecimal, ExternalEventEnvelope, ExternalExecutionEvent, ExternalInstrument,

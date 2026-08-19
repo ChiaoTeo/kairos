@@ -26,7 +26,9 @@ class AeronReferenceEventSource(NativeEventSource[ReferenceEventRecord]):
     ) -> None:
         super().__init__(
             decoder=decode_reference_event,
-            aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
+            aeron_dir=aeron_dir,
+            channel=channel,
+            stream_id=stream_id,
         )
 
 

@@ -38,6 +38,7 @@ class AgentControlledExecutionCommands:
         *,
         agent: AgentApplication,
         worker: AgentDecisionWorker,
+        workspace_id: str,
         launch_id: str,
         profile_hash: str,
         runtime: str,
@@ -47,11 +48,11 @@ class AgentControlledExecutionCommands:
         required_contexts: tuple[str, ...],
         max_decision_age_seconds: float,
         classify_exposure: Callable[[IntentRequest], str] | None = None,
-        record_admission: Callable[[IntentAdmissionEvidence], None] | None = None,
     ) -> None:
         self._commands = commands
         self._agent = agent
         self._worker = worker
+        self._workspace_id = workspace_id
         self._launch_id = launch_id
         self._profile_hash = profile_hash
         self._runtime = runtime
@@ -61,7 +62,6 @@ class AgentControlledExecutionCommands:
         self._required_contexts = required_contexts
         self._max_decision_age_seconds = max_decision_age_seconds
         self._classify_exposure = classify_exposure or (lambda request: "unknown")
-        self._record_admission = record_admission
 
     def target_position(
         self, request: TargetPositionRequest, **identity
@@ -106,9 +106,11 @@ class AgentControlledExecutionCommands:
         exposure_effect = self._classify_exposure(original)
         if exposure_effect not in {"increase", "reduce", "neutral", "unknown"}:
             raise ValueError("Exposure classifier returned an unsupported value")
+        now = _candidate_time(self._runtime, original)
         try:
             snapshot = self._agent._snapshot(
                 "execution.intent_review",
+                now=now,
                 required_contexts=self._required_contexts,
             )
         except ValueError as error:
@@ -121,12 +123,12 @@ class AgentControlledExecutionCommands:
                 error=str(error),
                 error_code="agent_context_unavailable",
             )
-        now = datetime.now(timezone.utc)
         decision_id = _decision_id(strategy_id, instance_id, request_id)
         candidate = IntentCandidate(
             decision_id=decision_id,
             request_id=request_id,
             intent_id=intent_id,
+            workspace_id=self._workspace_id,
             strategy_id=strategy_id,
             launch_id=self._launch_id,
             instance_id=instance_id,
@@ -136,56 +138,48 @@ class AgentControlledExecutionCommands:
             profile_hash=self._profile_hash,
             snapshot=snapshot,
             submitted_at=now,
-            deadline=now + timedelta(seconds=self._max_decision_age_seconds),
+            deadline=(
+                datetime.max.replace(tzinfo=timezone.utc)
+                if self._runtime == "fixture"
+                else now + timedelta(seconds=self._max_decision_age_seconds)
+            ),
             runtime=self._runtime,
             model=self._model,
             tool_profiles=self._tool_profiles,
         )
 
+        def submit_direct(effective: object) -> CommandResult:
+            if not isinstance(effective, type(original)):
+                raise TypeError("Agent effective request changed Intent request type")
+            return submit(
+                effective,
+                admission_evidence=None,
+                **identity,
+            )
+
         def submit_effective(effective: object) -> CommandResult:
             if not isinstance(effective, type(original)):
                 raise TypeError("Agent effective request changed Intent request type")
-            admission = None
-            if (
-                snapshot.mode is not AgentMode.SHADOW
-                and self._record_admission is not None
-            ):
-                admission = IntentAdmissionEvidence(
-                    decision_id=decision_id,
-                    request_id=request_id,
-                    intent_id=intent_id,
-                    source="decision_agent",
-                    outcome="approved" if effective == original else "revised",
-                    original_intent=original,
-                    effective_intent=effective,
-                    submission_status="submitting",
-                )
-                self._record_admission(admission)
-            try:
-                submitted = submit(
-                    effective,
-                    admission_evidence=admission,
-                    **identity,
-                )
-            except Exception:
-                if admission is not None and self._record_admission is not None:
-                    self._record_admission(
-                        replace(admission, submission_status="indeterminate")
-                    )
-                raise
-            if admission is not None and self._record_admission is not None:
-                self._record_admission(
-                    replace(admission, submission_status=submitted.status)
-                )
-            return submitted
+            admission = IntentAdmissionEvidence(
+                decision_id=decision_id,
+                request_id=request_id,
+                intent_id=intent_id,
+                source="decision_agent",
+                outcome="approved" if effective == original else "revised",
+                original_intent=original,
+                effective_intent=effective,
+            )
+            return submit(
+                effective,
+                admission_evidence=admission,
+                **identity,
+            )
 
         if snapshot.mode is AgentMode.SHADOW:
-            return self._worker.submit_shadow(candidate, submit_effective)
-        receipt = self._worker.submit(DecisionTask(candidate, submit_effective))
-        if receipt.status in {DecisionStatus.FAILED, DecisionStatus.INTERRUPTED} and (
-            exposure_effect == "reduce"
-        ):
-            return submit_effective(original)
+            return self._worker.submit_shadow(candidate, submit_direct)
+        receipt = self._worker.submit(
+            DecisionTask(candidate, submit_effective, bypass=submit_direct)
+        )
         if receipt.status in {DecisionStatus.PENDING, DecisionStatus.RUNNING}:
             return CommandResult(
                 request_id,
@@ -198,6 +192,15 @@ class AgentControlledExecutionCommands:
                 "duplicate",
                 {"intent_id": intent_id, "decision_id": decision_id},
             )
+        if (
+            receipt.status is DecisionStatus.ABSTAINED
+            and receipt.delivery_certainty == "sent"
+        ):
+            return CommandResult(
+                request_id,
+                receipt.final_submission_status or "accepted",
+                {"intent_id": intent_id, "decision_id": decision_id},
+            )
         return CommandResult(
             request_id,
             "rejected",
@@ -208,6 +211,74 @@ class AgentControlledExecutionCommands:
         )
 
 
+class UnavailableAgentExecutionCommands:
+    """Fail-closed adapter for an enabled Agent whose runtime did not start."""
+
+    def __init__(
+        self,
+        commands: object,
+        *,
+        agent: AgentApplication,
+        operations: tuple[str, ...],
+        classify_exposure: Callable[[IntentRequest], str] | None = None,
+    ) -> None:
+        self._commands = commands
+        self._agent = agent
+        self._operations = frozenset(operations)
+        self._classify_exposure = classify_exposure or (lambda request: "unknown")
+
+    def target_position(
+        self, request: TargetPositionRequest, **identity
+    ) -> CommandResult:
+        return self._control("target_position", request, identity)
+
+    def pair_arbitrage(
+        self, request: PairArbitrageRequest, **identity
+    ) -> CommandResult:
+        return self._control("pair_arbitrage", request, identity)
+
+    def portfolio_rebalance(
+        self, request: PortfolioRebalanceRequest, **identity
+    ) -> CommandResult:
+        return self._control("portfolio_rebalance", request, identity)
+
+    def quote_provisioning(
+        self, request: QuoteProvisioningRequest, **identity
+    ) -> CommandResult:
+        return self._control("quote_provisioning", request, identity)
+
+    def option_spread(self, request: OptionSpreadRequest, **identity) -> CommandResult:
+        return self._control("option_spread", request, identity)
+
+    def __getattr__(self, name: str):
+        return getattr(self._commands, name)
+
+    def _control(
+        self,
+        operation: str,
+        request: IntentRequest,
+        identity: dict[str, str],
+    ) -> CommandResult:
+        submit = getattr(self._commands, operation)
+        if operation not in self._operations:
+            return submit(request, **identity)
+        mode = self._agent._snapshot("execution.intent_review").mode
+        if mode is AgentMode.SHADOW:
+            return submit(request, **identity)
+        exposure_effect = self._classify_exposure(request)
+        if exposure_effect not in {"increase", "reduce", "neutral", "unknown"}:
+            raise ValueError("Exposure classifier returned an unsupported value")
+        if exposure_effect == "reduce":
+            return submit(request, **identity)
+        return CommandResult(
+            identity["request_id"],
+            "rejected",
+            {"intent_id": request.intent_id},
+            error="Decision Agent runtime is unavailable",
+            error_code="agent_runtime_unavailable",
+        )
+
+
 def _decision_id(strategy_id: str, instance_id: str, request_id: str) -> str:
     digest = hashlib.sha256(
         f"{strategy_id}\0{instance_id}\0{request_id}".encode("utf-8")
@@ -215,4 +286,18 @@ def _decision_id(strategy_id: str, instance_id: str, request_id: str) -> str:
     return f"decision:{digest}"
 
 
-__all__ = ["AgentControlledExecutionCommands"]
+def _candidate_time(runtime: str, request: IntentRequest) -> datetime:
+    if runtime != "fixture":
+        return datetime.now(timezone.utc)
+    source_time = getattr(request, "source_event_time_unix_nanos", None)
+    if source_time is None:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=source_time // 1_000
+    )
+
+
+__all__ = [
+    "AgentControlledExecutionCommands",
+    "UnavailableAgentExecutionCommands",
+]

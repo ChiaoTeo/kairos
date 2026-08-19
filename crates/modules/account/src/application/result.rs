@@ -1,6 +1,6 @@
 use crate::domain::{
-    Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, InstrumentId, MarginMode,
-    Money, OpenOrder, Position, PositionMode, SegmentKey,
+    Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, EarnHolding, InstrumentId,
+    MarginMode, Money, OpenOrder, Position, PositionMode, SegmentKey,
 };
 use kairos_primitives::{
     ActorId, BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
@@ -75,6 +75,8 @@ pub struct AccountSegmentView {
     pub balances: Vec<Balance>,
     pub collateral: Vec<Balance>,
     pub positions: Vec<Position>,
+    pub earn_holdings: Vec<EarnHolding>,
+    pub earn_watermark_unix_nanos: UnixNanos,
     pub open_orders: Vec<OpenOrder>,
 }
 
@@ -115,6 +117,8 @@ impl AccountSegmentView {
             balances: state.balances().values().cloned().collect(),
             collateral: state.collateral().values().cloned().collect(),
             positions: state.positions().values().cloned().collect(),
+            earn_holdings: state.earn_holdings().values().cloned().collect(),
+            earn_watermark_unix_nanos: state.earn_watermark_unix_nanos(),
             open_orders: state.open_orders().values().cloned().collect(),
         }
     }
@@ -193,6 +197,14 @@ pub enum AccountBusinessChange {
         instrument_id: InstrumentId,
         market_id: Option<MarketId>,
         position_side: kairos_primitives::PositionSide,
+    },
+    EarnHolding {
+        segment_key: SegmentKey,
+        value: EarnHolding,
+    },
+    EarnHoldingRemoved {
+        segment_key: SegmentKey,
+        holding_key: String,
     },
     ObservedOrder {
         segment_key: SegmentKey,

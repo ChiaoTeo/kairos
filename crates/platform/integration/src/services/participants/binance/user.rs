@@ -413,16 +413,10 @@ fn account_decimal(value: &str) -> Result<ExternalDecimal, IntegrationError> {
 }
 
 fn parse_parts(value: &str) -> Result<(i64, u8), IntegrationError> {
-    let negative = value.starts_with('-');
-    let value = value.trim_start_matches('-');
-    let mut parts = value.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("").trim_end_matches('0');
-    let scale = u8::try_from(fraction.len()).map_err(payload)?;
-    let mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
+    let value = crate::DecimalValue::parse(value)
+        .and_then(crate::DecimalValue::normalized)
         .map_err(payload)?;
-    Ok((if negative { -mantissa } else { mantissa }, scale))
+    Ok((value.mantissa, value.scale))
 }
 
 fn add(left: ExternalDecimal, right: ExternalDecimal) -> ExternalDecimal {

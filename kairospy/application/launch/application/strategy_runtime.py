@@ -28,6 +28,7 @@ class StrategyLaunchConfig:
     replay_end: datetime | None
     authoritative: bool
     notifications: Mapping[str, object]
+    capital: Mapping[str, object]
     agent: AgentLaunchConfig
 
     @classmethod
@@ -100,15 +101,23 @@ class StrategyLaunchConfig:
             "backtest_market.end",
         )
         notifications = _mapping(raw.get("notifications"), "notifications")
+        capital = _mapping(raw.get("capital"), "capital")
         agent = AgentLaunchConfig.from_mapping(
             _mapping(raw.get("agent"), "agent"),
             launch_mode=mode,
         )
         profile_snapshot = _mapping(raw.get("agent_profile"), "agent_profile")
+        mcp_snapshot = _mapping(raw.get("agent_mcp"), "agent_mcp")
         if agent.enabled:
             if not profile_snapshot:
                 raise ValueError("normalized launch agent_profile is required")
-            agent = replace(agent, profile_snapshot=dict(profile_snapshot))
+            if agent.mcp and not mcp_snapshot:
+                raise ValueError("normalized launch agent_mcp is required")
+            agent = replace(
+                agent,
+                profile_snapshot=dict(profile_snapshot),
+                mcp_snapshot=dict(mcp_snapshot) if mcp_snapshot else None,
+            )
         return cls(
             identity=LaunchIdentity(actual_launch_id, actual_mode),
             market_scope=cast(Literal["shared", "instance"], scope_value),
@@ -120,6 +129,7 @@ class StrategyLaunchConfig:
             replay_end=replay_end if mode == "backtest" else None,
             authoritative=authoritative,
             notifications=dict(notifications),
+            capital=dict(capital),
             agent=agent,
         )
 

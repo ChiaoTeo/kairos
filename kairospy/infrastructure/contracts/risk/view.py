@@ -50,7 +50,9 @@ class RiskViewReader:
     def __init__(self, root: str | Path, key: RiskViewKey, *, retries: int = 8) -> None:
         self.root = Path(root)
         self.key = key
-        self._reader = SharedSnapshotReader(key.resource_path(self.root), retries=retries)
+        self._reader = SharedSnapshotReader(
+            key.resource_path(self.root), retries=retries
+        )
 
     @property
     def path(self) -> Path:

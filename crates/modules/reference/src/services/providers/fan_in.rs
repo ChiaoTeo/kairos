@@ -536,9 +536,16 @@ where
     }
 
     async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
+        #[cfg(not(test))]
+        return Err(ReferenceError::Invalid(
+            "reference fan-in requires Conflux-managed connections".into(),
+        ));
+        #[cfg(test)]
+        {
+            let mut system = kairos_conflux::ConfluxSystem::new();
+            self.fetch_catalog_with_connections(&mut system.connections())
+                .await
+        }
     }
 
     async fn fetch_catalog_with_connections(
@@ -796,6 +803,7 @@ where
         }
     }
 
+    #[cfg(test)]
     async fn advance_source(
         &mut self,
         source_id: &str,

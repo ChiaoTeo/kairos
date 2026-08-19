@@ -204,6 +204,16 @@ pub mod kairos {
             pub use balance_generated::*;
             mod balance_removed_generated;
             pub use balance_removed_generated::*;
+            mod earn_holding_generated;
+            pub use earn_holding_generated::*;
+            mod earn_holding_removed_generated;
+            pub use earn_holding_removed_generated::*;
+            mod earn_holding_state_generated;
+            pub use earn_holding_state_generated::*;
+            mod earn_holding_upserted_generated;
+            pub use earn_holding_upserted_generated::*;
+            mod earn_liquidity_generated;
+            pub use earn_liquidity_generated::*;
             mod balance_upserted_generated;
             pub use balance_upserted_generated::*;
             mod freshness_state_generated;
@@ -265,6 +275,8 @@ pub mod kairos {
             pub use delivery_certainty_generated::*;
             mod execution_attempt_generated;
             pub use execution_attempt_generated::*;
+            mod execution_funding_requirement_generated;
+            pub use execution_funding_requirement_generated::*;
             mod execution_intent_generated;
             pub use execution_intent_generated::*;
             mod execution_leg_state_generated;
@@ -383,6 +395,8 @@ pub mod kairos {
             pub use enforcement_mode_generated::*;
             mod limit_usage_generated;
             pub use limit_usage_generated::*;
+            mod funding_requirement_generated;
+            pub use funding_requirement_generated::*;
             mod metric_generated;
             pub use metric_generated::*;
             mod policy_scope_generated;

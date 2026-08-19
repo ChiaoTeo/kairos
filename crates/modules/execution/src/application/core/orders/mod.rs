@@ -215,7 +215,7 @@ impl ExecutionApplication {
                     .validate_order(&request, &active_commitments, now)
                     .map_err(ExecutionError::Invalid)?;
                 let risk_context = admission
-                    .risk_authorization_context(&request)
+                    .risk_authorization_context(&request, &route.candidate)
                     .map_err(ExecutionError::Invalid)?;
                 (commitment, admission.dependency_watermarks(), risk_context)
             } else if self.live_trading {
@@ -251,6 +251,14 @@ impl ExecutionApplication {
                 Ok(reservation) => reservation,
                 Err(error) => {
                     let indeterminate = error.may_have_been_applied();
+                    if let RiskCommandFailure::DeferredInsufficientFunding { requirement } = &error
+                    {
+                        self.actor.set_funding_requirement(
+                            request.order_id.as_str(),
+                            requirement.clone(),
+                            now,
+                        );
+                    }
                     self.actor.set_risk_reservation_status(
                         request.order_id.as_str(),
                         if indeterminate {
@@ -260,7 +268,29 @@ impl ExecutionApplication {
                         },
                         now,
                     );
-                    self.persist_snapshot()?;
+                    self.actor.set_commitment_status(
+                        request.order_id.as_str(),
+                        if indeterminate {
+                            CommitmentStatus::Uncertain
+                        } else {
+                            CommitmentStatus::Released
+                        },
+                        now,
+                    );
+                    if let Some((_, event)) = self.actor.mark_delivery_status(
+                        request.order_id.as_str(),
+                        if indeterminate {
+                            ExecutionOrderStatus::Unknown
+                        } else {
+                            ExecutionOrderStatus::Rejected
+                        },
+                        error.to_string(),
+                        now,
+                    ) {
+                        self.commit(event)?;
+                    } else {
+                        self.persist_snapshot()?;
+                    }
                     return Err(if indeterminate {
                         ExecutionError::Indeterminate(error.to_string())
                     } else {

@@ -32,9 +32,9 @@ pub(crate) fn normalize_okx_order(
             .filter(|v| !v.is_empty())
     };
     let order_id = text("ordId").ok_or_else(|| "OKX order id is missing".to_string())?;
-    let quantity = order_decimal(decimal_field(value, "sz")?);
-    let filled_quantity = order_decimal(decimal_field(value, "accFillSz").unwrap_or_default());
-    let average_fill_price = decimal_field(value, "avgPx").ok().map(order_decimal);
+    let quantity = decimal_field(value, "sz")?;
+    let filled_quantity = decimal_field(value, "accFillSz").unwrap_or_default();
+    let average_fill_price = decimal_field(value, "avgPx").ok();
     Ok(ExternalOrder {
         connection_key: connection_key.clone(),
         order_id: OrderId::try_from(order_id).map_err(|error| error.to_string())?,
@@ -66,10 +66,6 @@ pub(crate) fn normalize_okx_order(
             .and_then(|v| v.parse::<u64>().ok())
             .map(|value| UnixNanos::from(value.saturating_mul(1_000))),
     })
-}
-
-fn order_decimal(value: crate::domain::account::ExternalDecimal) -> crate::DecimalValue {
-    crate::DecimalValue::new(value.mantissa, value.scale)
 }
 
 fn decimal_field(

@@ -30,12 +30,6 @@ impl ReferenceSource for HyperliquidSource {
         &self.id
     }
 
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
-    }
-
     async fn fetch_catalog_with_connections(
         &mut self,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,

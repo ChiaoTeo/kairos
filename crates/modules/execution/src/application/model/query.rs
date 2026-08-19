@@ -45,6 +45,10 @@ pub struct ExecutionRouteCandidate {
     /// Optional order-entry fields accepted by this concrete route.
     pub supported_options: Vec<String>,
     pub ready: bool,
+    #[serde(default)]
+    pub initial_margin_rate_bps: Option<u32>,
+    #[serde(default)]
+    pub margin_rule_id: Option<String>,
 }
 
 impl ExecutionRouteQuery {

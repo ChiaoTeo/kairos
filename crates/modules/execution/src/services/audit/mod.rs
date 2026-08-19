@@ -10,6 +10,7 @@ mod sqlx;
 use crate::application::{ExecutionEvent, IntentEvent};
 
 pub use memory::MemoryExecutionAudit;
+pub(crate) use model::IntentAdmissionAuditRecord;
 pub use model::{ExecutionAuditEvent, ExecutionAuditQuery};
 pub use sqlx::SqlxExecutionAudit;
 
@@ -23,10 +24,11 @@ impl ExecutionAudit {
         &mut self,
         events: &[ExecutionEvent],
         intents: &[IntentEvent],
+        admissions: &[IntentAdmissionAuditRecord],
     ) -> Result<(), String> {
         match self {
-            Self::Memory(audit) => audit.publish_batch(events, intents),
-            Self::Sqlx(audit) => audit.publish_batch(events, intents),
+            Self::Memory(audit) => audit.publish_batch(events, intents, admissions),
+            Self::Sqlx(audit) => audit.publish_batch(events, intents, admissions),
         }
     }
 }

@@ -409,28 +409,26 @@ impl FillArgs {
             order_id: fill.order_id.map(|value| value.to_string()),
             segment_key: fill.segment_key.to_string(),
             instrument_id: fill.instrument_id.to_string(),
-            quantity: DecimalValue {
-                mantissa: fill.quantity.mantissa(),
-                scale: fill.quantity.scale(),
-            },
-            price: DecimalValue {
-                mantissa: fill.price.mantissa(),
-                scale: fill.price.scale(),
-            },
+            quantity: DecimalValue::new(fill.quantity.mantissa(), fill.quantity.scale())
+                .map_err(|error| error.to_string())?,
+            price: DecimalValue::new(fill.price.mantissa(), fill.price.scale())
+                .map_err(|error| error.to_string())?,
             side: match fill.side {
                 kairos_account::domain::OrderSide::Buy => "buy".into(),
                 kairos_account::domain::OrderSide::Sell => "sell".into(),
             },
             settlement_asset: fill.settlement_asset.map(|value| value.to_string()),
-            settlement_delta: fill.settlement_delta.map(|value| DecimalValue {
-                mantissa: value.mantissa(),
-                scale: value.scale(),
-            }),
+            settlement_delta: fill
+                .settlement_delta
+                .map(|value| DecimalValue::new(value.mantissa(), value.scale()))
+                .transpose()
+                .map_err(|error| error.to_string())?,
             fee_asset: fill.fee_asset.map(|value| value.to_string()),
-            fee_amount: fill.fee_amount.map(|value| DecimalValue {
-                mantissa: value.mantissa(),
-                scale: value.scale(),
-            }),
+            fee_amount: fill
+                .fee_amount
+                .map(|value| DecimalValue::new(value.mantissa(), value.scale()))
+                .transpose()
+                .map_err(|error| error.to_string())?,
             occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
         })
     }

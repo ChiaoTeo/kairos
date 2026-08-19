@@ -79,6 +79,7 @@ mod tests {
                 policy_version: 2,
                 expires_at_unix_nanos: UnixNanos::new(1000),
                 updated_at_unix_nanos: UnixNanos::new(11),
+                funding_requirement: None,
             }],
             intents: Vec::new(),
             events: Vec::new(),

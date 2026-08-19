@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Mapping
 
-from .models import AgentMode
+from .models import AgentMode, _normalize_context_key
 
 
 _RUNTIMES = frozenset({"openai-agents", "fixture"})
@@ -53,9 +54,14 @@ class AgentModelConfig:
         provider = _text(value.get("provider"), "agent.model.provider")
         if provider != "openai":
             raise ValueError("agent.model.provider must be openai")
+        model = _text(value.get("model"), "agent.model.model")
+        if not _is_pinned_openai_model(model):
+            raise ValueError(
+                "agent.model.model must be a dated OpenAI snapshot or stable fine-tuned model id"
+            )
         return cls(
             provider=provider,
-            model=_text(value.get("model"), "agent.model.model"),
+            model=model,
             credential=_text(value.get("credential"), "agent.model.credential"),
             request_timeout_seconds=_number(
                 value.get("request_timeout_seconds", 5),
@@ -165,7 +171,8 @@ class IntentReviewConfig:
             )
         required_contexts = tuple(
             dict.fromkeys(
-                _string_list(
+                _normalize_context_key(item)
+                for item in _string_list(
                     value.get("required_contexts", ()),
                     "agent.capabilities.intent_review.required_contexts",
                 )
@@ -217,6 +224,7 @@ class AgentLaunchConfig:
     intent_review: IntentReviewConfig | None
     mcp: tuple[Mapping[str, object], ...]
     profile_snapshot: Mapping[str, object] | None = None
+    mcp_snapshot: Mapping[str, object] | None = None
 
     @classmethod
     def disabled(cls) -> "AgentLaunchConfig":
@@ -231,6 +239,7 @@ class AgentLaunchConfig:
             None,
             None,
             (),
+            None,
             None,
         )
 
@@ -324,6 +333,7 @@ class AgentLaunchConfig:
             intent_review=intent_review,
             mcp=mcp,
             profile_snapshot=None,
+            mcp_snapshot=None,
         )
 
     def normalized(self) -> dict[str, object]:
@@ -451,6 +461,12 @@ def _mode(value: object) -> AgentMode:
         return AgentMode(str(value))
     except ValueError as error:
         raise ValueError("Agent mode must be shadow, gate, or revise") from error
+
+
+def _is_pinned_openai_model(value: str) -> bool:
+    return bool(re.search(r"-20\d{2}-\d{2}-\d{2}$", value)) or bool(
+        re.fullmatch(r"ft:[^\s]+", value)
+    )
 
 
 __all__ = ["AgentLaunchConfig", "AgentModelConfig", "IntentReviewConfig"]

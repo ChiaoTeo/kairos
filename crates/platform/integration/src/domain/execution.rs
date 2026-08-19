@@ -5,9 +5,10 @@ use kairos_primitives::{
     Money, OrderId, Price, Quantity, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
 };
 
-use crate::domain::ParticipantInstrumentRef;
-
+pub use super::decimal::DecimalValue;
 pub use kairos_primitives::{OrderSide, OrderStatus};
+
+use crate::domain::ParticipantInstrumentRef;
 
 pub(crate) fn normalize_order_side(value: &str) -> OrderSide {
     match value.to_ascii_uppercase().as_str() {
@@ -108,18 +109,6 @@ pub struct OrderEntryEvent {
     pub filled_quantity: Option<DecimalValue>,
     pub occurred_at_unix_nanos: UnixNanos,
     pub reason: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DecimalValue {
-    pub mantissa: i64,
-    pub scale: u8,
-}
-
-impl DecimalValue {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
-    }
 }
 
 impl TryFrom<DecimalValue> for Quantity {

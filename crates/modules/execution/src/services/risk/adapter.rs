@@ -2,17 +2,18 @@
 
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::{Money, UnixNanos};
+use kairos_primitives::{Money, StrategyId, UnixNanos};
 use kairos_protocol::generated::kairos::{
     common::v_2::ViewCompleteness, risk::v_2::ReservationStatus as RiskViewReservationStatus,
 };
 use kairos_risk_contract::{
-    Amount, AuthorizeRequest, ContractError, Metric, RiskContext, RiskControlClient,
+    Amount, AuthorizeRequest, ContractError, RiskContext, RiskControlClient, TradeRiskProposal,
 };
 use rust_decimal::Decimal;
 
 use crate::application::{
-    RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
+    ExecutionFundingRequirement, RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
+    SubmitOrder,
 };
 use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
 
@@ -89,9 +90,9 @@ impl SocketExecutionRiskReservations {
         let zero = Amount::default();
         let available_margin = context
             .available_margin
-            .map(|value| Amount {
-                mantissa: value.mantissa(),
-                scale: value.scale(),
+            .map(|value| {
+                Amount::new(value.mantissa(), value.scale())
+                    .expect("Money satisfies Risk contract decimal bounds")
             })
             .unwrap_or_default();
         let reservation_ttl_nanos = self.reservation_ttl_nanos;
@@ -102,19 +103,31 @@ impl SocketExecutionRiskReservations {
                 idempotency_key: reservation_id.clone(),
                 reservation_id: reservation_id.clone(),
                 account_id: request.account_id.to_string(),
-                strategy_id: request
-                    .intent_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "execution".into()),
+                strategy_id: risk_strategy_id(request.strategy_id.as_ref())
+                    .map_err(RiskCommandFailure::NotSent)?,
                 instrument_id: request.instrument_id.to_string(),
                 exchange_id: request
                     .market_id
                     .as_ref()
                     .map(ToString::to_string)
                     .unwrap_or_else(|| request.segment_key.to_string()),
-                metric: Metric::Notional,
-                amount,
+                proposal: TradeRiskProposal {
+                    notional: amount,
+                    initial_margin_rate_bps: context
+                        .initial_margin_rate_bps
+                        .ok_or_else(|| {
+                            RiskCommandFailure::NotSent(
+                                "execution route is missing an initial margin rule".into(),
+                            )
+                        })?
+                        .into(),
+                    reduce_only: request.options.reduce_only.unwrap_or(false),
+                    margin_rule_id: context.margin_rule_id.clone().ok_or_else(|| {
+                        RiskCommandFailure::NotSent(
+                            "execution route is missing a margin rule identity".into(),
+                        )
+                    })?,
+                },
                 at_unix_nanos: now,
                 reservation_ttl_nanos,
                 dependency_generation: health.generation,
@@ -140,6 +153,54 @@ impl SocketExecutionRiskReservations {
             })
             .map_err(map_command_error)?;
         if !decision.allowed {
+            if let Some(requirement) = decision
+                .funding_requirement
+                .as_ref()
+                .filter(|requirement| requirement.shortfall.mantissa() > 0)
+            {
+                return Err(RiskCommandFailure::DeferredInsufficientFunding {
+                    requirement: ExecutionFundingRequirement {
+                        required_margin: Money::new(
+                            requirement.required_margin.mantissa(),
+                            requirement.required_margin.scale(),
+                        )
+                        .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+                        available_margin: Money::new(
+                            requirement.available_margin.mantissa(),
+                            requirement.available_margin.scale(),
+                        )
+                        .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+                        shortfall: Money::new(
+                            requirement.shortfall.mantissa(),
+                            requirement.shortfall.scale(),
+                        )
+                        .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+                        margin_rule_id: requirement.margin_rule_id.clone(),
+                        risk_decision_id: decision.decision_id.clone(),
+                        risk_policy_version: decision.policy_version,
+                        account_snapshot_watermark: decision
+                            .context
+                            .as_ref()
+                            .map(|context| context.account_snapshot_watermark)
+                            .unwrap_or_default(),
+                        broker: context.funding_broker.clone().ok_or_else(|| {
+                            RiskCommandFailure::NotSent(
+                                "execution route is missing its funding broker".into(),
+                            )
+                        })?,
+                        segment: context.funding_segment.clone().ok_or_else(|| {
+                            RiskCommandFailure::NotSent(
+                                "execution route is missing its funding segment".into(),
+                            )
+                        })?,
+                        collateral_asset: context.collateral_asset.clone().ok_or_else(|| {
+                            RiskCommandFailure::NotSent(
+                                "execution route is missing its collateral asset".into(),
+                            )
+                        })?,
+                    },
+                });
+            }
             return Err(RiskCommandFailure::Rejected(
                 if decision.violations.is_empty() {
                     "risk authorization rejected order".into()
@@ -185,10 +246,8 @@ impl SocketExecutionRiskReservations {
         self.client()?
             .resize(
                 &evidence.reservation_id,
-                &Amount {
-                    mantissa: amount.mantissa(),
-                    scale: amount.scale(),
-                },
+                &Amount::new(amount.mantissa(), amount.scale())
+                    .expect("Money satisfies Risk contract decimal bounds"),
                 at.get(),
             )
             .map(|_| ())
@@ -256,11 +315,18 @@ fn notional_amount(request: &SubmitOrder) -> Result<Amount, String> {
     if value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
-    Ok(Amount {
-        mantissa: i64::try_from(value.mantissa())
+    Amount::new(
+        i64::try_from(value.mantissa())
             .map_err(|_| "risk amount exceeds Decimal64 range".to_string())?,
-        scale: value.scale() as u8,
-    })
+        value.scale() as u8,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn risk_strategy_id(strategy_id: Option<&StrategyId>) -> Result<String, String> {
+    strategy_id
+        .map(ToString::to_string)
+        .ok_or_else(|| "risk authorization requires SubmitOrder.strategy_id".into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -279,13 +345,14 @@ fn evidence(
         idempotency_key: reservation_id.clone(),
         reservation_id,
         account_id: request.account_id.clone(),
-        amount: Money::new(amount.mantissa, amount.scale).map_err(|error| error.to_string())?,
+        amount: Money::new(amount.mantissa(), amount.scale()).map_err(|error| error.to_string())?,
         status: RiskReservationSagaStatus::Active,
         risk_generation,
         risk_event_sequence,
         policy_version,
         expires_at_unix_nanos: expires_at_unix_nanos.into(),
         updated_at_unix_nanos: updated_at_unix_nanos.into(),
+        funding_requirement: None,
     })
 }
 
@@ -347,6 +414,7 @@ fn read_reservation(
         policy_version: reservation.policy_version(),
         expires_at_unix_nanos: reservation.expires_at_unix_nanos().into(),
         updated_at_unix_nanos: reservation.updated_at_unix_nanos().into(),
+        funding_requirement: evidence.funding_requirement.clone(),
     }))
 }
 
@@ -355,4 +423,24 @@ fn now_unix_nanos() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::risk_strategy_id;
+    use kairos_primitives::StrategyId;
+
+    #[test]
+    fn risk_identity_uses_strategy_id_and_has_no_intent_fallback() {
+        let strategy_id = StrategyId::new("strategy-alpha").unwrap();
+
+        assert_eq!(
+            risk_strategy_id(Some(&strategy_id)).unwrap(),
+            "strategy-alpha"
+        );
+        assert_eq!(
+            risk_strategy_id(None).unwrap_err(),
+            "risk authorization requires SubmitOrder.strategy_id"
+        );
+    }
 }

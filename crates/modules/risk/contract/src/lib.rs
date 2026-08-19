@@ -11,11 +11,12 @@ pub mod transport;
 pub mod view;
 pub use control::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Allocation, Amount, AuthorizeRequest,
-    CircuitScope, CircuitState, CloseCircuitRequest, ConsumeReservationRequest,
-    DependencyWatermarks, EnforcementMode, LimitView, Metric, OpenCircuitRequest, PolicyScope,
-    PublishPolicyRequest, ReasonCode, ReleaseReservationRequest, Reservation, ReservationStatus,
-    ResizeReservationRequest, RiskCommandStatus, RiskContext, RiskControlError, RiskCurrentView,
-    RiskDecision, RiskEvent, RiskPolicy, RiskRestRequest, RiskRestResponse,
+    CircuitScope, CircuitState, CloseCircuitRequest, ConsumeReservationRequest, DecimalValue,
+    DependencyWatermarks, EnforcementMode, FundingRequirement, LimitView, Metric,
+    OpenCircuitRequest, PolicyScope, PublishPolicyRequest, ReasonCode, ReleaseReservationRequest,
+    Reservation, ReservationStatus, ResizeReservationRequest, RiskCommandStatus, RiskContext,
+    RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskPolicy, RiskRestRequest,
+    RiskRestResponse, TradeRiskProposal,
 };
 pub use control::{Health, RiskControlClient};
 pub use encode::{

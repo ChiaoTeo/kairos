@@ -38,6 +38,7 @@ enum AdmissionRequest {
     },
     RiskContext {
         request: SubmitOrder,
+        route: crate::application::ExecutionRouteCandidate,
         reply: std::sync::mpsc::SyncSender<Result<RiskAuthorizationContext, String>>,
     },
 }
@@ -283,8 +284,13 @@ impl QueuedExecutionOrderAdmission {
                             let _ =
                                 reply.send(admission.validate_order(&request, &active_commitments));
                         }
-                        AdmissionRequest::RiskContext { request, reply } => {
-                            let _ = reply.send(admission.risk_authorization_context(&request));
+                        AdmissionRequest::RiskContext {
+                            request,
+                            route,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(admission.risk_authorization_context(&request, &route));
                         }
                     }
                     if let Ok(mut value) = worker_watermarks.write() {
@@ -349,11 +355,13 @@ impl QueuedExecutionOrderAdmission {
     pub(crate) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
+        route: &crate::application::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         self.request(
             AdmissionRequest::RiskContext {
                 request: request.clone(),
+                route: route.clone(),
                 reply: tx,
             },
             rx,

@@ -1,9 +1,7 @@
 name: Rust Quality
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -34,7 +32,7 @@ jobs:
 
       - name: Verify generated contract code
         run: |
-          ./scripts/generate/generate_flatbuffers.sh
+          bash scripts/generate/generate_flatbuffers.sh
           git diff --exit-code -- kairospy/infrastructure/transport/generated crates/platform/protocol/src/generated
 
       - name: Run Clippy

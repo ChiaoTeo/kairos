@@ -14,6 +14,11 @@ from kairospy.application.launch import (
     LaunchInstance,
     LaunchInstanceApplication,
 )
+from kairospy.application.agent import (
+    AgentDecisionNotice,
+    AgentEvent,
+    AgentEventStatus,
+)
 from kairospy.application.strategy import StrategyApplication, StrategyLifecycle
 from kairospy.application.strategy.services.ingress import StrategyEventIngress
 from kairospy.application.account import AccountSegmentSnapshot, DataFreshness, SPOT
@@ -277,6 +282,29 @@ class FakeStrategyBacktestDriver:
 
     def mark_account(self, event):
         return self._mark_account(event)
+
+
+class AgentNoticeStrategy(Strategy):
+    strategy_id = "agent-notice"
+
+    def __init__(self, observed: list[str]) -> None:
+        self.observed = observed
+
+    def on_market(self, context, event) -> None:
+        self.observed.append("market")
+
+    def on_agent(self, context, event) -> None:
+        self.observed.append(f"agent:{event.data.status.value}")
+
+
+class AgentEndBarrierStrategy(Strategy):
+    strategy_id = "agent-end-barrier"
+
+    def __init__(self) -> None:
+        self.ended = False
+
+    def on_end(self, context) -> None:
+        self.ended = True
 
 
 def _strategy_application_arguments(
@@ -566,6 +594,71 @@ def test_replay_driver_fires_each_timer_in_empty_market_gap(tmp_path: Path) -> N
         datetime(2024, 1, 1, 2, tzinfo=timezone.utc),
         datetime(2024, 1, 1, 3, tzinfo=timezone.utc),
     ]
+
+
+def test_backtest_barrier_dispatches_agent_notice_before_market_fill(
+    tmp_path: Path,
+) -> None:
+    observed: list[str] = []
+    bus = InMemoryApplicationPorts()
+    stream = InMemoryMarketEventSource("market.events")
+    snapshots = InMemoryMarketSnapshotReader({})
+    strategy = AgentNoticeStrategy(observed)
+    event = AgentEvent(
+        AgentDecisionNotice(
+            "decision-1",
+            "execution.intent_review",
+            AgentEventStatus.APPROVED,
+        ),
+        EventMetadata("agent.decisions:instance-1", 1, producer="strategy.agent"),
+    )
+    pending = [[event], []]
+    host = StrategyApplication(
+        strategy,
+        launch_id="agent-backtest",
+        instance_id="instance-1",
+        **_strategy_application_arguments(
+            bus,
+            snapshots,
+            stream,
+            strategy_id=strategy.strategy_id,
+            instance_id="instance-1",
+        ),
+        journal=InMemoryLifecycleJournal(),
+        backtest=FakeStrategyBacktestDriver(
+            apply_market=lambda market_event: observed.append("fill")
+        ),
+        agent_synchronize=lambda: pending.pop(0),
+    )
+    host.start()
+    host.enable()
+
+    host.dispatch(
+        EventEnvelope(
+            "market.events",
+            1,
+            "data",
+            "quote",
+            {"close": 100},
+            datetime(2026, 8, 19, tzinfo=timezone.utc),
+        )
+    )
+
+    assert observed == ["market", "agent:approved", "fill"]
+
+
+def test_backtest_reaches_agent_barrier_after_on_end(tmp_path: Path) -> None:
+    strategy = AgentEndBarrierStrategy()
+    host, _, _, _ = _host(tmp_path, strategy=strategy)
+    barrier_states: list[bool] = []
+    host.backtest = FakeStrategyBacktestDriver()
+    host._agent_synchronize = lambda: barrier_states.append(strategy.ended) or ()
+    host.start()
+    host.enable()
+
+    host.stop()
+
+    assert barrier_states[-1] is True
 
 
 def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) -> None:
@@ -964,6 +1057,28 @@ def test_strategy_control_uses_instance_unix_rest_socket(
             assert status["subscription_count"] == 1
             assert status["subscriptions"][0]["status"] == "ready"
             assert status["decisions"]["decision_count"] == 1
+            assert status["agent"] == {
+                "enabled": False,
+                "required": False,
+                "state": "disabled",
+                "mode": "shadow",
+                "mode_revision": 0,
+                "context_watermark": 0,
+                "context_documents": 0,
+                "queue_depth": 0,
+                "queue_capacity": 0,
+                "in_flight": 0,
+                "last_success_at": None,
+                "last_failure": None,
+                "runtime": None,
+                "model": None,
+                "mcp_servers": 0,
+                "store_ready": False,
+                "rolling_error_rate": 0.0,
+                "latency_p50_millis": None,
+                "latency_p95_millis": None,
+                "latency_p99_millis": None,
+            }
             trace = await UnixRestClient(socket).request(
                 "GET", f"/v1/decisions/{decision.strategy_decision_id}"
             )

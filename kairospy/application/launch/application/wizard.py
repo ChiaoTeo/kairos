@@ -157,9 +157,7 @@ def prompt_draft(
         else None
     )
     risk_value = current.get("risk")
-    risk: Mapping[str, Any] = (
-        risk_value if isinstance(risk_value, Mapping) else {}
-    )
+    risk: Mapping[str, Any] = risk_value if isinstance(risk_value, Mapping) else {}
     risk_profile = (
         typer.prompt(
             "Risk profile",

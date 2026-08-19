@@ -61,6 +61,7 @@ class RiskReservationSagaStatus(StrEnum):
     CONSUMED = "consumed"
     EXPIRED = "expired"
     UNCERTAIN = "uncertain"
+    FAILED = "failed"
 
 
 class IntentStatus(StrEnum):
@@ -295,6 +296,21 @@ class RiskReservationSaga:
     policy_version: int
     expires_at_unix_nanos: int
     updated_at_unix_nanos: int
+    funding_requirement: "ExecutionFundingRequirement | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionFundingRequirement:
+    required_margin: Decimal
+    available_margin: Decimal
+    shortfall: Decimal
+    margin_rule_id: str
+    risk_decision_id: str
+    risk_policy_version: int
+    account_snapshot_watermark: int
+    broker: str
+    segment: str
+    collateral_asset: str
 
 
 @dataclass(frozen=True, slots=True)

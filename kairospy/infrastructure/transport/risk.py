@@ -6,7 +6,10 @@ from typing import Any, cast
 from kairospy.application.risk.events import RiskEventRecord
 from kairospy.infrastructure.contracts.risk import decode_event
 from kairospy.infrastructure.transport.native_event import NativeEventSource
-from kairospy.infrastructure.transport.generated_spec import DEFAULT_CHANNEL, RISK_EVENTS
+from kairospy.infrastructure.transport.generated_spec import (
+    DEFAULT_CHANNEL,
+    RISK_EVENTS,
+)
 
 
 class AeronRiskEventSource(NativeEventSource[RiskEventRecord]):
@@ -21,7 +24,9 @@ class AeronRiskEventSource(NativeEventSource[RiskEventRecord]):
     ) -> None:
         super().__init__(
             decoder=decode_risk_event,
-            aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
+            aeron_dir=aeron_dir,
+            channel=channel,
+            stream_id=stream_id,
         )
 
 
@@ -41,9 +46,13 @@ def decode_risk_event(payload: bytes) -> RiskEventRecord:
         if reservation is None:
             raise ValueError("Risk reservation event is missing reservation")
         account_id = _required_text(reservation.AccountId(), "reservation.account_id")
-        strategy_id = _required_text(reservation.StrategyId(), "reservation.strategy_id")
+        strategy_id = _required_text(
+            reservation.StrategyId(), "reservation.strategy_id"
+        )
         body: object = {
-            "reservation_id": _required_text(reservation.ReservationId(), "reservation_id"),
+            "reservation_id": _required_text(
+                reservation.ReservationId(), "reservation_id"
+            ),
             "request_id": _required_text(reservation.RequestId(), "request_id"),
             "status": _reservation_status(reservation.Status()),
         }
@@ -55,8 +64,7 @@ def decode_risk_event(payload: bytes) -> RiskEventRecord:
         account_id = _required_text(decision.AccountId(), "decision.account_id")
         strategy_id = _required_text(decision.StrategyId(), "decision.strategy_id")
         reasons = tuple(
-            decision.Reasons(index)
-            for index in range(decision.ReasonsLength())
+            decision.Reasons(index) for index in range(decision.ReasonsLength())
         )
         body = {
             "decision_id": _required_text(decision.DecisionId(), "decision_id"),
@@ -79,7 +87,9 @@ def decode_risk_event(payload: bytes) -> RiskEventRecord:
         account_id = None if scope is None else _optional_text(scope.AccountId())
         strategy_id = None if scope is None else _optional_text(scope.StrategyId())
         body = {
-            "exchange_id": None if scope is None else _optional_text(scope.ExchangeId()),
+            "exchange_id": None
+            if scope is None
+            else _optional_text(scope.ExchangeId()),
             "state": "open" if root_name == "CircuitOpened" else "closed",
             "reason": _required_text(circuit.Reason(), "circuit.reason"),
             "opened_at_unix_nanos": _optional_int(circuit.OpenedAtUnixNanos()),

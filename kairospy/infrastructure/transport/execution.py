@@ -29,7 +29,9 @@ class AeronExecutionEventSource(NativeEventSource[ExecutionEventRecord]):
     ) -> None:
         super().__init__(
             decoder=decode_execution_event,
-            aeron_dir=aeron_dir, channel=channel, stream_id=stream_id,
+            aeron_dir=aeron_dir,
+            channel=channel,
+            stream_id=stream_id,
         )
 
     def check_ready(self) -> None:
@@ -123,7 +125,13 @@ def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object
             "completed_quantity": _decimal(root.CompletedQuantity()),
             "reason": _text(root.Reason()) or "",
         }
-    if root_name in {"OrderSubmitted", "OrderAccepted", "OrderRejected", "OrderCanceled", "OrderExpired"}:
+    if root_name in {
+        "OrderSubmitted",
+        "OrderAccepted",
+        "OrderRejected",
+        "OrderCanceled",
+        "OrderExpired",
+    }:
         value = root.Order()
         if value is None:
             raise ValueError(f"{root_name} order payload is missing")
@@ -141,10 +149,15 @@ def _v2_payload(root_name: str, root: Any) -> tuple[str | None, dict[str, object
         value = root.Plan()
         if value is None:
             raise ValueError("PlanCreated plan payload is missing")
-        return None, {"plan_id": _text(value.PlanId()), "intent_id": _text(value.IntentId())}
+        return None, {
+            "plan_id": _text(value.PlanId()),
+            "intent_id": _text(value.IntentId()),
+        }
     if root_name == "ReconciliationRequired":
         return None, {
-            "reconciliation_id": _required_text(root.ReconciliationId(), "reconciliation_id"),
+            "reconciliation_id": _required_text(
+                root.ReconciliationId(), "reconciliation_id"
+            ),
             "reason": int(root.Reason()),
             "intent_id": _text(root.IntentId()),
             "plan_id": _text(root.PlanId()),
@@ -173,9 +186,7 @@ def _v2_intent(value: Any) -> dict[str, object]:
         "strategy_id": _required_text(value.StrategyId(), "intent strategy_id"),
         "launch_id": _required_text(value.LaunchId(), "intent launch_id"),
         "instance_id": _required_text(value.InstanceId(), "intent instance_id"),
-        "instrument_id": _required_text(
-            first.InstrumentId(), "intent instrument_id"
-        ),
+        "instrument_id": _required_text(first.InstrumentId(), "intent instrument_id"),
         "account_ids": account_ids,
         "target_quantity": None,
         "reason": _text(value.Reason()) or "",
@@ -220,10 +231,15 @@ def _v2_order(value: Any) -> dict[str, object]:
         "account_id": _required_text(value.AccountId(), "account_id"),
         "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
         "market_id": _required_text(value.MarketId(), "market_id"),
-        "execution_route_id": _required_text(value.ExecutionRouteId(), "execution_route_id"),
-        "selected_route": _v2_selected_route(selected_route) if selected_route else None,
+        "execution_route_id": _required_text(
+            value.ExecutionRouteId(), "execution_route_id"
+        ),
+        "selected_route": _v2_selected_route(selected_route)
+        if selected_route
+        else None,
         "attempts": [
-            _v2_attempt(value.Attempts(index)) for index in range(value.AttemptsLength())
+            _v2_attempt(value.Attempts(index))
+            for index in range(value.AttemptsLength())
         ],
         "side": _side(value.Side()),
         "quantity": _decimal(value.Quantity()),
@@ -286,7 +302,9 @@ def _v2_fill(value: Any) -> dict[str, object]:
         "account_id": _required_text(value.AccountId(), "account_id"),
         "instrument_id": _required_text(value.InstrumentId(), "instrument_id"),
         "market_id": _text(value.MarketId()),
-        "execution_route_id": _required_text(value.ExecutionRouteId(), "execution_route_id"),
+        "execution_route_id": _required_text(
+            value.ExecutionRouteId(), "execution_route_id"
+        ),
         "remote_order_id": _text(value.RemoteOrderId()),
         "reported_provider_id": _text(value.ReportedProviderId()),
         "provider_product": _text(value.ProviderProduct()),

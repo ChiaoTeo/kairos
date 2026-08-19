@@ -33,6 +33,7 @@ class DecisionTask:
     candidate: IntentCandidate
     submit: Callable[[object], CommandResult]
     shadow_result: CommandResult | None = None
+    bypass: Callable[[object], CommandResult] | None = None
 
 
 class AgentDecisionWorker:
@@ -45,6 +46,10 @@ class AgentDecisionWorker:
         policy: DecisionPolicy,
         records: DecisionRecordStore,
         queue_capacity: int,
+        publish_terminal: Callable[
+            [IntentCandidate, DecisionReceipt, tuple[str, ...]], None
+        ]
+        | None = None,
     ) -> None:
         if queue_capacity <= 0:
             raise ValueError("Agent worker queue_capacity must be positive")
@@ -55,12 +60,15 @@ class AgentDecisionWorker:
         self._lock = Lock()
         self._thread: Thread | None = None
         self._stop_requested = Event()
+        self._idle = Event()
+        self._idle.set()
         self._accepting = False
         self._in_flight = 0
         self._last_success_at: datetime | None = None
         self._last_failure: str | None = None
         self._latencies_millis: deque[float] = deque(maxlen=1_000)
         self._recent_errors: deque[bool] = deque(maxlen=1_000)
+        self._publish_terminal = publish_terminal
 
     def start(self) -> None:
         with self._lock:
@@ -99,15 +107,16 @@ class AgentDecisionWorker:
         try:
             submitted = submit_original(candidate.request)
         except Exception as error:
-            self._records.finish(
+            receipt = self._records.finish(
                 candidate.decision_id,
                 DecisionStatus.SUBMISSION_INDETERMINATE,
                 delivery_certainty="indeterminate",
                 reason=f"{type(error).__name__}: Execution submission failed",
             )
+            self._emit_terminal(candidate, receipt)
             raise
         queued = self._enqueue(
-            DecisionTask(candidate, submit_original, submitted),
+            DecisionTask(candidate, submit_original, shadow_result=submitted),
             failure_certainty="sent",
             final_submission_status=submitted.status,
         )
@@ -123,23 +132,60 @@ class AgentDecisionWorker:
         final_submission_status: str | None = None,
     ) -> DecisionReceipt:
         if not self._accepting:
-            return self._records.finish(
+            receipt = self._records.finish(
                 task.candidate.decision_id,
                 DecisionStatus.INTERRUPTED,
                 final_submission_status=final_submission_status,
                 delivery_certainty=failure_certainty,
                 reason="Decision worker is not accepting candidates",
             )
+            self._record_immediate_failure(receipt)
+            self._emit_terminal(task.candidate, receipt)
+            return receipt
         try:
-            self._queue.put_nowait(task)
+            with self._lock:
+                self._idle.clear()
+                self._queue.put_nowait(task)
         except Full:
-            return self._records.finish(
+            with self._lock:
+                if self._queue.empty() and self._in_flight == 0:
+                    self._idle.set()
+            if (
+                task.candidate.snapshot.mode is not AgentMode.SHADOW
+                and task.candidate.exposure_effect == "reduce"
+            ):
+                try:
+                    submitted = self._submit_bypass(task)
+                except Exception as error:
+                    receipt = self._records.finish(
+                        task.candidate.decision_id,
+                        DecisionStatus.SUBMISSION_INDETERMINATE,
+                        effective_request=task.candidate.request,
+                        delivery_certainty="indeterminate",
+                        reason=f"{type(error).__name__}: Execution submission failed",
+                    )
+                else:
+                    receipt = self._records.finish(
+                        task.candidate.decision_id,
+                        DecisionStatus.ABSTAINED,
+                        effective_request=task.candidate.request,
+                        final_submission_status=submitted.status,
+                        delivery_certainty="sent",
+                        reason="Decision worker queue was full; proven reduction bypassed Agent",
+                    )
+                self._record_immediate_failure(receipt)
+                self._emit_terminal(task.candidate, receipt)
+                return receipt
+            receipt = self._records.finish(
                 task.candidate.decision_id,
                 DecisionStatus.FAILED,
                 final_submission_status=final_submission_status,
                 delivery_certainty=failure_certainty,
                 reason="Decision worker queue is full",
             )
+            self._record_immediate_failure(receipt)
+            self._emit_terminal(task.candidate, receipt)
+            return receipt
         receipt = self._records.decision(task.candidate.decision_id)
         if receipt is None:
             raise RuntimeError("Decision record disappeared after queue admission")
@@ -205,14 +251,17 @@ class AgentDecisionWorker:
                 continue
             if task is None:
                 self._queue.task_done()
+                if self._queue.empty() and self._in_flight == 0:
+                    self._idle.set()
                 return
             with self._lock:
                 self._in_flight += 1
             started = time.monotonic()
+            had_error = False
             try:
-                self._execute(task)
+                had_error = self._execute(task)
             except Exception as error:
-                self._last_failure = type(error).__name__
+                had_error = True
                 try:
                     self._records.finish(
                         task.candidate.decision_id,
@@ -225,21 +274,39 @@ class AgentDecisionWorker:
             finally:
                 elapsed = (time.monotonic() - started) * 1_000
                 receipt = self._records.decision(task.candidate.decision_id)
-                failed = receipt is None or receipt.status in {
-                    DecisionStatus.FAILED,
-                    DecisionStatus.INTERRUPTED,
-                    DecisionStatus.SUBMISSION_INDETERMINATE,
-                }
+                if receipt is not None:
+                    self._emit_terminal(task.candidate, receipt)
+                failed = (
+                    had_error
+                    or receipt is None
+                    or receipt.status
+                    in {
+                        DecisionStatus.FAILED,
+                        DecisionStatus.INTERRUPTED,
+                        DecisionStatus.SUBMISSION_INDETERMINATE,
+                    }
+                )
                 with self._lock:
                     self._in_flight -= 1
                     self._latencies_millis.append(elapsed)
                     self._recent_errors.append(failed)
+                    if failed:
+                        self._last_failure = (
+                            "Decision record unavailable"
+                            if receipt is None
+                            else receipt.reason or receipt.status.value
+                        )
+                    else:
+                        self._last_success_at = datetime.now(timezone.utc)
+                    if self._queue.empty() and self._in_flight == 0:
+                        self._idle.set()
                 _LOG.info(
                     "Decision Agent run completed",
                     extra={
                         "decision_id": task.candidate.decision_id,
                         "request_id": task.candidate.request_id,
                         "intent_id": task.candidate.intent_id,
+                        "workspace_id": task.candidate.workspace_id,
                         "launch_id": task.candidate.launch_id,
                         "instance_id": task.candidate.instance_id,
                         "strategy_id": task.candidate.strategy_id,
@@ -252,12 +319,17 @@ class AgentDecisionWorker:
                 )
                 self._queue.task_done()
 
-    def _execute(self, task: DecisionTask) -> None:
+    def wait_idle(self, *, timeout: float) -> bool:
+        if timeout < 0:
+            raise ValueError("Agent worker wait timeout cannot be negative")
+        return self._idle.wait(timeout)
+
+    def _execute(self, task: DecisionTask) -> bool:
         candidate = task.candidate
         self._records.mark_running(candidate.decision_id)
         if datetime.now(timezone.utc) >= candidate.deadline:
             self._fail_or_bypass(task, "Decision deadline expired before model run")
-            return
+            return True
         decide = getattr(self._runtime, "decide", None)
         if not callable(decide):
             raise TypeError("Decision runtime does not provide decide(candidate)")
@@ -265,7 +337,7 @@ class AgentDecisionWorker:
             runtime_output = decide(candidate)
         except Exception as error:
             self._fail_or_bypass(task, f"{type(error).__name__}: Agent runtime failed")
-            return
+            return True
         if isinstance(runtime_output, DecisionResult):
             result = runtime_output
             tool_evidence: tuple[ToolEvidence, ...] = ()
@@ -276,7 +348,7 @@ class AgentDecisionWorker:
             self._fail_or_bypass(
                 task, "Decision runtime returned an invalid result type"
             )
-            return
+            return True
         if datetime.now(timezone.utc) >= candidate.deadline:
             self._fail_or_bypass(
                 task,
@@ -284,7 +356,7 @@ class AgentDecisionWorker:
                 result=result,
                 tool_evidence=tool_evidence,
             )
-            return
+            return True
         if (
             self._stop_requested.is_set()
             and candidate.snapshot.mode is not AgentMode.SHADOW
@@ -297,11 +369,11 @@ class AgentDecisionWorker:
                 delivery_certainty="not_sent",
                 reason="Decision worker stopped before final submission",
             )
-            return
+            return True
         outcome = self._policy.apply(candidate, result)
         if candidate.snapshot.mode is AgentMode.SHADOW:
             self._finish_shadow(task, result, outcome.decision, tool_evidence)
-            return
+            return False
         decision = outcome.decision
         effective = outcome.effective_request
         if (
@@ -324,7 +396,7 @@ class AgentDecisionWorker:
                 delivery_certainty="not_sent",
                 reason=outcome.reason,
             )
-            return
+            return False
         if effective is None:
             raise RuntimeError("Approved Decision is missing an effective request")
         self._records.mark_submitting(candidate.decision_id)
@@ -340,7 +412,7 @@ class AgentDecisionWorker:
                 delivery_certainty="indeterminate",
                 reason=f"{type(error).__name__}: Execution submission failed",
             )
-            return
+            return True
         certainty = "sent"
         status = _terminal_status(decision)
         self._records.finish(
@@ -353,7 +425,7 @@ class AgentDecisionWorker:
             delivery_certainty=certainty,
             reason=submitted.error,
         )
-        self._last_success_at = datetime.now(timezone.utc)
+        return False
 
     def _fail_or_bypass(
         self,
@@ -401,7 +473,7 @@ class AgentDecisionWorker:
             return
         try:
             self._records.mark_submitting(candidate.decision_id)
-            submitted = task.submit(candidate.request)
+            submitted = self._submit_bypass(task)
         except Exception as error:
             self._records.finish(
                 candidate.decision_id,
@@ -424,6 +496,18 @@ class AgentDecisionWorker:
             reason=reason,
         )
 
+    @staticmethod
+    def _submit_bypass(task: DecisionTask) -> CommandResult:
+        bypass = task.bypass
+        if bypass is None:
+            raise RuntimeError("Decision reduction bypass is not configured")
+        return bypass(task.candidate.request)
+
+    def _record_immediate_failure(self, receipt: DecisionReceipt) -> None:
+        with self._lock:
+            self._recent_errors.append(True)
+            self._last_failure = receipt.reason or receipt.status.value
+
     def _finish_shadow(
         self,
         task: DecisionTask,
@@ -442,25 +526,50 @@ class AgentDecisionWorker:
             delivery_certainty=None if submitted is None else "sent",
             reason=None if submitted is None else submitted.error,
         )
-        self._last_success_at = datetime.now(timezone.utc)
 
     def _interrupt_queued(self) -> None:
         while True:
             try:
                 task = self._queue.get_nowait()
             except Empty:
+                self._idle.set()
                 return
             if task is not None:
                 try:
-                    self._records.finish(
+                    receipt = self._records.finish(
                         task.candidate.decision_id,
                         DecisionStatus.INTERRUPTED,
                         delivery_certainty="not_sent",
                         reason="Decision worker stopped before run",
                     )
+                    self._emit_terminal(task.candidate, receipt)
                 except RuntimeError:
                     pass
             self._queue.task_done()
+
+    def _emit_terminal(
+        self, candidate: IntentCandidate, receipt: DecisionReceipt
+    ) -> None:
+        publish = self._publish_terminal
+        if publish is None or receipt.status in {
+            DecisionStatus.PENDING,
+            DecisionStatus.RUNNING,
+            DecisionStatus.SUBMITTING,
+        }:
+            return
+        try:
+            publish(
+                candidate,
+                receipt,
+                self._policy.notification_reason_codes(
+                    self._records.reason_codes(candidate.decision_id)
+                ),
+            )
+        except Exception:
+            _LOG.exception(
+                "Decision Agent terminal notification failed",
+                extra={"decision_id": candidate.decision_id},
+            )
 
 
 def _terminal_status(decision: DecisionKind) -> DecisionStatus:

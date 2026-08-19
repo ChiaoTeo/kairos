@@ -19,6 +19,7 @@ pub use connection::{
     ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionKey,
     ConnectionLifecycle, ConnectionState, MaintenanceOutcome, ProviderClockHealth,
 };
+pub use decimal::DecimalValue;
 pub use earn::*;
 pub use event::{ExternalEventDelivery, ExternalEventEnvelope, ExternalParticipantEvent};
 pub use execution::*;

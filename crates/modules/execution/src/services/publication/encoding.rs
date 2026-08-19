@@ -529,6 +529,31 @@ pub(super) fn encode_risk_reservation_state<'a>(
     let idempotency_key = builder.create_string(&reservation.idempotency_key);
     let account_id = builder.create_string(reservation.account_id.as_str());
     let amount = decimal(reservation.amount);
+    let funding_requirement = reservation.funding_requirement.as_ref().map(|requirement| {
+        let margin_rule_id = builder.create_string(&requirement.margin_rule_id);
+        let risk_decision_id = builder.create_string(&requirement.risk_decision_id);
+        let broker = builder.create_string(&requirement.broker);
+        let segment = builder.create_string(&requirement.segment);
+        let collateral_asset = builder.create_string(&requirement.collateral_asset);
+        let required_margin = decimal(requirement.required_margin);
+        let available_margin = decimal(requirement.available_margin);
+        let shortfall = decimal(requirement.shortfall);
+        fb::ExecutionFundingRequirement::create(
+            builder,
+            &fb::ExecutionFundingRequirementArgs {
+                required_margin: Some(&required_margin),
+                available_margin: Some(&available_margin),
+                shortfall: Some(&shortfall),
+                margin_rule_id: Some(margin_rule_id),
+                risk_decision_id: Some(risk_decision_id),
+                risk_policy_version: requirement.risk_policy_version,
+                account_snapshot_watermark: requirement.account_snapshot_watermark,
+                broker: Some(broker),
+                segment: Some(segment),
+                collateral_asset: Some(collateral_asset),
+            },
+        )
+    });
     Ok(fb::RiskReservationSagaState::create(
         builder,
         &fb::RiskReservationSagaStateArgs {
@@ -562,6 +587,7 @@ pub(super) fn encode_risk_reservation_state<'a>(
             policy_version: reservation.policy_version,
             expires_at_unix_nanos: reservation.expires_at_unix_nanos.get(),
             updated_at_unix_nanos: reservation.updated_at_unix_nanos.get(),
+            funding_requirement,
         },
     ))
 }
@@ -768,41 +794,10 @@ pub(super) fn intent_lifecycle(status: crate::application::IntentStatus) -> fb::
     }
 }
 
-pub(super) trait DecimalValue {
-    fn mantissa(&self) -> i64;
-    fn scale(&self) -> u8;
-}
-
-impl DecimalValue for kairos_primitives::Quantity {
-    fn mantissa(&self) -> i64 {
-        kairos_primitives::Quantity::mantissa(*self)
-    }
-    fn scale(&self) -> u8 {
-        kairos_primitives::Quantity::scale(*self)
-    }
-}
-
-impl DecimalValue for kairos_primitives::Price {
-    fn mantissa(&self) -> i64 {
-        kairos_primitives::Price::mantissa(*self)
-    }
-    fn scale(&self) -> u8 {
-        kairos_primitives::Price::scale(*self)
-    }
-}
-
-impl DecimalValue for kairos_primitives::Money {
-    fn mantissa(&self) -> i64 {
-        kairos_primitives::Money::mantissa(*self)
-    }
-    fn scale(&self) -> u8 {
-        kairos_primitives::Money::scale(*self)
-    }
-}
-
-pub(super) fn decimal<T: DecimalValue>(
-    value: T,
+pub(super) fn decimal(
+    value: impl Into<kairos_primitives::DecimalParts>,
 ) -> kairos_protocol::generated::kairos::common::v_2::Decimal64 {
+    let value = value.into();
     kairos_protocol::generated::kairos::common::v_2::Decimal64::new(value.mantissa(), value.scale())
 }
 

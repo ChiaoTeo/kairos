@@ -1,0 +1,17 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    uses: ./.github/workflows/rust-quality.yml
+
+  python:
+    uses: ./.github/workflows/python-quality.yml

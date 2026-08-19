@@ -43,8 +43,10 @@ impl<'a> AccountSegmentState<'a> {
     pub const VT_BALANCES: ::flatbuffers::VOffsetT = 44;
     pub const VT_COLLATERAL: ::flatbuffers::VOffsetT = 46;
     pub const VT_POSITIONS: ::flatbuffers::VOffsetT = 48;
-    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 50;
-    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 52;
+    pub const VT_EARN_HOLDINGS: ::flatbuffers::VOffsetT = 50;
+    pub const VT_EARN_WATERMARK_UNIX_NANOS: ::flatbuffers::VOffsetT = 52;
+    pub const VT_MARGIN_MODE: ::flatbuffers::VOffsetT = 54;
+    pub const VT_POSITION_MODE: ::flatbuffers::VOffsetT = 56;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -61,6 +63,7 @@ impl<'a> AccountSegmentState<'a> {
         args: &'args AccountSegmentStateArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<AccountSegmentState<'bldr>> {
         let mut builder = AccountSegmentStateBuilder::new(_fbb);
+        builder.add_earn_watermark_unix_nanos(args.earn_watermark_unix_nanos);
         builder.add_state_generation(args.state_generation);
         builder.add_observed_at_unix_nanos(args.observed_at_unix_nanos);
         builder.add_recovery_buffer_depth(args.recovery_buffer_depth);
@@ -69,6 +72,9 @@ impl<'a> AccountSegmentState<'a> {
         builder.add_channel_epoch(args.channel_epoch);
         builder.add_event_watermark(args.event_watermark);
         builder.add_snapshot_watermark(args.snapshot_watermark);
+        if let Some(x) = args.earn_holdings {
+            builder.add_earn_holdings(x);
+        }
         if let Some(x) = args.positions {
             builder.add_positions(x);
         }
@@ -401,6 +407,32 @@ impl<'a> AccountSegmentState<'a> {
         }
     }
     #[inline]
+    pub fn earn_holdings(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding<'a>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding>>,
+                >>(AccountSegmentState::VT_EARN_HOLDINGS, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn earn_watermark_unix_nanos(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(AccountSegmentState::VT_EARN_WATERMARK_UNIX_NANOS, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn margin_mode(&self) -> MarginMode {
         // Safety:
         // Created from valid Table for this object
@@ -506,6 +538,14 @@ impl ::flatbuffers::Verifiable for AccountSegmentState<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<Position>>,
             >>("positions", Self::VT_POSITIONS, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<EarnHolding>>,
+            >>("earn_holdings", Self::VT_EARN_HOLDINGS, true)?
+            .visit_field::<u64>(
+                "earn_watermark_unix_nanos",
+                Self::VT_EARN_WATERMARK_UNIX_NANOS,
+                false,
+            )?
             .visit_field::<MarginMode>("margin_mode", Self::VT_MARGIN_MODE, false)?
             .visit_field::<PositionMode>("position_mode", Self::VT_POSITION_MODE, false)?
             .finish();
@@ -548,6 +588,12 @@ pub struct AccountSegmentStateArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<Position<'a>>>,
         >,
     >,
+    pub earn_holdings: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<EarnHolding<'a>>>,
+        >,
+    >,
+    pub earn_watermark_unix_nanos: u64,
     pub margin_mode: MarginMode,
     pub position_mode: PositionMode,
 }
@@ -575,9 +621,11 @@ impl<'a> Default for AccountSegmentStateArgs<'a> {
             observed_at_unix_nanos: 0,
             state_generation: 0,
             valuation: None,
-            balances: None,   // required field
-            collateral: None, // required field
-            positions: None,  // required field
+            balances: None,      // required field
+            collateral: None,    // required field
+            positions: None,     // required field
+            earn_holdings: None, // required field
+            earn_watermark_unix_nanos: 0,
             margin_mode: MarginMode::UNSPECIFIED,
             position_mode: PositionMode::UNSPECIFIED,
         }
@@ -776,6 +824,26 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AccountSegmentStateBuilder<'a
         );
     }
     #[inline]
+    pub fn add_earn_holdings(
+        &mut self,
+        earn_holdings: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<EarnHolding<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            AccountSegmentState::VT_EARN_HOLDINGS,
+            earn_holdings,
+        );
+    }
+    #[inline]
+    pub fn add_earn_watermark_unix_nanos(&mut self, earn_watermark_unix_nanos: u64) {
+        self.fbb_.push_slot::<u64>(
+            AccountSegmentState::VT_EARN_WATERMARK_UNIX_NANOS,
+            earn_watermark_unix_nanos,
+            0,
+        );
+    }
+    #[inline]
     pub fn add_margin_mode(&mut self, margin_mode: MarginMode) {
         self.fbb_.push_slot::<MarginMode>(
             AccountSegmentState::VT_MARGIN_MODE,
@@ -816,6 +884,8 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AccountSegmentStateBuilder<'a
             .required(o, AccountSegmentState::VT_COLLATERAL, "collateral");
         self.fbb_
             .required(o, AccountSegmentState::VT_POSITIONS, "positions");
+        self.fbb_
+            .required(o, AccountSegmentState::VT_EARN_HOLDINGS, "earn_holdings");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -849,6 +919,11 @@ impl ::core::fmt::Debug for AccountSegmentState<'_> {
         ds.field("balances", &self.balances());
         ds.field("collateral", &self.collateral());
         ds.field("positions", &self.positions());
+        ds.field("earn_holdings", &self.earn_holdings());
+        ds.field(
+            "earn_watermark_unix_nanos",
+            &self.earn_watermark_unix_nanos(),
+        );
         ds.field("margin_mode", &self.margin_mode());
         ds.field("position_mode", &self.position_mode());
         ds.finish()

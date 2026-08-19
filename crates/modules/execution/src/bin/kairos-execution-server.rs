@@ -215,6 +215,10 @@ struct ExecutionRouteConfig {
     port: Option<u16>,
     #[serde(default)]
     client_id: Option<i32>,
+    #[serde(default)]
+    initial_margin_rate_bps: Option<u32>,
+    #[serde(default)]
+    margin_rule_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,6 +370,8 @@ impl Args {
             host: route.host.unwrap_or_else(|| "127.0.0.1".into()),
             port: route.port.unwrap_or(4002),
             client_id: route.client_id.unwrap_or(0),
+            initial_margin_rate_bps: route.initial_margin_rate_bps,
+            margin_rule_id: route.margin_rule_id,
         })
     }
 }
@@ -489,6 +495,8 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 4002,
             client_id: 7,
+            initial_margin_rate_bps: None,
+            margin_rule_id: None,
         };
         let first = acquire_exclusive_provider_process_locks(&workspace, &[route.clone()]).unwrap();
         let error = acquire_exclusive_provider_process_locks(&workspace, &[route.clone()])

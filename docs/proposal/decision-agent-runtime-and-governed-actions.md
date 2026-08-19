@@ -9,10 +9,13 @@
 - 第一运行时：OpenAI Agents SDK for Python
 - 第一运行方式：Strategy process 内的独立后台 worker
 
-本文定义一个 Strategy-scoped Agent runtime，而不是只为 Intent 设计的小型
-`IntentController`。它为每个 Strategy 提供独立 Profile、上下文投影、模式和工具权限；第一个落地能力是
-Intent review。Agent 可以提出受限修订，但它不是新的业务事实 owner，也不能绕过
-Market、Account、Risk 或 Execution。
+本文定义一个 **Strategy-scoped Agent runtime**，而不是只为 Intent 设计的小型
+`IntentController`。Agent 是 Strategy 的可选运行时能力：每个 Strategy 可以拥有不同的目标、上下文、
+模式和工具权限；Intent review 只是第一个受治理能力。未来如果增加 Market subscription proposal、
+Risk tightening 或 Strategy pause，也应继续复用这个运行时边界，而不是再造一套 Agent lifecycle。
+
+Agent 可以建议和审核动作，但它不是新的业务事实 owner，也不能绕过 Market、Account、Risk 或
+Execution。Profile 和权限上限由 Launch 固定，Strategy 只通过 `ctx.agent` 改变被允许动态变化的运行时状态。
 
 公共入口遵循现有 Strategy SDK 的对称模型：
 
@@ -22,6 +25,15 @@ on_agent        Strategy 被动观察 Agent 终态事件，不参与审批或提
 ctx.execution   Strategy 提交现有 typed Intent
 on_execution    Strategy 观察唯一权威的 Intent/plan/order/fill 业务事实
 ```
+
+四个入口分别属于控制面、观察面、业务命令面和业务事实面，不能互相替代：
+
+| 入口 | 用途 | 是否触发模型 | 是否承载业务事实 |
+|---|---|---:|---:|
+| Launch Profile | 固定 Agent 能力、权限上限和初始模式 | 否 | 否 |
+| `ctx.agent` | 发布私有上下文、撤回上下文、切换已授权模式 | 否 | 否 |
+| `on_agent` | 接收最小化的 Agent 终态通知 | 否 | 否 |
+| `ctx.execution` / `on_execution` | 提交 Intent / 观察 Execution 权威结果 | 间接触发审核 / 否 | 是 |
 
 ## 1. 背景与目标
 
@@ -40,10 +52,11 @@ Strategy typed Intent
 
 1. Agent 由 Launch 显式启用；关闭时现有行为完全不变。
 2. Launch 固定 Profile、model、tools、failure policy、初始模式和 Strategy 可选模式范围。
-3. Strategy 通过 `ctx.agent` 发布/撤回私有上下文，并在授权范围内动态切换模式。
+3. Strategy 通过命令式 `ctx.agent` 发布/撤回私有上下文，并在 Launch 授权范围内动态切换模式；这些命令
+   只修改下一次 candidate admission 会读取的本地状态，不实时调用 Agent。
 4. Strategy 可通过 `on_agent` 观察最小终态事件，但不接收 patch/有效 Intent，不查询或管理 Decision lifecycle。
-5. Agent 批准或修订后直接提交 Execution，不等待 `on_agent` 返回；Strategy 通过 `on_execution`
-   观察业务事实。
+5. Agent 批准或修订后直接提交 Execution，不等待 Strategy acknowledge 或 `on_agent` 返回；Strategy 不接收
+   original/effective Intent 回馈，只通过 `on_execution` 观察权威业务事实。
 6. Strategy 同步 callback 不执行 model、MCP 或 network I/O。
 7. candidate admission 固定 immutable context snapshot、mode 和 mode revision。
 8. worker 是 queue、in-flight run 和 SDK resource 的唯一 mutable owner。
@@ -129,7 +142,8 @@ Strategy 使用一个命令入口和一个事件入口：
 - `ctx.agent`：同步、本地、命令式控制；
 - `on_agent(ctx, event)`：异步终态通知，与 `on_market` / `on_execution` 保持一致。
 
-`StrategyContext` 增加 `agent: AgentApplication`。`AgentApplication` 只暴露三个同步命令：
+`StrategyContext` 增加 `agent: AgentApplication`。这里的 `Application` 是轻量的 Strategy control facade，
+不是 Agent lifecycle API。它只暴露三个同步、本地命令：
 
 ```python
 class AgentApplication:
@@ -142,21 +156,33 @@ class AgentApplication:
     def set_mode(self, mode: AgentMode) -> AgentModeReceipt: ...
 ```
 
-不暴露 `submit_intent_candidate`、`decision`、`recent_decisions`、`health`、Runner、session 或 tool API。Intent
-candidate 仍由 `ctx.execution.*` 的 concrete adapter 内部产生，Strategy 不需要学习第二套提交 API。
+不暴露 `launch`、`submit_intent_candidate`、`decision`、`recent_decisions`、`health`、Runner、session 或 tool
+API。Agent 的构造、启动、停止、恢复、SDK/MCP session 和健康管理由 Launch/composition/worker 负责；
+Intent candidate 仍由 `ctx.execution.*` 的 concrete adapter 内部产生，Strategy 不需要学习第二套提交 API。
+
+这些 receipt 只确认本地配置命令是否生效，不是 Agent decision receipt，也不承诺之后一定产生模型调用。
 
 ### 6.1 `on_agent`
 
 ```python
 @dataclass(frozen=True, slots=True)
-class AgentEvent:
+class AgentDecisionNotice:
     decision_id: str
-    capability: Literal["intent_review"]
+    capability: Literal["execution.intent_review"]
     status: Literal[
-        "approved", "revised", "rejected", "abstained", "failed", "interrupted"
+        "approved",
+        "revised",
+        "rejected",
+        "abstained",
+        "failed",
+        "interrupted",
+        "submission_indeterminate",
     ]
     reason_codes: tuple[str, ...]
-    occurred_at: datetime
+
+@dataclass(frozen=True, slots=True)
+class AgentEvent(DataEvent[AgentDecisionNotice]):
+    kind: str = field(init=False, default="decision_completed")
 
 class Strategy:
     def on_agent(self, ctx: StrategyContext, event: AgentEvent) -> None: ...
@@ -166,6 +192,7 @@ class Strategy:
 
 - Agent 不等待 callback；approve/revise 在本地 policy 通过后立即提交 Execution；
 - event 不包含 original/effective Intent、revision、prompt、tool payload 或模型原始输出；
+- `revised` 只表示 Agent 采用了受限修订，Strategy 不获得修订内容；
 - approved/revised 后的权威业务结果仍从 `on_execution` 到达；
 - rejected/abstained/failed 因不会创建 Execution Intent，通过 `on_agent` 提供最小可观察性；
 - callback 返回值必须是 `None`，失败按 Strategy callback 的现有错误边界处理，不回滚 Agent/Execution。
@@ -208,12 +235,20 @@ class AgentModeReceipt:
     reason: str | None = None
 ```
 
-Launch 固定 `initial_mode` 和 `strategy_selectable_modes`。`set_mode` 只能选择 allowlist 中的模式；成功切换
-递增 `mode_revision`，只影响之后 admission 的 candidate，不能追溯修改 queued/in-flight run。
+Launch 固定 `initial_mode` 和 `strategy_selectable_modes`。`ctx.agent.set_mode(...)` 只能选择 allowlist 中的模式；
+成功切换递增 `mode_revision`，只影响之后 admission 的 candidate，不能追溯修改 queued/in-flight run，也不会
+在切换时调用模型。
 
 `disabled` 不是 Strategy mode；它表示不构造 runtime，只能由 Launch 控制。Strategy 不能动态修改 Profile、
-model、tools、required、failure policy 或 credential。同一 callback 中先 publish/set_mode 再提交 Intent，
-candidate 必须确定读取新 revision。
+model、tools、required、failure policy、operation scope、revision policy 或 credential。同一 callback 中先
+publish/set_mode 再提交 Intent，candidate 必须确定读取新 revision。
+
+### 6.4 事件调度语义
+
+worker 不直接调用 Strategy object。它只把 `AgentEvent` 投递到 Strategy ingress，由现有
+Strategy dispatch thread 串行执行 `on_agent`。因此 `on_agent`、`on_market`、`on_account` 和
+`on_execution` 不会并发修改 Strategy state。事件携带稳定 `decision_id` 并可去重，但不承诺
+durable replay；需要运维审计时读取 Agent/Execution 的 owner-side record，而不依赖 Strategy callback。
 
 ## 7. Candidate、Result 与 revision
 
@@ -223,6 +258,7 @@ class IntentCandidate:
     decision_id: str
     request_id: str
     intent_id: str
+    workspace_id: str
     strategy_id: str
     launch_id: str
     instance_id: str
@@ -280,7 +316,7 @@ slippage、deadline 或执行激进程度。
 2. concrete adapter performs local scope/safety checks
 3. adapter builds candidate and immutable context/mode snapshot
 4. Decision record is persisted before enqueue
-5. callback receives IntentReceipt(PENDING, NOT_SENT)
+5. original Strategy call receives only a candidate-admission acknowledgement, not a Decision result
 6. worker runs bounded Agent SDK loop with allowed read tools
 7. host validates result and atomically applies allowed revisions
 8. host builds effective typed request
@@ -288,10 +324,11 @@ slippage、deadline 或执行激进程度。
 10. Execution records admission evidence and validates effective Intent
 11. Risk authorizes; Execution continues normal lifecycle
 12. Decision record stores downstream result and becomes terminal
+13. Strategy ingress receives a minimal AgentEvent and dispatches on_agent
 ```
 
-callback 不等待模型。Strategy 不接收后续 Agent completion。reject 时步骤 9 不发生，Execution 不创建 Intent
-或 admission audit。final command 已开始但 delivery certainty 未知时，Decision 标记
+Strategy 的原始 callback 不等待模型，也不会收到 effective Intent；`on_agent` 也不会阻塞或回滚步骤
+9–12。reject 时步骤 9 不发生，Execution 不创建 Intent 或 admission audit。final command 已开始但 delivery certainty 未知时，Decision 标记
 `submission_indeterminate`，不得自动重试。
 
 ### 8.2 Shadow
@@ -299,11 +336,13 @@ callback 不等待模型。Strategy 不接收后续 Agent completion。reject �
 Shadow 下 original request 沿现有路径立即提交，然后 candidate 旁路入队。Agent 只保存“如果受控会怎样”的
 结果，不得修改或重复提交已发生的 Intent。provider/tool failure 不影响原提交。Shadow Decision 与真实
 downstream result 关联，但不是 Execution admission decision。
+完成后仍可投递最小 `on_agent` 终态事件，事件不携带“假设修订”内容。
 
 ### 8.3 Disabled
 
 `enabled = false` 时不 import/构造 SDK、worker、MCP、Decision store 或 queue；Execution 使用当前 direct
-command client。`ctx.agent` 使用 disabled application，context 命令仍是本地操作，mode 切换返回 rejected。
+command client。`ctx.agent` 使用 disabled application，context 命令仍是本地操作，mode 切换返回 rejected，
+不产生 `on_agent` 事件。
 
 ## 9. Mode 与失败策略
 
@@ -341,6 +380,8 @@ command client。`ctx.agent` 使用 disabled application，context 命令仍是�
 
 明确降低绝对敞口的 target、close position、reduce-only order、cancel、强平、补偿和 reconciliation 不得因 Agent
 不可用而阻塞。不能仅凭方法名或模型理由判断减仓；必须使用权威 Account projection，无法证明时为 unknown。
+故障绕过使用原有 direct Execution 路径，不得伪造 `approved` admission evidence；Agent Decision 仍记录为
+abstained/failed 及真实 delivery certainty。
 
 ## 10. Execution admission audit
 
@@ -390,6 +431,10 @@ validation、snapshot、persist 和 non-blocking enqueue。queue full 立即按 
 第一版 tool 必须只读、provider-neutral、按 workspace/launch/instance/strategy/account scope 收窄，返回 owner
 watermark/sequence/time，限制大小、行数、时间范围、latency 和次数，不返回 credential、raw provider payload
 或文件内容，不接受 raw SQL、shell、任意 URL 或 unrestricted path。
+
+Launch 固化所选 MCP server/profile 的完整非 secret 快照与 content hash。required MCP 的连接或 tool-call
+failure 必须抛出并进入 exposure-aware failure policy；optional MCP 失败只能向模型返回固定的脱敏
+`unavailable` 标记，并在 Decision tool evidence 中记录 unavailable/hash，不能把 provider exception 交给模型。
 
 按 Profile 所需选择首批工具：
 
@@ -444,7 +489,7 @@ shutdown_timeout_seconds = 5
 
 [agent.model]
 provider = "openai"
-model = "pinned-model-snapshot"
+model = "model-family-2026-08-01"
 credential = "openai-agent"
 request_timeout_seconds = 5
 max_turns = 6
@@ -475,9 +520,20 @@ required = true
 ```
 
 Normalized config 固化 Profile name/version/hash、goal/rubric/invalidation/reason codes、initial/selectable modes、
-operation scope、failure policy、pinned model、limits、MCP logical profile 和 revision policy。Strategy 不得替换
-Profile。空 selectable list 表示运行期不能切换。restart 先恢复 initial mode，Strategy 可在 `on_start` 重新
-选择已授权 mode。
+operation scope、failure policy、pinned model、limits、MCP server/profile snapshot/hash 和 revision policy。Strategy 不得替换
+Profile。空 selectable list 表示运行期不能切换。restart 先恢复 initial mode，Strategy 可在 `on_start` 通过
+`ctx.agent.set_mode(...)` 重新选择已授权 mode。
+
+OpenAI model 必须使用带日期的 snapshot ID（或稳定 fine-tuned model ID）；可漂移的 model alias 在 Launch
+配置校验阶段直接拒绝。
+
+配置权限分为两层：
+
+- **Launch 静态上限**：enabled、required、Profile、model、tools、operation scope、failure/revision policy、
+  initial mode 和 selectable modes；
+- **Strategy 动态状态**：当前 mode、context documents 及其 revision/watermark。
+
+Strategy 的动态命令不能突破 Launch 静态上限，也不能改变已经排队或正在运行的 candidate snapshot。
 
 Launch 只保存 credential reference；Workspace resolver 在 composition 解析 secret。secret 禁止进入 params、
 normalized config、prompt/context/tool result、record、trace attribute、exception 或 repr。
@@ -511,11 +567,18 @@ backtest 不构造 remote model/MCP client，使用匹配 candidate hash、conte
 DecisionResult 和 tool evidence summary 的 fixture。缺失或不匹配 deterministically fail，不回退远程调用。
 回放仍执行本地 schema、revision policy、Execution validation 和 Risk logic。
 
+每次 Strategy callback 后、应用同一 market event 的模拟 fill 前，都必须等待 fixture worker idle 并串行派发
+`on_agent`；`on_end` 后、写 backtest report 前也必须经过同一 barrier。fixture candidate 与 AgentEvent 使用
+source event time，不读取墙上时钟，防止线程调度或本机时间改变 Strategy 可观察结果。
+
 ## 16. Health、日志与 shutdown
 
 Launch/System diagnostics 可以读取内部 health：enabled/required/state、mode/revision、context watermark/count、
 queue depth/capacity、in-flight、last success/failure、model、MCP/store readiness、rolling error rate 和 latency。
 health 不是 Strategy API。
+
+Agent runtime/tool/queue 失败必须计入 error rate 和 last failure，即使明确减仓随后通过 direct path 成功；
+下游 delivery success 与 Agent runtime health 是两个独立事实。
 
 日志关联 workspace/launch/instance/strategy、decision/request/intent、capability/mode/revision、model/tool、outcome、
 failure class 和 latency，不记录 secret、完整 prompt、账户 snapshot 或未脱敏 tool payload。
@@ -536,6 +599,7 @@ kairospy/application/agent/
   services/
     worker.py              bounded queue and run owner
     records.py             SQLite Decision records
+    events.py              bounded best-effort terminal notification stream
     openai_runtime.py      thin Agents SDK adapter
     tools.py               local read tools / MCP assembly
     controlled_execution.py concrete Execution command decorator
@@ -543,6 +607,7 @@ kairospy/application/agent/
 kairospy/application/strategy/
   composition.py          compose enabled/disabled Agent
   services/context.py     expose ctx.agent and bind event metadata
+  services/ingress.py     route/dedupe AgentEvent and dispatch on_agent
 
 crates/modules/execution/
   contract/               optional admission evidence in control contract
@@ -595,7 +660,10 @@ crates/modules/execution/
 
 ### 19.1 API/context/mode
 
-- public API 只有 publish/remove/set_mode；没有 `on_agent`；
+- `ctx.agent` 公共 API 只有 publish/remove/set_mode；
+- `on_agent` 仅接收最小终态事件，不含 original/effective Intent 或 revision；
+- approve/revise 不等待 `on_agent`，callback failure 不回滚下游提交；
+- AgentEvent 通过 Strategy dispatch thread 串行投递，不由 worker 并发调用 Strategy；
 - replace/remove/revision/dedupe、scope/TTL/required context；
 - bounds 和 credential rejection；
 - mode allowlist/revision；
@@ -663,23 +731,15 @@ python3 scripts/check/check_workspace_dependencies.py
 token/tool/cost、shadow 与真实结果差异、revision rejection、人工标注的 false reject/unsafe approve、outage 和
 rollback 演练。阈值由首个生产 Strategy 与风险预算确定。
 
-## 21. 完成清单
+## 21. Definition of Done
 
-- [x] 公共 API 已实现并导出；
-- [x] Launch Agent config 已校验、规范化并装配；
-- [x] disabled 与现有行为一致且不加载 optional SDK；
-- [x] context/mode projection 只有一个 mutable owner；
-- [x] candidate 固定 immutable context/mode snapshot；
-- [x] Decision store persist-before-enqueue、dedupe、terminal 语义完成；
-- [x] OpenAI Agents SDK structured output 与只读 MCP 完成；
-- [x] shadow/gate/revise 完成；
-- [x] exposure-aware failure/bypass 完成；
-- [x] typed revision 与风险单调 policy 完成；
-- [x] Execution original/effective admission audit 完成；
-- [x] 只有 effective Intent 进入 lifecycle；
-- [x] backtest fixture 无网络且确定性重放；
-- [x] health/log/redaction/shutdown 完成；
-- [x] behavior/failure/security/architecture 测试完成；
-- [ ] 全仓验证完成；
-- [x] 未提前实现未来 Subscription/Risk 通用动作；
-- [x] 未改变现有业务事实 owner。
+本节是验收标准，不在 proposal 中标记实现完成度。实际进度应由 issue/PR 和测试证据维护，避免
+设计文档同时成为容易失真的项目看板。完成必须同时满足：
+
+- `ctx.agent + on_agent` 入口、串行 dispatch 与 disabled 行为完整；
+- Launch/Profile/context/mode/candidate snapshot 边界已验证；
+- SDK/MCP/worker/store/shutdown 全生命周期由成熟 runtime 与单 worker owner 承担；
+- shadow/gate/revise、故障策略和风险单调 revision 已通过行为测试；
+- Execution 在 owner-side 持久化 original/effective admission evidence，只有 effective Intent 进入 lifecycle；
+- backtest/security/architecture 约束和第 19.6 节的仓库验证有可重现证据；
+- 没有提前引入通用 action registry、write MCP 或改变现有业务事实 owner。

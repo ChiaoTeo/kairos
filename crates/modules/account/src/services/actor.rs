@@ -154,6 +154,20 @@ impl AccountActor {
                     .apply_snapshot(snapshot)
                     .map_err(|error| error.to_string())
             }
+            AccountEvent::EarnHoldings(snapshot) => {
+                let account = self
+                    .accounts
+                    .get_mut(&snapshot.segment_key)
+                    .ok_or_else(|| {
+                        format!(
+                            "Earn snapshot segment is not configured: {}",
+                            snapshot.segment_key
+                        )
+                    })?;
+                account
+                    .apply_earn_snapshot(snapshot)
+                    .map_err(|error| error.to_string())
+            }
             AccountEvent::Fill(fill) => {
                 let account = self.accounts.get_mut(&fill.segment_key).ok_or_else(|| {
                     format!("fill segment is not configured: {}", fill.segment_key)
@@ -418,6 +432,37 @@ fn collect_business_changes(
         }
     }
 
+    let old_earn = old
+        .map(|value| {
+            value
+                .earn_holdings
+                .iter()
+                .map(|holding| (earn_holding_key(holding), holding))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_earn = current
+        .earn_holdings
+        .iter()
+        .map(|holding| (earn_holding_key(holding), holding))
+        .collect::<BTreeMap<_, _>>();
+    for (key, holding) in &current_earn {
+        if old_earn.get(key).copied() != Some(*holding) {
+            out.push(AccountBusinessChange::EarnHolding {
+                segment_key: current.segment_key.clone(),
+                value: (*holding).clone(),
+            });
+        }
+    }
+    for key in old_earn.keys() {
+        if !current_earn.contains_key(key) {
+            out.push(AccountBusinessChange::EarnHoldingRemoved {
+                segment_key: current.segment_key.clone(),
+                holding_key: key.clone(),
+            });
+        }
+    }
+
     let old_orders = old
         .map(|value| {
             value
@@ -470,6 +515,7 @@ fn collect_business_changes(
 fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_accounts: &mut bool) {
     match event {
         AccountEvent::Snapshot(snapshot) => keys.push(snapshot.segment_key.clone()),
+        AccountEvent::EarnHoldings(snapshot) => keys.push(snapshot.segment_key.clone()),
         AccountEvent::Fill(fill) => keys.push(fill.segment_key.clone()),
         AccountEvent::ObservedFill(fill) => keys.push(fill.segment_key.clone()),
         AccountEvent::OrderObserved(_) => *all_accounts = true,
@@ -479,6 +525,13 @@ fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_acco
             }
         }
     }
+}
+
+fn earn_holding_key(holding: &crate::domain::EarnHolding) -> String {
+    holding
+        .participant_position_id
+        .clone()
+        .unwrap_or_else(|| holding.product_id.clone())
 }
 
 fn segment_selected(segments: &[String], key: &SegmentKey) -> bool {

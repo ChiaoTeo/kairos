@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from kairospy.application.reference import Instrument, InstrumentRef, Market
 from kairospy.domain_types import InstrumentId, MarketId
@@ -107,10 +107,10 @@ class MarketApplication:
         cursor = self._event_cursor or 0
         subscribe_live = getattr(self._event_source, "subscribe_live", None)
         if callable(subscribe_live):
-            records = subscribe_live()
+            records = cast(AsyncIterator[Any], subscribe_live())
             live = True
         else:
-            records = self._event_source.replay_from(cursor)
+            records = cast(AsyncIterator[Any], self._event_source.replay_from(cursor))
             live = False
         async for record in records:
             typed = isinstance(record, (BarEvent, QuoteEvent, TradeEvent, GreeksEvent))
@@ -143,7 +143,7 @@ class MarketApplication:
                 continue
             event = record if typed else map_market_event(record)
             if isinstance(event, TradeEvent):
-                self._latest_trades[event.value.scope.key()] = event.value
+                self._latest_trades[event.data.scope.key()] = event.data
             if self._matches_subscription(event):
                 yield event
 
@@ -212,9 +212,7 @@ class MarketApplication:
             SubscriptionRequest(
                 subject=provider_symbol,
                 selectors=("quote",),
-                identity=ObservationScope.consolidated(
-                    instrument_id, network_id
-                ).key(),
+                identity=ObservationScope.consolidated(instrument_id, network_id).key(),
                 source_id=source_id,
                 market_type=provider_product,
                 params=params,
@@ -255,7 +253,12 @@ class MarketApplication:
     ) -> Bar | None:
         reader = getattr(self._snapshots, "read_bar", None)
         if callable(reader):
-            return reader(str(_market_id(market)), source_id or self._source_id, timeframe)
+            return cast(
+                Bar | None,
+                reader(
+                    str(_market_id(market)), source_id or self._source_id, timeframe
+                ),
+            )
         raise RuntimeError("Market v2 bar view reader is unavailable")
 
     def latest_quote(
@@ -263,7 +266,10 @@ class MarketApplication:
     ) -> Quote | None:
         reader = getattr(self._snapshots, "read_quote", None)
         if callable(reader):
-            return reader(str(_market_id(market)), source_id or self._source_id)
+            return cast(
+                Quote | None,
+                reader(str(_market_id(market)), source_id or self._source_id),
+            )
         raise RuntimeError("Market v2 quote view reader is unavailable")
 
     def latest_trade(self, market: Market | MarketId) -> Trade | None:
@@ -281,7 +287,10 @@ class MarketApplication:
     ) -> OptionGreeks | None:
         reader = getattr(self._snapshots, "read_greeks", None)
         if callable(reader):
-            return reader(str(_market_id(market)), source_id or self._source_id)
+            return cast(
+                OptionGreeks | None,
+                reader(str(_market_id(market)), source_id or self._source_id),
+            )
         raise RuntimeError("Market v2 greeks view reader is unavailable")
 
     def current_view(

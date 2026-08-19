@@ -64,10 +64,14 @@ _VIEW_ROOTS: dict[ExecutionViewKind, tuple[bytes, str]] = {
 
 
 class ExecutionViewReader:
-    def __init__(self, root: str | Path, key: ExecutionViewKey, *, retries: int = 8) -> None:
+    def __init__(
+        self, root: str | Path, key: ExecutionViewKey, *, retries: int = 8
+    ) -> None:
         self.root = Path(root)
         self.key = key
-        self._reader = SharedSnapshotReader(key.resource_path(self.root), retries=retries)
+        self._reader = SharedSnapshotReader(
+            key.resource_path(self.root), retries=retries
+        )
 
     def read(self) -> ExecutionViewFrame:
         snapshot = self._reader.read()
@@ -83,7 +87,9 @@ class ExecutionViewReader:
             raise ValueError("Execution envelope and payload generation differ")
         if int(metadata.AppliedRevision() or 0) != snapshot.applied_event_sequence:
             raise ValueError("Execution envelope and payload event sequence differ")
-        return ExecutionViewFrame(self.key, snapshot.generation, snapshot.payload, value)
+        return ExecutionViewFrame(
+            self.key, snapshot.generation, snapshot.payload, value
+        )
 
 
 def decode_view(payload: bytes, kind: ExecutionViewKind) -> Any:

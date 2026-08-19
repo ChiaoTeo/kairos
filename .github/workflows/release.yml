@@ -1,24 +1,66 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Quality]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  plan:
+    name: Plan release
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      tag_at_head: ${{ steps.plan.outputs.tag_at_head }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Record verified commit
+        id: commit
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release metadata and PyPI state
+        id: plan
+        run: >-
+          python scripts/release/release_plan.py
+          --check-pypi
+          --check-git
+          --github-output "$GITHUB_OUTPUT"
+
   build:
-    name: Build ${{ matrix.os }} wheel
+    name: Build and verify ${{ matrix.os }} distribution
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04, macos-13, macos-14, windows-latest]
     steps:
-      - name: Check out source
+      - name: Check out verified source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,22 +80,60 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: python -m build --sdist
 
-      - name: Upload distribution
+      - name: Verify and install distribution
+        run: >-
+          python scripts/release/smoke_distribution.py dist
+          --expected-version "${{ needs.plan.outputs.version }}"
+
+      - name: Upload verified distribution
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.os }}
           path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  tag:
+    name: Create release tag
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Create or verify tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          existing="$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null || true)"
+          if [ -n "$existing" ]; then
+            test "$existing" = "$RELEASE_SHA"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
 
   publish:
-    name: Publish to PyPI
-    needs: build
+    name: Publish verified distributions to PyPI
+    needs: [plan, build, tag]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Download distributions
+      - name: Download verified distributions
         uses: actions/download-artifact@v4
         with:
           pattern: packages-*
@@ -62,3 +142,25 @@ jobs:
 
       - name: Publish distributions
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  finalize:
+    name: Create GitHub release
+    needs: [plan, publish]
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release from verified tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: >-
+          gh release create "$RELEASE_TAG"
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "$RELEASE_TAG"

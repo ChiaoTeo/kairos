@@ -28,7 +28,9 @@ def advance_time(path: str | Path, event_time_unix_nanos: int) -> dict[str, Any]
     """Advance Execution's deterministic replay clock at an explicit barrier."""
 
     status, value = UnixJsonCommandClient(path).request(
-        "POST", "/v1/time/advance", {"event_time_unix_nanos": int(event_time_unix_nanos)}
+        "POST",
+        "/v1/time/advance",
+        {"event_time_unix_nanos": int(event_time_unix_nanos)},
     )
     if status >= 400:
         raise RuntimeError(
@@ -38,9 +40,13 @@ def advance_time(path: str | Path, event_time_unix_nanos: int) -> dict[str, Any]
 
 
 def backtest_run(path: str | Path, request: dict[str, Any]) -> dict[str, Any]:
-    status, value = UnixJsonCommandClient(path).request("POST", "/v1/backtest/run", request)
+    status, value = UnixJsonCommandClient(path).request(
+        "POST", "/v1/backtest/run", request
+    )
     if status >= 400:
-        raise RuntimeError(value.get("error", f"execution backtest failed with status {status}"))
+        raise RuntimeError(
+            value.get("error", f"execution backtest failed with status {status}")
+        )
     return value
 
 
@@ -60,11 +66,15 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
             "Quote": {
                 "market_id": str(quote.market_id),
                 "instrument_id": str(quote.instrument.id),
-                "bid_price": None if quote.bid_price is None else format(quote.bid_price, "f"),
+                "bid_price": None
+                if quote.bid_price is None
+                else format(quote.bid_price, "f"),
                 "bid_quantity": None
                 if quote.bid_quantity is None
                 else format(quote.bid_quantity, "f"),
-                "ask_price": None if quote.ask_price is None else format(quote.ask_price, "f"),
+                "ask_price": None
+                if quote.ask_price is None
+                else format(quote.ask_price, "f"),
                 "ask_quantity": None
                 if quote.ask_quantity is None
                 else format(quote.ask_quantity, "f"),
@@ -96,9 +106,13 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
         }
     else:
         return {"fills": []}
-    status, value = UnixJsonCommandClient(path).request("POST", "/v1/backtest/market", body)
+    status, value = UnixJsonCommandClient(path).request(
+        "POST", "/v1/backtest/market", body
+    )
     if status >= 400:
-        raise RuntimeError(value.get("error", f"execution market backtest failed with status {status}"))
+        raise RuntimeError(
+            value.get("error", f"execution market backtest failed with status {status}")
+        )
     return value
 
 

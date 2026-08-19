@@ -63,6 +63,7 @@ impl SimulatedRiskReservations {
             policy_version: 1,
             expires_at_unix_nanos: UnixNanos::new(at.get().saturating_add(60_000_000_000)),
             updated_at_unix_nanos: at,
+            funding_requirement: None,
         })
     }
 

@@ -423,14 +423,7 @@ mod native_order_tests {
     }
 }
 fn parse(value: &str) -> Result<DecimalValue, IntegrationError> {
-    let neg = value.starts_with('-');
-    let value = value.trim_start_matches('-');
-    let mut p = value.split('.');
-    let whole = p.next().unwrap_or("0");
-    let frac = p.next().unwrap_or("");
-    let scale = u8::try_from(frac.len()).map_err(payload)?;
-    let n = format!("{whole}{frac}").parse::<i64>().map_err(payload)?;
-    Ok(DecimalValue::new(if neg { -n } else { n }, scale))
+    DecimalValue::parse(value).map_err(payload)
 }
 fn payload(error: impl std::fmt::Display) -> IntegrationError {
     IntegrationError::InvalidPayload(error.to_string())

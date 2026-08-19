@@ -15,6 +15,7 @@ from .events import (
 )
 from .models import (
     ExecutionBacktestResult,
+    ExecutionFundingRequirement,
     BulkOrderCommandReceipt,
     DeliveryCertainty,
     ExecutionIntent,
@@ -58,6 +59,7 @@ __all__ = [
     "IntentAdmissionEvidence",
     "ExecutionAccountNotEnabledError",
     "ExecutionBacktestResult",
+    "ExecutionFundingRequirement",
     "ExecutionPolicy",
     "ExecutionEvent",
     "ExecutionIntent",

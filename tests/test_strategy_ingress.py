@@ -4,6 +4,11 @@ import asyncio
 
 import pytest
 
+from kairospy.application.agent import (
+    AgentDecisionNotice,
+    AgentEvent,
+    AgentEventStatus,
+)
 from kairospy.application.strategy.services.ingress import StrategyEventIngress
 from kairospy.domain_types import EventMetadata
 from kairospy.strategy import SystemEvent, SystemNotice
@@ -49,12 +54,14 @@ def _ingress(
     account: object | None = None,
     *,
     queue_size: int = 256,
+    agent_events=None,
 ) -> StrategyEventIngress:
     return StrategyEventIngress(
         market=market or _EmptySource(),  # type: ignore[arg-type]
         account=account or _EmptySource(),  # type: ignore[arg-type]
         risk=_EmptySource(),  # type: ignore[arg-type]
         execution=_EmptySource(),  # type: ignore[arg-type]
+        agent_events=agent_events,
         queue_size=queue_size,
     )
 
@@ -107,3 +114,21 @@ def test_ingress_does_not_start_market_without_strategy_demand() -> None:
         assert [item async for item in ingress.events(include_market=False)] == []
 
     asyncio.run(run())
+
+
+def test_ingress_routes_agent_notice_to_on_agent() -> None:
+    event = AgentEvent(
+        AgentDecisionNotice(
+            "decision-1",
+            "execution.intent_review",
+            AgentEventStatus.REJECTED,
+            ("risk_too_high",),
+        ),
+        EventMetadata("agent.decisions:instance", 1, producer="strategy.agent"),
+    )
+
+    dispatch = StrategyEventIngress.route(event)
+
+    assert dispatch.domain == "agent"
+    assert dispatch.hook == "on_agent"
+    assert dispatch.event is event

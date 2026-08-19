@@ -7,7 +7,7 @@ use sqlx::{
     Row, SqlitePool,
 };
 
-use super::{ExecutionAuditEvent, ExecutionAuditQuery};
+use super::{ExecutionAuditEvent, ExecutionAuditQuery, IntentAdmissionAuditRecord};
 use crate::application::{ExecutionEvent, IntentEvent};
 use crate::domain::ExecutionOrderStatus;
 
@@ -62,16 +62,18 @@ impl SqlxExecutionAudit {
         result.map_err(|error| error.to_string())
     }
 
-    pub fn publish_batch(
+    pub(crate) fn publish_batch(
         &mut self,
         events: &[ExecutionEvent],
         intents: &[IntentEvent],
+        admissions: &[IntentAdmissionAuditRecord],
     ) -> Result<(), String> {
-        if events.is_empty() && intents.is_empty() {
+        if events.is_empty() && intents.is_empty() && admissions.is_empty() {
             return Ok(());
         }
         let events = events.to_vec();
         let intents = intents.to_vec();
+        let admissions = admissions.to_vec();
         self.run(|pool| async move {
             let mut transaction = pool.begin().await?;
             for event in &events {
@@ -102,16 +104,44 @@ impl SqlxExecutionAudit {
                     .execute(&mut *transaction)
                     .await?;
             }
+            for record in &admissions {
+                let original = serde_json::to_string(&record.evidence.original_intent)
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                let effective = serde_json::to_string(&record.evidence.effective_intent)
+                    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                let result = sqlx::query(
+                    "INSERT INTO intent_admission_audit (decision_id,command_id,idempotency_key,intent_id,source,outcome,original_intent_json,effective_intent_json,original_hash,effective_hash,admission_result,created_at_unix_nanos) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(decision_id) DO UPDATE SET admission_result=excluded.admission_result WHERE intent_admission_audit.command_id IS excluded.command_id AND intent_admission_audit.idempotency_key=excluded.idempotency_key AND intent_admission_audit.intent_id=excluded.intent_id AND intent_admission_audit.source=excluded.source AND intent_admission_audit.outcome=excluded.outcome AND intent_admission_audit.original_intent_json=excluded.original_intent_json AND intent_admission_audit.effective_intent_json=excluded.effective_intent_json AND intent_admission_audit.original_hash=excluded.original_hash AND intent_admission_audit.effective_hash=excluded.effective_hash",
+                )
+                .bind(&record.evidence.decision_id)
+                .bind(&record.command_id)
+                .bind(&record.idempotency_key)
+                .bind(&record.intent_id)
+                .bind(&record.evidence.source)
+                .bind(&record.evidence.outcome)
+                .bind(original)
+                .bind(effective)
+                .bind(&record.evidence.original_hash)
+                .bind(&record.evidence.effective_hash)
+                .bind(&record.admission_result)
+                .bind(record.created_at_unix_nanos as i64)
+                .execute(&mut *transaction)
+                .await?;
+                if result.rows_affected() != 1 {
+                    return Err(sqlx::Error::Protocol(
+                        "Decision admission evidence was reused with different facts".into(),
+                    ));
+                }
+            }
             transaction.commit().await
         })
     }
 
     pub fn publish(&mut self, event: &ExecutionEvent) -> Result<(), String> {
-        self.publish_batch(std::slice::from_ref(event), &[])
+        self.publish_batch(std::slice::from_ref(event), &[], &[])
     }
 
     pub fn publish_intent(&mut self, event: &IntentEvent) -> Result<(), String> {
-        self.publish_batch(&[], std::slice::from_ref(event))
+        self.publish_batch(&[], std::slice::from_ref(event), &[])
     }
 
     pub fn query(
@@ -221,8 +251,11 @@ fn intent_event_key(event: &IntentEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::SqlxExecutionAudit;
-    use crate::application::{ExecutionAuditQuery, ExecutionEvent};
+    use crate::application::{
+        ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionEvent, IntentAdmissionEvidence,
+    };
     use crate::domain::ExecutionOrderStatus;
+    use crate::services::audit::IntentAdmissionAuditRecord;
 
     #[test]
     fn sqlx_audit_is_idempotent_and_queryable() {
@@ -251,5 +284,48 @@ mod tests {
             .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].remote_order_id.as_deref(), Some("exchange-1"));
+    }
+
+    #[test]
+    fn admission_audit_updates_only_the_result_for_identical_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut audit = SqlxExecutionAudit::new(directory.path().join("audit.sqlite")).unwrap();
+        let intent = ExecuteStrategyIntent::default();
+        let evidence = IntentAdmissionEvidence {
+            source: "decision_agent".into(),
+            decision_id: "decision-1".into(),
+            outcome: "approved".into(),
+            original_intent: intent.clone(),
+            effective_intent: intent,
+            original_hash: "a".repeat(64),
+            effective_hash: "a".repeat(64),
+        };
+        let mut record = IntentAdmissionAuditRecord {
+            command_id: Some("command-1".into()),
+            idempotency_key: "idempotency-1".into(),
+            intent_id: "intent:default".into(),
+            evidence,
+            admission_result: "accepted".into(),
+            created_at_unix_nanos: 42,
+        };
+
+        audit.publish_batch(&[], &[], &[record.clone()]).unwrap();
+        record.admission_result = "duplicate".into();
+        audit.publish_batch(&[], &[], &[record.clone()]).unwrap();
+        let result = audit
+            .run(|pool| async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT admission_result FROM intent_admission_audit WHERE decision_id = ?",
+                )
+                .bind("decision-1")
+                .fetch_one(&pool)
+                .await
+            })
+            .unwrap();
+        assert_eq!(result, "duplicate");
+
+        record.evidence.effective_hash = "b".repeat(64);
+        let error = audit.publish_batch(&[], &[], &[record]).unwrap_err();
+        assert!(error.contains("different facts"));
     }
 }

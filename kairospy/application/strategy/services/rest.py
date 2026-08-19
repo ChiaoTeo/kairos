@@ -219,4 +219,34 @@ class StrategyControlServer:
             "decisions": self.application.decisions.health(),
             "decision_traces": self.application.decisions.traces(),
             "execution_events": self.application.context.execution.health(),
+            "agent": _agent_health(self.application.context.agent._health()),
         }
+
+
+def _agent_health(health) -> dict[str, object]:
+    return {
+        "enabled": health.enabled,
+        "required": health.required,
+        "state": health.state,
+        "mode": health.mode.value,
+        "mode_revision": health.mode_revision,
+        "context_watermark": health.context_watermark,
+        "context_documents": health.context_documents,
+        "queue_depth": health.queue_depth,
+        "queue_capacity": health.queue_capacity,
+        "in_flight": health.in_flight,
+        "last_success_at": (
+            None
+            if health.last_success_at is None
+            else health.last_success_at.isoformat()
+        ),
+        "last_failure": health.last_failure,
+        "runtime": health.runtime,
+        "model": health.model,
+        "mcp_servers": health.mcp_servers,
+        "store_ready": health.store_ready,
+        "rolling_error_rate": health.rolling_error_rate,
+        "latency_p50_millis": health.latency_p50_millis,
+        "latency_p95_millis": health.latency_p95_millis,
+        "latency_p99_millis": health.latency_p99_millis,
+    }

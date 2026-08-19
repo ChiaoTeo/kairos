@@ -5,7 +5,14 @@ from typing import Literal, TypeAlias
 
 from kairospy.domain_types import DataEvent
 
-from .models import AccountStatusChange, Balance, EquityChange, ObservedOrder, Position
+from .models import (
+    AccountStatusChange,
+    Balance,
+    EarnHolding,
+    EquityChange,
+    ObservedOrder,
+    Position,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +61,13 @@ class PositionChangedEvent(DataEvent[Position]):
 
 
 @dataclass(frozen=True, slots=True)
+class EarnHoldingChangedEvent(DataEvent[EarnHolding]):
+    kind: Literal["earn_holding_changed"] = field(
+        init=False, default="earn_holding_changed"
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class EquityChangedEvent(DataEvent[EquityChange]):
     kind: Literal["equity_changed"] = field(init=False, default="equity_changed")
 
@@ -65,12 +79,15 @@ class AccountStatusChangedEvent(DataEvent[AccountStatusChange]):
 
 @dataclass(frozen=True, slots=True)
 class ObservedOrderChangedEvent(DataEvent[ObservedOrder]):
-    kind: Literal["observed_order_changed"] = field(init=False, default="observed_order_changed")
+    kind: Literal["observed_order_changed"] = field(
+        init=False, default="observed_order_changed"
+    )
 
 
 AccountEvent: TypeAlias = (
     BalanceChangedEvent
     | PositionChangedEvent
+    | EarnHoldingChangedEvent
     | EquityChangedEvent
     | AccountStatusChangedEvent
     | ObservedOrderChangedEvent

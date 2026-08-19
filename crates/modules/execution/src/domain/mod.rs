@@ -7,7 +7,8 @@ pub use intent::{
 };
 pub use order::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, DeliveryCertainty, ExecutionAttempt,
-    ExecutionFill, ExecutionOrder, ExecutionOrderStatus, LegId, Money, OrderCommitment, OrderId,
-    OrderSide, OrderType, PlanId, Quantity, RemoteOrderId, RiskReservationEvidence,
-    RiskReservationSagaStatus, RouteSelectionKind, SelectedExecutionRoute, UnixNanos,
+    ExecutionFill, ExecutionOrder, ExecutionOrderStatus, FundingRequirementEvidence, LegId, Money,
+    OrderCommitment, OrderId, OrderSide, OrderType, PlanId, Quantity, RemoteOrderId,
+    RiskReservationEvidence, RiskReservationSagaStatus, RouteSelectionKind, SelectedExecutionRoute,
+    UnixNanos,
 };

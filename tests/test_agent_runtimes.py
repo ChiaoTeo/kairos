@@ -25,6 +25,11 @@ from kairospy.application.agent.services.fixture_runtime import (
 from kairospy.application.agent.services.openai_runtime import (
     OpenAIDecisionRuntime,
     _ToolLimitHooks,
+    _tool_evidence,
+)
+from kairospy.application.agent.services.tools import (
+    MCPServerBinding,
+    MCPToolPolicy,
 )
 from kairospy.application.execution import TargetPositionRequest
 
@@ -35,6 +40,7 @@ def _candidate() -> IntentCandidate:
         decision_id="decision",
         request_id="request",
         intent_id="intent",
+        workspace_id="workspace",
         strategy_id="strategy",
         launch_id="launch",
         instance_id="instance",
@@ -184,3 +190,146 @@ def test_openai_runtime_enforces_tool_call_budget() -> None:
     asyncio.run(hooks.on_tool_start())
     with pytest.raises(RuntimeError, match="max_tool_calls"):
         asyncio.run(hooks.on_tool_start())
+
+
+def test_openai_runtime_enforces_tool_rows_and_freshness() -> None:
+    hooks = _ToolLimitHooks(
+        2,
+        (
+            MCPToolPolicy(
+                "market.get_latest_quote",
+                max_result_bytes=4096,
+                max_rows=1,
+                max_age_seconds=10,
+            ),
+        ),
+    )
+    tool = SimpleNamespace(name="market.get_latest_quote")
+    fresh = datetime.now(timezone.utc).isoformat()
+    asyncio.run(
+        hooks.on_tool_end(None, None, tool, {"observed_at": fresh, "rows": [1]})
+    )
+
+    with pytest.raises(RuntimeError, match="row limit"):
+        asyncio.run(
+            hooks.on_tool_end(None, None, tool, {"observed_at": fresh, "rows": [1, 2]})
+        )
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with pytest.raises(RuntimeError, match="freshness"):
+        asyncio.run(
+            hooks.on_tool_end(None, None, tool, {"observed_at": stale, "rows": []})
+        )
+
+
+def test_openai_runtime_rejects_credential_like_tool_content() -> None:
+    hooks = _ToolLimitHooks(1)
+    tool = SimpleNamespace(name="account.get_position")
+
+    with pytest.raises(RuntimeError, match="credential-like"):
+        asyncio.run(
+            hooks.on_tool_end(
+                None,
+                None,
+                tool,
+                {"position": {"quantity": "1", "api_token": "must-not-leak"}},
+            )
+        )
+
+
+def test_openai_runtime_distinguishes_optional_and_required_mcp_failure(
+    monkeypatch,
+) -> None:
+    captured_inputs: list[str] = []
+
+    class Provider:
+        def __init__(self, **values) -> None:
+            pass
+
+    class Settings:
+        def __init__(self, **values) -> None:
+            pass
+
+    class Config:
+        def __init__(self, **values) -> None:
+            pass
+
+    class Agent:
+        def __init__(self, **values) -> None:
+            pass
+
+    class Runner:
+        @staticmethod
+        async def run(agent, model_input, **values):
+            captured_inputs.append(model_input)
+            return SimpleNamespace(
+                final_output=DecisionResult(
+                    DecisionKind.ABSTAIN, 0, (), (), "optional evidence unavailable"
+                ),
+                new_items=(),
+            )
+
+    class UnavailableServer:
+        async def __aenter__(self):
+            raise ConnectionError("MCP unavailable")
+
+        async def __aexit__(self, *args):
+            return None
+
+    sdk = SimpleNamespace(
+        OpenAIProvider=Provider,
+        ModelSettings=Settings,
+        RunConfig=Config,
+        Agent=Agent,
+        Runner=Runner,
+    )
+    monkeypatch.setattr(
+        "kairospy.application.agent.services.openai_runtime.importlib.import_module",
+        lambda name: sdk,
+    )
+
+    def runtime(required: bool) -> OpenAIDecisionRuntime:
+        return OpenAIDecisionRuntime(
+            instructions="Review risk",
+            model="pinned-model",
+            api_key="not-logged",
+            max_turns=2,
+            max_tool_calls=1,
+            max_input_tokens=10_000,
+            max_output_tokens=1000,
+            request_timeout_seconds=2,
+            mcp_servers=(
+                MCPServerBinding(
+                    UnavailableServer(),
+                    required,
+                    "context/review",
+                    (),
+                ),
+            ),
+        )
+
+    output = runtime(False).decide(_candidate())
+    assert output.tool_evidence[0].tool_name == "mcp:context/review"
+    assert output.tool_evidence[0].status == "unavailable"
+    assert '"kairos_tool_status": "unavailable"' in captured_inputs[0]
+    assert "MCP unavailable" not in captured_inputs[0]
+
+    with pytest.raises(ConnectionError, match="MCP unavailable"):
+        runtime(True).decide(_candidate())
+
+
+def test_openai_runtime_records_sanitized_optional_tool_failure() -> None:
+    class ToolCallItem:
+        raw_item = SimpleNamespace(
+            call_id="call-optional",
+            name="market.get_latest_quote",
+            arguments='{"instrument_id":"BTCUSDT"}',
+        )
+
+    class ToolCallOutputItem:
+        raw_item = SimpleNamespace(call_id="call-optional")
+        output = '{"kairos_tool_status":"unavailable"}'
+
+    evidence = _tool_evidence([ToolCallItem(), ToolCallOutputItem()])
+
+    assert evidence[0].status == "unavailable"
+    assert evidence[0].result_hash is not None

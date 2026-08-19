@@ -93,17 +93,8 @@ pub enum ExternalPositionMode {
     Hedge,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExternalDecimal {
-    pub mantissa: i64,
-    pub scale: u8,
-}
-
-impl ExternalDecimal {
-    pub const fn new(mantissa: i64, scale: u8) -> Self {
-        Self { mantissa, scale }
-    }
-}
+/// Compatibility name for the participant-neutral Integration decimal.
+pub use super::decimal::DecimalValue as ExternalDecimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExternalBalance {

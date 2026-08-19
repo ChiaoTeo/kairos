@@ -372,11 +372,12 @@ pub(crate) fn risk_amount(value: Decimal) -> Result<RiskAmount, String> {
     if value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
-    Ok(RiskAmount {
-        mantissa: i64::try_from(value.mantissa())
+    RiskAmount::new(
+        i64::try_from(value.mantissa())
             .map_err(|_| "risk amount exceeds Decimal64 range".to_string())?,
-        scale: value.scale() as u8,
-    })
+        value.scale() as u8,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) fn now_unix_nanos() -> u64 {

@@ -3,9 +3,10 @@ use std::convert::Infallible;
 use std::time::{Duration, Instant};
 
 use kairos_conflux::{
-    AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, ExternalAccountEvent,
-    ExternalAccountEventEnvelope, ExternalParticipantEvent, ResourceOperationError, RestContract,
-    SystemEvent, TypedConnectionCollection,
+    AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, EarnPositionsRequest,
+    EarnProductFamily, EarnProductQuery, ExternalAccountEvent, ExternalAccountEventEnvelope,
+    ExternalParticipantEvent, ResourceOperationError, RestContract, SystemEvent,
+    TypedConnectionCollection,
 };
 use kairos_primitives::SegmentKey;
 use kairos_protocol::InstanceIdentity;
@@ -17,10 +18,10 @@ use super::{
     RefreshAccount,
 };
 use crate::domain::{
-    AccountFill, FillId, InstrumentId, OrderSide, Price, Quantity, SignedQuantity,
+    AccountEvent, AccountFill, FillId, InstrumentId, OrderSide, Price, Quantity, SignedQuantity,
 };
 use crate::services::integration::{
-    external_segment, map_event, map_snapshot, AccountInstrumentResolver,
+    external_segment, map_earn_positions, map_event, map_snapshot, AccountInstrumentResolver,
 };
 use crate::services::publication::{
     encode_account_current_view, encode_business_change, encode_observed_orders_current_view,
@@ -269,6 +270,7 @@ impl AccountApplication {
         fetches.extend(fetch_accounts(&mut connections.okx_private_rest, &by_key, &resolver).await);
         fetches
             .extend(fetch_accounts(&mut connections.ibkr_account_query, &by_key, &resolver).await);
+        let earn_fetches = fetch_earn_positions(&mut connections.binance_earn_rest, &by_key).await;
 
         let fetched = fetches
             .iter()
@@ -301,6 +303,21 @@ impl AccountApplication {
                 state.snapshot_failed(issue.error.clone(), issue.elapsed_ms);
             } else if let Ok(snapshot) = &fetch.result {
                 state.snapshot_succeeded(snapshot.observed_at_unix_nanos.get(), fetch.elapsed_ms);
+            }
+        }
+        for (segment, result, elapsed_ms) in earn_fetches {
+            match result {
+                Ok(snapshot) => {
+                    self.apply_event(AccountEvent::EarnHoldings(snapshot))?;
+                }
+                Err(error) => {
+                    if let Some(state) = self.conflux.segments.get_mut(&segment) {
+                        state.snapshot_failed(
+                            format!("Binance Earn refresh failed: {error}"),
+                            elapsed_ms,
+                        );
+                    }
+                }
             }
         }
         let keys = by_key.keys().cloned().collect::<Vec<_>>();
@@ -723,6 +740,57 @@ async fn fetch_accounts<C: AccountQuery, P>(
     fetches
 }
 
+async fn fetch_earn_positions<C: EarnProductQuery, P>(
+    connections: &mut TypedConnectionCollection<'_, C, P>,
+    segments: &BTreeMap<String, crate::domain::AccountSegment>,
+) -> Vec<(
+    SegmentKey,
+    Result<crate::domain::EarnHoldingsSnapshot, String>,
+    u64,
+)> {
+    let mut fetches = Vec::new();
+    for key in connections.keys() {
+        let Some(segment) = segments.get(key.as_str()) else {
+            continue;
+        };
+        let started = Instant::now();
+        let mut request = EarnPositionsRequest {
+            family: Some(EarnProductFamily::Flexible),
+            limit: Some(100),
+            ..EarnPositionsRequest::default()
+        };
+        let mut positions = Vec::new();
+        let result = async {
+            for _ in 0..100 {
+                let page = connections
+                    .get(&key)
+                    .expect("key returned by typed connection collection")
+                    .positions(&request)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                positions.extend(page.items);
+                let Some(cursor) = page.next_cursor else {
+                    return Ok(map_earn_positions(
+                        segment.segment_key.clone(),
+                        positions,
+                        now_unix_nanos().into(),
+                        true,
+                    ));
+                };
+                request.cursor = Some(cursor);
+            }
+            Err("Binance Earn positions exceeded the 100-page safety bound".into())
+        }
+        .await;
+        fetches.push((
+            segment.segment_key.clone(),
+            result,
+            started.elapsed().as_millis() as u64,
+        ));
+    }
+    fetches
+}
+
 fn parse_segments(values: Vec<String>) -> Result<Vec<SegmentKey>, AccountError> {
     values
         .into_iter()
@@ -759,9 +827,9 @@ fn simulated_fill(
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         instrument_id: InstrumentId::new(value.instrument_id)
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        quantity: Quantity::new(value.quantity.mantissa, value.quantity.scale)
+        quantity: Quantity::try_from(value.quantity)
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        price: Price::new(value.price.mantissa, value.price.scale)
+        price: Price::try_from(value.price)
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         side: match value.side.trim().to_ascii_lowercase().as_str() {
             "buy" => OrderSide::Buy,
@@ -779,7 +847,7 @@ fn simulated_fill(
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         settlement_delta: value
             .settlement_delta
-            .map(|amount| SignedQuantity::new(amount.mantissa, amount.scale))
+            .map(SignedQuantity::try_from)
             .transpose()
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         fee_asset: value
@@ -789,7 +857,7 @@ fn simulated_fill(
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         fee_amount: value
             .fee_amount
-            .map(|amount| SignedQuantity::new(amount.mantissa, amount.scale))
+            .map(SignedQuantity::try_from)
             .transpose()
             .map_err(|error| AccountError::Invalid(error.to_string()))?,
         occurred_at_unix_nanos: value.occurred_at_unix_nanos.into(),

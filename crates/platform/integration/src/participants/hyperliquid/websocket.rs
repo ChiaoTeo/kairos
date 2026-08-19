@@ -348,10 +348,10 @@ impl HyperliquidWebSocketConnection {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .into(),
-                quantity: external(fill_quantity),
-                price: external(fill_price),
+                quantity: fill_quantity,
+                price: fill_price,
                 fee_asset: None,
-                fee_amount: decimal(row.get("fee"))?.map(external),
+                fee_amount: decimal(row.get("fee"))?,
                 occurred_at_unix_nanos: observed,
             });
             self.pending_account.push_back(ExternalEventEnvelope {
@@ -643,22 +643,7 @@ fn required_decimal(value: Option<&Value>) -> Result<DecimalValue, IntegrationEr
     parse_decimal(value)
 }
 fn parse_decimal(value: &str) -> Result<DecimalValue, IntegrationError> {
-    let negative = value.starts_with('-');
-    let value = value.trim_start_matches('-');
-    let mut parts = value.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("");
-    let scale = u8::try_from(fraction.len()).map_err(payload)?;
-    let digits = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(payload)?;
-    Ok(DecimalValue::new(
-        if negative { -digits } else { digits },
-        scale,
-    ))
-}
-fn external(value: DecimalValue) -> crate::ExternalDecimal {
-    crate::ExternalDecimal::new(value.mantissa, value.scale)
+    DecimalValue::parse(value).map_err(payload)
 }
 fn payload(error: impl std::fmt::Display) -> IntegrationError {
     IntegrationError::InvalidPayload(error.to_string())

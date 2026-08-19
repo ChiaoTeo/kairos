@@ -77,6 +77,27 @@ mod more_tests {
     }
 
     #[test]
+    fn decimal_parts_preserve_boundary_scale_and_validate_precision() {
+        let value = "-12.50".parse::<DecimalParts>().unwrap();
+        assert_eq!(value.mantissa(), -1_250);
+        assert_eq!(value.scale(), 2);
+        assert_eq!(value.to_string(), "-12.50");
+        assert_eq!(serde_json::to_string(&value).unwrap(), "\"-12.50\"");
+        assert_eq!(
+            serde_json::from_str::<DecimalParts>("\"-12.50\"").unwrap(),
+            value
+        );
+        assert!("0.0000000000000000001".parse::<DecimalParts>().is_err());
+        assert!("+1".parse::<DecimalParts>().is_err());
+        assert_eq!(
+            Money::try_from(value).unwrap(),
+            Money::new(-1_250, 2).unwrap()
+        );
+        assert!(Quantity::try_from(value).is_err());
+        assert!("-0".parse::<Quantity>().is_err());
+    }
+
+    #[test]
     fn decimal_json_is_a_validated_canonical_string() {
         let price = serde_json::from_str::<Price>("\"42110.500\"").unwrap();
         assert_eq!(price, Price::new(421_105, 1).unwrap());

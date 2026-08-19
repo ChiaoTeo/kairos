@@ -140,9 +140,7 @@ def map_market_view(
             participant_timestamp_unix_nanos=getattr(
                 raw, "participant_timestamp_unix_nanos", None
             ),
-            trf_timestamp_unix_nanos=getattr(
-                raw, "trf_timestamp_unix_nanos", None
-            ),
+            trf_timestamp_unix_nanos=getattr(raw, "trf_timestamp_unix_nanos", None),
         )
     if kind == "greeks" or (kind is None and hasattr(value, "implied_volatility")):
         _require_attributes(

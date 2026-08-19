@@ -10,12 +10,12 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    CloseCircuit, ConsumeReservation, ExpireReservations, LimitView, OpenCircuit, PublishPolicy,
-    ReleaseReservation, ResizeReservation, RiskApplication, RiskClockMode, RiskCurrentView,
-    RiskDecision, RiskError, RiskEvent, RiskHost, RiskSnapshot,
+    CloseCircuit, ConsumeReservation, ExpireReservations, FundingRequirement, LimitView,
+    OpenCircuit, PublishPolicy, ReleaseReservation, ResizeReservation, RiskApplication,
+    RiskClockMode, RiskCurrentView, RiskDecision, RiskError, RiskEvent, RiskHost, RiskSnapshot,
 };
 pub use domain::{
     Allocation, Amount, AuthorizeRequest, CircuitScope, CircuitState, DependencyWatermarks,
-    EnforcementMode, Metric, PolicyScope, ReasonCode, Reservation, ReservationStatus, RiskContext,
-    RiskPolicy,
+    EnforcementMode, Metric, PolicyScope, ReasonCode, RequestedUsage, Reservation,
+    ReservationStatus, RiskContext, RiskPolicy, TradeRiskProposal,
 };

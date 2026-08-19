@@ -58,6 +58,13 @@ table DecisionReason {
   detail:string;
 }
 
+table FundingRequirement {
+  required_margin:kairos.common.v2.Decimal64 (required);
+  available_margin:kairos.common.v2.Decimal64 (required);
+  shortfall:kairos.common.v2.Decimal64 (required);
+  margin_rule_id:string (required);
+}
+
 table RiskDecision {
   decision_id:string (required);
   request_id:string (required);
@@ -70,6 +77,7 @@ table RiskDecision {
   reservation:Reservation;
   policy_version:ulong;
   context:RiskContext (required);
+  funding_requirement:FundingRequirement;
   evaluated_at_unix_nanos:ulong;
 }
 

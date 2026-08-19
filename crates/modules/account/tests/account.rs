@@ -7,8 +7,9 @@ use kairos_account::composition::account::{
 use kairos_account::composition::empty_snapshot;
 use kairos_account::domain::{
     Account, AccountFill, AccountObservedFill, AccountSegment, AccountSnapshot, AccountStatus,
-    ApplyOutcome, AssetId, Balance, ExternalAccountIdentity, FillId, InstrumentId, Money,
-    OrderSide, Position, SegmentKey, SignedQuantity,
+    ApplyOutcome, AssetId, Balance, EarnHolding, EarnHoldingLiquidity, EarnHoldingState,
+    EarnHoldingsSnapshot, ExternalAccountIdentity, FillId, InstrumentId, Money, OrderSide,
+    Position, SegmentKey, SignedQuantity,
 };
 use kairos_primitives::{Price, Quantity};
 
@@ -1029,4 +1030,66 @@ fn persistence_failure_does_not_commit_simulated_fill() {
     let after = account_snapshot(&application);
     assert_eq!(after.generation, generation_before);
     assert!(after.segments[0].positions.is_empty());
+}
+
+#[test]
+fn earn_holdings_have_an_independent_watermark_and_fact_set() {
+    let mut account = Account::new(segment("funding")).unwrap();
+    let holding = EarnHolding {
+        participant_position_id: Some("position-1".into()),
+        product_id: "USDT001".into(),
+        asset: currency("USDT"),
+        principal: quantity(100, 0),
+        redeemable: Some(quantity(80, 0)),
+        accrued_rewards: Vec::new(),
+        liquidity: EarnHoldingLiquidity::Immediate,
+        state: EarnHoldingState::Active,
+        observed_at_unix_nanos: nanos(10),
+    };
+    assert_eq!(
+        account
+            .apply_earn_snapshot(EarnHoldingsSnapshot {
+                segment_key: segment_key("funding"),
+                holdings: vec![holding],
+                observed_at_unix_nanos: nanos(10),
+                complete: true,
+            })
+            .unwrap(),
+        ApplyOutcome::Applied
+    );
+    assert_eq!(account.state().earn_holdings().len(), 1);
+    assert_eq!(account.state().earn_watermark_unix_nanos(), nanos(10));
+
+    // A normal balance snapshot does not own or clear the Earn fact set.
+    account
+        .apply_snapshot(AccountSnapshot {
+            segment_key: segment_key("funding"),
+            balances: Vec::new(),
+            collateral: Vec::new(),
+            positions: Vec::new(),
+            open_orders: Vec::new(),
+            status: AccountStatus::Ready,
+            observed_at_unix_nanos: nanos(11),
+            equity: None,
+            initial_equity: None,
+            net_profit: None,
+            account_model: None,
+            margin_mode: None,
+            position_mode: None,
+            kind: kairos_account::domain::SnapshotKind::Full,
+        })
+        .unwrap();
+    assert_eq!(account.state().earn_holdings().len(), 1);
+
+    assert_eq!(
+        account
+            .apply_earn_snapshot(EarnHoldingsSnapshot {
+                segment_key: segment_key("funding"),
+                holdings: Vec::new(),
+                observed_at_unix_nanos: nanos(9),
+                complete: true,
+            })
+            .unwrap(),
+        ApplyOutcome::Stale
+    );
 }

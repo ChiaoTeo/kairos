@@ -85,7 +85,9 @@ def compose_notifications(
             + ",".join(unknown_lifecycle)
         )
     if enabled and not routes:
-        raise NotificationConfigError("enabled notifications require at least one route")
+        raise NotificationConfigError(
+            "enabled notifications require at least one route"
+        )
     queue_capacity = _integer(
         config.get("queue_capacity", 256), "notifications.queue_capacity", 1, 100_000
     )
@@ -153,7 +155,9 @@ def compose_notifications(
         raise NotificationConfigError("; ".join(issues))
     active_routes = {
         route: tuple(
-            destination for destination in route_destinations if destination in destinations
+            destination
+            for destination in route_destinations
+            if destination in destinations
         )
         for route, route_destinations in routes.items()
     }
@@ -327,9 +331,7 @@ def _load_destinations(path: Path) -> tuple[dict[str, _DestinationRecord], str]:
     for raw_id, raw_record in table.items():
         destination_id = str(raw_id).strip()
         if not destination_id or not isinstance(raw_record, Mapping):
-            raise NotificationConfigError(
-                f"invalid notification destination: {raw_id}"
-            )
+            raise NotificationConfigError(f"invalid notification destination: {raw_id}")
         sender = str(raw_record.get("sender", "")).strip().lower()
         credential = raw_record.get("credential_id")
         credential_id = None if credential is None else str(credential).strip()
@@ -413,7 +415,9 @@ def _resolve_destination(
 def _load_credential(workspace: Workspace, credential_id: str) -> Mapping[str, object]:
     path = _credential_file(workspace, credential_id)
     if not path.is_file():
-        raise NotificationConfigError(f"notification credential not found: {credential_id}")
+        raise NotificationConfigError(
+            f"notification credential not found: {credential_id}"
+        )
     try:
         value = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
@@ -485,7 +489,9 @@ def _routes(value: object) -> dict[str, tuple[str, ...]]:
     return result
 
 
-def _string_tuple(value: object, name: str, *, non_empty: bool = False) -> tuple[str, ...]:
+def _string_tuple(
+    value: object, name: str, *, non_empty: bool = False
+) -> tuple[str, ...]:
     if not isinstance(value, list) or any(
         not isinstance(item, str) or not item.strip() for item in value
     ):

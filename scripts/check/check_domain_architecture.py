@@ -186,6 +186,62 @@ FORBIDDEN_MODULE_CONTRACT_RESOURCE_BYPASSES = {
     'std::env::var("AERON_DIR")': "module resolves an Aeron endpoint outside composition input",
 }
 
+CANONICAL_PRIMITIVE_TYPES = {
+    "AccountId",
+    "ActorId",
+    "AssetId",
+    "BasisPoints",
+    "BrokerId",
+    "ClientOrderId",
+    "Currency",
+    "DecisionId",
+    "DecimalParts",
+    "DurationNanos",
+    "EventContext",
+    "Exchange",
+    "FillId",
+    "Generation",
+    "IdempotencyKey",
+    "InstrumentId",
+    "IntentId",
+    "ListingId",
+    "MarketId",
+    "OrderId",
+    "OrderSide",
+    "OrderStatus",
+    "PlanId",
+    "Money",
+    "Price",
+    "PriceDelta",
+    "PositionSide",
+    "Quantity",
+    "RemoteOrderId",
+    "RequestId",
+    "ReservationId",
+    "Ratio",
+    "SegmentKey",
+    "Sequence",
+    "StrategyId",
+    "SignedQuantity",
+    "UnixNanos",
+}
+
+SHARED_DECIMAL_ADAPTERS = {
+    ROOT / "crates" / "modules" / "account" / "contract" / "src" / "control" / "account.rs",
+    ROOT / "crates" / "modules" / "reference" / "contract" / "src" / "encode" / "metadata.rs",
+    ROOT / "crates" / "modules" / "risk" / "contract" / "src" / "control" / "types.rs",
+    ROOT / "crates" / "platform" / "integration" / "src" / "domain" / "decimal.rs",
+}
+
+CONTRACT_DECIMAL_ALIASES = {
+    ROOT / "crates" / "modules" / "account" / "contract" / "src" / "control" / "account.rs": (
+        r"pub type DecimalValue = kairos_primitives::DecimalParts;"
+    ),
+    ROOT / "crates" / "modules" / "risk" / "contract" / "src" / "control" / "types.rs": (
+        r"pub type DecimalValue = kairos_primitives::DecimalParts;"
+    ),
+}
+
 
 def rust_sources() -> list[Path]:
     paths = list(MODULES.glob("*/src/**/*.rs"))
@@ -195,7 +251,6 @@ def rust_sources() -> list[Path]:
 
 def main() -> int:
     failures: list[str] = []
-    canonical = {"OrderSide": [], "OrderStatus": []}
 
     for path in rust_sources():
         text = path.read_text()
@@ -205,11 +260,9 @@ def main() -> int:
         legacy_exchange_identifier = r"\b(?:Venue|venue_id)\b"
         if re.search(legacy_exchange_identifier, text):
             failures.append(f"forbidden legacy exchange terminology in Rust source: {path}")
-        production = "#[cfg(test)]" not in text or path.parent.name != "tests"
-        if production:
-            for name in canonical:
-                if re.search(rf"\bpub\s+enum\s+{name}\b", text):
-                    canonical[name].append(path)
+        for name in CANONICAL_PRIMITIVE_TYPES:
+            if re.search(rf"\bpub\s+(?:struct|enum|type)\s+{name}\b", text):
+                failures.append(f"duplicate canonical primitive {name}: {path}")
         is_test = path.name.endswith("_tests.rs") or path.name == "tests.rs" or "tests" in path.parts
         if re.search(r"use\s+kairos_[a-z0-9_]+::services", text) and not is_test:
             failures.append(f"cross-module private services import in production file: {path}")
@@ -222,9 +275,26 @@ def main() -> int:
                 line = text.count("\n", 0, match.start()) + 1
                 failures.append(f"core domain field regressed to a primitive: {path}:{line}")
 
-    for name, paths in canonical.items():
-        if len(paths) > 1:
-            failures.append(f"duplicate canonical {name}: {', '.join(map(str, paths))}")
+    integration_domain = ROOT / "crates" / "platform" / "integration" / "src" / "domain"
+    decimal_definitions = []
+    for path in integration_domain.glob("*.rs"):
+        for name in re.findall(r"\bpub\s+struct\s+(DecimalValue|ExternalDecimal)\b", path.read_text()):
+            decimal_definitions.append((path, name))
+    expected_decimal = [(integration_domain / "decimal.rs", "DecimalValue")]
+    if decimal_definitions != expected_decimal:
+        rendered = ", ".join(f"{path}:{name}" for path, name in decimal_definitions)
+        failures.append(
+            "Integration must own exactly one neutral DecimalValue in domain/decimal.rs; "
+            f"found: {rendered or 'none'}"
+        )
+
+    for path in SHARED_DECIMAL_ADAPTERS:
+        if "kairos_primitives::DecimalParts" not in path.read_text():
+            failures.append(f"decimal adapter bypasses shared DecimalParts rules: {path}")
+
+    for path, pattern in CONTRACT_DECIMAL_ALIASES.items():
+        if not re.search(pattern, path.read_text()):
+            failures.append(f"contract decimal is not a DecimalParts alias: {path}")
 
     for path, patterns in TYPED_FIELDS.items():
         text = (

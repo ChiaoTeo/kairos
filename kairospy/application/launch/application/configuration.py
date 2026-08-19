@@ -51,6 +51,7 @@ class LaunchPlan:
     account_refs: tuple[str, ...]
     required_account_segments: Mapping[str, tuple[str, ...]]
     execution: Mapping[str, Any]
+    capital: Mapping[str, Any]
     mode_config: Mapping[str, Any]
     market_scope: str
     market_profile: str | None
@@ -69,6 +70,7 @@ class LaunchPlan:
     notifications: Mapping[str, Any] | None = None
     agent: Mapping[str, Any] | None = None
     agent_profile: Mapping[str, Any] | None = None
+    agent_mcp: Mapping[str, Any] | None = None
 
     def normalized(self) -> dict[str, Any]:
         return cast(
@@ -87,6 +89,7 @@ class LaunchPlan:
                         for account_id, segments in self.required_account_segments.items()
                     },
                     "execution": dict(self.execution),
+                    "capital": dict(self.capital),
                     self.mode: dict(self.mode_config),
                     "market_scope": self.market_scope,
                     "market_profile": self.market_profile,
@@ -109,6 +112,7 @@ class LaunchPlan:
                     "notifications": self.notifications,
                     "agent": self.agent,
                     "agent_profile": self.agent_profile,
+                    "agent_mcp": self.agent_mcp,
                 }
             ),
         )
@@ -288,6 +292,7 @@ class LaunchConfig:
             launch_mode=mode,
         ).normalized()
         agent_profile = _agent_profile_snapshot(self.root, agent)
+        agent_mcp = _agent_mcp_snapshot(self.root, agent)
         if (
             mode in {"backtest", "paper"}
             and execution.get("enabled", True)
@@ -396,6 +401,7 @@ class LaunchConfig:
             )
             live_private_sync.setdefault("enabled", bool(self.account_refs))
         risk = _optional_table(self.values.get("risk"), "risk")
+        capital = dict(_optional_table(self.values.get("capital"), "capital"))
         raw_risk_profile = risk.get("profile")
         if raw_risk_profile is not None:
             risk_profile = _text(raw_risk_profile, "risk.profile")
@@ -407,6 +413,7 @@ class LaunchConfig:
             account_refs=self.account_refs,
             required_account_segments=self.required_account_segments,
             execution=execution,
+            capital=capital,
             mode_config=mode_config,
             market_scope=market_scope,
             market_profile=market_profile,
@@ -425,6 +432,7 @@ class LaunchConfig:
             notifications=notifications,
             agent=agent,
             agent_profile=agent_profile,
+            agent_mcp=agent_mcp,
         )
 
     @property
@@ -473,6 +481,7 @@ class LaunchConfig:
             "execution",
             "strategy",
             "risk",
+            "capital",
             "notifications",
             "agent",
         ):
@@ -601,6 +610,16 @@ class LaunchConfig:
             not isinstance(risk, Mapping) or not risk.get("profile")
         ):
             issues.append("risk.profile is required for live launches")
+        capital = self.values.get("capital")
+        if isinstance(capital, Mapping):
+            enabled = capital.get("enabled", False)
+            if not isinstance(enabled, bool):
+                issues.append("capital.enabled must be a boolean")
+            if enabled:
+                for field in ("capital_group_id", "strategy_id"):
+                    value = capital.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        issues.append(f"capital.{field} is required when Capital is enabled")
         execution = self.values.get("execution")
         if mode == "live" and not isinstance(execution, Mapping):
             issues.append(
@@ -1049,6 +1068,98 @@ def _agent_profile_snapshot(
     if not snapshot["rubric"] or not snapshot["invalidation_rules"]:
         raise LaunchConfigError("Agent Profile rubric/invalidation_rules are required")
     return snapshot
+
+
+def _agent_mcp_snapshot(
+    workspace_root: Path, agent: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    if not agent.get("enabled", False):
+        return None
+    selections = agent.get("mcp", [])
+    if not isinstance(selections, list):
+        raise LaunchConfigError("normalized agent.mcp must be an array")
+    if not selections:
+        return None
+    path = workspace_root / "config" / "agents" / "mcp.toml"
+    try:
+        values = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise LaunchConfigError(f"Agent MCP config does not exist: {path}") from error
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise LaunchConfigError(f"Invalid Agent MCP config: {path}") from error
+    servers = values.get("servers")
+    profiles = values.get("profiles")
+    if not isinstance(servers, Mapping) or not isinstance(profiles, Mapping):
+        raise LaunchConfigError("Agent MCP config requires servers and profiles")
+    selected_servers: dict[str, Any] = {}
+    selected_profiles: dict[str, Any] = {}
+    server_fields = {
+        "transport",
+        "command",
+        "args",
+        "cwd",
+        "timeout_seconds",
+        "url",
+        "credential",
+    }
+    profile_fields = {
+        "server",
+        "allowed_tools",
+        "scope_enforced",
+        "max_result_bytes",
+        "max_rows",
+        "freshness_required_tools",
+        "max_age_seconds",
+    }
+    for index, selection in enumerate(selections):
+        if not isinstance(selection, Mapping):
+            raise LaunchConfigError(f"agent.mcp[{index}] must be an object")
+        server_id = selection.get("server")
+        profile_id = selection.get("profile")
+        if not _safe_agent_resource_id(server_id) or not _safe_agent_resource_id(
+            profile_id
+        ):
+            raise LaunchConfigError("Agent MCP server/profile id is invalid")
+        server = servers.get(server_id)
+        profile = profiles.get(profile_id)
+        if not isinstance(server, Mapping) or not isinstance(profile, Mapping):
+            raise LaunchConfigError(
+                f"Agent MCP selection does not exist: {server_id}/{profile_id}"
+            )
+        unknown_server = sorted(str(key) for key in server if key not in server_fields)
+        unknown_profile = sorted(
+            str(key) for key in profile if key not in profile_fields
+        )
+        if unknown_server:
+            raise LaunchConfigError(
+                f"Agent MCP server contains unsupported field: {unknown_server[0]}"
+            )
+        if unknown_profile:
+            raise LaunchConfigError(
+                f"Agent MCP profile contains unsupported field: {unknown_profile[0]}"
+            )
+        selected_servers[str(server_id)] = dict(server)
+        selected_profiles[str(profile_id)] = dict(profile)
+    payload: dict[str, Any] = {
+        "servers": selected_servers,
+        "profiles": selected_profiles,
+    }
+    payload["content_hash"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+def _safe_agent_resource_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and all(
+            character
+            in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for character in value
+        )
+    )
 
 
 def _normalized_notifications(value: Mapping[str, Any]) -> dict[str, Any]:

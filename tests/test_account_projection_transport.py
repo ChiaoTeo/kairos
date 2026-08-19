@@ -38,9 +38,15 @@ def _account_snapshot(*, generation: int = 7, completeness: int = 1) -> bytes:
         AccountSegmentState.AccountSegmentStateAddSegmentKey(builder, segment_key)
         AccountSegmentState.AccountSegmentStateAddEnvironment(builder, environment)
         AccountSegmentState.AccountSegmentStateAddBroker(builder, broker)
-        AccountSegmentState.AccountSegmentStateAddObservedAccountModel(builder, AccountModel.AccountModel.MARGIN)
-        AccountSegmentState.AccountSegmentStateAddStatus(builder, AccountStatus.AccountStatus.ACTIVE)
-        AccountSegmentState.AccountSegmentStateAddFreshness(builder, FreshnessState.FreshnessState.FRESH)
+        AccountSegmentState.AccountSegmentStateAddObservedAccountModel(
+            builder, AccountModel.AccountModel.MARGIN
+        )
+        AccountSegmentState.AccountSegmentStateAddStatus(
+            builder, AccountStatus.AccountStatus.ACTIVE
+        )
+        AccountSegmentState.AccountSegmentStateAddFreshness(
+            builder, FreshnessState.FreshnessState.FRESH
+        )
         AccountSegmentState.AccountSegmentStateAddObservedAtUnixNanos(builder, 1_000)
         AccountSegmentState.AccountSegmentStateAddStateGeneration(builder, 7)
         AccountSegmentState.AccountSegmentStateAddBalances(builder, balances)
@@ -91,7 +97,10 @@ def _write_shared_snapshot(path: Path, payload: bytes) -> None:
 
 
 def _account_path(root: Path) -> Path:
-    from kairospy.infrastructure.contracts.account import AccountViewKey, account_view_path
+    from kairospy.infrastructure.contracts.account import (
+        AccountViewKey,
+        account_view_path,
+    )
 
     return account_view_path(root, AccountViewKey("account:main", "main"))
 
@@ -102,7 +111,9 @@ def test_one_account_mmap_decodes_every_segment_at_one_generation(
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot())
 
-    snapshot = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    snapshot = AccountCurrentViewReader(
+        tmp_path, account_id=AccountId("main")
+    ).snapshot(AccountId("main"))
 
     assert snapshot.generation == 7
     assert [str(value.segment_key) for value in snapshot.segments] == [
@@ -120,7 +131,9 @@ def test_account_projection_rejects_frame_metadata_generation_mismatch(
     _write_shared_snapshot(path, _account_snapshot(generation=8))
 
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+            AccountId("main")
+        )
     except ValueError as error:
         assert "generation disagree" in str(error)
     else:
@@ -131,7 +144,9 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot(completeness=2))
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+            AccountId("main")
+        )
     except ValueError as error:
         assert "not complete" in str(error)
     else:
@@ -139,7 +154,9 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
 
     path.write_bytes(b"not-a-shared-snapshot")
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+            AccountId("main")
+        )
     except native.CorruptSnapshotError as error:
         assert error.code == "corrupt_snapshot"
     else:
@@ -149,8 +166,12 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
 def test_account_projection_reopens_after_publisher_restart(tmp_path: Path) -> None:
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot())
-    first = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    first = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+        AccountId("main")
+    )
     path.unlink()
     _write_shared_snapshot(path, _account_snapshot())
-    second = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(AccountId("main"))
+    second = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+        AccountId("main")
+    )
     assert second == first

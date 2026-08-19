@@ -256,6 +256,7 @@ impl OrderAdmissionContext {
     pub(super) fn risk_authorization_context(
         &mut self,
         request: &SubmitOrder,
+        route: &crate::application::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
         let account = self.account_projection(request.account_id.as_str())?;
         let market = if self.market_snapshot.is_some() {
@@ -285,6 +286,11 @@ impl OrderAdmissionContext {
             market_is_fresh: self.market_snapshot.is_none() || market.is_some(),
             market,
             available_margin,
+            initial_margin_rate_bps: route.initial_margin_rate_bps,
+            margin_rule_id: route.margin_rule_id.clone(),
+            funding_broker: Some(route.participant_id.clone()),
+            funding_segment: Some(request.segment_key.to_string()),
+            collateral_asset: request.options.quote_asset.clone(),
         })
     }
 }

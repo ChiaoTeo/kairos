@@ -196,20 +196,11 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
             order_id: Some("restart-persisted-order".into()),
             segment_key: "spot".into(),
             instrument_id: "paper:BTC-USDT".into(),
-            quantity: DecimalValue {
-                mantissa: 1,
-                scale: 0,
-            },
-            price: DecimalValue {
-                mantissa: 100,
-                scale: 0,
-            },
+            quantity: DecimalValue::new(1, 0).unwrap(),
+            price: DecimalValue::new(100, 0).unwrap(),
             side: "buy".into(),
             settlement_asset: Some("USDT".into()),
-            settlement_delta: Some(DecimalValue {
-                mantissa: -100,
-                scale: 0,
-            }),
+            settlement_delta: Some(DecimalValue::new(-100, 0).unwrap()),
             fee_asset: None,
             fee_amount: None,
             occurred_at_unix_nanos: 1_000_000_000,

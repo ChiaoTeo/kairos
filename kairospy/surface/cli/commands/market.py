@@ -6,13 +6,13 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, cast
 from uuid import uuid4
 
 import typer
 
 from kairospy.application.market.cli import MarketCliApplication
-from kairospy.application.system import ComponentProcessApplication
+from kairospy.application.system import ComponentProcessApplication, MarketSystemClient
 from kairospy.application.workspace import Workspace, WorkspaceApplication
 from kairospy.infrastructure.transport.market import MarketProjection
 from kairospy.surface.cli.options import OutputFormat, render
@@ -253,15 +253,15 @@ def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) 
     typer.echo(render(value, OutputFormat(parsed.output)))
 
 
-def _market_client(owner: Workspace):
+def _market_client(owner: Workspace) -> MarketSystemClient:
     # A first subscription may open a provider connection and warm its
     # initial snapshot (notably Binance order books), which can exceed the
     # short health-check timeout used by generic system controls.
     processes = ComponentProcessApplication(owner, control_timeout=30.0)
     socket = owner.paths.process_socket("market")
     if socket.exists():
-        return processes.client("market", socket)
-    return processes.ensure_running("market")
+        return cast(MarketSystemClient, processes.client("market", socket))
+    return cast(MarketSystemClient, processes.ensure_running("market"))
 
 
 __all__ = ["HELP", "market_passthrough"]

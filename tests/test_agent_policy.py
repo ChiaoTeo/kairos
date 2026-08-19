@@ -9,10 +9,21 @@ from kairospy.application.agent import (
     DecisionResult,
     IntentCandidate,
     ReduceTargetQuantity,
+    RequireMakerExecution,
+    ShortenDeadline,
+    TightenMaxSlippage,
+    TightenSplitPolicy,
     TightenLimitPrice,
 )
 from kairospy.application.agent.policy import DecisionPolicy
-from kairospy.application.execution import TargetPositionRequest
+from kairospy.application.execution import (
+    ArbitrageLegRequest,
+    OptionSpreadLegRequest,
+    OptionSpreadRequest,
+    PairArbitrageRequest,
+    SplitOrderPolicy,
+    TargetPositionRequest,
+)
 
 
 def _candidate(request: object) -> IntentCandidate:
@@ -21,6 +32,7 @@ def _candidate(request: object) -> IntentCandidate:
         decision_id="decision",
         request_id="request",
         intent_id="intent",
+        workspace_id="workspace",
         strategy_id="strategy",
         launch_id="launch",
         instance_id="instance",
@@ -149,3 +161,112 @@ def test_policy_enforces_profile_code_allowlists() -> None:
 
     assert outcome.decision is DecisionKind.ABSTAIN
     assert outcome.effective_request is None
+
+    empty_profile = DecisionPolicy({}).apply(
+        _candidate(request),
+        DecisionResult(
+            DecisionKind.APPROVE,
+            7000,
+            ("not_allowed_when_profile_is_empty",),
+            (),
+            "unknown reason",
+        ),
+    )
+    assert empty_profile.decision is DecisionKind.ABSTAIN
+    assert empty_profile.effective_request is None
+
+
+def test_policy_tightens_deadline_and_slippage_without_changing_identity() -> None:
+    option = OptionSpreadRequest(
+        OptionSpreadLegRequest("short", "BTC-100-C", "Sell", Decimal("1")),
+        OptionSpreadLegRequest("long", "BTC-110-C", "Buy", Decimal("1")),
+        Decimal("1"),
+        Decimal("9"),
+        deadline_unix_nanos=200,
+    )
+    arbitrage = PairArbitrageRequest(
+        ArbitrageLegRequest("BTCUSDT", "Buy", Decimal("1"), "main"),
+        ArbitrageLegRequest("BTCUSD", "Sell", Decimal("1"), "main"),
+        max_slippage_bps=20,
+    )
+    policy = DecisionPolicy(
+        {"allow_deadline_reduction": True, "allow_slippage_reduction": True}
+    )
+
+    shortened = policy.apply(
+        _candidate(option),
+        DecisionResult(
+            DecisionKind.REVISE,
+            8000,
+            (),
+            (),
+            "shorter",
+            (ShortenDeadline(100),),
+        ),
+    )
+    tightened = policy.apply(
+        _candidate(arbitrage),
+        DecisionResult(
+            DecisionKind.REVISE,
+            8000,
+            (),
+            (),
+            "less slippage",
+            (TightenMaxSlippage(10),),
+        ),
+    )
+
+    assert isinstance(shortened.effective_request, OptionSpreadRequest)
+    assert shortened.effective_request.deadline_unix_nanos == 100
+    assert shortened.effective_request.short_leg is option.short_leg
+    assert isinstance(tightened.effective_request, PairArbitrageRequest)
+    assert tightened.effective_request.max_slippage_bps == 10
+    assert tightened.effective_request.first is arbitrage.first
+
+
+def test_policy_tightens_split_and_requires_maker_execution() -> None:
+    split_request = TargetPositionRequest(
+        "BTCUSDT",
+        Decimal("10"),
+        account_id="main",
+        split=SplitOrderPolicy(
+            max_child_quantity=Decimal("5"),
+            child_count=2,
+            interval_millis=100,
+        ),
+    )
+    maker_request = TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main")
+    policy = DecisionPolicy(
+        {"allow_split_tightening": True, "allow_require_maker": True}
+    )
+
+    split = policy.apply(
+        _candidate(split_request),
+        DecisionResult(
+            DecisionKind.REVISE,
+            8000,
+            (),
+            (),
+            "smaller children",
+            (TightenSplitPolicy("2", 3, 200),),
+        ),
+    )
+    maker = policy.apply(
+        _candidate(maker_request),
+        DecisionResult(
+            DecisionKind.REVISE,
+            8000,
+            (),
+            (),
+            "maker only",
+            (RequireMakerExecution(),),
+        ),
+    )
+
+    assert isinstance(split.effective_request, TargetPositionRequest)
+    assert split.effective_request.split is not None
+    assert split.effective_request.split.max_child_quantity == Decimal("2")
+    assert split.effective_request.split.child_count == 3
+    assert split.effective_request.split.interval_millis == 200
+    assert isinstance(maker.effective_request, TargetPositionRequest)
+    assert maker.effective_request.maker is not None

@@ -24,7 +24,12 @@ pub(crate) trait ReferenceSource: Send {
         false
     }
 
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog>;
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        Err(ReferenceError::Invalid(format!(
+            "reference source `{}` requires Conflux-managed connections",
+            self.source_id()
+        )))
+    }
 
     async fn fetch_catalog_with_connections(
         &mut self,
@@ -121,19 +126,6 @@ impl ReferenceSource for ConfiguredProviderSource {
             Self::Hyperliquid(source) => source.source_id(),
             Self::MassiveEquity(source) => source.source_id(),
             Self::MassiveOptions(source) => source.source_id(),
-        }
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<crate::domain::ProviderCatalog> {
-        match self {
-            Self::BinanceSpot(source) => source.fetch_catalog().await,
-            Self::BinanceDerivatives(source) => source.fetch_catalog().await,
-            Self::BinanceOptions(source) => source.fetch_catalog().await,
-            Self::BinanceEquity(source) => source.fetch_catalog().await,
-            Self::Okx(source) => source.fetch_catalog().await,
-            Self::Hyperliquid(source) => source.fetch_catalog().await,
-            Self::MassiveEquity(source) => source.fetch_catalog().await,
-            Self::MassiveOptions(source) => source.fetch_catalog().await,
         }
     }
 

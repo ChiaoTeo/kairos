@@ -2,6 +2,18 @@ use crate::domain::ExecutionOrderStatus;
 use kairos_primitives::{OrderId, RemoteOrderId, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
+use crate::application::IntentAdmissionEvidence;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct IntentAdmissionAuditRecord {
+    pub command_id: Option<String>,
+    pub idempotency_key: String,
+    pub intent_id: String,
+    pub evidence: IntentAdmissionEvidence,
+    pub admission_result: String,
+    pub created_at_unix_nanos: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionAuditQuery {
     pub order_id: Option<OrderId>,

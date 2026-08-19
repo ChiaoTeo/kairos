@@ -18,6 +18,8 @@ class ComponentEndpoint:
     snapshot: Path | None = None
     view_root: Path | None = None
     required_segments: tuple[str, ...] = ()
+    broker: str | None = None
+    lease_fence: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +27,7 @@ class InstanceEndpoints:
     accounts: Mapping[AccountId, ComponentEndpoint]
     risk: ComponentEndpoint | None
     execution: ComponentEndpoint | None
+    capital: ComponentEndpoint | None
 
 
 def resolve_instance_endpoints(instance: InstanceWorkspace) -> InstanceEndpoints:
@@ -53,6 +56,7 @@ def resolve_instance_endpoints(instance: InstanceWorkspace) -> InstanceEndpoints
         accounts=accounts,
         risk=_optional_endpoint(components.get("risk"), "risk"),
         execution=_optional_endpoint(components.get("execution"), "execution"),
+        capital=_optional_endpoint(components.get("capital"), "capital"),
     )
 
 
@@ -88,7 +92,9 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
     if snapshot is not None and (not isinstance(snapshot, str) or not snapshot.strip()):
         raise RuntimeError(f"{component} endpoint has an invalid snapshot")
     view_root = value.get("view_root")
-    if view_root is not None and (not isinstance(view_root, str) or not view_root.strip()):
+    if view_root is not None and (
+        not isinstance(view_root, str) or not view_root.strip()
+    ):
         raise RuntimeError(f"{component} endpoint has an invalid view_root")
     required_segments = value.get("required_segments", [])
     if not isinstance(required_segments, list) or any(
@@ -96,6 +102,14 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
         for segment in required_segments
     ):
         raise RuntimeError(f"{component} endpoint has invalid required_segments")
+    broker = value.get("broker")
+    if broker is not None and (not isinstance(broker, str) or not broker.strip()):
+        raise RuntimeError(f"{component} endpoint has an invalid broker")
+    lease_fence = value.get("lease_fence")
+    if lease_fence is not None and (
+        not isinstance(lease_fence, str) or not lease_fence.strip()
+    ):
+        raise RuntimeError(f"{component} endpoint has an invalid lease_fence")
     return ComponentEndpoint(
         component=component,
         socket=Path(socket),
@@ -104,6 +118,8 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
         required_segments=tuple(
             dict.fromkeys(segment.strip() for segment in required_segments)
         ),
+        broker=None if broker is None else broker.strip(),
+        lease_fence=None if lease_fence is None else lease_fence.strip(),
     )
 
 

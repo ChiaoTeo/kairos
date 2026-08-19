@@ -51,13 +51,13 @@ class DecisionPolicy:
     ) -> DecisionPolicyOutcome:
         unknown_reasons = set(result.reason_codes) - self._reason_codes
         unknown_flags = set(result.risk_flags) - self._risk_flags
-        if self._reason_codes and unknown_reasons:
+        if unknown_reasons:
             return DecisionPolicyOutcome(
                 DecisionKind.ABSTAIN,
                 None,
                 "Decision contains reason codes outside the Profile allowlist",
             )
-        if self._risk_flags and unknown_flags:
+        if unknown_flags:
             return DecisionPolicyOutcome(
                 DecisionKind.ABSTAIN,
                 None,
@@ -77,6 +77,13 @@ class DecisionPolicy:
         except (TypeError, ValueError) as error:
             return DecisionPolicyOutcome(DecisionKind.ABSTAIN, None, str(error))
         return DecisionPolicyOutcome(DecisionKind.REVISE, effective)
+
+    def notification_reason_codes(
+        self, reason_codes: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Minimize Strategy events to Profile-authorized reason codes."""
+
+        return tuple(code for code in reason_codes if code in self._reason_codes)
 
     def _apply_revision(self, request: object, revision: object) -> object:
         if isinstance(revision, ReduceTargetQuantity):

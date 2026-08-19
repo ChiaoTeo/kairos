@@ -43,6 +43,8 @@ pub struct ExecutionConnectionOptions {
     pub host: String,
     pub port: u16,
     pub client_id: i32,
+    pub initial_margin_rate_bps: Option<u32>,
+    pub margin_rule_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,6 +181,8 @@ pub fn load_execution_routes_from_reference_markets(
                         &configured.product,
                     ),
                     ready: true,
+                    initial_margin_rate_bps: margin_rule(configured).map(|value| value.0),
+                    margin_rule_id: margin_rule(configured).map(|value| value.1),
                 },
                 participant_instrument,
             ));
@@ -242,9 +246,27 @@ pub(super) fn candidate_for_address(
                 &configured.product,
             ),
             ready: true,
+            initial_margin_rate_bps: margin_rule(configured).map(|value| value.0),
+            margin_rule_id: margin_rule(configured).map(|value| value.1),
         },
         participant_instrument,
     ))
+}
+
+fn margin_rule(configured: &ExecutionConnectionOptions) -> Option<(u32, String)> {
+    match (
+        configured.initial_margin_rate_bps,
+        configured.margin_rule_id.as_ref(),
+    ) {
+        (Some(rate), Some(id)) if rate > 0 && rate <= 10_000 && !id.trim().is_empty() => {
+            Some((rate, id.clone()))
+        }
+        (None, None) if configured.product.eq_ignore_ascii_case("spot") => Some((
+            10_000,
+            format!("route:{}:fully-funded", configured.route_id),
+        )),
+        _ => None,
+    }
 }
 
 fn canonical_venue_matches_participant(exchange_id: &str, participant_id: &str) -> bool {

@@ -53,6 +53,8 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Market | latest view | `MarketFreshnessLatestView` | `MLF2` | Market Actor | Execution preflight, Strategy | KSS1 mmap / one writer |
 | DRAFT | Account | event | `BalanceUpserted` | `ABU2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
 | DRAFT | Account | event | `BalanceRemoved` | `ABR2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
+| DRAFT | Account | event | `EarnHoldingUpserted` | `AEH2` | Account Actor | Portfolio, Capital reconciliation | Account event stream / retained target |
+| DRAFT | Account | event | `EarnHoldingRemoved` | `AER2` | Account Actor | Portfolio, Capital reconciliation | Account event stream / retained target |
 | DRAFT | Account | event | `PositionUpserted` | `APU2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
 | DRAFT | Account | event | `PositionRemoved` | `APR2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |
 | DRAFT | Account | event | `ValuationChanged` | `AVC2` | Account Actor | Strategy Account application, settlement audit | Account event stream / retained target |

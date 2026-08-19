@@ -31,7 +31,8 @@ impl<'a> RiskDecision<'a> {
     pub const VT_RESERVATION: ::flatbuffers::VOffsetT = 20;
     pub const VT_POLICY_VERSION: ::flatbuffers::VOffsetT = 22;
     pub const VT_CONTEXT: ::flatbuffers::VOffsetT = 24;
-    pub const VT_EVALUATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_FUNDING_REQUIREMENT: ::flatbuffers::VOffsetT = 26;
+    pub const VT_EVALUATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 28;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -50,6 +51,9 @@ impl<'a> RiskDecision<'a> {
         let mut builder = RiskDecisionBuilder::new(_fbb);
         builder.add_evaluated_at_unix_nanos(args.evaluated_at_unix_nanos);
         builder.add_policy_version(args.policy_version);
+        if let Some(x) = args.funding_requirement {
+            builder.add_funding_requirement(x);
+        }
         if let Some(x) = args.context {
             builder.add_context(x);
         }
@@ -216,6 +220,19 @@ impl<'a> RiskDecision<'a> {
         }
     }
     #[inline]
+    pub fn funding_requirement(&self) -> Option<FundingRequirement<'a>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<FundingRequirement>>(
+                    RiskDecision::VT_FUNDING_REQUIREMENT,
+                    None,
+                )
+        }
+    }
+    #[inline]
     pub fn evaluated_at_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -278,6 +295,11 @@ impl ::flatbuffers::Verifiable for RiskDecision<'_> {
                 Self::VT_CONTEXT,
                 true,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<FundingRequirement>>(
+                "funding_requirement",
+                Self::VT_FUNDING_REQUIREMENT,
+                false,
+            )?
             .visit_field::<u64>(
                 "evaluated_at_unix_nanos",
                 Self::VT_EVALUATED_AT_UNIX_NANOS,
@@ -307,6 +329,7 @@ pub struct RiskDecisionArgs<'a> {
     pub reservation: Option<::flatbuffers::WIPOffset<Reservation<'a>>>,
     pub policy_version: u64,
     pub context: Option<::flatbuffers::WIPOffset<RiskContext<'a>>>,
+    pub funding_requirement: Option<::flatbuffers::WIPOffset<FundingRequirement<'a>>>,
     pub evaluated_at_unix_nanos: u64,
 }
 impl<'a> Default for RiskDecisionArgs<'a> {
@@ -324,6 +347,7 @@ impl<'a> Default for RiskDecisionArgs<'a> {
             reservation: None,
             policy_version: 0,
             context: None, // required field
+            funding_requirement: None,
             evaluated_at_unix_nanos: 0,
         }
     }
@@ -421,6 +445,17 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> RiskDecisionBuilder<'a, 'b, A
             );
     }
     #[inline]
+    pub fn add_funding_requirement(
+        &mut self,
+        funding_requirement: ::flatbuffers::WIPOffset<FundingRequirement<'b>>,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<FundingRequirement>>(
+                RiskDecision::VT_FUNDING_REQUIREMENT,
+                funding_requirement,
+            );
+    }
+    #[inline]
     pub fn add_evaluated_at_unix_nanos(&mut self, evaluated_at_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             RiskDecision::VT_EVALUATED_AT_UNIX_NANOS,
@@ -473,6 +508,7 @@ impl ::core::fmt::Debug for RiskDecision<'_> {
         ds.field("reservation", &self.reservation());
         ds.field("policy_version", &self.policy_version());
         ds.field("context", &self.context());
+        ds.field("funding_requirement", &self.funding_requirement());
         ds.field("evaluated_at_unix_nanos", &self.evaluated_at_unix_nanos());
         ds.finish()
     }

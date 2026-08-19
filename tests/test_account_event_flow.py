@@ -52,8 +52,12 @@ def _status_event_payload() -> bytes:
     AccountStatusChanged.AccountStatusChangedAddMetadata(builder, metadata)
     AccountStatusChanged.AccountStatusChangedAddAccountId(builder, account_id)
     AccountStatusChanged.AccountStatusChangedAddSegmentKey(builder, segment_key)
-    AccountStatusChanged.AccountStatusChangedAddStatus(builder, AccountStatus.AccountStatus.ACTIVE)
-    AccountStatusChanged.AccountStatusChangedAddFreshness(builder, FreshnessState.FreshnessState.FRESH)
+    AccountStatusChanged.AccountStatusChangedAddStatus(
+        builder, AccountStatus.AccountStatus.ACTIVE
+    )
+    AccountStatusChanged.AccountStatusChangedAddFreshness(
+        builder, FreshnessState.FreshnessState.FRESH
+    )
     AccountStatusChanged.AccountStatusChangedAddProvenance(builder, provenance)
     event = AccountStatusChanged.AccountStatusChangedEnd(builder)
     builder.Finish(event, file_identifier=b"ASC2")

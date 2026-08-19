@@ -46,7 +46,9 @@ class MarketControlClient:
             headers=headers,
         )
         if status >= 400:
-            raise RuntimeError(str(value.get("error", f"Market request failed: HTTP {status}")))
+            raise RuntimeError(
+                str(value.get("error", f"Market request failed: HTTP {status}"))
+            )
         return value
 
     def release_owner(self, request: Mapping[str, object]) -> Mapping[str, Any]:

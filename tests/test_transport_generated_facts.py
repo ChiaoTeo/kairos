@@ -43,15 +43,10 @@ def test_every_schema_root_matches_its_generated_python_identifier() -> None:
         identifier = identifier_match.group(1).encode()
         namespace = namespace_match.group(1)
         module = importlib.import_module(
-            "kairospy.infrastructure.transport.generated."
-            + namespace
-            + "."
-            + root
+            "kairospy.infrastructure.transport.generated." + namespace + "." + root
         )
         generated_root = getattr(module, root)
         has_identifier = getattr(generated_root, f"{root}BufferHasIdentifier")
-        assert has_identifier(
-            b"\0\0\0\0" + identifier, 0
-        ), schema.relative_to(ROOT)
+        assert has_identifier(b"\0\0\0\0" + identifier, 0), schema.relative_to(ROOT)
         checked += 1
     assert checked > 0

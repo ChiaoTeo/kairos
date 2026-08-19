@@ -12,6 +12,8 @@ members = [
     "crates/platform/workspace",
     "crates/modules/account",
     "crates/modules/account/contract",
+    "crates/modules/capital",
+    "crates/modules/capital/contract",
     "crates/modules/execution",
     "crates/modules/execution/contract",
     "crates/modules/market",
@@ -23,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
@@ -50,6 +52,8 @@ hyper-util = "0.1"
 ibapi = { version = "3.3", default-features = false, features = ["async"] }
 kairos-account = { path = "crates/modules/account" }
 kairos-account-contract = { path = "crates/modules/account/contract" }
+kairos-capital = { path = "crates/modules/capital" }
+kairos-capital-contract = { path = "crates/modules/capital/contract" }
 kairos-conflux = { path = "crates/platform/conflux" }
 kairos-execution = { path = "crates/modules/execution" }
 kairos-execution-contract = { path = "crates/modules/execution/contract" }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
+from kairospy.application.reference import Instrument
 from kairospy.strategy import QuoteEvent, Strategy, StrategyContext
 
 
@@ -42,7 +43,9 @@ class PrintSpyOptionChain(Strategy):
         )
         underlying_instrument = next(iter(underlying_instruments), None)
         if underlying_instrument is None:
-            raise RuntimeError(f"no active equity instrument found for {self.underlying}")
+            raise RuntimeError(
+                f"no active equity instrument found for {self.underlying}"
+            )
         self._underlying_instrument_id = str(underlying_instrument.id)
         self._underlying_scope_key = (
             f"consolidated:{self._underlying_instrument_id}:sip"
@@ -206,13 +209,13 @@ def _expiry_window(observed_at: datetime, max_days: int) -> tuple[int, int]:
 
 
 def _select_contracts(
-    chain: tuple[object, ...],
+    chain: tuple[Instrument, ...],
     *,
     spot: Decimal,
     strike_offset_percent: Decimal,
     max_expiries: int,
     max_contracts: int,
-) -> tuple[object, ...]:
+) -> tuple[Instrument, ...]:
     lower = spot * (Decimal("1") - strike_offset_percent)
     upper = spot * (Decimal("1") + strike_offset_percent)
     eligible = tuple(
@@ -230,7 +233,7 @@ def _select_contracts(
     if not expiries:
         return ()
 
-    selected: list[object] = []
+    selected: list[Instrument] = []
     remaining_expiries = len(expiries)
     for expiry in expiries:
         expiry_budget = max(2, (max_contracts - len(selected)) // remaining_expiries)

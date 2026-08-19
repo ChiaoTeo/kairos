@@ -11,6 +11,10 @@ from kairospy.application.agent.composition import (
     AgentProcessComposition,
     compose_agent,
 )
+from kairospy.application.agent.services.tools import AgentToolScope
+from kairospy.application.capital.composition import (
+    build_strategy_access as build_capital_access,
+)
 from kairospy.application.execution import ExecutionPolicy
 from kairospy.application.execution.composition import (
     build_strategy_access as build_execution_access,
@@ -28,6 +32,9 @@ from kairospy.application.notification.composition import (
     NotificationProcessComposition,
     compose_notifications,
 )
+from kairospy.application.portfolio.composition import (
+    build_strategy_access as build_portfolio_access,
+)
 from kairospy.application.reference.composition import (
     build_strategy_access as build_reference_access,
 )
@@ -35,6 +42,7 @@ from kairospy.application.risk.composition import (
     build_strategy_access as build_risk_access,
 )
 from kairospy.application.workspace import Workspace
+from kairospy.infrastructure.contracts.capital import CapitalContractClient
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 from .services.decision_journal import StrategyDecisionJournal
 
@@ -116,10 +124,47 @@ def compose_strategy_process(
             if endpoint.required_segments
         },
     )
+    portfolio = build_portfolio_access(
+        launch_id=launch_id,
+        mode=mode,
+        account=account,
+    )
+    capital_enabled = bool(config.capital.get("enabled", False))
+    if capital_enabled and endpoints.capital is None:
+        raise RuntimeError("Capital is enabled but the instance manifest has no endpoint")
+    capital = build_capital_access(
+        identity=identity,
+        capital_group_id=(
+            str(config.capital["capital_group_id"]) if capital_enabled else None
+        ),
+        account_ids=tuple(endpoints.accounts),
+        account_lease_fences={
+            account_id: endpoint.lease_fence
+            for account_id, endpoint in endpoints.accounts.items()
+            if endpoint.lease_fence is not None
+        },
+        endpoint=(
+            endpoints.capital.socket
+            if capital_enabled and endpoints.capital is not None
+            else None
+        ),
+        commands=(
+            None
+            if not capital_enabled or endpoints.capital is None
+            else CapitalContractClient(endpoints.capital.socket)
+        ),
+    )
     agent = compose_agent(
         workspace=workspace,
         instance=instance,
         config=config.agent,
+        tool_scope=AgentToolScope(
+            workspace.identity.workspace_id,
+            launch_id,
+            instance_id,
+            identity.strategy_id,
+            tuple(str(account_id) for account_id in endpoints.accounts),
+        ),
     )
     risk = build_risk_access(
         instance=instance,
@@ -141,11 +186,10 @@ def compose_strategy_process(
             max_order_notional=config.max_order_notional,
             require_limit_orders=config.require_limit_orders,
         ),
-        decorate_commands=lambda commands, record_admission: agent.decorate_commands(
+        decorate_commands=lambda commands: agent.decorate_commands(
             commands,
             launch_id=launch_id,
             account=account,
-            record_admission=record_admission,
         ),
     )
 
@@ -181,9 +225,13 @@ def compose_strategy_process(
         reference=reference,
         market=market.application,
         account=account,
+        portfolio=portfolio,
+        capital=capital,
         risk=risk,
         execution=execution,
         agent=agent.application,
+        agent_events=None if agent.events is None else agent.events.events,
+        agent_synchronize=agent.synchronize if mode == "backtest" else None,
         notifications=notifications.application,
         decision_journal=StrategyDecisionJournal(
             instance.artifact("strategy-decisions.jsonl")

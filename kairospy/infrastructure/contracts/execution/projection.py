@@ -16,6 +16,7 @@ from kairospy.application.execution.models import (
     OrderStatus,
     OrderCommitment,
     RiskReservationSaga,
+    ExecutionFundingRequirement,
     RiskReservationSagaStatus,
 )
 from kairospy.application.reference import InstrumentRef
@@ -219,14 +220,17 @@ def _intent(value: Any) -> ExecutionIntent:
         for index in range(intent.LegsLength())
     )
     plan = value.Plan()
-    order_ids = tuple(
-        dict.fromkeys(
-            OrderId(_required_text(leg.OrderIds(index), "intent order_id"))
-            for leg_index in range(0 if plan is None else plan.LegsLength())
-            for leg in (plan.Legs(leg_index),)
-            for index in range(leg.OrderIdsLength())
-        )
-    )
+    decoded_order_ids: list[OrderId] = []
+    if plan is not None:
+        for leg_index in range(plan.LegsLength()):
+            leg = plan.Legs(leg_index)
+            if leg is None:
+                continue
+            decoded_order_ids.extend(
+                OrderId(_required_text(leg.OrderIds(index), "intent order_id"))
+                for index in range(leg.OrderIdsLength())
+            )
+    order_ids = tuple(dict.fromkeys(decoded_order_ids))
     first_leg = intent.Legs(0)
     return ExecutionIntent(
         id=IntentId(_required_text(intent.IntentId(), "intent_id")),
@@ -399,6 +403,7 @@ def _commitment(value: Any) -> OrderCommitment:
 
 
 def _risk_reservation(value: Any) -> RiskReservationSaga:
+    raw_funding = value.FundingRequirement()
     return RiskReservationSaga(
         order_id=OrderId(_required_text(value.OrderId(), "reservation order_id")),
         reservation_id=_required_text(
@@ -421,12 +426,43 @@ def _risk_reservation(value: Any) -> RiskReservationSaga:
             7: RiskReservationSagaStatus.CONSUMED,
             8: RiskReservationSagaStatus.EXPIRED,
             9: RiskReservationSagaStatus.UNCERTAIN,
+            10: RiskReservationSagaStatus.FAILED,
         }.get(int(value.Lifecycle()), RiskReservationSagaStatus.UNCERTAIN),
         risk_generation=int(value.RiskGeneration()),
         risk_event_sequence=int(value.RiskEventSequence()),
         policy_version=int(value.PolicyVersion()),
         expires_at_unix_nanos=int(value.ExpiresAtUnixNanos()),
         updated_at_unix_nanos=int(value.UpdatedAtUnixNanos()),
+        funding_requirement=(
+            None
+            if raw_funding is None
+            else ExecutionFundingRequirement(
+                required_margin=_required_decimal(
+                    raw_funding.RequiredMargin(), "funding required_margin"
+                ),
+                available_margin=_required_decimal(
+                    raw_funding.AvailableMargin(), "funding available_margin"
+                ),
+                shortfall=_required_decimal(
+                    raw_funding.Shortfall(), "funding shortfall"
+                ),
+                margin_rule_id=_required_text(
+                    raw_funding.MarginRuleId(), "funding margin_rule_id"
+                ),
+                risk_decision_id=_required_text(
+                    raw_funding.RiskDecisionId(), "funding risk_decision_id"
+                ),
+                risk_policy_version=int(raw_funding.RiskPolicyVersion()),
+                account_snapshot_watermark=int(
+                    raw_funding.AccountSnapshotWatermark()
+                ),
+                broker=_required_text(raw_funding.Broker(), "funding broker"),
+                segment=_required_text(raw_funding.Segment(), "funding segment"),
+                collateral_asset=_required_text(
+                    raw_funding.CollateralAsset(), "funding collateral_asset"
+                ),
+            )
+        ),
     )
 
 

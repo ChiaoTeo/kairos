@@ -7,7 +7,7 @@ class PrintAaplMulti(Strategy):
     def on_start(self, context: StrategyContext) -> None:
         markets = context.reference.find_markets(
             symbol="AAPL",
-            market_type="equity",
+            instrument_kind="equity",
         )
         if len(markets) < 2:
             raise RuntimeError(

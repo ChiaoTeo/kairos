@@ -146,14 +146,25 @@ class RiskDecision(object):
         return None
 
     # RiskDecision
-    def EvaluatedAtUnixNanos(self):
+    def FundingRequirement(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.risk.v2.FundingRequirement import FundingRequirement
+            obj = FundingRequirement()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # RiskDecision
+    def EvaluatedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def RiskDecisionStart(builder):
-    builder.StartObject(12)
+    builder.StartObject(13)
 
 def Start(builder):
     RiskDecisionStart(builder)
@@ -236,8 +247,14 @@ def RiskDecisionAddContext(builder, context):
 def AddContext(builder, context):
     RiskDecisionAddContext(builder, context)
 
+def RiskDecisionAddFundingRequirement(builder, fundingRequirement):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(fundingRequirement), 0)
+
+def AddFundingRequirement(builder, fundingRequirement):
+    RiskDecisionAddFundingRequirement(builder, fundingRequirement)
+
 def RiskDecisionAddEvaluatedAtUnixNanos(builder, evaluatedAtUnixNanos):
-    builder.PrependUint64Slot(11, evaluatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(12, evaluatedAtUnixNanos, 0)
 
 def AddEvaluatedAtUnixNanos(builder, evaluatedAtUnixNanos):
     RiskDecisionAddEvaluatedAtUnixNanos(builder, evaluatedAtUnixNanos)

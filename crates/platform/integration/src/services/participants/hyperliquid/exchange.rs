@@ -393,15 +393,7 @@ fn decimal(value: DecimalValue) -> f64 {
 }
 
 fn parse_decimal(value: &str) -> Result<DecimalValue, IntegrationError> {
-    let value = value
-        .parse::<rust_decimal::Decimal>()
-        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?;
-    Ok(DecimalValue::new(
-        i64::try_from(value.mantissa())
-            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-        u8::try_from(value.scale())
-            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-    ))
+    DecimalValue::parse(value).map_err(IntegrationError::InvalidPayload)
 }
 
 fn now() -> UnixNanos {

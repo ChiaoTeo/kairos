@@ -42,30 +42,10 @@ fn context(actor_id: &str, identity: &InstanceIdentity, sequence: u64) -> Encode
     )
 }
 
-fn dec<T: DecimalValue>(value: T) -> Decimal64 {
+fn dec(value: impl Into<kairos_primitives::DecimalParts>) -> Decimal64 {
+    let value = value.into();
     Decimal64::new(value.mantissa(), value.scale())
 }
-
-trait DecimalValue {
-    fn mantissa(&self) -> i64;
-    fn scale(&self) -> u8;
-}
-
-macro_rules! decimal_value {
-    ($($ty:path),+ $(,)?) => {$ (
-        impl DecimalValue for $ty {
-            fn mantissa(&self) -> i64 { <$ty>::mantissa(*self) }
-            fn scale(&self) -> u8 { <$ty>::scale(*self) }
-        }
-    )+ };
-}
-
-decimal_value!(
-    kairos_primitives::Price,
-    kairos_primitives::Quantity,
-    kairos_primitives::Money,
-    kairos_primitives::Rate,
-);
 
 fn strings<'a, A: flatbuffers::Allocator + 'a>(
     builder: &mut FlatBufferBuilder<'a, A>,

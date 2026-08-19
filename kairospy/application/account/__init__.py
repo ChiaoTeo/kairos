@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import socket
+from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from .events import (
     AccountEvent,
     AccountStatusChangedEvent,
     BalanceChangedEvent,
+    EarnHoldingChangedEvent,
     EquityChangedEvent,
     ObservedOrderChangedEvent,
     PositionChangedEvent,
@@ -47,6 +49,9 @@ from .models import (
     AccountStatusChange,
     Balance,
     DataFreshness,
+    EarnHolding,
+    EarnHoldingState,
+    EarnLiquidity,
     EquityChange,
     ObservedOrder,
     Position,
@@ -455,6 +460,7 @@ class TradeLeaseApplication:
             "host": socket.gethostname(),
             "acquired_at": now,
             "heartbeat_at": now,
+            "fencing_token": uuid4().hex,
         }
         try:
             path.mkdir()
@@ -466,7 +472,7 @@ class TradeLeaseApplication:
                 shutil.rmtree(path)
                 path.mkdir()
             elif existing and existing.get("launch_instance_id") == launch_instance_id:
-                pass
+                record["fencing_token"] = existing.get("fencing_token") or uuid4().hex
             else:
                 raise ValueError(f"account {key} trading is already leased") from error
         _write_json(path / "owner.json", record)
@@ -582,6 +588,10 @@ __all__ = [
     "AccountCliApplication",
     "CredentialApplication",
     "DataFreshness",
+    "EarnHolding",
+    "EarnHoldingChangedEvent",
+    "EarnHoldingState",
+    "EarnLiquidity",
     "EquityChange",
     "EquityChangedEvent",
     "ObservedOrder",

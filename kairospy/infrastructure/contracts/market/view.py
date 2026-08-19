@@ -119,10 +119,14 @@ _VIEW_ROOTS: dict[MarketViewKind, tuple[bytes, str, str]] = {
 class MarketViewReader:
     """Read one Market v2 view and return its generated protocol object."""
 
-    def __init__(self, root: str | Path, key: MarketViewKey, *, retries: int = 8) -> None:
+    def __init__(
+        self, root: str | Path, key: MarketViewKey, *, retries: int = 8
+    ) -> None:
         self.root = Path(root)
         self.key = key
-        self._reader = SharedSnapshotReader(key.resource_path(self.root), retries=retries)
+        self._reader = SharedSnapshotReader(
+            key.resource_path(self.root), retries=retries
+        )
 
     def read(self) -> MarketViewFrame:
         snapshot = self._reader.read()
@@ -133,9 +137,7 @@ class MarketViewReader:
         resource_id = _text(metadata.ResourceId())
         view_key = _text(metadata.ViewKey())
         if resource_id != self.key.resource_id():
-            raise ValueError(
-                f"Market view resource identity mismatch: {resource_id!r}"
-            )
+            raise ValueError(f"Market view resource identity mismatch: {resource_id!r}")
         if view_key != self.key.canonical_key():
             raise ValueError(f"Market view key mismatch: {view_key!r}")
         if metadata.ResourceEpoch() != 1:
@@ -177,4 +179,10 @@ def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode()
 
 
-__all__ = ["MarketViewFrame", "MarketViewKey", "MarketViewKind", "MarketViewReader", "decode_view"]
+__all__ = [
+    "MarketViewFrame",
+    "MarketViewKey",
+    "MarketViewKind",
+    "MarketViewReader",
+    "decode_view",
+]

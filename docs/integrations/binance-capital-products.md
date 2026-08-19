@@ -2,7 +2,7 @@
 
 Document type: maintained integration evidence.
 
-Verified against the Binance Developer API catalog on 2026-08-18. This map is
+Verified against the Binance Developer API catalog on 2026-08-19. This map is
 an input to capability design, not a promise that every endpoint is already
 implemented.
 
@@ -25,6 +25,14 @@ Relevant operation families include:
 - master/subaccount Universal Transfer plus history;
 - dedicated subaccount futures, margin, sub-to-master, and sub-to-sub transfer;
 - Funding Wallet and aggregate wallet-balance queries.
+
+Current implementation status: the concrete `BinanceCapitalRestConnection`
+implements same-Account User Universal Transfer submit/history for explicitly
+bound Spot, Funding, USD-M, COIN-M, and Cross Margin segments. Binance does not
+accept a client idempotency key on this endpoint, so Capital persists a
+delivery fence and reconciles by `tranId` or an unambiguous route/asset/amount/
+time match. Master/subaccount and other cross-Account rails remain separate
+pending implementations.
 
 These map to `AssetTransferCommand` and `AssetTransferStatusQuery` only when
 both endpoints are locations within Binance. A blockchain withdrawal or a

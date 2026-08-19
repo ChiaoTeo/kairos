@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from threading import Event
 import time
 
 from kairospy.application.agent import (
@@ -21,11 +22,13 @@ from kairospy.application.agent.services import (
 )
 from kairospy.application.agent.services.controlled_execution import (
     AgentControlledExecutionCommands,
+    UnavailableAgentExecutionCommands,
 )
 from kairospy.application.execution import (
     DeliveryCertainty,
     ExecutionApplication,
     SubmissionStatus,
+    TargetPositionRequest,
 )
 from kairospy.domain_types import InstrumentId
 from kairospy.strategy import CommandResult
@@ -39,9 +42,26 @@ class Runtime:
         return self.result
 
 
+class BlockingRuntime(Runtime):
+    def __init__(self, result: DecisionResult) -> None:
+        super().__init__(result)
+        self.entered = Event()
+        self.release = Event()
+
+    def decide(self, candidate):
+        self.entered.set()
+        self.release.wait(2)
+        return self.result
+
+
+class FailingRuntime:
+    def decide(self, candidate):
+        raise TimeoutError("model timed out")
+
+
 class Commands:
     def __init__(self) -> None:
-        self.calls: list[tuple[object, dict[str, str]]] = []
+        self.calls: list[tuple[object, dict[str, object]]] = []
 
     def target_position(self, request, **identity) -> CommandResult:
         self.calls.append((request, identity))
@@ -57,15 +77,16 @@ def _assembled(
     result: DecisionResult,
     required_contexts: tuple[str, ...] = (),
     exposure: str = "unknown",
-    admission_evidence: list[object] | None = None,
+    runtime: object | None = None,
+    queue_capacity: int = 8,
 ):
     agent = AgentApplication(enabled=True, initial_mode=mode)
     records = DecisionRecordStore(tmp_path / "decisions.sqlite3")
     worker = AgentDecisionWorker(
-        runtime=Runtime(result),
+        runtime=runtime or Runtime(result),
         policy=DecisionPolicy({"allow_quantity_reduction": True}),
         records=records,
-        queue_capacity=8,
+        queue_capacity=queue_capacity,
     )
     worker.start()
     commands = Commands()
@@ -73,6 +94,7 @@ def _assembled(
         commands,
         agent=agent,
         worker=worker,
+        workspace_id="workspace",
         launch_id="launch",
         profile_hash="profile-hash",
         runtime="fixture",
@@ -82,9 +104,6 @@ def _assembled(
         required_contexts=required_contexts,
         max_decision_age_seconds=5,
         classify_exposure=lambda request: exposure,
-        record_admission=(
-            None if admission_evidence is None else admission_evidence.append
-        ),
     )
     application = ExecutionApplication(
         controlled,
@@ -117,6 +136,27 @@ def test_gate_returns_pending_not_sent_then_worker_submits(tmp_path: Path) -> No
     worker.close(timeout=1)
 
 
+def test_fixture_candidate_uses_deterministic_time_not_wall_clock(
+    tmp_path: Path,
+) -> None:
+    application, _, _, worker, records = _assembled(
+        tmp_path,
+        mode=AgentMode.GATE,
+        result=DecisionResult(DecisionKind.REJECT, 9000, (), (), "rejected"),
+    )
+
+    application.target_position(InstrumentId("BTCUSDT"), Decimal("1"), account="main")
+    _wait_any_terminal(records)
+    row = records._connection.execute(
+        "SELECT submitted_at, deadline FROM decision_records"
+    ).fetchone()
+
+    assert row is not None
+    assert row["submitted_at"] == "1970-01-01T00:00:00+00:00"
+    assert row["deadline"].startswith("9999-12-31T23:59:59.999999")
+    worker.close(timeout=1)
+
+
 def test_shadow_submits_original_synchronously_and_does_not_resubmit(
     tmp_path: Path,
 ) -> None:
@@ -142,7 +182,6 @@ def test_shadow_submits_original_synchronously_and_does_not_resubmit(
 def test_revise_records_original_and_effective_in_execution_admission(
     tmp_path: Path,
 ) -> None:
-    evidence: list[object] = []
     application, _, commands, worker, records = _assembled(
         tmp_path,
         mode=AgentMode.REVISE,
@@ -154,7 +193,6 @@ def test_revise_records_original_and_effective_in_execution_admission(
             "reduce target",
             (ReduceTargetQuantity("1"),),
         ),
-        admission_evidence=evidence,
     )
 
     receipt = application.target_position(
@@ -165,9 +203,7 @@ def test_revise_records_original_and_effective_in_execution_admission(
     assert receipt.status is SubmissionStatus.PENDING
     assert terminal.status is DecisionStatus.REVISED
     assert len(commands.calls) == 1
-    assert len(evidence) == 2
-    assert getattr(evidence[0], "submission_status") == "submitting"
-    admission = evidence[-1]
+    admission = commands.calls[0][1]["admission_evidence"]
     assert getattr(admission, "outcome") == "revised"
     assert getattr(admission, "original_intent").quantity == Decimal("2")
     assert getattr(admission, "effective_intent").quantity == Decimal("1")
@@ -216,7 +252,90 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
     )
     assert bypassed.status is SubmissionStatus.ACCEPTED
     assert len(reducing_commands.calls) == 1
+    assert "admission_evidence" not in reducing_commands.calls[0][1]
     reducing_worker.close(timeout=1)
+
+
+def test_runtime_failure_reduction_bypasses_without_agent_admission_evidence(
+    tmp_path: Path,
+) -> None:
+    application, _, commands, worker, records = _assembled(
+        tmp_path,
+        mode=AgentMode.GATE,
+        result=DecisionResult(DecisionKind.APPROVE, 9000, (), (), "unused"),
+        exposure="reduce",
+        runtime=FailingRuntime(),
+    )
+
+    pending = application.target_position(
+        InstrumentId("BTCUSDT"), Decimal("0"), account="main"
+    )
+    terminal = _wait_any_terminal(records)
+
+    assert pending.status is SubmissionStatus.PENDING
+    assert terminal.status is DecisionStatus.ABSTAINED
+    assert terminal.delivery_certainty == "sent"
+    assert len(commands.calls) == 1
+    assert commands.calls[0][1]["admission_evidence"] is None
+    worker.close(timeout=1)
+
+
+def test_queue_full_reduction_returns_downstream_status_without_agent_evidence(
+    tmp_path: Path,
+) -> None:
+    runtime = BlockingRuntime(
+        DecisionResult(DecisionKind.APPROVE, 9000, (), (), "approved")
+    )
+    application, _, commands, worker, _ = _assembled(
+        tmp_path,
+        mode=AgentMode.GATE,
+        result=runtime.result,
+        exposure="reduce",
+        runtime=runtime,
+        queue_capacity=1,
+    )
+
+    first = application.target_position(
+        InstrumentId("BTCUSDT"), Decimal("1"), account="main"
+    )
+    assert first.status is SubmissionStatus.PENDING
+    assert runtime.entered.wait(1)
+    second = application.target_position(
+        InstrumentId("BTCUSDT"), Decimal("1"), account="main"
+    )
+    bypassed = application.target_position(
+        InstrumentId("BTCUSDT"), Decimal("0"), account="main"
+    )
+
+    assert second.status is SubmissionStatus.PENDING
+    assert bypassed.status is SubmissionStatus.ACCEPTED
+    assert bypassed.delivery_certainty is DeliveryCertainty.SENT
+    assert len(commands.calls) == 1
+    assert commands.calls[0][1]["admission_evidence"] is None
+    runtime.release.set()
+    assert worker.wait_idle(timeout=1)
+    worker.close(timeout=1)
+
+
+def test_unavailable_runtime_allows_only_proven_reduction() -> None:
+    commands = Commands()
+    unavailable = UnavailableAgentExecutionCommands(
+        commands,
+        agent=AgentApplication(enabled=True, initial_mode=AgentMode.GATE),
+        operations=("target_position",),
+        classify_exposure=lambda request: "reduce",
+    )
+
+    result = unavailable.target_position(
+        TargetPositionRequest("BTCUSDT", Decimal("0"), account_id="main"),
+        request_id="request",
+        strategy_id="strategy",
+        instance_id="instance",
+    )
+
+    assert result.status == "accepted"
+    assert len(commands.calls) == 1
+    assert "admission_evidence" not in commands.calls[0][1]
 
 
 def _wait_any_terminal(records: DecisionRecordStore):

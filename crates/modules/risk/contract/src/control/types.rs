@@ -22,68 +22,13 @@ pub struct RiskControlError {
 
 // Stable cross-process Risk command, decision, snapshot and event models.
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Amount {
-    pub mantissa: i64,
-    pub scale: u8,
-}
+/// Signed fixed-decimal representation used by the Risk process contract.
+/// Domain mappings decide whether a particular field is an amount, money,
+/// rate, or another semantic value.
+pub type DecimalValue = kairos_primitives::DecimalParts;
 
-impl Serialize for Amount {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        if self.scale > 18 {
-            return Err(serde::ser::Error::custom("decimal scale exceeds 18 digits"));
-        }
-        let negative = self.mantissa < 0;
-        let magnitude = i128::from(self.mantissa).abs();
-        let value = if self.scale == 0 {
-            format!("{}{magnitude}", if negative { "-" } else { "" })
-        } else {
-            let factor = 10_i128.pow(u32::from(self.scale));
-            format!(
-                "{}{whole}.{fraction:0width$}",
-                if negative { "-" } else { "" },
-                whole = magnitude / factor,
-                fraction = magnitude % factor,
-                width = usize::from(self.scale)
-            )
-        };
-        serializer.serialize_str(&value)
-    }
-}
-
-impl<'de> Deserialize<'de> for Amount {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        let (negative, unsigned) = value
-            .strip_prefix('-')
-            .map_or((false, value.as_str()), |value| (true, value));
-        let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-        if whole.is_empty()
-            || fraction.len() > 18
-            || !whole.bytes().all(|byte| byte.is_ascii_digit())
-            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err(serde::de::Error::custom(
-                "expected a decimal string with at most 18 fractional digits",
-            ));
-        }
-        let magnitude = format!("{whole}{fraction}")
-            .parse::<i128>()
-            .map_err(serde::de::Error::custom)?;
-        let mantissa = i64::try_from(if negative { -magnitude } else { magnitude })
-            .map_err(serde::de::Error::custom)?;
-        Ok(Self {
-            mantissa,
-            scale: fraction.len() as u8,
-        })
-    }
-}
+/// Compatibility name retained for existing Risk contract callers.
+pub type Amount = DecimalValue;
 
 #[cfg(test)]
 mod amount_tests {
@@ -94,19 +39,18 @@ mod amount_tests {
     #[test]
     fn json_amount_is_a_decimal_string_only() {
         let amount = serde_json::from_str::<Amount>("\"-12.50\"").unwrap();
-        assert_eq!((amount.mantissa, amount.scale), (-1_250, 2));
+        assert_eq!((amount.mantissa(), amount.scale()), (-1_250, 2));
         assert_eq!(serde_json::to_string(&amount).unwrap(), "\"-12.50\"");
         assert!(serde_json::from_str::<Amount>(r#"{"mantissa":-1250,"scale":2}"#).is_err());
+        assert!(serde_json::from_str::<Amount>("\"0.0000000000000000001\"").is_err());
+        assert!(Amount::new(1, kairos_primitives::MAX_DECIMAL_SCALE + 1).is_err());
     }
 
     #[test]
     fn mutation_controls_have_typed_contract_shapes() {
         let resize = ResizeReservationRequest {
             reservation_id: "reservation-1".into(),
-            amount: Amount {
-                mantissa: 125,
-                scale: 2,
-            },
+            amount: Amount::new(125, 2).unwrap(),
             at_unix_nanos: 10,
         };
         assert_eq!(
@@ -235,14 +179,22 @@ pub struct AuthorizeRequest {
     pub strategy_id: String,
     pub instrument_id: String,
     pub exchange_id: String,
-    pub metric: Metric,
-    pub amount: Amount,
+    pub proposal: TradeRiskProposal,
     pub at_unix_nanos: u64,
     pub reservation_ttl_nanos: u64,
     pub dependency_generation: u64,
     pub dependency_event_sequence: u64,
     #[serde(default)]
     pub context: Option<RiskContext>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TradeRiskProposal {
+    pub notional: Amount,
+    pub initial_margin_rate_bps: u64,
+    #[serde(default)]
+    pub reduce_only: bool,
+    pub margin_rule_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -428,7 +380,17 @@ pub struct RiskDecision {
     pub dependency_watermarks: DependencyWatermarks,
     #[serde(default)]
     pub context: Option<RiskContext>,
+    #[serde(default)]
+    pub funding_requirement: Option<FundingRequirement>,
     pub evaluated_at_unix_nanos: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FundingRequirement {
+    pub required_margin: Amount,
+    pub available_margin: Amount,
+    pub shortfall: Amount,
+    pub margin_rule_id: String,
 }
 
 /// mmap current-state contract. It cannot carry event history or positions.

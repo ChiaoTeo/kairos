@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, overload
+from typing import Any, cast, overload
 
 from kairospy.application.reference import InstrumentRef
 from kairospy.domain_types import AccountId, InstrumentId, IntentId, OrderId, SegmentKey
@@ -126,6 +126,8 @@ class ExecutionApplication:
         value = query(str(intent_id))
         if value is None:
             return None
+        if not isinstance(value, dict):
+            raise ValueError("Execution diagnostic payload must be an object")
         intent = value.get("intent")
         if not isinstance(intent, Mapping):
             raise ValueError("Execution diagnostic intent payload is invalid")
@@ -137,7 +139,7 @@ class ExecutionApplication:
                 AccountId(str(item)) for item in account_ids
             ).issubset(self._account_ids):
                 return None
-        return value
+        return cast(dict[str, object], value)
 
     async def events(self) -> AsyncIterator[ExecutionEvent]:
         if self._event_source is None:
@@ -218,7 +220,10 @@ class ExecutionApplication:
         if not callable(recovery_snapshot):
             return
         try:
-            snapshot = tuple(recovery_snapshot())
+            raw_snapshot = recovery_snapshot()
+            if not isinstance(raw_snapshot, (list, tuple)):
+                raise ValueError("Execution recovery snapshot must be an array")
+            snapshot = tuple(raw_snapshot)
             if len(snapshot) == 2:
                 head, intents = snapshot
                 fills: tuple[object, ...] = ()
@@ -227,7 +232,12 @@ class ExecutionApplication:
                 head, intents, fills, fill_history_truncated = snapshot
             else:
                 raise ValueError("Execution recovery snapshot shape is invalid")
-            head = int(head)
+            if isinstance(head, bool) or not isinstance(head, int):
+                raise ValueError("Execution recovery head must be an integer")
+            if not isinstance(intents, (list, tuple)):
+                raise ValueError("Execution recovery intents must be an array")
+            if not isinstance(fills, (list, tuple)):
+                raise ValueError("Execution recovery fills must be an array")
             intents = tuple(intents)
             fills = tuple(fills)
         except FileNotFoundError:

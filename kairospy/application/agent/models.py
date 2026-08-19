@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
 import json
 from types import MappingProxyType
 from typing import Mapping, TypeAlias
+
+from kairospy.domain_types import DataEvent
 
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -52,6 +54,41 @@ class DecisionStatus(StrEnum):
     SUBMISSION_INDETERMINATE = "submission_indeterminate"
 
 
+class AgentEventStatus(StrEnum):
+    APPROVED = "approved"
+    REVISED = "revised"
+    REJECTED = "rejected"
+    ABSTAINED = "abstained"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    SUBMISSION_INDETERMINATE = "submission_indeterminate"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDecisionNotice:
+    decision_id: str
+    capability: str
+    status: AgentEventStatus
+    reason_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.decision_id.strip():
+            raise ValueError("Agent event decision_id is required")
+        if self.capability != "execution.intent_review":
+            raise ValueError("Agent event capability is unsupported")
+        object.__setattr__(self, "status", AgentEventStatus(self.status))
+        if len(self.reason_codes) > 32 or any(
+            not value.strip() or len(value) > 96 for value in self.reason_codes
+        ):
+            raise ValueError("Agent event reason_codes must contain bounded strings")
+        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEvent(DataEvent[AgentDecisionNotice]):
+    kind: str = field(init=False, default="decision_completed")
+
+
 @dataclass(frozen=True, slots=True)
 class AgentContextDocument:
     key: str
@@ -62,11 +99,7 @@ class AgentContextDocument:
     source_event_sequence: int | None = None
 
     def __post_init__(self) -> None:
-        key = self.key.strip()
-        if not key or len(key) > 64:
-            raise ValueError("Agent context key must contain 1..64 characters")
-        if any(character not in _KEY_CHARACTERS for character in key):
-            raise ValueError("Agent context key contains unsupported characters")
+        key = _normalize_context_key(self.key)
         scopes = tuple(dict.fromkeys(scope.strip() for scope in self.scopes))
         if not scopes or any(not scope or len(scope) > 96 for scope in scopes):
             raise ValueError("Agent context requires bounded non-empty scopes")
@@ -249,6 +282,7 @@ class IntentCandidate:
     decision_id: str
     request_id: str
     intent_id: str
+    workspace_id: str
     strategy_id: str
     launch_id: str
     instance_id: str
@@ -268,6 +302,7 @@ class IntentCandidate:
             "decision_id",
             "request_id",
             "intent_id",
+            "workspace_id",
             "strategy_id",
             "launch_id",
             "instance_id",
@@ -345,6 +380,15 @@ _SECRET_FRAGMENTS = (
 )
 
 
+def _normalize_context_key(value: str) -> str:
+    key = value.strip()
+    if not key or len(key) > 64:
+        raise ValueError("Agent context key must contain 1..64 characters")
+    if any(character not in _KEY_CHARACTERS for character in key):
+        raise ValueError("Agent context key contains unsupported characters")
+    return key
+
+
 def _freeze_mapping(
     value: Mapping[str, JsonValue], *, depth: int
 ) -> Mapping[str, JsonValue]:
@@ -407,6 +451,9 @@ def _datetime_text(value: datetime | None) -> str | None:
 
 
 __all__ = [
+    "AgentDecisionNotice",
+    "AgentEvent",
+    "AgentEventStatus",
     "AgentContextDocument",
     "AgentContextReceipt",
     "AgentContextSnapshot",

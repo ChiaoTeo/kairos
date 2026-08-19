@@ -43,7 +43,9 @@ pub struct AssetTransferSubmission {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetTransferQuery {
-    pub idempotency_key: IdempotencyKey,
+    /// The original request is required because some participants require the
+    /// route type for history queries and do not echo a client idempotency key.
+    pub request: AssetTransferRequest,
     pub participant_transfer_id: Option<String>,
 }
 
@@ -53,6 +55,9 @@ pub enum AssetTransferState {
     Succeeded,
     Failed,
     Cancelled,
+    /// A provider state that is preserved in `participant_state` but has no
+    /// safe participant-neutral interpretation yet.
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import inspect
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 
@@ -10,8 +11,10 @@ from kairospy.application.agent import (
     AgentApplication,
     AgentContextDocument,
     AgentContextStatus,
+    AgentLaunchConfig,
     AgentMode,
     AgentModeStatus,
+    AgentModelConfig,
     DecisionKind,
     DecisionResult,
     DecisionStatus,
@@ -67,6 +70,8 @@ def test_context_replace_dedupe_remove_and_immutable_snapshot() -> None:
     assert replacement.revision > first.revision
     assert agent.remove_context("signal").status is AgentContextStatus.REMOVED
     assert agent.remove_context("signal").status is AgentContextStatus.DUPLICATE
+    with pytest.raises(ValueError, match="unsupported characters"):
+        agent.remove_context("invalid/context")
 
 
 def test_context_scope_expiry_required_and_secret_bounds() -> None:
@@ -131,6 +136,24 @@ risk_flags = ["concentration"]
 """,
         encoding="utf-8",
     )
+    (profile.parent / "mcp.toml").write_text(
+        """[servers.kairos-context]
+transport = "stdio"
+command = "kairos-context-mcp"
+args = ["--readonly"]
+timeout_seconds = 2
+
+[profiles.intent-review-readonly]
+server = "kairos-context"
+allowed_tools = ["market.get_latest_quote"]
+scope_enforced = true
+max_result_bytes = 4096
+max_rows = 10
+freshness_required_tools = ["market.get_latest_quote"]
+max_age_seconds = 30
+""",
+        encoding="utf-8",
+    )
     config = LaunchConfig.from_values(
         {
             "launch": {
@@ -147,7 +170,7 @@ risk_flags = ["concentration"]
                 "max_queue_size": 64,
                 "model": {
                     "provider": "openai",
-                    "model": "pinned-model",
+                    "model": "gpt-5.4-2026-03-05",
                     "credential": "openai-agent",
                 },
                 "capabilities": {
@@ -182,6 +205,7 @@ risk_flags = ["concentration"]
     assert "secret" not in repr(agent).lower()
     assert normalized["agent_profile"]["id"] == "mean-reversion-v1"
     assert len(normalized["agent_profile"]["content_hash"]) == 64
+    assert len(normalized["agent_mcp"]["content_hash"]) == 64
 
     path = tmp_path / "normalized.json"
     path.write_text(__import__("json").dumps(normalized), encoding="utf-8")
@@ -191,6 +215,12 @@ risk_flags = ["concentration"]
     assert runtime.agent.intent_review.initial_mode is AgentMode.SHADOW
     assert runtime.agent.profile_snapshot is not None
     assert runtime.agent.profile_snapshot["goal"] == "Review mean-reversion intents"
+    assert runtime.agent.mcp_snapshot is not None
+    profiles = runtime.agent.mcp_snapshot["profiles"]
+    assert isinstance(profiles, Mapping)
+    review_profile = profiles["intent-review-readonly"]
+    assert isinstance(review_profile, Mapping)
+    assert review_profile["scope_enforced"] is True
 
 
 def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
@@ -242,6 +272,37 @@ def test_launch_rejects_agent_secrets_and_remote_backtest_runtime(
     assert any("must be fixture" in issue for issue in backtest.report().issues)
 
 
+def test_agent_model_rejects_floating_alias() -> None:
+    with pytest.raises(ValueError, match="dated OpenAI snapshot"):
+        AgentModelConfig.from_mapping(
+            {
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "credential": "agent-key",
+            }
+        )
+
+
+def test_agent_config_rejects_unpublishable_required_context_key() -> None:
+    with pytest.raises(ValueError, match="unsupported characters"):
+        AgentLaunchConfig.from_mapping(
+            {
+                "enabled": True,
+                "runtime": "fixture",
+                "profile": "profile-v1",
+                "fixture_path": "fixtures/agent.jsonl",
+                "capabilities": {
+                    "intent_review": {
+                        "operations": ["target_position"],
+                        "required_contexts": ["signal/current"],
+                        "revisions": {},
+                    }
+                },
+            },
+            launch_mode="backtest",
+        )
+
+
 def test_decision_store_persists_before_run_deduplicates_and_recovers(
     tmp_path: Path,
 ) -> None:
@@ -251,6 +312,7 @@ def test_decision_store_persists_before_run_deduplicates_and_recovers(
         decision_id="decision-1",
         request_id="request-1",
         intent_id="intent-1",
+        workspace_id="workspace",
         strategy_id="strategy",
         launch_id="launch",
         instance_id="instance",
@@ -294,17 +356,19 @@ def test_decision_store_persists_before_run_deduplicates_and_recovers(
     assert store.recent(limit=1) == (finished,)
     row = store._connection.execute(
         """
-        SELECT runtime, tool_profiles_json, tool_evidence_json,
-               effective_request_hash
+        SELECT workspace_id, runtime, tool_profiles_json, tool_evidence_json,
+               effective_request_hash, latency_millis
         FROM decision_records WHERE decision_id = ?
         """,
         (candidate.decision_id,),
     ).fetchone()
     assert row is not None
+    assert row["workspace_id"] == "workspace"
     assert row["runtime"] == "unknown"
     assert row["tool_profiles_json"] == "[]"
     assert "market.get_latest_quote" in row["tool_evidence_json"]
     assert len(row["effective_request_hash"]) == 64
+    assert row["latency_millis"] is not None
     store.close()
 
     reopened = DecisionRecordStore(tmp_path / "decisions.sqlite3")
@@ -322,6 +386,7 @@ def test_decision_store_interrupts_only_nonterminal_records(tmp_path: Path) -> N
                 decision_id=f"decision-{index}",
                 request_id=f"request-{index}",
                 intent_id=f"intent-{index}",
+                workspace_id="workspace",
                 strategy_id="strategy",
                 launch_id="launch",
                 instance_id="instance",

@@ -194,24 +194,13 @@ fn optional_external(
 }
 
 fn external_decimal(value: &str) -> Result<ExternalDecimal, IntegrationError> {
-    let value = decimal(value)?;
-    Ok(ExternalDecimal::new(value.mantissa, value.scale))
+    decimal(value)
 }
 
 fn decimal(value: &str) -> Result<DecimalValue, IntegrationError> {
-    let negative = value.starts_with('-');
-    let value = value.trim_start_matches('-');
-    let mut parts = value.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("").trim_end_matches('0');
-    let scale = u8::try_from(fraction.len()).map_err(payload)?;
-    let digits = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(payload)?;
-    Ok(DecimalValue::new(
-        if negative { -digits } else { digits },
-        scale,
-    ))
+    DecimalValue::parse(value)
+        .and_then(DecimalValue::normalized)
+        .map_err(payload)
 }
 
 fn subtract(left: ExternalDecimal, right: ExternalDecimal) -> ExternalDecimal {

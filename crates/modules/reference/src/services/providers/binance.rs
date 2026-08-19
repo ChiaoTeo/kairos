@@ -15,7 +15,7 @@ pub struct BinanceOptionsSource {
     connection: ConnectionRef,
 }
 
-enum BinanceDerivativesConnection {
+enum BinanceDerivativesFamily {
     UsdM(ConnectionRef),
     CoinM(ConnectionRef),
 }
@@ -23,7 +23,7 @@ enum BinanceDerivativesConnection {
 pub struct BinanceDerivativesSource {
     id: &'static str,
     product: BinanceProduct,
-    connection: BinanceDerivativesConnection,
+    connection: BinanceDerivativesFamily,
 }
 
 pub struct BinanceEquitySource {
@@ -58,7 +58,7 @@ impl BinanceDerivativesSource {
         Self {
             id: "binance-usdm-futures",
             product: BinanceProduct::UsdMFutures,
-            connection: BinanceDerivativesConnection::UsdM(ConnectionRef::managed(key)),
+            connection: BinanceDerivativesFamily::UsdM(ConnectionRef::managed(key)),
         }
     }
 
@@ -66,7 +66,7 @@ impl BinanceDerivativesSource {
         Self {
             id: "binance-coinm-futures",
             product: BinanceProduct::CoinMFutures,
-            connection: BinanceDerivativesConnection::CoinM(ConnectionRef::managed(key)),
+            connection: BinanceDerivativesFamily::CoinM(ConnectionRef::managed(key)),
         }
     }
 }
@@ -75,12 +75,6 @@ impl BinanceDerivativesSource {
 impl ReferenceSource for BinanceSpotSource {
     fn source_id(&self) -> &str {
         "binance-spot"
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
     }
 
     async fn fetch_catalog_with_connections(
@@ -108,12 +102,6 @@ impl ReferenceSource for BinanceOptionsSource {
         "binance-options"
     }
 
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
-    }
-
     async fn fetch_catalog_with_connections(
         &mut self,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
@@ -139,18 +127,12 @@ impl ReferenceSource for BinanceDerivativesSource {
         self.id
     }
 
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
-    }
-
     async fn fetch_catalog_with_connections(
         &mut self,
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            BinanceDerivativesConnection::UsdM(ConnectionRef(key)) => {
+            BinanceDerivativesFamily::UsdM(ConnectionRef(key)) => {
                 connections
                     .binance_usdm_rest
                     .get(key)
@@ -158,7 +140,7 @@ impl ReferenceSource for BinanceDerivativesSource {
                     .fetch_instruments()
                     .await
             }
-            BinanceDerivativesConnection::CoinM(ConnectionRef(key)) => {
+            BinanceDerivativesFamily::CoinM(ConnectionRef(key)) => {
                 connections
                     .binance_coinm_rest
                     .get(key)
@@ -176,12 +158,6 @@ impl ReferenceSource for BinanceDerivativesSource {
 impl ReferenceSource for BinanceEquitySource {
     fn source_id(&self) -> &str {
         "binance-equity"
-    }
-
-    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.fetch_catalog_with_connections(&mut system.connections())
-            .await
     }
 
     async fn fetch_catalog_with_connections(

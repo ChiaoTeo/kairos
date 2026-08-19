@@ -24,13 +24,7 @@ class SystemObserveReader:
         market_snapshot: Mapping[str, Any] | None = None
         market = components.get("market", {})
         if market.get("status") in {"ok", "ready", "running", "degraded"}:
-            try:
-                socket = self.processes.workspace.paths.process_socket("market")
-                market_snapshot = self.processes.client(
-                    "market", socket, timeout=self.processes.control_timeout
-                ).snapshot()
-            except Exception as error:
-                market_snapshot = {"error": str(error)}
+            market_snapshot = dict(market)
         return ObserveSnapshot(
             workspace_id=self.workspace_id,
             components=components,

@@ -14,7 +14,9 @@ pub use event::*;
 pub use query::*;
 pub(crate) use result::remote_status;
 pub use result::*;
-pub use risk::{RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult};
+pub use risk::{
+    ExecutionFundingRequirement, RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
+};
 pub use snapshot::*;
 
 use kairos_primitives::{

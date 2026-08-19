@@ -21,10 +21,14 @@ class ExecutionControlClient:
     def submit_intent(self, request: Mapping[str, object]) -> Mapping[str, Any]:
         return self.request("POST", "/v1/intents", request)
 
-    def cancel_order(self, order_id: str, request: Mapping[str, object] | None = None) -> Mapping[str, Any]:
+    def cancel_order(
+        self, order_id: str, request: Mapping[str, object] | None = None
+    ) -> Mapping[str, Any]:
         return self.request("DELETE", f"/v1/orders/{quote(order_id, safe='')}", request)
 
-    def replace_order(self, order_id: str, request: Mapping[str, object]) -> Mapping[str, Any]:
+    def replace_order(
+        self, order_id: str, request: Mapping[str, object]
+    ) -> Mapping[str, Any]:
         return self.request("PATCH", f"/v1/orders/{quote(order_id, safe='')}", request)
 
     def reconcile(self, request: Mapping[str, object]) -> Mapping[str, Any]:
@@ -38,7 +42,9 @@ class ExecutionControlClient:
     ) -> Mapping[str, Any]:
         status, value = self._client.request(method, path, body)
         if status >= 400:
-            raise RuntimeError(str(value.get("error", f"Execution request failed: HTTP {status}")))
+            raise RuntimeError(
+                str(value.get("error", f"Execution request failed: HTTP {status}"))
+            )
         return value
 
 

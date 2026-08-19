@@ -11,13 +11,13 @@ class PrintBinanceBtcOptions(Strategy):
     def on_start(self, context: StrategyContext) -> None:
         markets = context.reference.find_markets(
             exchange="binance",
-            market_type="options",
+            instrument_kind="option",
         )
         markets = tuple(
             market
             for market in markets
             if (market.base_asset or "").upper() == "BTC"
-            or market.symbol.upper().startswith("BTC")
+            or (market.venue_symbol or "").upper().startswith("BTC")
         )
         if not markets:
             raise RuntimeError("no active Binance BTC option markets found")

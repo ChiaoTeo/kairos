@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 flatbuffers.workspace = true
 futures-core.workspace = true
+kairos-primitives.workspace = true
 kairos-protocol.workspace = true
 kairos-transport.workspace = true
 kairos-workspace.workspace = true

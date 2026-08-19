@@ -105,8 +105,19 @@ class RiskReservationSagaState(object):
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
+    # RiskReservationSagaState
+    def FundingRequirement(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            x = self._tab.Indirect(o + self._tab.Pos)
+            from kairos.execution.v2.ExecutionFundingRequirement import ExecutionFundingRequirement
+            obj = ExecutionFundingRequirement()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
 def RiskReservationSagaStateStart(builder):
-    builder.StartObject(11)
+    builder.StartObject(12)
 
 def Start(builder):
     RiskReservationSagaStateStart(builder)
@@ -176,6 +187,12 @@ def RiskReservationSagaStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     RiskReservationSagaStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)
+
+def RiskReservationSagaStateAddFundingRequirement(builder, fundingRequirement):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(fundingRequirement), 0)
+
+def AddFundingRequirement(builder, fundingRequirement):
+    RiskReservationSagaStateAddFundingRequirement(builder, fundingRequirement)
 
 def RiskReservationSagaStateEnd(builder):
     return builder.EndObject()

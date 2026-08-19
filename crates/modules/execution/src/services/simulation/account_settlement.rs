@@ -104,11 +104,14 @@ impl SimulatedAccountSettlement {
                         })?
                         .to_string(),
                 ),
-                settlement_delta: Some(DecimalValue {
-                    mantissa: i64::try_from(settlement_delta.mantissa())
-                        .map_err(|_| "settlement delta exceeds Decimal64 range")?,
-                    scale: settlement_delta.scale() as u8,
-                }),
+                settlement_delta: Some(
+                    DecimalValue::new(
+                        i64::try_from(settlement_delta.mantissa())
+                            .map_err(|_| "settlement delta exceeds Decimal64 range")?,
+                        settlement_delta.scale() as u8,
+                    )
+                    .map_err(|error| error.to_string())?,
+                ),
                 fee_asset: fill.fee_currency.as_ref().map(ToString::to_string),
                 fee_amount: (fill.fee.mantissa() != 0)
                     .then_some(decimal_value(fill.fee.mantissa(), fill.fee.scale())),
@@ -119,5 +122,5 @@ impl SimulatedAccountSettlement {
 }
 
 fn decimal_value(mantissa: i64, scale: u8) -> DecimalValue {
-    DecimalValue { mantissa, scale }
+    DecimalValue::new(mantissa, scale).expect("semantic decimal satisfies contract bounds")
 }

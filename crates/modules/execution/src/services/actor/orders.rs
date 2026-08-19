@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::FundingRequirementEvidence;
 
 impl ExecutionActor {
     pub(crate) fn unknown_remote_orders(&self) -> impl Iterator<Item = &UnknownRemoteOrder> {
@@ -92,6 +93,18 @@ impl ExecutionActor {
     ) {
         if let Some(reservation) = self.risk_reservations.get_mut(order_id) {
             reservation.status = status;
+            reservation.updated_at_unix_nanos = now.into();
+        }
+    }
+
+    pub(crate) fn set_funding_requirement(
+        &mut self,
+        order_id: &str,
+        requirement: FundingRequirementEvidence,
+        now: u64,
+    ) {
+        if let Some(reservation) = self.risk_reservations.get_mut(order_id) {
+            reservation.funding_requirement = Some(requirement);
             reservation.updated_at_unix_nanos = now.into();
         }
     }

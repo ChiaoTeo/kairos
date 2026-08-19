@@ -13,6 +13,7 @@ _LIFECYCLE = (
     "on_account",
     "on_risk",
     "on_execution",
+    "on_agent",
     "on_clock",
     "on_system",
     "on_end",

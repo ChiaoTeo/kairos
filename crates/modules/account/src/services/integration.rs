@@ -9,18 +9,19 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use kairos_conflux::{
-    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, ExternalAccountEvent,
-    ExternalAccountIdentity, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
-    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalOpenOrder,
-    ExternalOrderStatus, ExternalPosition, ExternalPositionMode, IbkrAccountQueryConfig,
-    IbkrAccountStreamConfig, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
-    ParticipantInstrumentRef,
+    BinanceRestConfig, BinanceUserWebSocketConfig, ConnectionKey, EarnPosition, EarnPositionState,
+    EarnProductFamily, ExternalAccountEvent, ExternalAccountIdentity, ExternalAccountModel,
+    ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
+    ExternalDecimal, ExternalMarginMode, ExternalOpenOrder, ExternalOrderStatus, ExternalPosition,
+    ExternalPositionMode, IbkrAccountQueryConfig, IbkrAccountStreamConfig, OkxPrivateRestConfig,
+    OkxPrivateWebSocketConfig, ParticipantInstrumentRef,
 };
 
 use crate::domain::{
     AccountEvent, AccountModel, AccountObservedFill, AccountOrderObservation, AccountSegment,
-    AccountSnapshot, AccountStatus, AssetId, Balance, FillId, InstrumentId, MarginMode, Money,
-    OpenOrder, Position, PositionMode, SegmentKey, SignedQuantity,
+    AccountSnapshot, AccountStatus, AssetId, Balance, EarnAccruedReward, EarnHolding,
+    EarnHoldingLiquidity, EarnHoldingState, EarnHoldingsSnapshot, FillId, InstrumentId, MarginMode,
+    Money, OpenOrder, Position, PositionMode, SegmentKey, SignedQuantity,
 };
 
 #[derive(Clone, Default)]
@@ -336,7 +337,11 @@ impl AccountAsyncSnapshotConnection {
         match self {
             Self::BinanceSpot(parameters) => connections.binance_spot_rest.create(key, parameters),
             Self::BinanceFunding(parameters) => {
-                connections.binance_funding_rest.create(key, parameters)
+                connections
+                    .binance_funding_rest
+                    .create(key.clone(), parameters.clone())
+                    .map_err(|error| error.to_string())?;
+                connections.binance_earn_rest.create(key, parameters)
             }
             Self::BinanceMargin(parameters) => {
                 connections.binance_margin_rest.create(key, parameters)
@@ -532,6 +537,58 @@ pub(crate) fn map_snapshot(
     })
 }
 
+pub(crate) fn map_earn_positions(
+    segment_key: SegmentKey,
+    positions: Vec<EarnPosition>,
+    observed_at_unix_nanos: kairos_primitives::UnixNanos,
+    complete: bool,
+) -> EarnHoldingsSnapshot {
+    EarnHoldingsSnapshot {
+        segment_key,
+        holdings: positions
+            .into_iter()
+            .map(|value| EarnHolding {
+                participant_position_id: value.participant_position_id,
+                product_id: value.product_id,
+                asset: value.asset,
+                principal: value.principal,
+                redeemable: value.redeemable_amount,
+                accrued_rewards: value
+                    .accrued_rewards
+                    .into_iter()
+                    .map(|reward| EarnAccruedReward {
+                        asset: reward.asset,
+                        amount: reward.amount,
+                    })
+                    .collect(),
+                liquidity: match value.family {
+                    EarnProductFamily::Flexible => EarnHoldingLiquidity::Immediate,
+                    EarnProductFamily::Locked => value.matures_at_unix_nanos.map_or(
+                        EarnHoldingLiquidity::Unknown,
+                        |matures_at_unix_nanos| EarnHoldingLiquidity::FixedTerm {
+                            matures_at_unix_nanos,
+                        },
+                    ),
+                    EarnProductFamily::Staking
+                    | EarnProductFamily::YieldBearingAsset
+                    | EarnProductFamily::Other(_) => EarnHoldingLiquidity::Unknown,
+                },
+                state: match value.state {
+                    EarnPositionState::Active => EarnHoldingState::Active,
+                    EarnPositionState::Redeeming => EarnHoldingState::Redeeming,
+                    EarnPositionState::Redeemed => EarnHoldingState::Redeemed,
+                    EarnPositionState::Unknown(value) => EarnHoldingState::Unknown(value),
+                },
+                observed_at_unix_nanos: value
+                    .observed_at_unix_nanos
+                    .unwrap_or(observed_at_unix_nanos),
+            })
+            .collect(),
+        observed_at_unix_nanos,
+        complete,
+    }
+}
+
 fn map_open_order(
     value: ExternalOpenOrder,
     resolver: &AccountInstrumentResolver,
@@ -654,7 +711,7 @@ pub(crate) fn map_event(
 
 #[cfg(test)]
 mod identity_tests {
-    use super::AccountInstrumentResolver;
+    use super::{map_earn_positions, AccountInstrumentResolver};
     use kairos_conflux::{
         ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     };
@@ -736,5 +793,34 @@ mod identity_tests {
         .unwrap();
 
         assert!(resolver.resolve(&provider).is_err());
+    }
+
+    #[test]
+    fn maps_earn_positions_into_a_separate_account_fact_set() {
+        let observed_at = kairos_primitives::UnixNanos::new(100);
+        let snapshot = map_earn_positions(
+            kairos_primitives::SegmentKey::new("funding").unwrap(),
+            vec![kairos_conflux::EarnPosition {
+                participant_position_id: Some("position-1".into()),
+                product_id: "USDT001".into(),
+                asset: kairos_primitives::Currency::new("USDT").unwrap(),
+                family: kairos_conflux::EarnProductFamily::Flexible,
+                principal: kairos_primitives::Quantity::new(100, 0).unwrap(),
+                accrued_rewards: Vec::new(),
+                redeemable_amount: Some(kairos_primitives::Quantity::new(80, 0).unwrap()),
+                subscribed_at_unix_nanos: None,
+                matures_at_unix_nanos: None,
+                state: kairos_conflux::EarnPositionState::Redeeming,
+                observed_at_unix_nanos: Some(observed_at),
+            }],
+            observed_at,
+            true,
+        );
+        assert_eq!(snapshot.holdings.len(), 1);
+        assert_eq!(snapshot.holdings[0].product_id, "USDT001");
+        assert_eq!(
+            snapshot.holdings[0].state,
+            crate::domain::EarnHoldingState::Redeeming
+        );
     }
 }

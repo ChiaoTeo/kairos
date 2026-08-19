@@ -1,0 +1,32 @@
+[package]
+name = "kairos-capital"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Strategy-scoped capital objective and placement state owner"
+autobins = false
+
+[lib]
+name = "kairos_capital"
+path = "src/lib.rs"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+kairos-capital-contract.workspace = true
+kairos-integration.workspace = true
+kairos-primitives.workspace = true
+kairos-workspace = { workspace = true, features = ["otel"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[[bin]]
+name = "kairos-capital-server"
+path = "src/bin/kairos-capital-server.rs"

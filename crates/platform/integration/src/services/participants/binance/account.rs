@@ -425,19 +425,9 @@ fn snapshot(
 }
 
 fn parse(value: &str) -> Result<ExternalDecimal, IntegrationError> {
-    let negative = value.starts_with('-');
-    let value = value.trim_start_matches('-');
-    let mut parts = value.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("").trim_end_matches('0');
-    let scale = u8::try_from(fraction.len()).map_err(payload)?;
-    let mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(payload)?;
-    Ok(ExternalDecimal::new(
-        if negative { -mantissa } else { mantissa },
-        scale,
-    ))
+    ExternalDecimal::parse(value)
+        .and_then(ExternalDecimal::normalized)
+        .map_err(payload)
 }
 
 fn add(left: ExternalDecimal, right: ExternalDecimal) -> ExternalDecimal {

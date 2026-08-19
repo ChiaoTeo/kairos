@@ -341,10 +341,11 @@ mod tests {
                             strategy_id: "strategy-1".into(),
                             instrument_id: "instrument-1".into(),
                             exchange_id: "exchange-1".into(),
-                            metric: kairos_risk_contract::Metric::Notional,
-                            amount: Amount {
-                                mantissa: 10,
-                                scale: 0,
+                            proposal: kairos_risk_contract::TradeRiskProposal {
+                                notional: Amount::new(10, 0).unwrap(),
+                                initial_margin_rate_bps: 10_000,
+                                reduce_only: false,
+                                margin_rule_id: "test:fully-funded".into(),
                             },
                             at_unix_nanos: 1,
                             reservation_ttl_nanos: 10,

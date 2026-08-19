@@ -15,9 +15,11 @@ from kairospy.strategy import (
 from kairospy.strategy.clock import StrategyClock
 from kairospy.application.account import AccountApplication
 from kairospy.application.agent import AgentApplication
+from kairospy.application.capital import CapitalApplication
 from kairospy.application.execution import ExecutionApplication
 from kairospy.application.market import MarketApplication
 from kairospy.application.notification import NotificationApplication
+from kairospy.application.portfolio import PortfolioApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
 
@@ -35,6 +37,8 @@ class StrategyContext(StrategyContextContract):
         reference: ReferenceApplication,
         market: MarketApplication,
         account: AccountApplication,
+        portfolio: PortfolioApplication,
+        capital: CapitalApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
         agent: AgentApplication | None = None,
@@ -68,6 +72,8 @@ class StrategyContext(StrategyContextContract):
         self.reference = reference
         self.market = market
         self.account = account
+        self.portfolio = portfolio
+        self.capital = capital
         self.risk = risk
         self.execution = execution
         self.agent = agent or AgentApplication.disabled()

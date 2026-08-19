@@ -20,12 +20,12 @@ pub(crate) use model::remote_status;
 pub use model::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent,
     ExecutionBusinessChange, ExecutionBusinessEvent, ExecutionCurrentView, ExecutionError,
-    ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionRouteCandidate,
-    ExecutionRouteQuery, ExecutionSnapshot, ExpireIntent, HedgeRequirement, IntentEvent,
-    IntentAdmissionEvidence, IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
-    RemoteOrderQuery, ReplaceOrder, RiskAuthorizationContext, RiskCommandFailure,
-    RiskCommandResult, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
-    UnknownRemoteOrderResolution,
+    ExecutionEvent, ExecutionFillReport, ExecutionFundingRequirement, ExecutionOrderOptions,
+    ExecutionRouteCandidate, ExecutionRouteQuery, ExecutionSnapshot, ExpireIntent,
+    HedgeRequirement, IntentAdmissionEvidence, IntentEvent, IntentLegRequest, IntentState,
+    IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder, RemoteOrderQuery,
+    ReplaceOrder, RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult,
+    SnapshotWatermark, SubmitOrder, UnknownRemoteOrder, UnknownRemoteOrderResolution,
 };
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteOrderUpdate {

@@ -81,6 +81,47 @@ enabled = false
     assert plan.execution["enabled"] is False
 
 
+def test_capital_is_optional_but_enabled_instance_requires_stable_identity(
+    tmp_path: Path,
+) -> None:
+    disabled = _write_config(tmp_path / "capital-disabled.toml")
+    assert LaunchConfigurationApplication().validate(disabled)["valid"] is True
+
+    enabled = tmp_path / "capital-enabled.toml"
+    enabled.write_text(
+        """[launch]
+id = "capital-enabled"
+mode = "paper"
+strategy = "builtin:interactive"
+
+[account]
+ref = "paper-account"
+
+[capital]
+enabled = true
+capital_group_id = "strategy-capital"
+strategy_id = "strategy-a"
+
+[paper]
+""",
+        encoding="utf-8",
+    )
+    plan = LaunchConfigurationApplication().load(enabled).plan()
+    assert plan.capital == {
+        "enabled": True,
+        "capital_group_id": "strategy-capital",
+        "strategy_id": "strategy-a",
+    }
+
+    missing_identity = enabled.read_text(encoding="utf-8").replace(
+        'capital_group_id = "strategy-capital"\n', ""
+    )
+    enabled.write_text(missing_identity, encoding="utf-8")
+    report = LaunchConfigurationApplication().validate(enabled)
+    assert report["valid"] is False
+    assert "capital.capital_group_id" in " ".join(report["issues"])
+
+
 def test_launch_config_preserves_required_segments_per_account(tmp_path: Path) -> None:
     config = tmp_path / "required-segments.toml"
     config.write_text(
@@ -101,9 +142,7 @@ enabled = false
 
     plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
 
-    assert plan.required_account_segments == {
-        "main": ("spot", "usd_m_futures")
-    }
+    assert plan.required_account_segments == {"main": ("spot", "usd_m_futures")}
     assert plan.normalized()["account_requirements"] == {
         "main": {"required_segments": ["spot", "usd_m_futures"]}
     }
@@ -560,7 +599,9 @@ credential_id = "okx-main"
     assert any("not an enabled launch account" in issue for issue in report["issues"])
 
     config.write_text(
-        foreign_account.replace('account_id = "outside"', 'account_id = "paper-account"', 1),
+        foreign_account.replace(
+            'account_id = "outside"', 'account_id = "paper-account"', 1
+        ),
         encoding="utf-8",
     )
 
@@ -640,7 +681,7 @@ def test_live_market_scope_defaults_shared_and_can_be_instance_local(
     config.write_text(
         '[launch]\nid = "live"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
         '[account]\nref = "live-account"\n\n'
-        '[execution]\nenabled = false\n\n'
+        "[execution]\nenabled = false\n\n"
         '[risk]\nprofile = "live-default"\n\n'
         '[live.market]\nscope = "instance"\n\n'
         "[live.safety]\ntrading_enabled = false\n",
@@ -665,8 +706,8 @@ def test_live_launch_requires_non_simulation_risk_profile(tmp_path: Path) -> Non
     config = tmp_path / "live-risk.toml"
     config.write_text(
         '[launch]\nid = "live-risk"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
-        '[execution]\nenabled = false\n\n'
-        '[live.safety]\ntrading_enabled = false\n',
+        "[execution]\nenabled = false\n\n"
+        "[live.safety]\ntrading_enabled = false\n",
         encoding="utf-8",
     )
     report = LaunchConfigurationApplication().validate(config)
@@ -681,6 +722,7 @@ def test_live_launch_requires_non_simulation_risk_profile(tmp_path: Path) -> Non
     report = LaunchConfigurationApplication().validate(config)
     assert report["valid"] is False
     assert any("forbidden for live" in issue for issue in report["issues"])
+
 
 def test_replay_market_cannot_use_shared_scope(tmp_path: Path) -> None:
     config = tmp_path / "replay.toml"

@@ -214,6 +214,7 @@ fn encode_segment<'a>(
     let balances = encode_balances(builder, &account.balances);
     let collateral = encode_balances(builder, &account.collateral);
     let positions = encode_positions(builder, &account.positions)?;
+    let earn_holdings = encode_earn_holdings(builder, &account.earn_holdings);
     let valuation = encode_valuation(builder, account)?;
     let last_error = account
         .last_error
@@ -252,6 +253,8 @@ fn encode_segment<'a>(
             balances: Some(balances),
             collateral: Some(collateral),
             positions: Some(positions),
+            earn_holdings: Some(earn_holdings),
+            earn_watermark_unix_nanos: account.earn_watermark_unix_nanos.get(),
             margin_mode: account
                 .margin_mode
                 .map(margin_mode)
@@ -262,6 +265,84 @@ fn encode_segment<'a>(
                 .unwrap_or(account_fb::PositionMode::UNSPECIFIED),
         },
     ))
+}
+
+fn encode_earn_holdings<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    values: &[crate::domain::EarnHolding],
+) -> flatbuffers::WIPOffset<
+    flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<account_fb::EarnHolding<'a>>>,
+> {
+    let offsets = values
+        .iter()
+        .map(|value| encode_earn_holding(builder, value))
+        .collect::<Vec<_>>();
+    builder.create_vector(&offsets)
+}
+
+fn encode_earn_holding<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    value: &crate::domain::EarnHolding,
+) -> flatbuffers::WIPOffset<account_fb::EarnHolding<'a>> {
+    let holding_key_value = value
+        .participant_position_id
+        .as_deref()
+        .unwrap_or(&value.product_id);
+    let holding_key = builder.create_string(holding_key_value);
+    let participant_position_id = value
+        .participant_position_id
+        .as_deref()
+        .map(|value| builder.create_string(value));
+    let product_id = builder.create_string(&value.product_id);
+    let asset = builder.create_string(value.asset.as_str());
+    let principal = Decimal64::new(value.principal.mantissa(), value.principal.scale());
+    let redeemable = value
+        .redeemable
+        .map(|value| Decimal64::new(value.mantissa(), value.scale()));
+    let (state, participant_state) = match &value.state {
+        crate::domain::EarnHoldingState::Active => (account_fb::EarnHoldingState::ACTIVE, None),
+        crate::domain::EarnHoldingState::Redeeming => {
+            (account_fb::EarnHoldingState::REDEEMING, None)
+        }
+        crate::domain::EarnHoldingState::Redeemed => (account_fb::EarnHoldingState::REDEEMED, None),
+        crate::domain::EarnHoldingState::Unknown(raw) => (
+            account_fb::EarnHoldingState::UNKNOWN,
+            Some(builder.create_string(raw)),
+        ),
+    };
+    let (liquidity, notice_seconds, matures_at) = match value.liquidity {
+        crate::domain::EarnHoldingLiquidity::Immediate => {
+            (account_fb::EarnLiquidity::IMMEDIATE, 0, 0)
+        }
+        crate::domain::EarnHoldingLiquidity::Notice { notice_seconds } => {
+            (account_fb::EarnLiquidity::NOTICE, notice_seconds, 0)
+        }
+        crate::domain::EarnHoldingLiquidity::FixedTerm {
+            matures_at_unix_nanos,
+        } => (
+            account_fb::EarnLiquidity::FIXED_TERM,
+            0,
+            matures_at_unix_nanos.get(),
+        ),
+        crate::domain::EarnHoldingLiquidity::Unknown => (account_fb::EarnLiquidity::UNKNOWN, 0, 0),
+    };
+    account_fb::EarnHolding::create(
+        builder,
+        &account_fb::EarnHoldingArgs {
+            holding_key: Some(holding_key),
+            participant_position_id,
+            product_id: Some(product_id),
+            asset: Some(asset),
+            principal: Some(&principal),
+            redeemable: redeemable.as_ref(),
+            state,
+            participant_state,
+            liquidity,
+            notice_seconds,
+            matures_at_unix_nanos: matures_at,
+            observed_at_unix_nanos: value.observed_at_unix_nanos.get(),
+        },
+    )
 }
 
 fn encode_balances<'a>(
@@ -485,6 +566,39 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_position_removed_buffer(&mut builder, root);
+        }
+        AccountBusinessChange::EarnHolding { segment_key, value } => {
+            let segment_key = builder.create_string(segment_key.as_str());
+            let holding = encode_earn_holding(&mut builder, value);
+            let root = account_fb::EarnHoldingUpserted::create(
+                &mut builder,
+                &account_fb::EarnHoldingUpsertedArgs {
+                    metadata: Some(metadata),
+                    account_id: Some(account_id),
+                    segment_key: Some(segment_key),
+                    holding: Some(holding),
+                    provenance,
+                },
+            );
+            account_fb::finish_earn_holding_upserted_buffer(&mut builder, root);
+        }
+        AccountBusinessChange::EarnHoldingRemoved {
+            segment_key,
+            holding_key,
+        } => {
+            let segment_key = builder.create_string(segment_key.as_str());
+            let holding_key = builder.create_string(holding_key);
+            let root = account_fb::EarnHoldingRemoved::create(
+                &mut builder,
+                &account_fb::EarnHoldingRemovedArgs {
+                    metadata: Some(metadata),
+                    account_id: Some(account_id),
+                    segment_key: Some(segment_key),
+                    holding_key: Some(holding_key),
+                    provenance,
+                },
+            );
+            account_fb::finish_earn_holding_removed_buffer(&mut builder, root);
         }
         AccountBusinessChange::ObservedOrder { segment_key, value } => {
             let segment_key = builder.create_string(segment_key.as_str());

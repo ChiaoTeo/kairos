@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-account"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
@@ -2744,10 +2744,11 @@ dependencies = [
 
 [[package]]
 name = "kairos-account-contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",
@@ -2760,14 +2761,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-capital"
+version = "0.2.0"
+dependencies = [
+ "axum",
+ "clap",
+ "kairos-capital-contract",
+ "kairos-integration",
+ "kairos-primitives",
+ "kairos-workspace",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kairos-capital-contract"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kairos-conflux"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "kairos-account-contract",
  "kairos-execution-contract",
  "kairos-integration",
  "kairos-market-contract",
+ "kairos-primitives",
  "kairos-reference-contract",
  "kairos-risk-contract",
  "kairos-transport",
@@ -2779,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-execution"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
@@ -2810,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-execution-contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
@@ -2826,7 +2854,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-integration"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2855,7 +2883,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-market"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
@@ -2882,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-market-contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
@@ -2898,14 +2926,14 @@ dependencies = [
 
 [[package]]
 name = "kairos-network"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "kairos-primitives"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "rust_decimal",
@@ -2915,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "serde_json",
@@ -2923,7 +2951,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-python-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kairos-transport",
  "pyo3",
@@ -2931,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-reference"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2955,7 +2983,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-reference-contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
@@ -2974,7 +3002,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-risk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
@@ -2996,10 +3024,11 @@ dependencies = [
 
 [[package]]
 name = "kairos-risk-contract"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",
@@ -3013,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "crc32fast",
@@ -3030,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "kairos-workspace"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "http-body-util",

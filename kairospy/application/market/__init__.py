@@ -460,7 +460,10 @@ def _validate_events(events: list[dict[str, Any]]) -> None:
             raise ValueError(f"market dataset event {index} is missing scope")
         scope_kind = scope.get("kind")
         if scope_kind == "market":
-            if not isinstance(scope.get("market_id"), str) or not scope["market_id"].strip():
+            if (
+                not isinstance(scope.get("market_id"), str)
+                or not scope["market_id"].strip()
+            ):
                 raise ValueError(
                     f"market dataset event {index} has invalid market scope"
                 )

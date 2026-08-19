@@ -9,6 +9,112 @@ use crate::DomainTypeError;
 /// can be represented without pretending that additional precision exists.
 pub const MAX_DECIMAL_SCALE: u8 = 18;
 
+/// Validated fixed-decimal representation for integration, persistence, and
+/// process-contract adapters. It deliberately carries no business meaning;
+/// domain code should convert it into `Quantity`, `Price`, `Money`, or another
+/// semantic numeric type.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct DecimalParts {
+    mantissa: i64,
+    scale: u8,
+}
+
+impl DecimalParts {
+    pub fn new(mantissa: i64, scale: u8) -> Result<Self, DomainTypeError> {
+        if scale > MAX_DECIMAL_SCALE {
+            return Err(DomainTypeError::Invalid {
+                type_name: "DecimalParts",
+                reason: "decimal scale exceeds 18 digits",
+            });
+        }
+        Ok(Self { mantissa, scale })
+    }
+
+    pub const fn mantissa(self) -> i64 {
+        self.mantissa
+    }
+
+    pub const fn scale(self) -> u8 {
+        self.scale
+    }
+}
+
+impl std::str::FromStr for DecimalParts {
+    type Err = DomainTypeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (negative, unsigned) = value
+            .strip_prefix('-')
+            .map_or((false, value), |value| (true, value));
+        let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        if whole.is_empty()
+            || fraction.len() > usize::from(MAX_DECIMAL_SCALE)
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(DomainTypeError::Invalid {
+                type_name: "DecimalParts",
+                reason: "expected a decimal with at most 18 fractional digits",
+            });
+        }
+        let magnitude =
+            format!("{whole}{fraction}")
+                .parse::<i128>()
+                .map_err(|_| DomainTypeError::Invalid {
+                    type_name: "DecimalParts",
+                    reason: "decimal value is too large",
+                })?;
+        let mantissa = if negative { -magnitude } else { magnitude };
+        Self::new(
+            i64::try_from(mantissa).map_err(|_| DomainTypeError::Invalid {
+                type_name: "DecimalParts",
+                reason: "decimal value is too large",
+            })?,
+            fraction.len() as u8,
+        )
+    }
+}
+
+impl fmt::Display for DecimalParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mantissa = i128::from(self.mantissa);
+        let negative = mantissa < 0;
+        let magnitude = mantissa.abs();
+        if self.scale == 0 {
+            return write!(f, "{}{magnitude}", if negative { "-" } else { "" });
+        }
+        let factor = 10_i128.pow(u32::from(self.scale));
+        write!(
+            f,
+            "{}{whole}.{fraction:0width$}",
+            if negative { "-" } else { "" },
+            whole = magnitude / factor,
+            fraction = magnitude % factor,
+            width = usize::from(self.scale),
+        )
+    }
+}
+
+impl Serialize for DecimalParts {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for DecimalParts {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 fn normalize_decimal_parts(
     mut mantissa: i64,
     mut scale: u8,
@@ -272,45 +378,24 @@ macro_rules! fixed_decimal_impl {
             type Err = DomainTypeError;
 
             fn from_str(value: &str) -> Result<Self, Self::Err> {
-                let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-                if whole.is_empty()
-                    || fraction.len() > 18
-                    || !whole.bytes().all(|byte| byte.is_ascii_digit())
-                    || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-                {
+                if value.starts_with('-') {
                     return Err(DomainTypeError::Invalid {
                         type_name: stringify!($name),
                         reason: "expected a non-negative decimal",
                     });
                 }
-                let scale = u8::try_from(fraction.len()).map_err(|_| DomainTypeError::Invalid {
-                    type_name: stringify!($name),
-                    reason: "decimal scale is too large",
-                })?;
-                let digits = format!("{whole}{fraction}");
-                let mantissa = digits
-                    .parse::<i64>()
-                    .map_err(|_| DomainTypeError::Invalid {
-                        type_name: stringify!($name),
-                        reason: "decimal value is too large",
-                    })?;
-                Self::new(mantissa, scale)
+                let value = value.parse::<DecimalParts>()?;
+                Self::new(value.mantissa(), value.scale())
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                if self.scale == 0 {
-                    return write!(f, "{}", self.mantissa);
-                }
-                let factor = 10_i64.pow(u32::from(self.scale));
-                let whole = self.mantissa / factor;
-                let fraction = format!(
-                    "{:0width$}",
-                    self.mantissa % factor,
-                    width = usize::from(self.scale)
-                );
-                write!(f, "{whole}.{fraction}")
+                fmt::Display::fmt(
+                    &DecimalParts::new(self.mantissa, self.scale)
+                        .expect("domain decimal invariant"),
+                    f,
+                )
             }
         }
     };
@@ -325,56 +410,18 @@ macro_rules! signed_fixed_decimal_impl {
             type Err = DomainTypeError;
 
             fn from_str(value: &str) -> Result<Self, Self::Err> {
-                let (negative, unsigned) = value
-                    .strip_prefix('-')
-                    .map_or((false, value), |value| (true, value));
-                let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-                if whole.is_empty()
-                    || fraction.len() > 18
-                    || !whole.bytes().all(|byte| byte.is_ascii_digit())
-                    || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-                {
-                    return Err(DomainTypeError::Invalid {
-                        type_name: stringify!($name),
-                        reason: "expected a signed decimal",
-                    });
-                }
-                let scale = u8::try_from(fraction.len()).map_err(|_| DomainTypeError::Invalid {
-                    type_name: stringify!($name),
-                    reason: "decimal scale is too large",
-                })?;
-                let digits = format!("{whole}{fraction}");
-                let magnitude = digits
-                    .parse::<i128>()
-                    .map_err(|_| DomainTypeError::Invalid {
-                        type_name: stringify!($name),
-                        reason: "decimal value is too large",
-                    })?;
-                let mantissa = if negative { -magnitude } else { magnitude };
-                let mantissa = i64::try_from(mantissa).map_err(|_| DomainTypeError::Invalid {
-                    type_name: stringify!($name),
-                    reason: "decimal value is too large",
-                })?;
-                Self::new(mantissa, scale)
+                let value = value.parse::<DecimalParts>()?;
+                Self::new(value.mantissa(), value.scale())
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let mantissa = i128::from(self.mantissa());
-                let negative = mantissa < 0;
-                let magnitude = mantissa.abs();
-                if self.scale() == 0 {
-                    return write!(f, "{}{magnitude}", if negative { "-" } else { "" });
-                }
-                let factor = 10_i128.pow(u32::from(self.scale()));
-                let whole = magnitude / factor;
-                let fraction = format!(
-                    "{:0width$}",
-                    magnitude % factor,
-                    width = usize::from(self.scale())
-                );
-                write!(f, "{}{whole}.{fraction}", if negative { "-" } else { "" })
+                fmt::Display::fmt(
+                    &DecimalParts::new(self.mantissa(), self.scale())
+                        .expect("domain decimal invariant"),
+                    f,
+                )
             }
         }
     };
@@ -432,6 +479,26 @@ decimal_value_semantics!(Price);
 decimal_value_semantics!(PriceDelta);
 decimal_value_semantics!(Money);
 decimal_value_semantics!(Rate);
+
+macro_rules! decimal_parts_conversion {
+    ($($name:ident),+ $(,)?) => {$ (
+        impl From<$name> for DecimalParts {
+            fn from(value: $name) -> Self {
+                Self::new(value.mantissa(), value.scale()).expect("domain decimal invariant")
+            }
+        }
+
+        impl TryFrom<DecimalParts> for $name {
+            type Error = DomainTypeError;
+
+            fn try_from(value: DecimalParts) -> Result<Self, Self::Error> {
+                Self::new(value.mantissa(), value.scale())
+            }
+        }
+    )+ };
+}
+
+decimal_parts_conversion!(Quantity, SignedQuantity, Price, PriceDelta, Money, Rate);
 
 fn decimal_value(mantissa: i64, scale: u8) -> Result<RustDecimal, DomainTypeError> {
     RustDecimal::try_new(mantissa, u32::from(scale)).map_err(|_| DomainTypeError::Invalid {

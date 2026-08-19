@@ -122,7 +122,9 @@ def test_feishu_signing_is_rejected_until_the_component_supports_it(
         credential.read_text(encoding="utf-8") + 'signing_secret = "secret"\n',
         encoding="utf-8",
     )
-    with pytest.raises(NotificationConfigError, match="Apprise adapter does not support"):
+    with pytest.raises(
+        NotificationConfigError, match="Apprise adapter does not support"
+    ):
         compose_notifications(
             workspace=workspace,
             instance=workspace.instance("paper", "launch", "signed"),
@@ -163,7 +165,9 @@ def test_backtest_records_without_resolving_credentials(tmp_path: Path) -> None:
     }
 
 
-def test_launch_normalizes_notifications_and_validates_workspace(tmp_path: Path) -> None:
+def test_launch_normalizes_notifications_and_validates_workspace(
+    tmp_path: Path,
+) -> None:
     workspace = _workspace(tmp_path)
     launch = workspace.paths.config / "launches" / "signals.toml"
     launch.write_text(
@@ -257,9 +261,12 @@ def test_static_resource_validation_does_not_require_backtest_secrets(
     workspace = _workspace(tmp_path)
     for credential in workspace.paths.credential_config().parent.glob("*.toml"):
         credential.unlink()
-    assert validate_notification_resources(
-        workspace, _config(), mode="backtest", resolve_secrets=False
-    ) == ()
+    assert (
+        validate_notification_resources(
+            workspace, _config(), mode="backtest", resolve_secrets=False
+        )
+        == ()
+    )
     issues = validate_notification_resources(
         workspace, _config(), mode="paper", resolve_secrets=False
     )
@@ -358,7 +365,9 @@ signals = ["feishu-options", "telegram-personal"]
             await composition.notifications.runtime.close()
         records = [
             json.loads(line)
-            for line in instance.artifact("notifications.jsonl").read_text().splitlines()
+            for line in instance.artifact("notifications.jsonl")
+            .read_text()
+            .splitlines()
         ]
         return records, composition.application.context.execution
 
@@ -369,9 +378,9 @@ signals = ["feishu-options", "telegram-personal"]
         "stopped",
         "stopped",
     ]
-    assert {
-        record["occurred_at"] for record in records
-    } == {"2026-08-18T00:00:00+00:00"}
+    assert {record["occurred_at"] for record in records} == {
+        "2026-08-18T00:00:00+00:00"
+    }
     rejected = execution.target_position(
         InstrumentId("instrument:test:SPY"), Decimal("1"), account="main"
     )

@@ -72,7 +72,9 @@ def test_research_business_use_cases_are_owned_by_application() -> None:
         assert operation in ResearchApplication.__dict__
 
 
-def test_python_does_not_expose_account_fact_mutation_or_legacy_backtest_settlement() -> None:
+def test_python_does_not_expose_account_fact_mutation_or_legacy_backtest_settlement() -> (
+    None
+):
     account_contract = (
         ROOT / "kairospy/infrastructure/contracts/account/runtime.py"
     ).read_text(encoding="utf-8")

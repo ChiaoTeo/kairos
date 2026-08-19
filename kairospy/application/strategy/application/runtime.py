@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import asyncio
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
 from ..domain.lifecycle import StrategyDataHealth, StrategyLifecycle, StrategyReadiness
@@ -14,15 +14,25 @@ from ..services.decision_journal import StrategyDecisionJournal
 from ..services.journal import StrategyLifecycleJournal
 from kairospy.application.account import AccountApplication
 from kairospy.application.agent import AgentApplication
+from kairospy.application.capital import (
+    CapitalApplication,
+    CapitalDemand,
+    FundingLocation,
+    FundingObjectiveStatus,
+    FundingPriority,
+)
 from kairospy.application.execution import (
     ExecutionApplication,
     ExecutionBacktestResult,
     Fill,
     FillEvent,
     IntentUpdateEvent,
+    OrderStatus,
+    OrderUpdateEvent,
 )
 from kairospy.application.market import MarketApplication
 from kairospy.application.notification import NotificationApplication
+from kairospy.application.portfolio import PortfolioApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
 from ..services.context import StrategyContext
@@ -71,7 +81,7 @@ class StrategyApplication:
     """Application facade for one instance-owned user Strategy runtime.
 
     Launch owns this application's process lifecycle. Business state remains
-    owned by Market, Account, Risk, and Execution applications.
+    owned by Market, Account, Portfolio, Risk, and Execution applications.
     """
 
     def __init__(
@@ -85,7 +95,11 @@ class StrategyApplication:
         account: AccountApplication,
         risk: RiskApplication,
         execution: ExecutionApplication,
+        portfolio: PortfolioApplication | None = None,
+        capital: CapitalApplication | None = None,
         agent: AgentApplication | None = None,
+        agent_events=None,
+        agent_synchronize=None,
         notifications: NotificationApplication | None = None,
         decision_journal: StrategyDecisionJournal | None = None,
         decision_notification_routes: tuple[str, ...] = (),
@@ -102,6 +116,8 @@ class StrategyApplication:
         self.launch_id = launch_id
         self.instance_id = instance_id
         self.backtest = backtest
+        self._agent_synchronize = agent_synchronize
+        self._synchronizing_agent = False
         self.journal = journal
         self.logger = logger or StrategyLogger(
             fields={
@@ -116,6 +132,14 @@ class StrategyApplication:
             reference=reference,
             market=market,
             account=account,
+            portfolio=portfolio
+            or PortfolioApplication(f"{launch_id}:{instance_id}", account),
+            capital=capital
+            or CapitalApplication.disabled(
+                strategy_id=strategy.strategy_id,
+                launch_id=launch_id,
+                instance_id=instance_id,
+            ),
             risk=risk,
             execution=execution,
             agent=agent,
@@ -131,6 +155,7 @@ class StrategyApplication:
             account=account,
             risk=risk,
             execution=execution,
+            agent_events=agent_events,
         )
         self.callbacks = StrategyCallbackHost(strategy, self.context, self.logger)
         self._status = StrategyStatus(
@@ -142,7 +167,6 @@ class StrategyApplication:
         self._stop_requested = asyncio.Event()
         self._command_active = False
         self._queued_events: deque[object] = deque(maxlen=256)
-        self.equity_curve: list[dict[str, object]] = []
         self._timers = DeterministicTimerQueue()
         self._timer_sequence = 0
         self._system_sequence = 0
@@ -178,6 +202,12 @@ class StrategyApplication:
     @property
     def status(self) -> StrategyStatus:
         return self._status
+
+    @property
+    def equity_curve(self) -> list[dict[str, object]]:
+        """Compatibility report view now owned by PortfolioApplication."""
+
+        return self.context.portfolio.equity_curve
 
     def decision_trace(self, strategy_decision_id: str) -> dict[str, object] | None:
         """Aggregate Strategy progress with authoritative Execution and delivery facts."""
@@ -401,6 +431,10 @@ class StrategyApplication:
         self._stream_sequences[metadata.stream_id] = max(
             previous_sequence, metadata.sequence
         )
+        # Portfolio is the instance-owned consolidated record. It observes
+        # Account/Market facts before user callbacks see the same event.
+        self.context.portfolio.observe(event)
+        self._observe_execution_funding_demand(event)
         self._trace_sequence += 1
         self.event_trace.append(
             {
@@ -412,6 +446,7 @@ class StrategyApplication:
                 "source_stream_id": metadata.stream_id,
             }
         )
+
         # Source continuity belongs to the Market event contract. Strategy
         # records received source metadata but never reads a snapshot to join
         # or repair the stream.
@@ -446,6 +481,8 @@ class StrategyApplication:
             self._release_subscriptions_best_effort()
             self._transition(StrategyLifecycle.FAILED, str(error))
             raise
+        if self.backtest is not None:
+            self._synchronize_agent_events()
         if isinstance(event, (QuoteEvent, TradeEvent)):
             self._apply_backtest_callbacks(event)
         first_event = not self._status.first_event_received and domain == "market"
@@ -476,6 +513,101 @@ class StrategyApplication:
                 event_sequence=metadata.sequence,
             )
 
+    def _observe_execution_funding_demand(self, event: object) -> None:
+        if (
+            not self.context.capital.enabled
+            or not isinstance(event, OrderUpdateEvent)
+            or event.data.status is not OrderStatus.REJECTED
+        ):
+            return
+        reservation = next(
+            (
+                value
+                for value in self.context.execution.risk_reservations()
+                if value.order_id == event.data.id
+            ),
+            None,
+        )
+        if reservation is None or reservation.funding_requirement is None:
+            return
+        requirement = reservation.funding_requirement
+        lease_fence = self.context.capital.account_lease_fence(event.data.account_id)
+        if lease_fence is None:
+            self._log(
+                "capital demand omitted because account lease fence is unavailable",
+                event="capital_demand_omitted",
+                order_id=str(event.data.id),
+            )
+            return
+        observed_at = datetime.fromtimestamp(
+            event.metadata.occurred_at_unix_nanos / 1_000_000_000,
+            tz=timezone.utc,
+        )
+        demand_id = f"risk:{requirement.risk_decision_id}:{event.data.id}"
+        try:
+            receipt = self.context.capital.observe_demand(
+                CapitalDemand(
+                    demand_id=demand_id,
+                    idempotency_key=demand_id,
+                    destination=FundingLocation(
+                        event.data.account_id,
+                        requirement.segment,
+                        requirement.collateral_asset,
+                        requirement.broker,
+                    ),
+                    observed_shortfall=requirement.shortfall,
+                    observed_at=observed_at,
+                    required_by=observed_at,
+                    expires_at=observed_at + timedelta(seconds=60),
+                    account_watermark=requirement.account_snapshot_watermark,
+                    risk_watermark=max(
+                        reservation.risk_generation,
+                        reservation.risk_event_sequence,
+                    ),
+                    destination_lease_fence=lease_fence,
+                    priority=FundingPriority.HIGH,
+                    causal_references=(
+                        f"execution-order:{event.data.id}",
+                        f"risk-decision:{requirement.risk_decision_id}",
+                    ),
+                )
+            )
+        except Exception as error:
+            self._log(
+                "capital demand observation failed",
+                event="capital_demand_failed",
+                order_id=str(event.data.id),
+                error=str(error),
+            )
+            return
+        if receipt.status not in {
+            FundingObjectiveStatus.ACCEPTED,
+            FundingObjectiveStatus.DUPLICATE,
+        }:
+            self._log(
+                "capital demand was not accepted",
+                event="capital_demand_not_accepted",
+                demand_id=demand_id,
+                status=receipt.status.value,
+                reason=receipt.message,
+            )
+
+    def _synchronize_agent_events(self) -> None:
+        synchronize = self._agent_synchronize
+        if synchronize is None or self._synchronizing_agent:
+            return
+        self._synchronizing_agent = True
+        try:
+            for _ in range(256):
+                events = tuple(synchronize())
+                if not events:
+                    return
+                for event in events:
+                    self._dispatch_event(event)
+            raise RuntimeError("Backtest Agent event cascade exceeded 256 batches")
+        finally:
+            self._synchronizing_agent = False
+
     def _apply_backtest_callbacks(self, event: MarketEvent) -> None:
         if self.backtest is not None:
             result = self.backtest.apply_market(event)
@@ -493,13 +625,11 @@ class StrategyApplication:
         try:
             snapshot = self.backtest.mark_account(event)
             if snapshot is not None:
-                self.equity_curve.append(
-                    {
-                        "observed_at_unix_nanos": getattr(
-                            event.data, "occurred_at_unix_nanos", 0
-                        ),
-                        "snapshot": snapshot,
-                    }
+                self.context.portfolio.record_account_mark(
+                    snapshot,
+                    observed_at_unix_nanos=getattr(
+                        event.data, "occurred_at_unix_nanos", 0
+                    ),
                 )
         except RuntimeError as error:
             # A pre-position quote is valid replay input. Account starts
@@ -631,6 +761,11 @@ class StrategyApplication:
         callback_error: Exception | None = None
         try:
             self.callbacks.lifecycle("on_end")
+            if self.backtest is not None:
+                # on_end may submit a fixture-governed Intent. Reach the same
+                # deterministic worker barrier used after ordinary callbacks
+                # before the backtest report is written.
+                self._synchronize_agent_events()
         except Exception as error:
             callback_error = error
         cleanup_error: Exception | None = None
@@ -749,6 +884,9 @@ class StrategyApplication:
         # Readiness belongs to each concrete business Application. Strategy
         # neither opens Aeron itself nor consults a mmap header/cursor.
         self.context.account._check_event_source_ready()
+        self.context.portfolio.rebuild()
+        if self.context.account.account_ids:
+            self.context.portfolio.require_current()
         self.context.risk.check_event_source_ready()
         self.context.execution.check_event_source_ready()
         statuses = self.context.market.subscription_statuses()

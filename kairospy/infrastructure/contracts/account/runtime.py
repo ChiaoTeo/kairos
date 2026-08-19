@@ -12,6 +12,9 @@ from kairospy.application.account import (
     AccountSnapshot,
     Balance,
     DataFreshness,
+    EarnHolding,
+    EarnHoldingState,
+    EarnLiquidity,
     Position,
     PositionSide,
     SegmentCompleteness,
@@ -101,7 +104,9 @@ class AccountCurrentViewReader:
         if _text(metadata.ViewKey()) != self._key.canonical_key():
             raise ValueError("Account current view key identity mismatch")
         if _text(root.AccountId()) != str(account_id):
-            raise ValueError(f"account {account_id!s} is not present in Account projection")
+            raise ValueError(
+                f"account {account_id!s} is not present in Account projection"
+            )
         generation = snapshot.generation
         if int(metadata.Generation()) != generation:
             raise ValueError("Account mmap frame and metadata generation disagree")
@@ -112,7 +117,10 @@ class AccountCurrentViewReader:
             raise ValueError("Account mmap current view is missing applied revision")
         return AccountSnapshot(
             account_id=account_id,
-            segments=tuple(_segment_snapshot(root.Segments(index), account_id, generation) for index in range(root.SegmentsLength())),
+            segments=tuple(
+                _segment_snapshot(root.Segments(index), account_id, generation)
+                for index in range(root.SegmentsLength())
+            ),
             generation=generation,
             event_sequence=int(event_sequence),
         )
@@ -146,6 +154,33 @@ def _segment_snapshot(
         )
         for value in _table_items(account, "Positions")
     )
+    earn_holdings = tuple(
+        EarnHolding(
+            account_id=account_id,
+            segment_key=segment_key,
+            holding_key=_text(value.HoldingKey()) or "",
+            participant_position_id=_text(value.ParticipantPositionId()),
+            product_id=_text(value.ProductId()) or "",
+            asset=_text(value.Asset()) or "",
+            principal=_decimal64(value.Principal()) or Decimal("0"),
+            redeemable=_decimal64(value.Redeemable()),
+            state={
+                1: EarnHoldingState.ACTIVE,
+                2: EarnHoldingState.REDEEMING,
+                3: EarnHoldingState.REDEEMED,
+            }.get(int(value.State()), EarnHoldingState.UNKNOWN),
+            participant_state=_text(value.ParticipantState()),
+            liquidity={
+                1: EarnLiquidity.IMMEDIATE,
+                2: EarnLiquidity.NOTICE,
+                3: EarnLiquidity.FIXED_TERM,
+            }.get(int(value.Liquidity()), EarnLiquidity.UNKNOWN),
+            notice_seconds=_optional_watermark(value.NoticeSeconds()),
+            matures_at_unix_nanos=_optional_watermark(value.MaturesAtUnixNanos()),
+            observed_at_unix_nanos=_optional_watermark(value.ObservedAtUnixNanos()),
+        )
+        for value in _table_items(account, "EarnHoldings")
+    )
     raw_status = account.Status()
     status = _account_status(int(raw_status))
     freshness = {
@@ -165,6 +200,8 @@ def _segment_snapshot(
         ),
         balances=balances,
         positions=positions,
+        earn_holdings=earn_holdings,
+        earn_watermark_unix_nanos=_optional_watermark(account.EarnWatermarkUnixNanos()),
         freshness=freshness,
         generation=generation,
         sync_mode={
@@ -189,7 +226,9 @@ def _segment_snapshot(
         event_watermark=_optional_watermark(account.EventWatermark()),
         channel_epoch=_optional_watermark(account.ChannelEpoch()),
         last_event_at_unix_nanos=_optional_watermark(account.LastEventAtUnixNanos()),
-        last_success_at_unix_nanos=_optional_watermark(account.LastSuccessAtUnixNanos()),
+        last_success_at_unix_nanos=_optional_watermark(
+            account.LastSuccessAtUnixNanos()
+        ),
         last_error=_text(account.LastError()),
         recovery_buffer_depth=int(account.RecoveryBufferDepth()),
     )
@@ -204,7 +243,13 @@ def _optional_watermark(value: int) -> int | None:
 
 
 def _account_status(value: int) -> str:
-    return {1: "active", 2: "restricted", 6: "reconciling", 7: "type_mismatch", 8: "unavailable"}.get(value, "unknown")
+    return {
+        1: "active",
+        2: "restricted",
+        6: "reconciling",
+        7: "type_mismatch",
+        8: "unavailable",
+    }.get(value, "unknown")
 
 
 def _account_model(value: int) -> str | None:

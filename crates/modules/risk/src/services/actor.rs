@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::application::{
-    CloseCircuit, LimitView, OpenCircuit, ResizeReservation, RiskDecision, RiskEvent, RiskSnapshot,
+    CloseCircuit, FundingRequirement, LimitView, OpenCircuit, ResizeReservation, RiskDecision,
+    RiskEvent, RiskSnapshot,
 };
 use crate::domain::{
     Allocation, Amount, AuthorizeRequest, DependencyWatermarks, EnforcementMode, Metric,
@@ -176,6 +177,7 @@ impl RiskActor {
 
     fn evaluate_pre_trade(&self, request: AuthorizeRequest) -> Result<RiskDecision, ActorError> {
         request.validate().map_err(ActorError::Invalid)?;
+        let usages = request.usages().map_err(ActorError::Invalid)?;
         let mut reasons = Vec::new();
         let mut violations = Vec::new();
         if self.circuits.iter().any(|c| {
@@ -189,74 +191,39 @@ impl RiskActor {
                 reasons.push(ReasonCode::StaleMarket);
                 violations.push("market data is stale".into());
             }
-            if request.metric == Metric::Margin
-                && !crate::domain::margin::is_available(context.available_margin, request.amount)
-            {
-                reasons.push(ReasonCode::InsufficientMargin);
-                violations.push("available margin is insufficient".into());
-            }
-            if request.metric == Metric::Notional
-                && context.available_margin != Amount::ZERO
-                && !crate::domain::margin::is_available(context.available_margin, request.amount)
-            {
-                reasons.push(ReasonCode::InsufficientMargin);
-                violations.push("available account margin is insufficient for notional".into());
-            }
-            if matches!(request.metric, Metric::GrossExposure | Metric::NetExposure) {
-                let observed =
-                    crate::domain::exposure::project(context.current_exposure, request.amount)
-                        .map_err(ActorError::Invalid)?;
-                if self.policy_exceeded(request.metric, &request, observed)? {
-                    reasons.push(ReasonCode::LimitExceeded);
-                    violations.push("exposure limit exceeded".into());
+            if let Some(margin) = usages.iter().find(|usage| usage.metric == Metric::Margin) {
+                if !crate::domain::margin::is_available(context.available_margin, margin.amount) {
+                    reasons.push(ReasonCode::InsufficientMargin);
+                    violations.push(
+                        "available margin is insufficient for required initial margin".into(),
+                    );
                 }
             }
-            if request.metric == Metric::DailyLoss && context.current_pnl.mantissa() < 0 {
-                let loss = Amount::new(
-                    context.current_pnl.mantissa().unsigned_abs() as i64,
-                    context.current_pnl.scale(),
-                )
-                .map_err(ActorError::Invalid)?
-                .checked_add(request.amount)
-                .map_err(ActorError::Invalid)?;
-                if self.policy_exceeded(request.metric, &request, loss)? {
-                    reasons.push(ReasonCode::LossLimitExceeded);
-                    violations.push("daily loss limit exceeded".into());
-                }
-            }
-            if request.metric == Metric::Drawdown
-                && self.policy_exceeded(Metric::Drawdown, &request, context.current_drawdown)?
-            {
+            if self.policy_exceeded(Metric::Drawdown, &request, context.current_drawdown)? {
                 reasons.push(ReasonCode::LossLimitExceeded);
                 violations.push("drawdown limit exceeded".into());
             }
-            if request.metric == Metric::Leverage {
-                let leverage = Amount::new(
-                    i64::try_from(context.leverage_bps.get())
-                        .map_err(|_| ActorError::Invalid("leverage value overflow".into()))?,
-                    0,
-                )
-                .map_err(ActorError::Invalid)?;
-                if self.policy_exceeded(Metric::Leverage, &request, leverage)? {
-                    reasons.push(ReasonCode::LeverageExceeded);
-                    violations.push("leverage limit exceeded".into());
-                }
+            let leverage = Amount::new(
+                i64::try_from(context.leverage_bps.get())
+                    .map_err(|_| ActorError::Invalid("leverage value overflow".into()))?,
+                0,
+            )
+            .map_err(ActorError::Invalid)?;
+            if self.policy_exceeded(Metric::Leverage, &request, leverage)? {
+                reasons.push(ReasonCode::LeverageExceeded);
+                violations.push("leverage limit exceeded".into());
             }
-            if request.metric == Metric::PriceDeviation {
-                let deviation = Amount::new(
-                    i64::try_from(context.price_deviation_bps.get())
-                        .map_err(|_| ActorError::Invalid("price deviation overflow".into()))?,
-                    0,
-                )
-                .map_err(ActorError::Invalid)?;
-                if self.policy_exceeded(Metric::PriceDeviation, &request, deviation)? {
-                    reasons.push(ReasonCode::LimitExceeded);
-                    violations.push("price deviation limit exceeded".into());
-                }
+            let deviation = Amount::new(
+                i64::try_from(context.price_deviation_bps.get())
+                    .map_err(|_| ActorError::Invalid("price deviation overflow".into()))?,
+                0,
+            )
+            .map_err(ActorError::Invalid)?;
+            if self.policy_exceeded(Metric::PriceDeviation, &request, deviation)? {
+                reasons.push(ReasonCode::LimitExceeded);
+                violations.push("price deviation limit exceeded".into());
             }
-            if request.metric == Metric::StressLoss
-                && self.policy_exceeded(Metric::StressLoss, &request, context.stress_loss)?
-            {
+            if self.policy_exceeded(Metric::StressLoss, &request, context.stress_loss)? {
                 reasons.push(ReasonCode::LimitExceeded);
                 violations.push("stress scenario loss limit exceeded".into());
             }
@@ -369,6 +336,7 @@ impl RiskActor {
                 policy_version: existing.policy_version,
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
+                funding_requirement: self.funding_requirement(&request),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
             };
             return self.commit_decision(&request, decision);
@@ -389,6 +357,7 @@ impl RiskActor {
                 policy_version: self.policy_version,
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
+                funding_requirement: self.funding_requirement(&request),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
             };
             return self.commit_decision(&request, decision);
@@ -396,59 +365,61 @@ impl RiskActor {
 
         let mut allocations = Vec::new();
         let mut planned: HashMap<PolicyId, Amount> = HashMap::new();
-        let policy_ids = self
-            .by_metric
-            .get(&request.metric)
-            .cloned()
-            .unwrap_or_default();
         let mut matches = 0;
         let mut violations = Vec::new();
         let mut reason_codes = Vec::new();
         let mut policy_version = Generation::new(0);
 
-        for policy_id in policy_ids {
-            let state = self
-                .limits
-                .get(&policy_id)
-                .ok_or_else(|| ActorError::State("policy index is corrupt".into()))?;
-            if !state.policy.active_at(request.at_unix_nanos)
-                || !state.policy.scope.matches(&request)
-            {
-                continue;
-            }
-            matches += 1;
-            policy_version = policy_version.max(state.policy.version);
-            let planned_amount = planned.get(&policy_id).copied().unwrap_or(Amount::ZERO);
-            let available = self
-                .available_for_request(state, &request)
-                .map_err(ActorError::State)?
-                .checked_sub(planned_amount)
-                .map_err(ActorError::State)?;
-            if request.amount.cmp_value(available).is_gt() {
-                match state.policy.enforcement {
-                    EnforcementMode::Reject => {
-                        reason_codes.push(ReasonCode::LimitExceeded);
-                        violations.push(format!("policy {} limit exceeded", policy_id));
-                    }
-                    EnforcementMode::Warn | EnforcementMode::Observe => {}
+        for usage in request.usages().map_err(ActorError::Invalid)? {
+            let policy_ids = self
+                .by_metric
+                .get(&usage.metric)
+                .cloned()
+                .unwrap_or_default();
+            for policy_id in policy_ids {
+                let state = self
+                    .limits
+                    .get(&policy_id)
+                    .ok_or_else(|| ActorError::State("policy index is corrupt".into()))?;
+                if !state.policy.active_at(request.at_unix_nanos)
+                    || !state.policy.scope.matches(&request)
+                {
+                    continue;
                 }
+                matches += 1;
+                policy_version = policy_version.max(state.policy.version);
+                let planned_amount = planned.get(&policy_id).copied().unwrap_or(Amount::ZERO);
+                let available = self
+                    .available_for_request(state, &request)
+                    .map_err(ActorError::State)?
+                    .checked_sub(planned_amount)
+                    .map_err(ActorError::State)?;
+                if usage.amount.cmp_value(available).is_gt() {
+                    match state.policy.enforcement {
+                        EnforcementMode::Reject => {
+                            reason_codes.push(ReasonCode::LimitExceeded);
+                            violations.push(format!("policy {} limit exceeded", policy_id));
+                        }
+                        EnforcementMode::Warn | EnforcementMode::Observe => {}
+                    }
+                }
+                planned.insert(
+                    policy_id.clone(),
+                    planned_amount
+                        .checked_add(usage.amount)
+                        .map_err(ActorError::State)?,
+                );
+                allocations.push(Allocation {
+                    policy_id,
+                    metric: usage.metric,
+                    amount: usage.amount,
+                });
             }
-            planned.insert(
-                policy_id.clone(),
-                planned_amount
-                    .checked_add(request.amount)
-                    .map_err(ActorError::State)?,
-            );
-            allocations.push(Allocation {
-                policy_id,
-                metric: request.metric,
-                amount: request.amount,
-            });
         }
 
         if matches == 0 {
             reason_codes.push(ReasonCode::NoMatchingPolicy);
-            violations.push(format!("no active policy for {}", request.metric.as_str()));
+            violations.push("no active policy for normalized trade proposal".into());
         }
         if !violations.is_empty() {
             let decision = RiskDecision {
@@ -463,6 +434,7 @@ impl RiskActor {
                 policy_version,
                 dependency_watermarks: self.watermarks.clone(),
                 context: request.context.clone(),
+                funding_requirement: self.funding_requirement(&request),
                 evaluated_at_unix_nanos: request.at_unix_nanos,
             };
             return self.commit_decision(&request, decision);
@@ -517,6 +489,7 @@ impl RiskActor {
             policy_version,
             dependency_watermarks: self.watermarks.clone(),
             context: request.context.clone(),
+            funding_requirement: self.funding_requirement(&request),
             evaluated_at_unix_nanos: request.at_unix_nanos,
         };
         self.commit_decision(&request, decision)
@@ -601,7 +574,35 @@ impl RiskActor {
         if current.status != ReservationStatus::Reserved {
             return Err(ActorError::Rejected("reservation is not active".into()));
         }
-        for allocation in &current.allocations {
+        let previous_notional = current
+            .allocations
+            .iter()
+            .find(|allocation| allocation.metric == Metric::Notional)
+            .map(|allocation| allocation.amount)
+            .ok_or_else(|| {
+                ActorError::Invalid(
+                    "multi-metric reservation resize requires a notional allocation".into(),
+                )
+            })?;
+        let resized_allocations = current
+            .allocations
+            .iter()
+            .map(|allocation| {
+                let amount = if allocation.metric == Metric::OrderRate {
+                    allocation.amount
+                } else {
+                    allocation
+                        .amount
+                        .checked_mul_ratio(request.amount, previous_notional)?
+                };
+                Ok(Allocation {
+                    amount,
+                    ..allocation.clone()
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(ActorError::Invalid)?;
+        for (allocation, resized) in current.allocations.iter().zip(&resized_allocations) {
             let state = self
                 .limits
                 .get(&allocation.policy_id)
@@ -611,7 +612,7 @@ impl RiskActor {
                 .map_err(ActorError::State)?
                 .checked_add(allocation.amount)
                 .map_err(ActorError::State)?;
-            if request.amount.cmp_value(available_without_current).is_gt()
+            if resized.amount.cmp_value(available_without_current).is_gt()
                 && state.policy.enforcement == EnforcementMode::Reject
             {
                 return Err(ActorError::Rejected(format!(
@@ -621,14 +622,7 @@ impl RiskActor {
             }
         }
         let updated = Reservation {
-            allocations: current
-                .allocations
-                .iter()
-                .map(|allocation| Allocation {
-                    amount: request.amount,
-                    ..allocation.clone()
-                })
-                .collect(),
+            allocations: resized_allocations,
             updated_at_unix_nanos: request.at_unix_nanos,
             ..current.clone()
         };
@@ -750,7 +744,6 @@ impl RiskActor {
         reserve: bool,
     ) -> Result<(), String> {
         let sign = reserve;
-        let consume = reservation.status == ReservationStatus::Consumed;
         for allocation in &reservation.allocations {
             let state = self
                 .limits
@@ -760,9 +753,6 @@ impl RiskActor {
                 state.reserved = state.reserved.checked_add(allocation.amount)?;
             } else {
                 state.reserved = state.reserved.checked_sub(allocation.amount)?;
-                if consume {
-                    state.used = state.used.checked_add(allocation.amount)?;
-                }
             }
         }
         Ok(())
@@ -851,8 +841,33 @@ impl RiskActor {
             policy_version: self.policy_version,
             dependency_watermarks: self.watermarks.clone(),
             context: request.context.clone(),
+            funding_requirement: self.funding_requirement(request),
             evaluated_at_unix_nanos: request.at_unix_nanos,
         }
+    }
+
+    fn funding_requirement(&self, request: &AuthorizeRequest) -> Option<FundingRequirement> {
+        let required = request
+            .usages()
+            .ok()?
+            .into_iter()
+            .find(|usage| usage.metric == Metric::Margin)?
+            .amount;
+        let available = request
+            .context
+            .as_ref()
+            .map_or(Amount::ZERO, |context| context.available_margin);
+        let shortfall = if required.cmp_value(available).is_gt() {
+            required.checked_sub(available).ok()?
+        } else {
+            Amount::ZERO
+        };
+        Some(FundingRequirement {
+            required_margin: required,
+            available_margin: available,
+            shortfall,
+            margin_rule_id: request.proposal.margin_rule_id.clone(),
+        })
     }
 
     fn policy_exceeded(
@@ -878,8 +893,18 @@ impl RiskActor {
         state: &LimitState,
         request: &AuthorizeRequest,
     ) -> Result<Amount, String> {
-        if state.policy.metric != Metric::OrderRate {
-            return state.available();
+        if state.policy.window_nanos.is_none() {
+            let observed = request.context.as_ref().map_or(Amount::ZERO, |context| {
+                match state.policy.metric {
+                    Metric::GrossExposure | Metric::NetExposure => context.current_exposure,
+                    Metric::Margin => context.current_margin,
+                    _ => Amount::ZERO,
+                }
+            });
+            return state
+                .policy
+                .limit
+                .checked_sub(observed.checked_add(state.reserved)?);
         }
         let Some(window) = state.policy.window_nanos else {
             return state.available();
@@ -891,6 +916,10 @@ impl RiskActor {
             .filter(|reservation| {
                 reservation.created_at_unix_nanos >= start
                     && reservation.created_at_unix_nanos <= request.at_unix_nanos
+                    && matches!(
+                        reservation.status,
+                        ReservationStatus::Reserved | ReservationStatus::Consumed
+                    )
                     && reservation
                         .allocations
                         .iter()

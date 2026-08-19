@@ -70,6 +70,7 @@ macro_rules! for_each_handle_collection {
         $macro! {
             (binance_spot_rest, BinanceSpotRestHandle, crate::BinanceRestConfig, CreateBinanceSpotRest, RemoveBinanceSpotRest, binance_spot_rest, binance_spot_rest_connections, Rest),
             (binance_funding_rest, BinanceFundingRestHandle, crate::BinanceRestConfig, CreateBinanceFundingRest, RemoveBinanceFundingRest, binance_funding_rest, binance_funding_rest_connections, Rest),
+            (binance_earn_rest, BinanceEarnRestHandle, crate::BinanceRestConfig, CreateBinanceEarnRest, RemoveBinanceEarnRest, binance_earn_rest, binance_earn_rest_connections, Rest),
             (binance_margin_rest, BinanceMarginRestHandle, crate::BinanceRestConfig, CreateBinanceMarginRest, RemoveBinanceMarginRest, binance_margin_rest, binance_margin_rest_connections, Rest),
             (binance_usdm_rest, BinanceUsdMRestHandle, crate::BinanceRestConfig, CreateBinanceUsdMRest, RemoveBinanceUsdMRest, binance_usdm_rest, binance_usdm_rest_connections, Rest),
             (binance_coinm_rest, BinanceCoinMRestHandle, crate::BinanceRestConfig, CreateBinanceCoinMRest, RemoveBinanceCoinMRest, binance_coinm_rest, binance_coinm_rest_connections, Rest),
@@ -277,16 +278,7 @@ impl<A: ConfluxActor> Conflux<A> {
                 Err(error) => return Err(RunError::RequiredConnection(error)),
             }
 
-            let system_deadline = self
-                .system
-                .next_wakeup_deadline(&self.connection_driver)
-                .unwrap_or_else(|| tokio::time::Instant::now() + MAX_IDLE_POLL_CADENCE);
-            let deadline = self
-                .pending_connection_removals
-                .values()
-                .map(|pending| pending.deadline)
-                .min()
-                .map_or(system_deadline, |pending| pending.min(system_deadline));
+            let deadline = self.next_runtime_wakeup_deadline();
             let wakeup_timer = self
                 .wakeup_timer
                 .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(deadline)));
@@ -336,16 +328,7 @@ impl<A: ConfluxActor> Conflux<A> {
                 continue;
             }
 
-            let system_deadline = self
-                .system
-                .next_wakeup_deadline(&self.connection_driver)
-                .unwrap_or_else(|| tokio::time::Instant::now() + MAX_IDLE_POLL_CADENCE);
-            let deadline = self
-                .pending_connection_removals
-                .values()
-                .map(|pending| pending.deadline)
-                .min()
-                .map_or(system_deadline, |pending| pending.min(system_deadline));
+            let deadline = self.next_runtime_wakeup_deadline();
             let wakeup_timer = self
                 .wakeup_timer
                 .get_or_insert_with(|| Box::pin(tokio::time::sleep_until(deadline)));
@@ -465,6 +448,19 @@ impl<A: ConfluxActor> Conflux<A> {
                 Ok(None)
             }
         }
+    }
+
+    fn next_runtime_wakeup_deadline(&self) -> tokio::time::Instant {
+        let idle_deadline = tokio::time::Instant::now() + MAX_IDLE_POLL_CADENCE;
+        let system_deadline = self
+            .system
+            .next_wakeup_deadline(&self.connection_driver)
+            .map_or(idle_deadline, |deadline| deadline.min(idle_deadline));
+        self.pending_connection_removals
+            .values()
+            .map(|pending| pending.deadline)
+            .min()
+            .map_or(system_deadline, |deadline| deadline.min(system_deadline))
     }
 
     async fn apply_connection_control(&mut self, command: ConnectionControlCommand) {
@@ -1001,7 +997,7 @@ mod tests {
 
     use super::*;
     use crate::{Contract, RestContract, SystemEvent};
-    use futures_util::StreamExt;
+    use futures_util::{SinkExt, StreamExt};
 
     struct TestRest;
 
@@ -1022,6 +1018,14 @@ mod tests {
     struct StartupReadyActor {
         key: ConnectionKey,
         started_ready: Option<oneshot::Sender<bool>>,
+    }
+
+    struct IntegrationKeysActor {
+        keys: std::collections::BTreeSet<ConnectionKey>,
+    }
+
+    struct ReadyCountActor {
+        ready: usize,
     }
 
     impl Contract for TestActor {
@@ -1098,6 +1102,53 @@ mod tests {
             _event: ConfluxEvent<Self, Self::LocalEvent>,
             _context: &mut Context<'_, Self>,
         ) -> Result<Option<i64>, Self::FatalError> {
+            Ok(None)
+        }
+    }
+
+    impl Contract for IntegrationKeysActor {
+        type Rest = TestRest;
+    }
+
+    impl ConfluxActor for IntegrationKeysActor {
+        type FatalError = Infallible;
+        type LocalEvent = i64;
+
+        async fn handle(
+            &mut self,
+            event: ConfluxEvent<Self, Self::LocalEvent>,
+            context: &mut Context<'_, Self>,
+        ) -> Result<Option<i64>, Self::FatalError> {
+            if let ConfluxEvent::Integration(event) = event {
+                self.keys
+                    .insert(event.identity.descriptor.connection_key.clone());
+                if self.keys.len() == 2 {
+                    context.request_shutdown(ShutdownMode::Drain);
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    impl Contract for ReadyCountActor {
+        type Rest = TestRest;
+    }
+
+    impl ConfluxActor for ReadyCountActor {
+        type FatalError = Infallible;
+        type LocalEvent = i64;
+
+        async fn handle(
+            &mut self,
+            event: ConfluxEvent<Self, Self::LocalEvent>,
+            context: &mut Context<'_, Self>,
+        ) -> Result<Option<i64>, Self::FatalError> {
+            if matches!(event, ConfluxEvent::System(SystemEvent::SourceReady { .. })) {
+                self.ready += 1;
+                if self.ready == 2 {
+                    context.request_shutdown(ShutdownMode::Drain);
+                }
+            }
             Ok(None)
         }
     }
@@ -1179,6 +1230,56 @@ mod tests {
                         .unwrap(),
                     2
                 );
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn duplicate_create_and_missing_remove_have_stable_errors() {
+        let (conflux, handle) = Conflux::new(
+            TestActor::default(),
+            ConfluxSystem::new(),
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                let key = ConnectionKey::new("duplicate-okx").unwrap();
+                let parameters = crate::OkxRestConfig {
+                    environment: "test".into(),
+                    endpoint: "https://www.okx.com".into(),
+                };
+                handle
+                    .connections()
+                    .okx_public_rest
+                    .create(key.clone(), parameters.clone())
+                    .await
+                    .unwrap();
+
+                assert!(matches!(
+                    handle
+                        .connections()
+                        .okx_public_rest
+                        .create(key.clone(), parameters)
+                        .await,
+                    Err(ConnectionControlError::Create(
+                        ConnectionCreateError::AlreadyExists(value)
+                    )) if value == key
+                ));
+                handle
+                    .connections()
+                    .okx_public_rest
+                    .remove(key.clone())
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    handle.connections().okx_public_rest.remove(key.clone()).await,
+                    Err(ConnectionControlError::NotFound(value)) if value == key
+                ));
+
+                handle.shutdown(ShutdownMode::Drain);
+                process.await.unwrap().unwrap();
             })
             .await;
     }
@@ -1307,6 +1408,63 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn graceful_shutdown_disconnects_managed_stream_before_returning() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (peer_closed, peer_closed_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while socket.next().await.is_some() {}
+            let _ = peer_closed.send(());
+        });
+        let (ready, ready_rx) = oneshot::channel();
+        let (conflux, handle) = Conflux::new(
+            SourceReadyActor { ready: Some(ready) },
+            ConfluxSystem::new(),
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                handle
+                    .connections()
+                    .binance_spot_websocket
+                    .create(
+                        ConnectionKey::new("shutdown-binance-stream").unwrap(),
+                        crate::BinanceWebSocketConfig {
+                            environment: "test".into(),
+                            endpoint,
+                            credential: None,
+                            event_capacity: 8,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), ready_rx)
+                    .await
+                    .expect("connection must become ready")
+                    .unwrap();
+
+                handle.shutdown(ShutdownMode::Drain);
+                let outcome = tokio::time::timeout(Duration::from_secs(1), process)
+                    .await
+                    .expect("graceful shutdown must complete")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(outcome.phase, ProcessPhase::Stopped);
+                tokio::time::timeout(Duration::from_secs(1), peer_closed_rx)
+                    .await
+                    .expect("peer must observe disconnect before shutdown returns")
+                    .unwrap();
+            })
+            .await;
+        server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn preinstalled_stream_is_ready_before_actor_started() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("ws://{}", listener.local_addr().unwrap());
@@ -1358,6 +1516,69 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn one_driver_pass_registers_and_delivers_all_ready_connections() {
+        async fn websocket_server(listener: tokio::net::TcpListener, symbol: &'static str) {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    format!(r#"{{"e":"trade","s":"{symbol}","E":1,"p":"1","q":"1"}}"#).into(),
+                ))
+                .await
+                .unwrap();
+            while socket.next().await.is_some() {}
+        }
+
+        let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first_endpoint = format!("ws://{}", first.local_addr().unwrap());
+        let second_endpoint = format!("ws://{}", second.local_addr().unwrap());
+        let first_server = tokio::spawn(websocket_server(first, "BTCUSDT"));
+        let second_server = tokio::spawn(websocket_server(second, "ETHUSDT"));
+
+        let first_key = ConnectionKey::new("market-first").unwrap();
+        let second_key = ConnectionKey::new("market-second").unwrap();
+        let mut system = ConfluxSystem::new();
+        for (key, endpoint) in [
+            (first_key.clone(), first_endpoint),
+            (second_key.clone(), second_endpoint),
+        ] {
+            system
+                .connections()
+                .binance_spot_websocket
+                .create(
+                    key,
+                    crate::BinanceWebSocketConfig {
+                        environment: "test".into(),
+                        endpoint,
+                        credential: None,
+                        event_capacity: 8,
+                    },
+                )
+                .unwrap();
+        }
+        let (conflux, _handle) = Conflux::new(
+            IntegrationKeysActor {
+                keys: std::collections::BTreeSet::new(),
+            },
+            system,
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        let outcome = tokio::time::timeout(Duration::from_secs(1), conflux.run())
+            .await
+            .expect("both managed connections must be polled")
+            .unwrap();
+        assert_eq!(
+            outcome.actor.keys,
+            std::collections::BTreeSet::from([first_key, second_key])
+        );
+        first_server.await.unwrap();
+        second_server.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn required_connection_failure_prevents_actor_startup() {
         let key = ConnectionKey::new("required-binance-stream").unwrap();
         let mut system = ConfluxSystem::new();
@@ -1397,6 +1618,105 @@ mod tests {
             .expect("required connection failure must be bounded");
         assert!(matches!(result, Err(RunError::RequiredConnection(_))));
         assert!(started_ready_rx.await.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn optional_connection_failure_still_allows_actor_startup() {
+        let key = ConnectionKey::new("optional-binance-stream").unwrap();
+        let mut system = ConfluxSystem::new();
+        system
+            .connections()
+            .binance_spot_websocket
+            .create_with_options(
+                key.clone(),
+                crate::BinanceWebSocketConfig {
+                    environment: "test".into(),
+                    endpoint: "ws://127.0.0.1:9".into(),
+                    credential: None,
+                    event_capacity: 8,
+                },
+                crate::ConnectionCreateOptions {
+                    required: false,
+                    recovery: crate::RecoveryPolicy {
+                        maximum_attempts: Some(0),
+                        ..crate::RecoveryPolicy::default()
+                    },
+                },
+            )
+            .unwrap();
+        let (started_ready, started_ready_rx) = oneshot::channel();
+        let (conflux, handle) = Conflux::new(
+            StartupReadyActor {
+                key,
+                started_ready: Some(started_ready),
+            },
+            system,
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let process = tokio::task::spawn_local(conflux.run());
+                assert!(
+                    !tokio::time::timeout(Duration::from_secs(1), started_ready_rx)
+                        .await
+                        .expect("optional failure must not prevent Actor startup")
+                        .unwrap()
+                );
+                handle.shutdown(ShutdownMode::Drain);
+                process.await.unwrap().unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transport_failure_reconnects_with_bounded_backoff() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let mut first = tokio_tungstenite::accept_async(first).await.unwrap();
+            first.close(None).await.unwrap();
+
+            let (second, _) = listener.accept().await.unwrap();
+            let mut second = tokio_tungstenite::accept_async(second).await.unwrap();
+            while second.next().await.is_some() {}
+        });
+        let mut system = ConfluxSystem::new();
+        system
+            .connections()
+            .binance_spot_websocket
+            .create_with_options(
+                ConnectionKey::new("recovering-binance-stream").unwrap(),
+                crate::BinanceWebSocketConfig {
+                    environment: "test".into(),
+                    endpoint,
+                    credential: None,
+                    event_capacity: 8,
+                },
+                crate::ConnectionCreateOptions {
+                    required: true,
+                    recovery: crate::RecoveryPolicy {
+                        initial_backoff: Duration::from_millis(10),
+                        maximum_backoff: Duration::from_millis(10),
+                        maximum_attempts: Some(2),
+                    },
+                },
+            )
+            .unwrap();
+        let (conflux, _handle) = Conflux::new(
+            ReadyCountActor { ready: 0 },
+            system,
+            ConfluxConfig::default(),
+        )
+        .unwrap();
+
+        let outcome = tokio::time::timeout(Duration::from_secs(1), conflux.run())
+            .await
+            .expect("recoverable transport failure must reconnect")
+            .unwrap();
+        assert_eq!(outcome.actor.ready, 2);
+        server.await.unwrap();
     }
 
     #[test]
@@ -1499,6 +1819,20 @@ mod tests {
             .expect("timer branch should wake the runtime")
             .unwrap();
         assert_eq!(outcome.actor.ticks, 1);
+    }
+
+    #[test]
+    fn far_system_deadline_is_clamped_to_the_non_waking_ingress_cadence() {
+        let mut system = ConfluxSystem::new();
+        system.register_timer("far".into(), Duration::from_secs(60));
+        let (conflux, _handle) =
+            Conflux::new(TestActor::default(), system, ConfluxConfig::default()).unwrap();
+        let before = tokio::time::Instant::now();
+
+        let deadline = conflux.next_runtime_wakeup_deadline();
+
+        assert!(deadline >= before);
+        assert!(deadline <= before + MAX_IDLE_POLL_CADENCE + Duration::from_millis(1));
     }
 
     #[test]

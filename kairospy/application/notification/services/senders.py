@@ -104,7 +104,9 @@ class RecordingSender:
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+            stream.write(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            )
         return SenderResult("delivered")
 
 
@@ -158,7 +160,9 @@ def _feishu_webhook_token(webhook_url: str) -> str:
         or parts[-2] != "hook"
         or not parts[-1]
     ):
-        raise ValueError("Feishu credential must contain an official custom-bot webhook URL")
+        raise ValueError(
+            "Feishu credential must contain an official custom-bot webhook URL"
+        )
     token = parts[-1]
     if not re.fullmatch(r"[A-Za-z0-9_-]+", token):
         raise ValueError("Feishu credential contains an invalid webhook token")
