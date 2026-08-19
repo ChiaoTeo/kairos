@@ -30,6 +30,7 @@ _READ_ONLY_TOOLS = frozenset(
 class MCPServerBinding:
     server: AsyncContextManager[Any]
     required: bool
+    name: str
 
 
 def build_mcp_servers(
@@ -97,7 +98,11 @@ def build_mcp_servers(
         else:
             raise ValueError(f"MCP server {server_id} has unsupported transport")
         bindings.append(
-            MCPServerBinding(instance, bool(selection.get("required", False)))
+            MCPServerBinding(
+                instance,
+                bool(selection.get("required", False)),
+                f"{server_id}/{profile_id}",
+            )
         )
     return tuple(bindings)
 

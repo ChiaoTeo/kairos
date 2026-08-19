@@ -8,16 +8,16 @@ use super::*;
 /// source only maps the neutral integration payload into Reference-owned
 /// domain records.
 pub struct BinanceSpotSource {
-    connection: ConnectionRef<BinanceSpotRestConnection>,
+    connection: ConnectionRef,
 }
 
 pub struct BinanceOptionsSource {
-    connection: ConnectionRef<BinanceOptionsRestConnection>,
+    connection: ConnectionRef,
 }
 
 enum BinanceDerivativesConnection {
-    UsdM(ConnectionRef<BinanceUsdMRestConnection>),
-    CoinM(ConnectionRef<BinanceCoinMRestConnection>),
+    UsdM(ConnectionRef),
+    CoinM(ConnectionRef),
 }
 
 pub struct BinanceDerivativesSource {
@@ -27,7 +27,7 @@ pub struct BinanceDerivativesSource {
 }
 
 pub struct BinanceEquitySource {
-    connection: ConnectionRef<BinanceStocksRestConnection>,
+    connection: ConnectionRef,
 }
 impl BinanceSpotSource {
     pub(crate) fn from_key(key: kairos_conflux::ConnectionKey) -> Self {
@@ -71,32 +71,6 @@ impl BinanceDerivativesSource {
     }
 }
 
-#[cfg(test)]
-fn binance_public_base_url(endpoint: impl Into<String>) -> String {
-    let endpoint = endpoint.into();
-    let trimmed = endpoint.trim_end_matches('/');
-    let base_url = trimmed
-        .strip_suffix("/api/v3/exchangeInfo")
-        .or_else(|| trimmed.strip_suffix("/fapi/v1/exchangeInfo"))
-        .or_else(|| trimmed.strip_suffix("/dapi/v1/exchangeInfo"))
-        .or_else(|| trimmed.strip_suffix("/eapi/v1/exchangeInfo"))
-        .unwrap_or(trimmed)
-        .to_owned();
-    base_url
-}
-
-#[cfg(test)]
-fn binance_rest_config(
-    endpoint: impl Into<String>,
-    credential: Option<BinanceCredential>,
-) -> BinanceRestConfig {
-    BinanceRestConfig {
-        environment: "public".into(),
-        endpoint: binance_public_base_url(endpoint),
-        credential,
-    }
-}
-
 #[async_trait::async_trait(?Send)]
 impl ReferenceSource for BinanceSpotSource {
     fn source_id(&self) -> &str {
@@ -114,7 +88,7 @@ impl ReferenceSource for BinanceSpotSource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            ConnectionRef::Managed(key, _) => {
+            ConnectionRef(key) => {
                 connections
                     .binance_spot_rest
                     .get(key)
@@ -145,7 +119,7 @@ impl ReferenceSource for BinanceOptionsSource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            ConnectionRef::Managed(key, _) => {
+            ConnectionRef(key) => {
                 connections
                     .binance_options_rest
                     .get(key)
@@ -176,7 +150,7 @@ impl ReferenceSource for BinanceDerivativesSource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            BinanceDerivativesConnection::UsdM(ConnectionRef::Managed(key, _)) => {
+            BinanceDerivativesConnection::UsdM(ConnectionRef(key)) => {
                 connections
                     .binance_usdm_rest
                     .get(key)
@@ -184,7 +158,7 @@ impl ReferenceSource for BinanceDerivativesSource {
                     .fetch_instruments()
                     .await
             }
-            BinanceDerivativesConnection::CoinM(ConnectionRef::Managed(key, _)) => {
+            BinanceDerivativesConnection::CoinM(ConnectionRef(key)) => {
                 connections
                     .binance_coinm_rest
                     .get(key)
@@ -215,7 +189,7 @@ impl ReferenceSource for BinanceEquitySource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            ConnectionRef::Managed(key, _) => {
+            ConnectionRef(key) => {
                 connections
                     .binance_stocks_rest
                     .get(key)

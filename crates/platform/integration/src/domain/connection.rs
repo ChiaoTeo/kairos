@@ -119,6 +119,13 @@ pub enum ConnectionLifecycle {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaintenanceOutcome {
+    Healthy,
+    Progressed,
+    ReconnectRequired { reason: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionState {
     pub identity: ConnectionDescriptor,
     pub lifecycle: ConnectionLifecycle,

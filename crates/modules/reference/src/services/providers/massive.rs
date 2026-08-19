@@ -20,13 +20,13 @@ pub struct MassiveOptionsCoverageSource {
 }
 
 struct ScopedMassiveOptions {
-    connection: ConnectionRef<MassiveRestConnection>,
+    connection: ConnectionRef,
     cursor: Option<String>,
     legacy_accumulated: Option<ProviderCatalog>,
 }
 
 pub struct MassiveEquitySource {
-    connection: ConnectionRef<MassiveRestConnection>,
+    connection: ConnectionRef,
     cursor: Option<String>,
     accumulated: Option<ProviderCatalog>,
     sync_store: SqlxProviderSyncStore,
@@ -88,13 +88,11 @@ impl MassiveOptionsCoverageSource {
     pub async fn new(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        sync_store: SqlxProviderSyncStore,
+        mut sync_store: SqlxProviderSyncStore,
     ) -> ReferenceResult<(Self, kairos_conflux::ConfluxSystem)> {
         let api_key = api_key.into();
         let base_url = base_url.into();
-        let underlyings = sync_store
-            .option_underlyings("massive-options")
-            .await?;
+        let underlyings = sync_store.option_underlyings("massive-options").await?;
         let mut system = kairos_conflux::ConfluxSystem::new();
         let mut keys = Vec::new();
         for underlying in underlyings {
@@ -109,9 +107,7 @@ impl MassiveOptionsCoverageSource {
                         environment: "public".into(),
                         endpoint: base_url.clone(),
                         api_key: secrecy::SecretString::new(api_key.clone().into()),
-                        instrument_query: MassiveInstrumentQuery::options(Some(
-                            underlying.clone(),
-                        )),
+                        instrument_query: MassiveInstrumentQuery::options(Some(underlying.clone())),
                     },
                 )
                 .map_err(|error| ReferenceError::Provider(error.to_string()))?;
@@ -196,7 +192,7 @@ impl MassiveOptionsCoverageSource {
     }
 
     #[cfg(test)]
-    async fn set_option_underlying_with_connections(
+    pub(super) async fn set_option_underlying_with_connections(
         &mut self,
         underlying: &str,
         enabled: bool,
@@ -215,9 +211,12 @@ impl MassiveOptionsCoverageSource {
             self.set_option_underlying_with_key(&underlying, true, Some(key))
                 .await?;
         } else {
-            let key = self.scopes.get(&underlying).map(|scope| match &scope.connection {
-                ConnectionRef::Managed(key, _) => key.clone(),
-            });
+            let key = self
+                .scopes
+                .get(&underlying)
+                .map(|scope| match &scope.connection {
+                    ConnectionRef(key) => key.clone(),
+                });
             self.set_option_underlying_with_key(&underlying, false, None)
                 .await?;
             if let Some(key) = key {
@@ -258,7 +257,7 @@ impl MassiveOptionsCoverageSource {
                 .get_mut(underlying)
                 .expect("enabled coverage scope is present");
             let result = match &mut scope.connection {
-                ConnectionRef::Managed(connection_key, _) => {
+                ConnectionRef(connection_key) => {
                     tokio::time::timeout(
                         MASSIVE_PAGE_TIMEOUT,
                         connections
@@ -513,41 +512,6 @@ impl ReferenceSource for MassiveOptionsCoverageSource {
         result
     }
 
-    #[cfg(test)]
-    async fn set_option_underlying_with_connections(
-        &mut self,
-        underlying: &str,
-        enabled: bool,
-        connections: &mut kairos_conflux::ConnectionCollections<'_>,
-    ) -> ReferenceResult<()> {
-        let underlying = normalize_option_underlying(underlying)?;
-        if enabled {
-            if self.scopes.contains_key(&underlying) {
-                return Ok(());
-            }
-            let (key, parameters) = self.connection_plan(&underlying)?;
-            connections
-                .massive_rest
-                .create(key.clone(), parameters)
-                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-            self.set_option_underlying_with_key(&underlying, true, Some(key))
-                .await?;
-        } else {
-            let key = self.scopes.get(&underlying).map(|scope| match &scope.connection {
-                ConnectionRef::Managed(key, _) => key.clone(),
-            });
-            self.set_option_underlying_with_key(&underlying, false, None)
-                .await?;
-            if let Some(key) = key {
-                connections
-                    .massive_rest
-                    .remove(&key)
-                    .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-            }
-        }
-        Ok(())
-    }
-
     fn option_underlyings(&self) -> Vec<String> {
         self.scopes.keys().cloned().collect()
     }
@@ -570,7 +534,7 @@ impl ReferenceSource for MassiveEquitySource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match &mut self.connection {
-            ConnectionRef::Managed(key, _) => {
+            ConnectionRef(key) => {
                 connections
                     .massive_rest
                     .get(key)
@@ -611,7 +575,7 @@ impl ReferenceSource for MassiveEquitySource {
         let mut page_count = 0;
         for _ in 0..MASSIVE_PAGES_PER_REFRESH {
             let page = match &mut self.connection {
-                ConnectionRef::Managed(key, _) => {
+                ConnectionRef(key) => {
                     tokio::time::timeout(
                         MASSIVE_PAGE_TIMEOUT,
                         connections

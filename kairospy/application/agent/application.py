@@ -200,6 +200,7 @@ class AgentApplication:
         """Composition/Launch diagnostic; Strategy protocol does not expose it."""
 
         worker = self._health_provider() if self._health_provider is not None else {}
+        mcp_servers = self._runtime_metadata.get("mcp_servers", 0)
         return DecisionAgentHealth(
             enabled=self._enabled,
             required=self._required,
@@ -221,8 +222,16 @@ class AgentApplication:
             model=str(self._runtime_metadata.get("model"))
             if self._runtime_metadata.get("model") is not None
             else None,
-            mcp_servers=int(self._runtime_metadata.get("mcp_servers", 0)),
+            mcp_servers=(
+                mcp_servers
+                if isinstance(mcp_servers, int) and not isinstance(mcp_servers, bool)
+                else 0
+            ),
             store_ready=bool(self._runtime_metadata.get("store_ready", False)),
+            rolling_error_rate=float(worker.get("rolling_error_rate", 0.0)),
+            latency_p50_millis=worker.get("latency_p50_millis"),
+            latency_p95_millis=worker.get("latency_p95_millis"),
+            latency_p99_millis=worker.get("latency_p99_millis"),
         )
 
     def _bind_document_metadata(

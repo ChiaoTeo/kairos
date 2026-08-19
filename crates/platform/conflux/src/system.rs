@@ -70,8 +70,9 @@ use thiserror::Error;
 use tokio::time::Instant;
 
 use crate::{
-    resource::ManagedLifecycleOperation, IntegrationEvent, ManagedClients,
-    ManagedConnectionIdentity, ManagedConnections, NamedResources, ResourceState, SystemEvent,
+    resource::{ManagedConnections, ManagedLifecycleOperation},
+    IntegrationEvent, ManagedClients, ManagedConnectionIdentity, NamedResources, ResourceState,
+    SystemEvent,
 };
 
 pub(crate) enum ConnectionDriverOutput {
@@ -299,6 +300,7 @@ pub enum ConnectionCreateError {
 pub struct TypedConnectionCollection<'a, C, P> {
     connections: &'a mut ManagedConnections<String, C>,
     constructor: fn(ConnectionKey, P) -> Result<C, kairos_integration::IntegrationError>,
+    requires_ready: bool,
     parameters: PhantomData<fn(P)>,
 }
 
@@ -306,10 +308,12 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
     fn new(
         connections: &'a mut ManagedConnections<String, C>,
         constructor: fn(ConnectionKey, P) -> Result<C, kairos_integration::IntegrationError>,
+        requires_ready: bool,
     ) -> Self {
         Self {
             connections,
             constructor,
+            requires_ready,
             parameters: PhantomData,
         }
     }
@@ -357,13 +361,15 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
         if managed.state() == ResourceState::Retiring {
             return Err(ConnectionAccessError::Retiring(key.clone()));
         }
-        if matches!(
-            managed.state(),
-            ResourceState::Starting
-                | ResourceState::Failed
-                | ResourceState::Stopping
-                | ResourceState::Stopped
-        ) {
+        if (self.requires_ready && managed.state() != ResourceState::Ready)
+            || matches!(
+                managed.state(),
+                ResourceState::Starting
+                    | ResourceState::Failed
+                    | ResourceState::Stopping
+                    | ResourceState::Stopped
+            )
+        {
             return Err(ConnectionAccessError::NotReady(key.clone()));
         }
         Ok(managed.connection_mut())
@@ -383,11 +389,19 @@ impl<'a, C, P> TypedConnectionCollection<'a, C, P> {
             .ok_or_else(|| ConnectionAccessError::NotFound(key.clone()))
     }
 
-    pub fn remove(&mut self, key: &ConnectionKey) -> Result<(), ConnectionAccessError> {
+    fn remove_now(&mut self, key: &ConnectionKey) -> Result<(), ConnectionAccessError> {
         self.connections
             .remove(&key.to_string())
             .map(drop)
             .ok_or_else(|| ConnectionAccessError::NotFound(key.clone()))
+    }
+}
+
+impl TypedConnectionCollection<'_, MassiveRestConnection, MassiveRestConfig> {
+    /// Removes a bounded HTTP client that has no lifecycle or event poller.
+    /// Stateful connections can only be retired through Conflux control.
+    pub fn remove(&mut self, key: &ConnectionKey) -> Result<(), ConnectionAccessError> {
+        self.remove_now(key)
     }
 }
 

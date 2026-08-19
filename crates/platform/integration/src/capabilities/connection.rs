@@ -4,7 +4,7 @@ use std::future::Future;
 use std::task::{Context, Poll};
 use tokio::time::Instant;
 
-use crate::domain::ConnectionHealth;
+use crate::domain::{ConnectionHealth, MaintenanceOutcome};
 use crate::IntegrationError;
 
 /// Bounded observation of a concrete connection's current health.
@@ -19,13 +19,6 @@ pub trait ConnectionLifecycleCommand: Send {
     fn connect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
     fn disconnect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
     fn reconnect(&mut self) -> impl Future<Output = Result<(), IntegrationError>> + Send;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MaintenanceOutcome {
-    Healthy,
-    Progressed,
-    ReconnectRequired { reason: String },
 }
 
 /// Persistent, cancellation-safe maintenance for a stateful connection.

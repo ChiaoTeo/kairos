@@ -105,9 +105,9 @@ pub use process::{
     OkxPublicRestHandle, OkxPublicWebSocketHandle, RunError,
 };
 pub use resource::{
-    ConnectionCreateOptions, EnsureDisposition, ManagedClient, ManagedClients, ManagedConnection,
-    ManagedConnectionPolicy, ManagedConnections, ManagedResource, NamedResources, RecoveryPolicy,
-    ResourceError, ResourceOperationError, ResourceState,
+    ConnectionCreateOptions, EnsureDisposition, ManagedClient, ManagedClients,
+    ManagedConnectionPolicy, ManagedResource, NamedResources, RecoveryPolicy, ResourceError,
+    ResourceOperationError, ResourceState,
 };
 pub use system::{
     ConfluxSystem, ConnectionAccessError, ConnectionCollections, ConnectionCreateError,

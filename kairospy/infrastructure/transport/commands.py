@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
 from decimal import Decimal
+import hashlib
+import json
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -21,6 +24,7 @@ from kairospy.application.execution import (
     MarketOrderRequest,
     OrderRequest,
     ReplaceOrderRequest,
+    IntentAdmissionEvidence,
 )
 from kairospy.application.market import SubscriptionRequest as MarketSubscriptionRequest
 from kairospy.application.reference import InstrumentRef
@@ -192,17 +196,21 @@ class ExecutionCommandClient:
         payload = envelope.get("payload")
         if not isinstance(payload, Mapping) or not isinstance(payload.get("intent"), Mapping):
             return 422, {"error": "execution intent payload is required"}
+        body: dict[str, object] = {
+            "command_id": envelope.get("command_id"),
+            "idempotency_key": envelope.get("idempotency_key")
+            or envelope.get("command_id"),
+            "caller_id": envelope.get("strategy_id"),
+            "workspace_id": "workspace",
+            "intent": dict(payload["intent"]),
+        }
+        evidence = payload.get("admission_evidence")
+        if isinstance(evidence, Mapping):
+            body["admission_evidence"] = dict(evidence)
         return self.client.request(
             "POST",
             "/v1/intents",
-            {
-                "command_id": envelope.get("command_id"),
-                "idempotency_key": envelope.get("idempotency_key")
-                or envelope.get("command_id"),
-                "caller_id": envelope.get("strategy_id"),
-                "workspace_id": "workspace",
-                "intent": dict(payload["intent"]),
-            },
+            body,
         )
 
     def target_position(
@@ -212,6 +220,7 @@ class ExecutionCommandClient:
         strategy_id: str,
         instance_id: str,
         request_id: str,
+        admission_evidence: IntentAdmissionEvidence | None = None,
     ) -> CommandHandle:
         if not instance_id.strip():
             return CommandHandle(
@@ -242,35 +251,34 @@ class ExecutionCommandClient:
         account_ids = list(request.account_ids) or (
             [request.account_id] if request.account_id else ["main"]
         )
+        body = {
+            "intent_id": intent_id,
+            "strategy_decision_id": request.strategy_decision_id,
+            "strategy_id": strategy_id,
+            "launch_id": self.launch_id or "",
+            "instance_id": instance_id,
+            "account_ids": account_ids,
+            "segment_key": request.segment_key,
+            "instrument_id": request.instrument_id,
+            "execution_route_id": request.execution_route_id,
+            "intent_type": "TargetPosition",
+            "target_quantity": _decimal(request.quantity),
+            "limit_price": None
+            if request.limit_price is None
+            else _decimal(request.limit_price),
+            "source_snapshot_id": request.source_snapshot_id,
+            "source_event_sequence": request.source_event_sequence,
+            "source_event_time_unix_nanos": request.source_event_time_unix_nanos,
+            "reason": request.reason,
+            "order_options": _execution_options(request.split, request.maker),
+        }
         envelope = CommandEnvelope(
             command_id=request_id,
             operation="execution.submit_intent",
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
-            payload={
-                "intent": {
-                    "intent_id": intent_id,
-                    "strategy_decision_id": request.strategy_decision_id,
-                    "strategy_id": strategy_id,
-                    "launch_id": self.launch_id or "",
-                    "instance_id": instance_id,
-                    "account_ids": account_ids,
-                    "segment_key": request.segment_key,
-                    "instrument_id": request.instrument_id,
-                    "execution_route_id": request.execution_route_id,
-                    "intent_type": "TargetPosition",
-                    "target_quantity": _decimal(request.quantity),
-                    "limit_price": None
-                    if request.limit_price is None
-                    else _decimal(request.limit_price),
-                    "source_snapshot_id": request.source_snapshot_id,
-                    "source_event_sequence": request.source_event_sequence,
-                    "source_event_time_unix_nanos": request.source_event_time_unix_nanos,
-                    "reason": request.reason,
-                    "order_options": _execution_options(request.split, request.maker),
-                }
-            },
+            payload=_intent_submission_payload(body, admission_evidence),
         )
         status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
@@ -406,6 +414,7 @@ class ExecutionCommandClient:
         strategy_id: str,
         instance_id: str,
         request_id: str,
+        admission_evidence: IntentAdmissionEvidence | None = None,
     ) -> CommandHandle:
         if not instance_id.strip():
             return CommandHandle(
@@ -477,7 +486,7 @@ class ExecutionCommandClient:
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
-            payload={"intent": body},
+            payload=_intent_submission_payload(body, admission_evidence),
         )
         status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
@@ -489,6 +498,7 @@ class ExecutionCommandClient:
         strategy_id: str,
         instance_id: str,
         request_id: str,
+        admission_evidence: IntentAdmissionEvidence | None = None,
     ) -> CommandHandle:
         if not instance_id.strip():
             return CommandHandle(
@@ -538,7 +548,7 @@ class ExecutionCommandClient:
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
-            payload={"intent": body},
+            payload=_intent_submission_payload(body, admission_evidence),
         )
         status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
@@ -550,6 +560,7 @@ class ExecutionCommandClient:
         strategy_id: str,
         instance_id: str,
         request_id: str,
+        admission_evidence: IntentAdmissionEvidence | None = None,
     ) -> CommandHandle:
         if not instance_id.strip():
             return CommandHandle(
@@ -617,7 +628,7 @@ class ExecutionCommandClient:
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
-            payload={"intent": body},
+            payload=_intent_submission_payload(body, admission_evidence),
         )
         status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
@@ -629,6 +640,7 @@ class ExecutionCommandClient:
         strategy_id: str,
         instance_id: str,
         request_id: str,
+        admission_evidence: IntentAdmissionEvidence | None = None,
     ) -> CommandHandle:
         if not instance_id.strip():
             return CommandHandle(
@@ -706,7 +718,7 @@ class ExecutionCommandClient:
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
-            payload={"intent": body},
+            payload=_intent_submission_payload(body, admission_evidence),
         )
         status, value = self._submit_v2_intent(envelope.as_dict())
         return _handle(request_id, status, value)
@@ -903,6 +915,62 @@ def _execution_options(
             else maker.max_quote_age_millis * 1_000_000,
         }
     return options
+
+
+def _intent_submission_payload(
+    effective: Mapping[str, object],
+    evidence: IntentAdmissionEvidence | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"intent": dict(effective)}
+    if evidence is None:
+        return payload
+    original = _original_intent_body(effective, evidence)
+    effective_body = dict(effective)
+    original_json = _canonical_control_json(original)
+    effective_json = _canonical_control_json(effective_body)
+    payload["admission_evidence"] = {
+        "source": evidence.source,
+        "decision_id": evidence.decision_id,
+        "outcome": evidence.outcome,
+        "original_intent": original,
+        "effective_intent": effective_body,
+        "original_hash": hashlib.sha256(original_json).hexdigest(),
+        "effective_hash": hashlib.sha256(effective_json).hexdigest(),
+    }
+    return payload
+
+
+def _original_intent_body(
+    effective: Mapping[str, object], evidence: IntentAdmissionEvidence
+) -> dict[str, object]:
+    original = copy.deepcopy(dict(effective))
+    if evidence.outcome == "approved":
+        return original
+    request = evidence.original_intent
+    if isinstance(request, TargetPositionRequest):
+        original["target_quantity"] = _decimal(request.quantity)
+        original["limit_price"] = (
+            None if request.limit_price is None else _decimal(request.limit_price)
+        )
+        original["order_options"] = _execution_options(request.split, request.maker)
+    elif isinstance(request, PairArbitrageRequest):
+        original["max_slippage_bps"] = request.max_slippage_bps
+    elif isinstance(request, OptionSpreadRequest):
+        original["deadline_unix_nanos"] = request.deadline_unix_nanos
+    elif not isinstance(
+        request, (PortfolioRebalanceRequest, QuoteProvisioningRequest)
+    ):
+        raise TypeError("Unsupported original Intent admission evidence type")
+    return original
+
+
+def _canonical_control_json(value: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
 
 
 def _hedge_policy(policy: HedgePolicy | None) -> dict[str, object] | None:

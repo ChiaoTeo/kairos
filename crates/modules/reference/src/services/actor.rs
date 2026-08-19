@@ -192,13 +192,6 @@ impl ReferenceActor {
         }
     }
 
-    #[cfg(test)]
-    pub async fn refresh_source(&mut self, source_id: &str) -> ReferenceResult<RefreshResult> {
-        let mut system = kairos_conflux::ConfluxSystem::new();
-        self.refresh_source_with_connections(source_id, &mut system.connections())
-            .await
-    }
-
     async fn reconcile_normalized(
         &mut self,
         overlay: ProviderCatalog,

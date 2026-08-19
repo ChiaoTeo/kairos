@@ -11,6 +11,7 @@ from typing import Mapping
 from ..models import (
     DecisionKind,
     DecisionResult,
+    DecisionRuntimeOutput,
     IntentCandidate,
     ReduceTargetQuantity,
     RequireMakerExecution,
@@ -18,6 +19,7 @@ from ..models import (
     TightenLimitPrice,
     TightenMaxSlippage,
     TightenSplitPolicy,
+    ToolEvidence,
 )
 
 
@@ -28,12 +30,18 @@ class FixtureDecisionRuntime:
         self.path = path
         self._fixtures = self._load(path)
 
-    def decide(self, candidate: IntentCandidate) -> DecisionResult:
+    def decide(self, candidate: IntentCandidate) -> DecisionRuntimeOutput:
         key = fixture_key(candidate)
         value = self._fixtures.get(key)
         if value is None:
             raise LookupError(f"Decision fixture does not match candidate: {key}")
-        return _decision_result(value)
+        result = value.get("result")
+        if not isinstance(result, Mapping):
+            raise ValueError("Decision fixture requires a result object")
+        return DecisionRuntimeOutput(
+            _decision_result(result),
+            _tool_evidence(value.get("tool_evidence", ())),
+        )
 
     @staticmethod
     def _load(path: Path) -> Mapping[str, Mapping[str, object]]:
@@ -65,7 +73,7 @@ class FixtureDecisionRuntime:
                 )
             if key in fixtures:
                 raise ValueError(f"Duplicate Decision fixture key: {key}")
-            fixtures[key] = result
+            fixtures[key] = value
         return fixtures
 
 
@@ -82,6 +90,9 @@ def fixture_key(candidate: IntentCandidate) -> str:
         "context_snapshot_hash": candidate.snapshot.context_snapshot_hash,
         "profile_hash": candidate.profile_hash,
         "mode": candidate.snapshot.mode.value,
+        "runtime": candidate.runtime,
+        "model": candidate.model,
+        "tool_profiles": list(candidate.tool_profiles),
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -100,6 +111,25 @@ def _decision_result(value: Mapping[str, object]) -> DecisionResult:
         summary=str(value.get("summary", "")),
         revisions=tuple(_revision(item) for item in raw_revisions),
     )
+
+
+def _tool_evidence(value: object) -> tuple[ToolEvidence, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Decision fixture tool_evidence must be an array")
+    evidence: list[ToolEvidence] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ValueError("Decision fixture tool evidence must be an object")
+        evidence.append(
+            ToolEvidence(
+                tool_name=str(item.get("tool_name", "")),
+                argument_hash=_optional_text(item.get("argument_hash")),
+                result_hash=_optional_text(item.get("result_hash")),
+                status=str(item.get("status", "")),
+                observed_at=_optional_text(item.get("observed_at")),
+            )
+        )
+    return tuple(evidence)
 
 
 def _revision(value: object):

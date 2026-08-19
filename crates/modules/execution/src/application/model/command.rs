@@ -154,6 +154,17 @@ pub struct ExecuteStrategyIntent {
     pub order_options: ExecutionOrderOptions,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IntentAdmissionEvidence {
+    pub source: String,
+    pub decision_id: String,
+    pub outcome: String,
+    pub original_intent: ExecuteStrategyIntent,
+    pub effective_intent: ExecuteStrategyIntent,
+    pub original_hash: String,
+    pub effective_hash: String,
+}
+
 impl Default for ExecuteStrategyIntent {
     fn default() -> Self {
         Self {

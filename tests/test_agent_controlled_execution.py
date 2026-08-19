@@ -75,6 +75,9 @@ def _assembled(
         worker=worker,
         launch_id="launch",
         profile_hash="profile-hash",
+        runtime="fixture",
+        model=None,
+        tool_profiles=(),
         operations=("target_position",),
         required_contexts=required_contexts,
         max_decision_age_seconds=5,
@@ -162,8 +165,9 @@ def test_revise_records_original_and_effective_in_execution_admission(
     assert receipt.status is SubmissionStatus.PENDING
     assert terminal.status is DecisionStatus.REVISED
     assert len(commands.calls) == 1
-    assert len(evidence) == 1
-    admission = evidence[0]
+    assert len(evidence) == 2
+    assert getattr(evidence[0], "submission_status") == "submitting"
+    admission = evidence[-1]
     assert getattr(admission, "outcome") == "revised"
     assert getattr(admission, "original_intent").quantity == Decimal("2")
     assert getattr(admission, "effective_intent").quantity == Decimal("1")

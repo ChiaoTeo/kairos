@@ -16,6 +16,7 @@ from kairospy.application.agent import (
     DecisionResult,
     DecisionStatus,
     IntentCandidate,
+    ToolEvidence,
 )
 from kairospy.application.agent.services import DecisionRecordStore
 from kairospy.application.launch.application.configuration import LaunchConfig
@@ -270,6 +271,15 @@ def test_decision_store_persists_before_run_deduplicates_and_recovers(
         candidate.decision_id,
         DecisionStatus.APPROVED,
         result=DecisionResult(DecisionKind.APPROVE, 9000, (), (), "approved"),
+        tool_evidence=(
+            ToolEvidence(
+                "market.get_latest_quote",
+                "a" * 64,
+                "b" * 64,
+                "completed",
+                "2026-08-18T00:00:00Z",
+            ),
+        ),
         effective_request=candidate.request,
         final_submission_status="accepted",
         delivery_certainty="sent",
@@ -282,6 +292,19 @@ def test_decision_store_persists_before_run_deduplicates_and_recovers(
     assert finished.status is DecisionStatus.APPROVED
     assert finished.final_submission_status == "accepted"
     assert store.recent(limit=1) == (finished,)
+    row = store._connection.execute(
+        """
+        SELECT runtime, tool_profiles_json, tool_evidence_json,
+               effective_request_hash
+        FROM decision_records WHERE decision_id = ?
+        """,
+        (candidate.decision_id,),
+    ).fetchone()
+    assert row is not None
+    assert row["runtime"] == "unknown"
+    assert row["tool_profiles_json"] == "[]"
+    assert "market.get_latest_quote" in row["tool_evidence_json"]
+    assert len(row["effective_request_hash"]) == 64
     store.close()
 
     reopened = DecisionRecordStore(tmp_path / "decisions.sqlite3")

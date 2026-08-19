@@ -61,6 +61,12 @@ class AgentProcessComposition:
             worker=self.worker,
             launch_id=launch_id,
             profile_hash=self.profile_hash,
+            runtime=self.config.runtime,
+            model=None if self.config.model is None else self.config.model.model,
+            tool_profiles=tuple(
+                f"{selection['server']}/{selection['profile']}"
+                for selection in self.config.mcp
+            ),
             operations=review.operations,
             required_contexts=review.required_contexts,
             max_decision_age_seconds=review.max_decision_age_seconds,

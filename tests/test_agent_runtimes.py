@@ -69,6 +69,15 @@ def test_fixture_runtime_requires_exact_candidate_context_profile_and_mode(
                     "summary": "fixture",
                     "revisions": [],
                 },
+                "tool_evidence": [
+                    {
+                        "tool_name": "market.get_latest_quote",
+                        "argument_hash": "a" * 64,
+                        "result_hash": "b" * 64,
+                        "status": "completed",
+                        "observed_at": "2026-08-18T00:00:00Z",
+                    }
+                ],
             }
         )
         + "\n",
@@ -76,7 +85,9 @@ def test_fixture_runtime_requires_exact_candidate_context_profile_and_mode(
     )
     runtime = FixtureDecisionRuntime(path)
 
-    assert runtime.decide(candidate).decision is DecisionKind.APPROVE
+    output = runtime.decide(candidate)
+    assert output.result.decision is DecisionKind.APPROVE
+    assert output.tool_evidence[0].tool_name == "market.get_latest_quote"
     changed = replace(candidate, profile_hash="different-profile")
     with pytest.raises(LookupError, match="does not match"):
         runtime.decide(changed)
@@ -109,7 +120,25 @@ def test_openai_runtime_uses_structured_output_and_disables_sensitive_trace(
         async def run(agent, model_input, **values):
             captured["input"] = model_input
             captured["run"] = values
-            return SimpleNamespace(final_output=expected)
+
+            class ToolCallItem:
+                raw_item = SimpleNamespace(
+                    call_id="call-1",
+                    name="market.get_latest_quote",
+                    arguments='{"instrument_id":"BTCUSDT"}',
+                )
+
+            class ToolCallOutputItem:
+                raw_item = SimpleNamespace(call_id="call-1")
+                output = {
+                    "observed_at": "2026-08-18T00:00:00Z",
+                    "bid": "1",
+                }
+
+            return SimpleNamespace(
+                final_output=expected,
+                new_items=[ToolCallItem(), ToolCallOutputItem()],
+            )
 
     sdk = SimpleNamespace(
         OpenAIProvider=Provider,
@@ -133,7 +162,12 @@ def test_openai_runtime_uses_structured_output_and_disables_sensitive_trace(
         request_timeout_seconds=2,
     )
 
-    assert runtime.decide(_candidate()) is expected
+    output = runtime.decide(_candidate())
+    assert output.result is expected
+    assert output.tool_evidence[0].tool_name == "market.get_latest_quote"
+    assert output.tool_evidence[0].argument_hash is not None
+    assert output.tool_evidence[0].result_hash is not None
+    assert output.tool_evidence[0].observed_at == "2026-08-18T00:00:00Z"
     agent_values = cast(Mapping[str, object], captured["agent"])
     run_config = cast(Mapping[str, object], captured["run_config"])
     settings = cast(Mapping[str, object], captured["settings"])

@@ -5,7 +5,7 @@ use super::*;
 pub struct OkxSource {
     id: String,
     product: OkxProduct,
-    connection: ConnectionRef<OkxPublicRestConnection>,
+    connection: ConnectionRef,
 }
 impl OkxSource {
     pub(crate) fn from_key(
@@ -45,7 +45,7 @@ impl ReferenceSource for OkxSource {
             OkxProduct::Option => "OPTION",
         };
         let facts = match &mut self.connection {
-            ConnectionRef::Managed(key, _) => {
+            ConnectionRef(key) => {
                 connections
                     .okx_public_rest
                     .get(key)

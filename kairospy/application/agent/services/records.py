@@ -11,7 +11,7 @@ import sqlite3
 from threading import RLock
 from typing import Mapping
 
-from ..models import DecisionReceipt, DecisionStatus, IntentCandidate
+from ..models import DecisionReceipt, DecisionStatus, IntentCandidate, ToolEvidence
 
 
 class DecisionRecordStore:
@@ -28,8 +28,21 @@ class DecisionRecordStore:
 
     def admit(self, candidate: IntentCandidate) -> tuple[DecisionReceipt, bool]:
         payload = _canonical_json(candidate.request)
-        candidate_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         snapshot = candidate.snapshot
+        candidate_hash = hashlib.sha256(
+            _canonical_json(
+                {
+                    "request": candidate.request,
+                    "profile_hash": candidate.profile_hash,
+                    "runtime": candidate.runtime,
+                    "model": candidate.model,
+                    "tool_profiles": candidate.tool_profiles,
+                    "mode": snapshot.mode.value,
+                    "mode_revision": snapshot.mode_revision,
+                    "context_snapshot_hash": snapshot.context_snapshot_hash,
+                }
+            ).encode("utf-8")
+        ).hexdigest()
         now = _now()
         with self._lock, self._connection:
             cursor = self._connection.execute(
@@ -38,9 +51,10 @@ class DecisionRecordStore:
                     decision_id, request_id, intent_id, strategy_id, launch_id,
                     instance_id, operation, exposure_effect, mode, mode_revision,
                     context_watermark, context_snapshot_hash, profile_hash, candidate_hash,
-                    candidate_json, submitted_at, deadline, status, created_at,
+                    runtime, model, tool_profiles_json, candidate_json,
+                    submitted_at, deadline, status, created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.decision_id,
@@ -57,6 +71,9 @@ class DecisionRecordStore:
                     snapshot.context_snapshot_hash,
                     candidate.profile_hash,
                     candidate_hash,
+                    candidate.runtime,
+                    candidate.model,
+                    _canonical_json(candidate.tool_profiles),
                     payload,
                     candidate.submitted_at.isoformat(),
                     candidate.deadline.isoformat(),
@@ -87,6 +104,7 @@ class DecisionRecordStore:
         status: DecisionStatus,
         *,
         result: object | None = None,
+        tool_evidence: tuple[ToolEvidence, ...] = (),
         effective_request: object | None = None,
         final_submission_status: str | None = None,
         delivery_certainty: str | None = None,
@@ -98,6 +116,9 @@ class DecisionRecordStore:
             DecisionStatus.SUBMITTING,
         }:
             raise ValueError("Decision finish requires a terminal status")
+        effective_json = (
+            None if effective_request is None else _canonical_json(effective_request)
+        )
         return self._transition(
             decision_id,
             status,
@@ -108,10 +129,12 @@ class DecisionRecordStore:
             ),
             completed_at=_now(),
             result_json=None if result is None else _canonical_json(result),
-            effective_request_json=(
+            tool_evidence_json=_canonical_json(tool_evidence),
+            effective_request_json=effective_json,
+            effective_request_hash=(
                 None
-                if effective_request is None
-                else _canonical_json(effective_request)
+                if effective_json is None
+                else hashlib.sha256(effective_json.encode("utf-8")).hexdigest()
             ),
             final_submission_status=final_submission_status,
             delivery_certainty=delivery_certainty,
@@ -251,9 +274,14 @@ class DecisionRecordStore:
                     context_snapshot_hash TEXT NOT NULL,
                     profile_hash TEXT NOT NULL,
                     candidate_hash TEXT NOT NULL,
+                    runtime TEXT NOT NULL DEFAULT 'unknown',
+                    model TEXT,
+                    tool_profiles_json TEXT NOT NULL DEFAULT '[]',
                     candidate_json TEXT NOT NULL,
                     result_json TEXT,
+                    tool_evidence_json TEXT NOT NULL DEFAULT '[]',
                     effective_request_json TEXT,
+                    effective_request_hash TEXT,
                     submitted_at TEXT NOT NULL,
                     deadline TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -273,6 +301,23 @@ class DecisionRecordStore:
                 ON decision_records(created_at DESC)
                 """
             )
+            existing = {
+                str(row[1])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(decision_records)"
+                ).fetchall()
+            }
+            for column, declaration in (
+                ("runtime", "TEXT NOT NULL DEFAULT 'unknown'"),
+                ("model", "TEXT"),
+                ("tool_profiles_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("tool_evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("effective_request_hash", "TEXT"),
+            ):
+                if column not in existing:
+                    self._connection.execute(
+                        f"ALTER TABLE decision_records ADD COLUMN {column} {declaration}"
+                    )
 
 
 def _receipt(row: sqlite3.Row) -> DecisionReceipt:

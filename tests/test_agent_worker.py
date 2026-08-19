@@ -266,6 +266,34 @@ def test_runtime_failure_bypasses_agent_for_proven_reduction(tmp_path: Path) -> 
     worker.close(timeout=1)
 
 
+def test_shutdown_is_bounded_and_does_not_submit_late_gate_result(
+    tmp_path: Path,
+) -> None:
+    runtime = BlockingRuntime(
+        DecisionResult(DecisionKind.APPROVE, 9000, (), (), "approved")
+    )
+    worker, records = _worker(tmp_path, runtime)
+    candidate = _candidate(1)
+    submissions: list[object] = []
+    worker.submit(
+        DecisionTask(
+            candidate,
+            lambda request: _accepted(candidate.request_id, request, submissions),
+        )
+    )
+    assert runtime.entered.wait(1)
+
+    worker.close(timeout=0)
+    assert worker.health()["last_failure"] == "shutdown_timeout"
+    runtime.release.set()
+    finished = _wait_terminal(records, candidate.decision_id)
+    worker.close(timeout=1)
+
+    assert finished.status is DecisionStatus.INTERRUPTED
+    assert finished.delivery_certainty == "not_sent"
+    assert submissions == []
+
+
 def _accepted(
     request_id: str, request: object, submissions: list[object]
 ) -> CommandResult:

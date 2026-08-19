@@ -5,7 +5,7 @@ use super::*;
 pub struct HyperliquidSource {
     id: String,
     product: HyperliquidProduct,
-    connection: ConnectionRef<HyperliquidInfoRestConnection>,
+    connection: ConnectionRef,
 }
 impl HyperliquidSource {
     pub(crate) fn from_key(
@@ -41,7 +41,7 @@ impl ReferenceSource for HyperliquidSource {
         connections: &mut kairos_conflux::ConnectionCollections<'_>,
     ) -> ReferenceResult<ProviderCatalog> {
         let facts = match (&mut self.connection, self.product) {
-            (ConnectionRef::Managed(key, _), HyperliquidProduct::Perpetual) => {
+            (ConnectionRef(key), HyperliquidProduct::Perpetual) => {
                 connections
                     .hyperliquid_info_rest
                     .get(key)
@@ -49,7 +49,7 @@ impl ReferenceSource for HyperliquidSource {
                     .fetch_perpetual_instruments()
                     .await
             }
-            (ConnectionRef::Managed(key, _), HyperliquidProduct::Spot) => {
+            (ConnectionRef(key), HyperliquidProduct::Spot) => {
                 connections
                     .hyperliquid_info_rest
                     .get(key)

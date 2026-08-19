@@ -34,7 +34,9 @@ expected Account facts have been observed.
 |---|---|
 | Balances, positions, equity, available margin, Earn positions | Account |
 | Strategy/account limits and temporary capital reservations | Risk |
-| Liquidity targets, Earn deployment, and movement inside one Strategy capital group | Capital |
+| Dynamic desired funding objective and its lifetime | Strategy |
+| Static membership, route, product, and hard-limit configuration | Launch/control configuration |
+| Effective liquidity targets, Earn deployment, and movement inside one Strategy capital group | Capital |
 | Participant transfer, subscribe, redeem, and status-query calls | Integration |
 | Exchange-facing order lifecycle | Execution |
 | Target position or trade intent | Strategy |
@@ -74,8 +76,9 @@ Account, Portfolio, Risk, and Execution checks.
 
 Each live group has exactly one mutable state owner: the Capital Actor inside
 the owning Strategy launch. It uses that launch's fenced account authorities
-and owns demand observations, targets, Capital reservations, and operation
-plans. Account continues to own actual balances and positions. Paper and
+and owns funding-objective observations, effective targets, Capital
+reservations, and operation plans. Account continues to own actual balances
+and positions. Paper and
 backtest create an instance-local simulated Capital runtime with the same
 group semantics.
 
@@ -147,7 +150,8 @@ completes. A route may not be used to escape the group boundary.
 
 Capital management must include, at minimum:
 
-- allocation targets, reservations, liquidity buffers, and expiry;
+- versioned Strategy funding objectives, effective targets, reservations,
+  liquidity buffers, and expiry;
 - route allowlists, per-operation/daily limits, and circuit breakers;
 - idempotent transfer plans and indeterminate-delivery reconciliation;
 - Account-observed settlement and stale-fact rejection;
@@ -209,6 +213,19 @@ usage, and later consumes, resizes, expires, or releases the reservation.
 Portfolio records current and historical portfolio facts; it does not grant
 risk capacity.
 
+Risk understands trade economics, not execution mechanics. Execution supplies
+a normalized proposed action containing the Account/Segment, instrument,
+side, quantity, bounded price, order exposure effect, and reduce-only intent.
+Risk combines that proposal with Reference product facts, Account/Portfolio
+state, and Market valuation to calculate incremental exposure, margin, stress,
+concentration, and applicable budget usage. Execution must not supply an
+authoritative pre-approved risk amount.
+
+Risk does not select participant endpoints, order routes, slicing algorithms,
+maker/taker tactics, retry behavior, remote order identifiers, or fill
+reconciliation. Those remain Execution concerns. Provider-specific wallet or
+order vocabulary also remains outside Risk.
+
 An Account balance increase changes physical availability; it does not
 automatically increase a Strategy policy limit. If Capital only fulfills an
 already approved allocation, Risk keeps the same limit and refreshes its
@@ -265,14 +282,46 @@ only through participant reconciliation plus Account-observed settlement.
 
 ## Funding targets and rebalance decisions
 
-Capital maintains a versioned `minimum < target < maximum` policy for each
-member account/segment/asset. The policy also defines a stress buffer, minimum
-movement amount, deficit dwell time, cooldown, and hysteresis. This is the
-normal pre-funding mechanism; it is not derived from the latest order Intent.
+Funding has four distinct layers:
 
-`CapitalDemandObserved` is advisory evidence. Capital deduplicates, expires,
-nets, and aggregates observations by destination, asset, and time horizon. It
-creates a rebalance decision only when the resulting target deficit persists,
+1. Launch/control configuration defines the static governance envelope:
+   CapitalGroup membership, permitted Segments and products, routes, source
+   authority, hard floors/caps, transfer limits, and circuit breakers.
+2. Strategy dynamically publishes a desired `FundingObjective` describing how
+   much liquidity it expects at a balance location and by when. It may revise,
+   cancel, or let that objective expire.
+3. Risk supplies the maximum permitted risk capacity. A funding objective or
+   physical transfer never raises that budget.
+4. Capital combines these inputs with Account facts and owns the resulting
+   effective target, rebalance decision, reservation, and external operation.
+
+A Strategy funding objective contains, at minimum:
+
+```text
+objective_id + version
+destination Account + Segment + Asset
+desired_available
+required_by + expires_at
+priority + confidence
+strategy_decision_id
+```
+
+It never names a source Account, transfer route, Earn product, participant API,
+or retry plan. Those are Capital decisions. Publishing an objective therefore
+does not authorize a movement.
+
+Capital evaluates each objective inside a versioned policy envelope. The
+envelope may define `minimum < default target < maximum`, a stress buffer,
+minimum movement amount, deficit dwell time, cooldown, and hysteresis. The
+effective target cannot exceed either the policy maximum or Risk-permitted
+capacity. Static configuration supplies safe defaults when Strategy has no
+active objective.
+
+`CapitalDemandObserved` from a failed/deferred Execution plan is additional
+advisory evidence, not the only source of demand. Capital deduplicates,
+expires, nets, and aggregates it with active Strategy funding objectives by
+destination, asset, and time horizon. It creates a rebalance decision only
+when the resulting effective-target deficit persists,
 Account facts are fresh, an intra-group route is enabled, source surplus is
 unreserved, and all policy limits permit the movement. Repeated or replaced
 Intents must not be blindly summed.
@@ -292,7 +341,8 @@ Strategy intent -> Execution plan -> Risk admission
                                              demand observation only
 
 SLOW PATH
-Account facts + Risk budgets + scheduled demand + liquidity policy
+Strategy funding objectives + Execution demand observations
+Account facts + Risk budgets + static liquidity policy
                               |
                               v
                     aggregate by account/asset/horizon
@@ -314,8 +364,9 @@ Account facts + Risk budgets + scheduled demand + liquidity policy
                  new Execution plan + fresh Risk check
 ```
 
-Strategy never supplies an authoritative raw margin requirement. Execution
-supplies the planned exposure; Risk calculates and authorizes the margin. The
+Strategy may publish a prospective liquidity objective, but never supplies an
+authoritative raw margin requirement. Execution supplies the concrete planned
+exposure; Risk calculates and authorizes the margin. The
 Strategy instance may report a physical shortfall to its Capital runtime, but
 that observation never authorizes a transfer. Capital aggregates it
 with policy targets and other demand before creating a rebalance decision.
@@ -463,13 +514,14 @@ Earn products even when a participant markets them next to Earn.
 The first Capital slice should implement one concrete workflow, for example:
 redeem Binance Simple Earn in one member account, move USDT through a supported
 route into another member account or its USD-M segment, and observe the
-resulting Account balance. The movement is triggered by a
-persisting account funding deficit against a configured target, not by one
-Intent. Binance may implement that first route with its master/subaccount API,
+resulting Account balance. The movement is triggered by a persistent deficit
+against an effective target derived from an active Strategy objective and the
+configured policy envelope, not by one Intent. Binance may implement that first route with its master/subaccount API,
 but the business model must not depend on the hierarchy. A later Strategy
 evaluation creates a fresh Execution plan. That slice must persist:
 
-- target, rebalance decision, aggregated demand, and optional causal Strategy references;
+- objective version, policy version, effective target, rebalance decision,
+  aggregated demand, and optional causal Strategy references;
 - idempotency keys for every participant operation;
 - Risk reservation identity;
 - submitted, indeterminate, terminal, and reconciled states;

@@ -40,6 +40,9 @@ class AgentControlledExecutionCommands:
         worker: AgentDecisionWorker,
         launch_id: str,
         profile_hash: str,
+        runtime: str,
+        model: str | None,
+        tool_profiles: tuple[str, ...],
         operations: tuple[str, ...],
         required_contexts: tuple[str, ...],
         max_decision_age_seconds: float,
@@ -51,6 +54,9 @@ class AgentControlledExecutionCommands:
         self._worker = worker
         self._launch_id = launch_id
         self._profile_hash = profile_hash
+        self._runtime = runtime
+        self._model = model
+        self._tool_profiles = tool_profiles
         self._operations = frozenset(operations)
         self._required_contexts = required_contexts
         self._max_decision_age_seconds = max_decision_age_seconds
@@ -131,28 +137,45 @@ class AgentControlledExecutionCommands:
             snapshot=snapshot,
             submitted_at=now,
             deadline=now + timedelta(seconds=self._max_decision_age_seconds),
+            runtime=self._runtime,
+            model=self._model,
+            tool_profiles=self._tool_profiles,
         )
 
         def submit_effective(effective: object) -> CommandResult:
             if not isinstance(effective, type(original)):
                 raise TypeError("Agent effective request changed Intent request type")
-            submitted = submit(effective, **identity)
+            admission = None
             if (
                 snapshot.mode is not AgentMode.SHADOW
                 and self._record_admission is not None
-                and submitted.status in {"accepted", "duplicate"}
             ):
-                self._record_admission(
-                    IntentAdmissionEvidence(
-                        decision_id=decision_id,
-                        request_id=request_id,
-                        intent_id=intent_id,
-                        source="decision_agent",
-                        outcome="approved" if effective == original else "revised",
-                        original_intent=original,
-                        effective_intent=effective,
-                        submission_status=submitted.status,
+                admission = IntentAdmissionEvidence(
+                    decision_id=decision_id,
+                    request_id=request_id,
+                    intent_id=intent_id,
+                    source="decision_agent",
+                    outcome="approved" if effective == original else "revised",
+                    original_intent=original,
+                    effective_intent=effective,
+                    submission_status="submitting",
+                )
+                self._record_admission(admission)
+            try:
+                submitted = submit(
+                    effective,
+                    admission_evidence=admission,
+                    **identity,
+                )
+            except Exception:
+                if admission is not None and self._record_admission is not None:
+                    self._record_admission(
+                        replace(admission, submission_status="indeterminate")
                     )
+                raise
+            if admission is not None and self._record_admission is not None:
+                self._record_admission(
+                    replace(admission, submission_status=submitted.status)
                 )
             return submitted
 

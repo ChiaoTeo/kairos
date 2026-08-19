@@ -17,7 +17,7 @@ pub mod transfer;
 pub use account::*;
 pub use connection::{
     ConnectionDescriptor, ConnectionDomainRef, ConnectionHealth, ConnectionKey,
-    ConnectionLifecycle, ConnectionState, ProviderClockHealth,
+    ConnectionLifecycle, ConnectionState, MaintenanceOutcome, ProviderClockHealth,
 };
 pub use earn::*;
 pub use event::{ExternalEventDelivery, ExternalEventEnvelope, ExternalParticipantEvent};

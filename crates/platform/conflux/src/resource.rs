@@ -215,20 +215,16 @@ struct ManagedLifecycle<C> {
 pub struct ManagedConnection<C> {
     connection: Option<C>,
     lifecycle: Option<ManagedLifecycle<C>>,
-    revision: u64,
-    epoch: u64,
     generation: u64,
     state: ResourceState,
     policy: ManagedConnectionPolicy,
 }
 
 impl<C> ManagedConnection<C> {
-    fn new(connection: C, revision: u64, generation: u64, policy: ManagedConnectionPolicy) -> Self {
+    fn new(connection: C, generation: u64, policy: ManagedConnectionPolicy) -> Self {
         Self {
             connection: Some(connection),
             lifecycle: None,
-            revision,
-            epoch: 0,
             generation,
             state: ResourceState::Created,
             policy,
@@ -247,14 +243,6 @@ impl<C> ManagedConnection<C> {
             .expect("managed connection is unavailable during lifecycle transition")
     }
 
-    pub const fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub const fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
     pub const fn generation(&self) -> u64 {
         self.generation
     }
@@ -269,25 +257,6 @@ impl<C> ManagedConnection<C> {
 
     pub fn set_state(&mut self, state: ResourceState) {
         self.state = state;
-    }
-
-    fn replace(
-        &mut self,
-        revision: u64,
-        generation: u64,
-        connection: C,
-    ) -> Result<(), ResourceError> {
-        validate_new_revision(self.revision, revision)?;
-        self.epoch = next_epoch(self.epoch)?;
-        self.revision = revision;
-        self.generation = generation;
-        assert!(
-            self.lifecycle.is_none(),
-            "cannot replace a connection during lifecycle transition"
-        );
-        self.connection = Some(connection);
-        self.state = ResourceState::Created;
-        Ok(())
     }
 }
 
@@ -523,42 +492,6 @@ where
         Self::default()
     }
 
-    pub fn ensure_with(
-        &mut self,
-        key: K,
-        revision: u64,
-        create: impl FnOnce() -> C,
-    ) -> Result<EnsureDisposition, ResourceError> {
-        if let Some(entry) = self.entries.get_mut(&key) {
-            if revision < entry.revision {
-                return Err(ResourceError::StaleRevision {
-                    current: entry.revision,
-                    received: revision,
-                });
-            }
-            if revision == entry.revision {
-                return Ok(EnsureDisposition::Existing);
-            }
-            let generation = next_generation(self.generations.get(&key).copied())?;
-            self.generations.insert(key.clone(), generation);
-            entry.replace(revision, generation, create())?;
-            return Ok(EnsureDisposition::Replaced);
-        }
-
-        let generation = next_generation(self.generations.get(&key).copied())?;
-        self.generations.insert(key.clone(), generation);
-        self.entries.insert(
-            key,
-            ManagedConnection::new(
-                create(),
-                revision,
-                generation,
-                ConnectionCreateOptions::default(),
-            ),
-        );
-        Ok(EnsureDisposition::Created)
-    }
-
     #[cfg(test)]
     pub(crate) fn insert_new(&mut self, key: K, connection: C) -> Result<bool, ResourceError> {
         self.insert_new_with_options(key, connection, ConnectionCreateOptions::default())
@@ -575,10 +508,8 @@ where
         }
         let generation = next_generation(self.generations.get(&key).copied())?;
         self.generations.insert(key.clone(), generation);
-        self.entries.insert(
-            key,
-            ManagedConnection::new(connection, 0, generation, options),
-        );
+        self.entries
+            .insert(key, ManagedConnection::new(connection, generation, options));
         Ok(true)
     }
 
@@ -600,14 +531,6 @@ where
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut ManagedConnection<C>)> {
         self.entries.iter_mut()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 }
 
@@ -753,7 +676,6 @@ mod tests {
                 connects: Arc::clone(&connects),
                 drops: Arc::clone(&drops),
             },
-            0,
             1,
             ConnectionCreateOptions::default(),
         );

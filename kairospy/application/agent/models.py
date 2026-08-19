@@ -212,6 +212,39 @@ class DecisionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolEvidence:
+    tool_name: str
+    argument_hash: str | None
+    result_hash: str | None
+    status: str
+    observed_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.tool_name.strip() or len(self.tool_name) > 192:
+            raise ValueError("Tool evidence name must be a bounded string")
+        if self.status not in {"completed", "failed", "unavailable"}:
+            raise ValueError("Tool evidence status is unsupported")
+        for name in ("argument_hash", "result_hash"):
+            value = getattr(self, name)
+            if value is not None and (
+                len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise ValueError(f"Tool evidence {name} must be a SHA-256 hex digest")
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionRuntimeOutput:
+    result: DecisionResult
+    tool_evidence: tuple[ToolEvidence, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.tool_evidence) > 64:
+            raise ValueError("Decision runtime returned too many tool evidence records")
+        object.__setattr__(self, "tool_evidence", tuple(self.tool_evidence))
+
+
+@dataclass(frozen=True, slots=True)
 class IntentCandidate:
     decision_id: str
     request_id: str
@@ -226,6 +259,9 @@ class IntentCandidate:
     snapshot: AgentContextSnapshot
     submitted_at: datetime
     deadline: datetime
+    runtime: str = "unknown"
+    model: str | None = None
+    tool_profiles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -237,6 +273,7 @@ class IntentCandidate:
             "instance_id",
             "operation",
             "profile_hash",
+            "runtime",
         ):
             if not str(getattr(self, name)).strip():
                 raise ValueError(f"Agent candidate {name} is required")
@@ -249,6 +286,13 @@ class IntentCandidate:
             raise ValueError("Agent candidate deadline must be after submitted_at")
         object.__setattr__(self, "submitted_at", submitted)
         object.__setattr__(self, "deadline", deadline)
+        if self.model is not None and not self.model.strip():
+            raise ValueError("Agent candidate model cannot be blank")
+        if len(self.tool_profiles) > 32 or any(
+            not value.strip() or len(value) > 192 for value in self.tool_profiles
+        ):
+            raise ValueError("Agent candidate tool_profiles must contain bounded IDs")
+        object.__setattr__(self, "tool_profiles", tuple(self.tool_profiles))
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +324,10 @@ class DecisionAgentHealth:
     model: str | None = None
     mcp_servers: int = 0
     store_ready: bool = False
+    rolling_error_rate: float = 0.0
+    latency_p50_millis: float | None = None
+    latency_p95_millis: float | None = None
+    latency_p99_millis: float | None = None
 
 
 _KEY_CHARACTERS = frozenset(
@@ -369,6 +417,7 @@ __all__ = [
     "DecisionKind",
     "DecisionReceipt",
     "DecisionResult",
+    "DecisionRuntimeOutput",
     "DecisionStatus",
     "DecisionAgentHealth",
     "JsonValue",
@@ -380,4 +429,5 @@ __all__ = [
     "TightenLimitPrice",
     "TightenMaxSlippage",
     "TightenSplitPolicy",
+    "ToolEvidence",
 ]

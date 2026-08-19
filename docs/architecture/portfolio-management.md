@@ -67,6 +67,8 @@ Capital (optional) ----------> participant funding operation
 - Risk remains a separate launch-scoped enforcement Actor. It consumes
   authoritative Account/Market facts and may use Portfolio projection evidence,
   but never trusts Strategy-supplied aggregate risk numbers as authorization.
+  It understands the economic effect of a proposed trade so it can calculate
+  budget usage, but not participant routing or order-lifecycle mechanics.
 - Capital is optional because a pre-funded Strategy can trade without
   automated funding movement.
 - Capital failure must not block orders that Portfolio, Account, and Risk prove

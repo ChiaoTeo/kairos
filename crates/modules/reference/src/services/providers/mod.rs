@@ -6,26 +6,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 use futures_util::future::join_all;
 use kairos_conflux::{
-    BinanceCoinMRestConnection, BinanceOptionsRestConnection, BinanceSpotRestConnection,
-    BinanceStocksRestConnection, BinanceUsdMRestConnection, ExternalInstrument,
-    ExternalInstrumentCatalog, ExternalInstrumentKind, HyperliquidInfoRestConnection,
-    InstrumentCatalogQuery, MassiveInstrumentQuery, MassiveRestConfig, MassiveRestConnection,
-    OkxPublicRestConnection, ParticipantKind,
+    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, InstrumentCatalogQuery,
+    MassiveInstrumentQuery, MassiveRestConfig, ParticipantKind,
 };
-#[cfg(test)]
-use kairos_conflux::{BinanceCredential, BinanceRestConfig, HyperliquidRestConfig, OkxRestConfig};
 use kairos_primitives::{AssetClass, InstrumentKind};
 
-enum ConnectionRef<C> {
-    Managed(
-        kairos_conflux::ConnectionKey,
-        std::marker::PhantomData<fn() -> C>,
-    ),
-}
+struct ConnectionRef(kairos_conflux::ConnectionKey);
 
-impl<C> ConnectionRef<C> {
+impl ConnectionRef {
     fn managed(key: kairos_conflux::ConnectionKey) -> Self {
-        Self::Managed(key, std::marker::PhantomData)
+        Self(key)
     }
 }
 

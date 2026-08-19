@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 from datetime import datetime, timezone
+import logging
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
+import time
 from typing import Callable
 
 from kairospy.strategy.results import CommandResult
@@ -13,11 +16,16 @@ from ..models import (
     DecisionKind,
     DecisionReceipt,
     DecisionResult,
+    DecisionRuntimeOutput,
     DecisionStatus,
     IntentCandidate,
+    ToolEvidence,
 )
 from ..policy import DecisionPolicy
 from .records import DecisionRecordStore
+
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,8 @@ class AgentDecisionWorker:
         self._in_flight = 0
         self._last_success_at: datetime | None = None
         self._last_failure: str | None = None
+        self._latencies_millis: deque[float] = deque(maxlen=1_000)
+        self._recent_errors: deque[bool] = deque(maxlen=1_000)
 
     def start(self) -> None:
         with self._lock:
@@ -93,7 +103,7 @@ class AgentDecisionWorker:
                 candidate.decision_id,
                 DecisionStatus.SUBMISSION_INDETERMINATE,
                 delivery_certainty="indeterminate",
-                reason=f"{type(error).__name__}: {error}",
+                reason=f"{type(error).__name__}: Execution submission failed",
             )
             raise
         queued = self._enqueue(
@@ -145,6 +155,8 @@ class AgentDecisionWorker:
                 if thread.is_alive() and self._accepting
                 else "stopping"
             )
+            latencies = sorted(self._latencies_millis)
+            errors = tuple(self._recent_errors)
             return {
                 "state": state,
                 "queue_depth": self._queue.qsize(),
@@ -152,6 +164,10 @@ class AgentDecisionWorker:
                 "in_flight": self._in_flight,
                 "last_success_at": self._last_success_at,
                 "last_failure": self._last_failure,
+                "rolling_error_rate": (sum(errors) / len(errors) if errors else 0.0),
+                "latency_p50_millis": _percentile(latencies, 0.50),
+                "latency_p95_millis": _percentile(latencies, 0.95),
+                "latency_p99_millis": _percentile(latencies, 0.99),
             }
 
     def close(self, *, timeout: float) -> None:
@@ -192,6 +208,7 @@ class AgentDecisionWorker:
                 return
             with self._lock:
                 self._in_flight += 1
+            started = time.monotonic()
             try:
                 self._execute(task)
             except Exception as error:
@@ -201,13 +218,38 @@ class AgentDecisionWorker:
                         task.candidate.decision_id,
                         DecisionStatus.FAILED,
                         delivery_certainty="not_sent",
-                        reason=f"{type(error).__name__}: {error}",
+                        reason=f"{type(error).__name__}: Decision worker failed",
                     )
                 except RuntimeError:
                     pass
             finally:
+                elapsed = (time.monotonic() - started) * 1_000
+                receipt = self._records.decision(task.candidate.decision_id)
+                failed = receipt is None or receipt.status in {
+                    DecisionStatus.FAILED,
+                    DecisionStatus.INTERRUPTED,
+                    DecisionStatus.SUBMISSION_INDETERMINATE,
+                }
                 with self._lock:
                     self._in_flight -= 1
+                    self._latencies_millis.append(elapsed)
+                    self._recent_errors.append(failed)
+                _LOG.info(
+                    "Decision Agent run completed",
+                    extra={
+                        "decision_id": task.candidate.decision_id,
+                        "request_id": task.candidate.request_id,
+                        "intent_id": task.candidate.intent_id,
+                        "launch_id": task.candidate.launch_id,
+                        "instance_id": task.candidate.instance_id,
+                        "strategy_id": task.candidate.strategy_id,
+                        "capability": task.candidate.snapshot.capability,
+                        "agent_mode": task.candidate.snapshot.mode.value,
+                        "mode_revision": task.candidate.snapshot.mode_revision,
+                        "outcome": None if receipt is None else receipt.status.value,
+                        "latency_millis": elapsed,
+                    },
+                )
                 self._queue.task_done()
 
     def _execute(self, task: DecisionTask) -> None:
@@ -220,11 +262,17 @@ class AgentDecisionWorker:
         if not callable(decide):
             raise TypeError("Decision runtime does not provide decide(candidate)")
         try:
-            result = decide(candidate)
+            runtime_output = decide(candidate)
         except Exception as error:
-            self._fail_or_bypass(task, f"{type(error).__name__}: {error}")
+            self._fail_or_bypass(task, f"{type(error).__name__}: Agent runtime failed")
             return
-        if not isinstance(result, DecisionResult):
+        if isinstance(runtime_output, DecisionResult):
+            result = runtime_output
+            tool_evidence: tuple[ToolEvidence, ...] = ()
+        elif isinstance(runtime_output, DecisionRuntimeOutput):
+            result = runtime_output.result
+            tool_evidence = runtime_output.tool_evidence
+        else:
             self._fail_or_bypass(
                 task, "Decision runtime returned an invalid result type"
             )
@@ -234,11 +282,25 @@ class AgentDecisionWorker:
                 task,
                 "Decision deadline expired after model run",
                 result=result,
+                tool_evidence=tool_evidence,
+            )
+            return
+        if (
+            self._stop_requested.is_set()
+            and candidate.snapshot.mode is not AgentMode.SHADOW
+        ):
+            self._records.finish(
+                candidate.decision_id,
+                DecisionStatus.INTERRUPTED,
+                result=result,
+                tool_evidence=tool_evidence,
+                delivery_certainty="not_sent",
+                reason="Decision worker stopped before final submission",
             )
             return
         outcome = self._policy.apply(candidate, result)
         if candidate.snapshot.mode is AgentMode.SHADOW:
-            self._finish_shadow(task, result, outcome.decision)
+            self._finish_shadow(task, result, outcome.decision, tool_evidence)
             return
         decision = outcome.decision
         effective = outcome.effective_request
@@ -258,6 +320,7 @@ class AgentDecisionWorker:
                 candidate.decision_id,
                 _terminal_status(decision),
                 result=result,
+                tool_evidence=tool_evidence,
                 delivery_certainty="not_sent",
                 reason=outcome.reason,
             )
@@ -272,9 +335,10 @@ class AgentDecisionWorker:
                 candidate.decision_id,
                 DecisionStatus.SUBMISSION_INDETERMINATE,
                 result=result,
+                tool_evidence=tool_evidence,
                 effective_request=effective,
                 delivery_certainty="indeterminate",
-                reason=f"{type(error).__name__}: {error}",
+                reason=f"{type(error).__name__}: Execution submission failed",
             )
             return
         certainty = "sent"
@@ -283,6 +347,7 @@ class AgentDecisionWorker:
             candidate.decision_id,
             status,
             result=result,
+            tool_evidence=tool_evidence,
             effective_request=effective,
             final_submission_status=submitted.status,
             delivery_certainty=certainty,
@@ -296,14 +361,29 @@ class AgentDecisionWorker:
         reason: str,
         *,
         result: DecisionResult | None = None,
+        tool_evidence: tuple[ToolEvidence, ...] = (),
     ) -> None:
         candidate = task.candidate
+        if (
+            self._stop_requested.is_set()
+            and candidate.snapshot.mode is not AgentMode.SHADOW
+        ):
+            self._records.finish(
+                candidate.decision_id,
+                DecisionStatus.INTERRUPTED,
+                result=result,
+                tool_evidence=tool_evidence,
+                delivery_certainty="not_sent",
+                reason="Decision worker stopped before final submission",
+            )
+            return
         if candidate.snapshot.mode is AgentMode.SHADOW:
             submitted = task.shadow_result
             self._records.finish(
                 candidate.decision_id,
                 DecisionStatus.FAILED,
                 result=result,
+                tool_evidence=tool_evidence,
                 final_submission_status=None if submitted is None else submitted.status,
                 delivery_certainty=None if submitted is None else "sent",
                 reason=reason,
@@ -314,6 +394,7 @@ class AgentDecisionWorker:
                 candidate.decision_id,
                 DecisionStatus.FAILED,
                 result=result,
+                tool_evidence=tool_evidence,
                 delivery_certainty="not_sent",
                 reason=reason,
             )
@@ -326,15 +407,17 @@ class AgentDecisionWorker:
                 candidate.decision_id,
                 DecisionStatus.SUBMISSION_INDETERMINATE,
                 result=result,
+                tool_evidence=tool_evidence,
                 effective_request=candidate.request,
                 delivery_certainty="indeterminate",
-                reason=f"{type(error).__name__}: {error}",
+                reason=f"{type(error).__name__}: Execution submission failed",
             )
             return
         self._records.finish(
             candidate.decision_id,
             DecisionStatus.ABSTAINED,
             result=result,
+            tool_evidence=tool_evidence,
             effective_request=candidate.request,
             final_submission_status=submitted.status,
             delivery_certainty="sent",
@@ -346,12 +429,14 @@ class AgentDecisionWorker:
         task: DecisionTask,
         result: DecisionResult,
         decision: DecisionKind,
+        tool_evidence: tuple[ToolEvidence, ...],
     ) -> None:
         submitted = task.shadow_result
         self._records.finish(
             task.candidate.decision_id,
             _terminal_status(decision),
             result=result,
+            tool_evidence=tool_evidence,
             effective_request=None,
             final_submission_status=None if submitted is None else submitted.status,
             delivery_certainty=None if submitted is None else "sent",
@@ -385,6 +470,13 @@ def _terminal_status(decision: DecisionKind) -> DecisionStatus:
         DecisionKind.REJECT: DecisionStatus.REJECTED,
         DecisionKind.ABSTAIN: DecisionStatus.ABSTAINED,
     }[decision]
+
+
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    index = min(len(values) - 1, max(0, round((len(values) - 1) * fraction)))
+    return values[index]
 
 
 __all__ = ["AgentDecisionWorker", "DecisionTask"]

@@ -22,7 +22,7 @@ pub use model::{
     ExecutionBusinessChange, ExecutionBusinessEvent, ExecutionCurrentView, ExecutionError,
     ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionRouteCandidate,
     ExecutionRouteQuery, ExecutionSnapshot, ExpireIntent, HedgeRequirement, IntentEvent,
-    IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
+    IntentAdmissionEvidence, IntentLegRequest, IntentState, IntentStatus, QuoteObservation, RefreshQuoteIntent, RemoteOrder,
     RemoteOrderQuery, ReplaceOrder, RiskAuthorizationContext, RiskCommandFailure,
     RiskCommandResult, SnapshotWatermark, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,

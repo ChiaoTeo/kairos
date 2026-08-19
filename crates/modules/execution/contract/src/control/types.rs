@@ -48,6 +48,8 @@ pub struct SubmitIntentRequest {
     #[serde(flatten)]
     pub envelope: CommandEnvelope,
     pub intent: serde_json::Value,
+    #[serde(default)]
+    pub admission_evidence: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
