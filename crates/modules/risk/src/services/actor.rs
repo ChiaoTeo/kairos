@@ -515,6 +515,7 @@ impl RiskActor {
             decision: decision.clone(),
             account_id: request.account_id.clone(),
             strategy_id: request.strategy_id.clone(),
+            instrument_id: request.instrument_id.clone(),
             event_sequence: next_sequence,
         });
         self.checkpoint();

@@ -589,10 +589,7 @@ fn decision_fb<'a>(
     let req = b.create_string(&value.request_id);
     let account = b.create_string(&value.account_id);
     let strategy = b.create_string(&value.strategy_id);
-    let instrument = value
-        .instrument_id
-        .as_ref()
-        .map(|item| b.create_string(item.as_str()));
+    let instrument = b.create_string(value.instrument_id.as_str());
     let reasons = b.create_vector(&[] as &[flatbuffers::WIPOffset<fb::DecisionReason>]);
     let allocs = value
         .allocations
@@ -651,7 +648,7 @@ fn decision_fb<'a>(
             request_id: Some(req),
             account_id: Some(account),
             strategy_id: Some(strategy),
-            instrument_id: instrument,
+            instrument_id: Some(instrument),
             outcome: if value.allowed {
                 if value.degraded {
                     fb::DecisionOutcome::DEGRADED_ALLOWED

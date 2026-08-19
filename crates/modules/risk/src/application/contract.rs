@@ -140,14 +140,14 @@ pub(crate) fn decision(
     value: &crate::RiskDecision,
     account_id: &kairos_primitives::AccountId,
     strategy_id: &kairos_primitives::StrategyId,
-    instrument_id: Option<&kairos_primitives::InstrumentId>,
+    instrument_id: &kairos_primitives::InstrumentId,
 ) -> kairos_risk_contract::RiskDecision {
     kairos_risk_contract::RiskDecision {
         decision_id: value.decision_id.clone(),
         request_id: value.request_id.clone(),
         account_id: account_id.clone(),
         strategy_id: strategy_id.clone(),
-        instrument_id: instrument_id.cloned(),
+        instrument_id: instrument_id.clone(),
         allowed: value.allowed,
         degraded: value.degraded,
         reason_codes: value.reason_codes.iter().map(reason).collect(),
@@ -321,9 +321,10 @@ pub(crate) fn event(value: &crate::RiskEvent) -> kairos_risk_contract::RiskEvent
             decision: value,
             account_id,
             strategy_id,
+            instrument_id,
             event_sequence,
         } => kairos_risk_contract::RiskEvent::DecisionEvaluated {
-            decision: decision(value, account_id, strategy_id, None),
+            decision: decision(value, account_id, strategy_id, instrument_id),
             account_id: account_id.clone(),
             strategy_id: strategy_id.clone(),
             event_sequence: *event_sequence,

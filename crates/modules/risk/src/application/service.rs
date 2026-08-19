@@ -98,6 +98,7 @@ pub enum RiskEvent {
         decision: RiskDecision,
         account_id: kairos_primitives::AccountId,
         strategy_id: kairos_primitives::StrategyId,
+        instrument_id: kairos_primitives::InstrumentId,
         event_sequence: Sequence,
     },
     CircuitChanged {

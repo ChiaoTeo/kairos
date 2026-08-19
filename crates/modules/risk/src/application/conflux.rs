@@ -165,7 +165,7 @@ impl RiskApplication {
                                     &decision,
                                     &identity.0,
                                     &identity.1,
-                                    Some(&identity.2),
+                                    &identity.2,
                                 )
                             })
                     });
@@ -187,7 +187,7 @@ impl RiskApplication {
                                     &decision,
                                     &identity.0,
                                     &identity.1,
-                                    Some(&identity.2),
+                                    &identity.2,
                                 )
                             })
                     });
@@ -209,7 +209,7 @@ impl RiskApplication {
                                     &decision,
                                     &identity.0,
                                     &identity.1,
-                                    Some(&identity.2),
+                                    &identity.2,
                                 )
                             })
                     });

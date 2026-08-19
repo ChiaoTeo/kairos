@@ -377,7 +377,7 @@ pub struct RiskDecision {
     pub request_id: RequestId,
     pub account_id: AccountId,
     pub strategy_id: StrategyId,
-    pub instrument_id: Option<InstrumentId>,
+    pub instrument_id: InstrumentId,
     pub allowed: bool,
     pub degraded: bool,
     pub reason_codes: Vec<ReasonCode>,
