@@ -124,6 +124,16 @@ impl SocketExecutionRiskReservations {
                         })?,
                     )
                     .into(),
+                    account_segment: context.funding_segment.clone().ok_or_else(|| {
+                        RiskCommandFailure::NotSent(
+                            "execution route is missing its funding segment".into(),
+                        )
+                    })?,
+                    collateral_asset: context.collateral_asset.clone().ok_or_else(|| {
+                        RiskCommandFailure::NotSent(
+                            "execution route is missing its collateral asset".into(),
+                        )
+                    })?,
                     reduce_only: request.options.reduce_only.unwrap_or(false),
                     margin_rule_id: context.margin_rule_id.clone().ok_or_else(|| {
                         RiskCommandFailure::NotSent(
@@ -192,16 +202,8 @@ impl SocketExecutionRiskReservations {
                                 "execution route is missing its funding broker".into(),
                             )
                         })?,
-                        segment: context.funding_segment.clone().ok_or_else(|| {
-                            RiskCommandFailure::NotSent(
-                                "execution route is missing its funding segment".into(),
-                            )
-                        })?,
-                        collateral_asset: context.collateral_asset.clone().ok_or_else(|| {
-                            RiskCommandFailure::NotSent(
-                                "execution route is missing its collateral asset".into(),
-                            )
-                        })?,
+                        segment: requirement.account_segment.clone(),
+                        collateral_asset: requirement.collateral_asset.clone(),
                     },
                 });
             }

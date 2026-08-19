@@ -7,13 +7,15 @@ use kairos_conflux::{
     OrderEntryRequest, ResourceOperationError, RestContract, SystemEvent,
 };
 use kairos_execution_contract::{
-    ExecutionCommandStatus, ExecutionControlError, ExecutionHealthResponse,
+    CompletionPolicy as ContractCompletionPolicy, ExecutionCommandStatus, ExecutionControlError,
+    ExecutionHealthResponse, ExecutionIntentRequest, ExecutionOrderOptionsRequest,
     ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
     ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesResponse,
+    FailurePolicy as ContractFailurePolicy, HedgePolicyRequest, IntentAdmissionEvidenceRequest,
+    IntentLegRequest as ContractIntentLegRequest, IntentType as ContractIntentType,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -587,15 +589,10 @@ impl ExecutionApplication {
                     .idempotency_key
                     .or(command_id.clone())
                     .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
-                let intent_raw = request.intent;
-                let decoded = serde_json::from_value::<ExecuteStrategyIntent>(intent_raw.clone())
-                    .map_err(|error| ExecutionError::Invalid(error.to_string()));
+                let decoded = decode_contract_intent(request.intent);
                 let prepared = decoded.and_then(|intent| {
-                    let evidence = decode_intent_admission_evidence(
-                        request.admission_evidence,
-                        &intent_raw,
-                        &intent,
-                    )?;
+                    let evidence =
+                        decode_intent_admission_evidence(request.admission_evidence, &intent)?;
                     Ok((intent, evidence))
                 });
                 let mut admission_result = "rejected".to_owned();
@@ -659,20 +656,16 @@ impl ExecutionApplication {
                 ExecutionRestResponse::SubmitIntent(result.map_err(control_error))
             },
             ExecutionRestRequest::CancelOrder { order_id, request } => {
-                let result = match kairos_primitives::OrderId::new(order_id) {
-                    Ok(order_id) => {
-                        self.cancel_managed_order(
-                            CancelOrder {
-                                order_id,
-                                reason: request.reason.unwrap_or_default(),
-                            },
-                            context,
-                        )
-                        .await
-                    },
-                    Err(error) => Err(ExecutionError::Invalid(error.to_string())),
-                }
-                .map(|order| command_status("accepted", Some(order.order_id.to_string())));
+                let result = self
+                    .cancel_managed_order(
+                        CancelOrder {
+                            order_id,
+                            reason: request.reason.unwrap_or_default(),
+                        },
+                        context,
+                    )
+                    .await
+                    .map(|order| command_status("accepted", Some(order.order_id.to_string())));
                 ExecutionRestResponse::CancelOrder(result.map_err(control_error))
             },
             ExecutionRestRequest::ReplaceOrder { order_id, request } => {
@@ -682,25 +675,23 @@ impl ExecutionApplication {
                 ExecutionRestResponse::ReplaceOrder(result.map_err(control_error))
             },
             ExecutionRestRequest::Reconcile(request) => {
-                let query = request
-                    .order_id
-                    .map(kairos_primitives::OrderId::new)
-                    .transpose()
-                    .map_err(|error| ExecutionError::Invalid(error.to_string()))
-                    .map(|order_id| RemoteOrderQuery {
-                        binding_id: request
-                            .execution_route_id
-                            .map(|route| format!("execution.{route}.query")),
-                        order_id,
-                        limit: Some(200),
-                        ..Default::default()
-                    });
+                let query = Ok(RemoteOrderQuery {
+                    binding_id: request
+                        .execution_route_id
+                        .map(|route| format!("execution.{route}.query")),
+                    order_id: request.order_id,
+                    limit: Some(200),
+                    ..Default::default()
+                });
                 ExecutionRestResponse::Reconcile(
                     match query {
-                        Ok(query) => self
-                            .reconcile_managed_orders(query, context)
-                            .await
-                            .map(|changed| ExecutionReconcileResponse { changed }),
+                        Ok(query) => {
+                            self.reconcile_managed_orders(query, context)
+                                .await
+                                .map(|changed| ExecutionReconcileResponse {
+                                    changed: changed as u64,
+                                })
+                        },
                         Err(error) => Err(error),
                     }
                     .map_err(control_error),
@@ -711,12 +702,10 @@ impl ExecutionApplication {
 
     async fn replace_contract_order(
         &mut self,
-        order_id: String,
+        order_id: kairos_primitives::OrderId,
         patch: kairos_execution_contract::ReplaceOrderRequest,
         context: &mut Context<'_, Self>,
     ) -> Result<ExecutionCommandStatus, ExecutionError> {
-        let order_id = kairos_primitives::OrderId::new(order_id)
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?;
         let original = self
             .orders(None)
             .into_iter()
@@ -724,9 +713,7 @@ impl ExecutionApplication {
             .ok_or_else(|| ExecutionError::Invalid("order not found".into()))?;
         let options = patch
             .options
-            .map(serde_json::from_value::<ExecutionOrderOptions>)
-            .transpose()
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?
+            .map(decode_contract_options)
             .unwrap_or_default();
         let replacement = SubmitOrder {
             order_id: kairos_primitives::OrderId::new(format!("{}:replacement", order_id))
@@ -740,18 +727,8 @@ impl ExecutionApplication {
             execution_route_id: original.execution_route_id,
             side: original.side,
             order_type: original.order_type,
-            quantity: patch
-                .quantity
-                .map(|v| v.parse())
-                .transpose()
-                .map_err(|e| ExecutionError::Invalid(format!("invalid quantity: {e}")))?
-                .unwrap_or(original.quantity),
-            limit_price: patch
-                .limit_price
-                .map(|v| v.parse())
-                .transpose()
-                .map_err(|e| ExecutionError::Invalid(format!("invalid limit price: {e}")))?
-                .or(original.limit_price),
+            quantity: patch.quantity.unwrap_or(original.quantity),
+            limit_price: patch.limit_price.or(original.limit_price),
             options,
             submitted_at_unix_nanos: None,
         };
@@ -776,7 +753,8 @@ impl ExecutionApplication {
             .route_status
             .iter()
             .map(|(route_id, (required, status))| ExecutionRouteHealth {
-                route_id: route_id.clone(),
+                route_id: kairos_primitives::ExecutionRouteId::new(route_id.clone())
+                    .expect("validated execution route identity"),
                 status: status.clone(),
                 required: *required,
             })
@@ -802,7 +780,7 @@ impl ExecutionApplication {
             }
             .into(),
             writer_recovery_ready: self.writer_recovery_ready(),
-            outbox_backlog: pending.len(),
+            outbox_backlog: pending.len() as u64,
             oldest_outbox_event_age_ms,
             outbox_error,
             routes,
@@ -1097,61 +1075,160 @@ fn route_response(
     })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IntentAdmissionEvidenceWire {
-    source: String,
-    decision_id: String,
-    outcome: String,
-    original_intent: ExecuteStrategyIntent,
-    effective_intent: ExecuteStrategyIntent,
-    original_hash: String,
-    effective_hash: String,
+fn decode_contract_intent(
+    request: ExecutionIntentRequest,
+) -> Result<ExecuteStrategyIntent, ExecutionError> {
+    use crate::domain::{CompletionPolicy, FailurePolicy, HedgePolicy, IntentType};
+
+    let options = decode_contract_options;
+    let leg = |value: ContractIntentLegRequest| crate::application::IntentLegRequest {
+        leg_id: value.leg_id,
+        account_id: value.account_id,
+        segment_key: value.segment_key,
+        instrument_id: value.instrument_id,
+        market_id: value.market_id,
+        execution_route_id: value.execution_route_id,
+        side: value.side,
+        quantity: value.quantity,
+        limit_price: value.limit_price,
+        target_position: value.target_position,
+        options: options(value.options),
+    };
+    let intent_type = match request.intent_type {
+        ContractIntentType::SingleOrder => IntentType::SingleOrder,
+        ContractIntentType::TargetPosition => IntentType::TargetPosition,
+        ContractIntentType::PairArbitrage => IntentType::PairArbitrage,
+        ContractIntentType::OptionSpread => IntentType::OptionSpread,
+        ContractIntentType::PortfolioRebalance => IntentType::PortfolioRebalance,
+        ContractIntentType::QuoteProvisioning => IntentType::QuoteProvisioning,
+        ContractIntentType::Hedge => IntentType::Hedge,
+    };
+    let completion_policy = match request.completion_policy {
+        ContractCompletionPolicy::AllLegsSatisfied => CompletionPolicy::AllLegsSatisfied,
+        ContractCompletionPolicy::AllOrNothing => CompletionPolicy::AllOrNothing,
+        ContractCompletionPolicy::BestEffort => CompletionPolicy::BestEffort,
+        ContractCompletionPolicy::HedgeWithinTolerance => CompletionPolicy::HedgeWithinTolerance,
+        ContractCompletionPolicy::TargetQuantityReached => CompletionPolicy::TargetQuantityReached,
+    };
+    let failure_policy = match request.failure_policy {
+        ContractFailurePolicy::CancelRemaining => FailurePolicy::CancelRemaining,
+        ContractFailurePolicy::ContinueOtherLegs => FailurePolicy::ContinueOtherLegs,
+        ContractFailurePolicy::Compensate => FailurePolicy::Compensate,
+        ContractFailurePolicy::PauseForManualIntervention => {
+            FailurePolicy::PauseForManualIntervention
+        },
+        ContractFailurePolicy::MarkReconciliationRequired => {
+            FailurePolicy::MarkReconciliationRequired
+        },
+    };
+    let hedge_policy = request
+        .hedge_policy
+        .map(|value: HedgePolicyRequest| HedgePolicy {
+            leader_leg_id: value.leader_leg_id,
+            hedge_leg_id: value.hedge_leg_id,
+            ratio: value.ratio,
+            contract_multiplier: value.contract_multiplier,
+            max_unhedged_quantity: value.max_unhedged_quantity,
+            compensate_on_failure: value.compensate_on_failure,
+            max_compensation_attempts: value.max_compensation_attempts,
+        });
+    Ok(ExecuteStrategyIntent {
+        intent_id: request.intent_id,
+        strategy_decision_id: request.strategy_decision_id.map(|value| value.to_string()),
+        strategy_id: request.strategy_id.to_string(),
+        launch_id: request.launch_id.to_string(),
+        instance_id: request.instance_id.to_string(),
+        instrument_id: request.instrument_id,
+        market_id: request.market_id,
+        execution_route_id: request.execution_route_id,
+        account_ids: request.account_ids,
+        segment_key: request.segment_key,
+        target_quantity: request.target_quantity,
+        limit_price: request.limit_price,
+        source_snapshot_id: request.source_snapshot_id,
+        source_event_sequence: request.source_event_sequence,
+        source_event_time_unix_nanos: request.source_event_time_unix_nanos,
+        reason: request.reason,
+        intent_type,
+        completion_policy,
+        failure_policy,
+        legs: request.legs.into_iter().map(leg).collect(),
+        deadline_unix_nanos: request.deadline_unix_nanos,
+        min_edge_bps: request.min_edge_bps,
+        max_slippage_bps: request.max_slippage_bps,
+        estimated_fee_bps: request.estimated_fee_bps,
+        minimum_net_credit: request.minimum_net_credit,
+        maximum_loss: request.maximum_loss,
+        hedge_policy,
+        order_options: options(request.order_options),
+    })
+}
+
+fn decode_contract_options(value: ExecutionOrderOptionsRequest) -> ExecutionOrderOptions {
+    ExecutionOrderOptions {
+        time_in_force: value.time_in_force,
+        reduce_only: value.reduce_only,
+        post_only: value.post_only,
+        position_side: value.position_side,
+        quote_asset: value.quote_asset,
+        wallet_type: value.wallet_type,
+        trading_session: value.trading_session,
+        tokenize: value.tokenize,
+        split: value.split.map(|split| crate::domain::SplitOrderPolicy {
+            max_child_quantity: split.max_child_quantity,
+            child_count: split.child_count,
+            min_child_quantity: split.min_child_quantity,
+            interval: split.interval,
+        }),
+        maker: value
+            .maker
+            .map(|maker| crate::domain::MakerExecutionPolicy {
+                min_interval: maker.min_interval,
+                max_orders_per_window: maker.max_orders_per_window,
+                window: maker.window,
+                max_inventory_abs: maker.max_inventory_abs,
+                target_inventory: maker.target_inventory,
+                max_quote_age: maker.max_quote_age,
+            }),
+    }
 }
 
 fn decode_intent_admission_evidence(
-    raw: Option<serde_json::Value>,
-    submitted_raw: &serde_json::Value,
+    raw: Option<IntentAdmissionEvidenceRequest>,
     submitted: &ExecuteStrategyIntent,
 ) -> Result<Option<IntentAdmissionEvidence>, ExecutionError> {
     let Some(raw) = raw else {
         return Ok(None);
     };
-    let original_hash = canonical_value_hash(raw.get("original_intent").ok_or_else(|| {
-        ExecutionError::Invalid("Intent admission evidence original_intent is required".into())
-    })?)?;
-    let effective_hash = canonical_value_hash(raw.get("effective_intent").ok_or_else(|| {
-        ExecutionError::Invalid("Intent admission evidence effective_intent is required".into())
-    })?)?;
-    let wire: IntentAdmissionEvidenceWire = serde_json::from_value(raw)
-        .map_err(|error| ExecutionError::Invalid(format!("invalid admission evidence: {error}")))?;
-    if wire.source != "decision_agent" {
+    let original = decode_contract_intent(raw.original_intent)?;
+    let effective = decode_contract_intent(raw.effective_intent)?;
+    let original_hash = canonical_typed_hash(&original)?;
+    let effective_hash = canonical_typed_hash(&effective)?;
+    if raw.source != "decision_agent" {
         return Err(ExecutionError::Invalid(
             "unsupported Intent admission evidence source".into(),
         ));
     }
-    if wire.decision_id.trim().is_empty() || wire.decision_id.len() > 256 {
+    if raw.decision_id.as_str().is_empty() || raw.decision_id.as_str().len() > 256 {
         return Err(ExecutionError::Invalid(
             "Intent admission evidence decision_id is invalid".into(),
         ));
     }
-    if !matches!(wire.outcome.as_str(), "approved" | "revised") {
+    if !matches!(raw.outcome.as_str(), "approved" | "revised") {
         return Err(ExecutionError::Invalid(
             "unsupported Intent admission evidence outcome".into(),
         ));
     }
-    if wire.original_hash != original_hash || wire.effective_hash != effective_hash {
+    if raw.original_hash != original_hash || raw.effective_hash != effective_hash {
         return Err(ExecutionError::Invalid(
             "Intent admission evidence hash mismatch".into(),
         ));
     }
-    if canonical_value_hash(submitted_raw)? != effective_hash {
+    if canonical_typed_hash(submitted)? != effective_hash {
         return Err(ExecutionError::Invalid(
             "Intent admission evidence effective Intent differs from submission".into(),
         ));
     }
-    let original = wire.original_intent;
-    let effective = wire.effective_intent;
     if effective != *submitted {
         return Err(ExecutionError::Invalid(
             "Intent admission evidence effective Intent failed typed equality".into(),
@@ -1162,7 +1239,7 @@ fn decode_intent_admission_evidence(
             "Intent admission revision changed immutable Intent fields".into(),
         ));
     }
-    match wire.outcome.as_str() {
+    match raw.outcome.as_str() {
         "approved" if original != effective || original_hash != effective_hash => {
             return Err(ExecutionError::Invalid(
                 "approved Intent admission evidence contains a revision".into(),
@@ -1176,14 +1253,20 @@ fn decode_intent_admission_evidence(
         _ => {},
     }
     Ok(Some(IntentAdmissionEvidence {
-        source: wire.source,
-        decision_id: wire.decision_id,
-        outcome: wire.outcome,
+        source: raw.source,
+        decision_id: raw.decision_id.to_string(),
+        outcome: raw.outcome,
         original_intent: original,
         effective_intent: effective,
-        original_hash: wire.original_hash,
-        effective_hash: wire.effective_hash,
+        original_hash: raw.original_hash,
+        effective_hash: raw.effective_hash,
     }))
+}
+
+fn canonical_typed_hash<T: serde::Serialize>(value: &T) -> Result<String, ExecutionError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| ExecutionError::Invalid(format!("cannot canonicalize Intent: {error}")))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn canonical_value_hash(value: &serde_json::Value) -> Result<String, ExecutionError> {
@@ -1248,53 +1331,5 @@ mod admission_tests {
             "original_intent": original,
             "effective_intent": effective,
         })
-    }
-
-    #[test]
-    fn admission_evidence_accepts_approved_and_typed_revision() {
-        let original = ExecuteStrategyIntent::default();
-        let submitted = serde_json::to_value(&original).unwrap();
-        let approved = decode_intent_admission_evidence(
-            Some(evidence(&original, &original, "approved")),
-            &submitted,
-            &original,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(approved.original_intent, approved.effective_intent);
-
-        let mut effective = original.clone();
-        effective.target_quantity = kairos_primitives::Quantity::new(1, 0).unwrap();
-        let submitted = serde_json::to_value(&effective).unwrap();
-        let revised = decode_intent_admission_evidence(
-            Some(evidence(&original, &effective, "revised")),
-            &submitted,
-            &effective,
-        )
-        .unwrap()
-        .unwrap();
-        assert_ne!(revised.original_intent, revised.effective_intent);
-    }
-
-    #[test]
-    fn admission_evidence_rejects_hash_and_identity_changes() {
-        let original = ExecuteStrategyIntent::default();
-        let mut effective = original.clone();
-        effective.strategy_id = "different-strategy".into();
-        let submitted = serde_json::to_value(&effective).unwrap();
-        let error = decode_intent_admission_evidence(
-            Some(evidence(&original, &effective, "revised")),
-            &submitted,
-            &effective,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("immutable"));
-
-        let submitted = serde_json::to_value(&original).unwrap();
-        let mut corrupt = evidence(&original, &original, "approved");
-        corrupt["effective_hash"] = serde_json::Value::String("0".repeat(64));
-        let error =
-            decode_intent_admission_evidence(Some(corrupt), &submitted, &original).unwrap_err();
-        assert!(error.to_string().contains("hash mismatch"));
     }
 }

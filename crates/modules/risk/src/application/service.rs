@@ -80,6 +80,8 @@ pub struct FundingRequirement {
     pub available_margin: crate::domain::Amount,
     pub shortfall: crate::domain::Amount,
     pub margin_rule_id: String,
+    pub account_segment: kairos_primitives::SegmentKey,
+    pub collateral_asset: kairos_primitives::Currency,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

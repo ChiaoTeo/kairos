@@ -1,10 +1,8 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::ProtocolContext;
-use kairos_protocol::generated::kairos::common::v_2::{
-    Decimal64, EventMetadata, EventMetadataArgs,
-};
+use kairos_protocol::generated::kairos::common::v_2::{Decimal64, EventMetadata};
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
+use kairos_protocol::ProtocolContext;
 
 use crate::ContractResult;
 use crate::transport::{Asset, Entity, Instrument, Listing, Market};
@@ -42,41 +40,8 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    let event_id = builder.create_string(
-        context
-            .event_id
-            .as_ref()
-            .expect("reference event context carries event identity")
-            .as_str(),
-    );
-    let stream_id = builder.create_string("reference.events");
-    let producer_id = builder.create_string(&context.producer_id);
-    let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = context
-        .identity
-        .launch_id()
-        .map(|value| builder.create_string(value.as_str()));
-    let instance_id = context
-        .identity
-        .instance_id()
-        .map(|value| builder.create_string(value.as_str()));
-    EventMetadata::create(
-        builder,
-        &EventMetadataArgs {
-            event_id: Some(event_id),
-            stream_id: Some(stream_id),
-            sequence: context.sequence.get(),
-            producer_id: Some(producer_id),
-            workspace_id: Some(workspace_id),
-            launch_id,
-            instance_id,
-            occurred_at_unix_nanos,
-            published_at_unix_nanos: now_unix_nanos(),
-            ..Default::default()
-        },
-    )
+    kairos_protocol::metadata::event_metadata(builder, context, "reference.events", occurred_at_unix_nanos)
 }
-
 /// Typed v2 Reference event encoder. It accepts contract-owned record models
 /// and never serializes a record through JSON.
 pub struct ReferenceEncoder;

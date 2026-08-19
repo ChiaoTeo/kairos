@@ -118,3 +118,41 @@ pub struct CapitalControlError {
     #[serde(default)]
     pub details: BTreeMap<String, serde_json::Value>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct QueryCapitalAvailabilityRequest {
+    pub request_id: RequestId,
+    pub capital_group_id: CapitalGroupId,
+    pub location: FundingLocation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapitalReadinessStatus {
+    WaitingForFacts,
+    Degraded,
+    Ready,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CapitalAvailabilityResponse {
+    pub request_id: RequestId,
+    pub capital_group_id: CapitalGroupId,
+    pub location: FundingLocation,
+    pub readiness: CapitalReadinessStatus,
+    pub policy_minimum: Quantity,
+    pub policy_default_target: Quantity,
+    pub policy_maximum: Quantity,
+    pub policy_version: Generation,
+    pub active_objective_ids: Vec<FundingObjectiveId>,
+    pub active_demand_ids: Vec<CapitalDemandId>,
+    pub desired_target: Quantity,
+    pub observed_available: Quantity,
+    pub effective_target: Quantity,
+    pub deficit: Quantity,
+    pub account_watermark: Sequence,
+    pub risk_policy_version: Generation,
+    pub risk_watermark: Sequence,
+    pub evaluated_at_unix_nanos: UnixNanos,
+    pub reason: Option<String>,
+}

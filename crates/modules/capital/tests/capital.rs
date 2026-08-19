@@ -15,7 +15,7 @@ use kairos_capital::{
     ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
     RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
 };
-use kairos_integration::{
+use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
     AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission, CommandOutcome,
     IntegrationError,

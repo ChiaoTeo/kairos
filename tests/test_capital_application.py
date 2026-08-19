@@ -107,6 +107,27 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
     assert capital.availability(_objective().destination).deficit == Decimal("30000")
 
 
+def test_availability_transport_failure_degrades_without_blocking_strategy() -> None:
+    class Projection:
+        def availability(self, **_query):
+            raise RuntimeError("snapshot is warming up")
+
+    capital = CapitalApplication(
+        object(),
+        Projection(),
+        strategy_id="basis",
+        launch_id="launch-a",
+        instance_id="instance-a",
+        capital_group_id="group-a",
+        account_ids=(AccountId("account-a"),),
+    )
+
+    availability = capital.availability(_objective().destination)
+
+    assert availability.readiness is CapitalReadiness.DEGRADED
+    assert "warming up" in (availability.reason or "")
+
+
 def test_funding_objective_requires_a_bounded_time_window() -> None:
     objective = _objective()
 

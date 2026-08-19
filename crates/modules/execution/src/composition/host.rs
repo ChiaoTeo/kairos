@@ -118,13 +118,19 @@ fn decode_request(
         ("POST", "/v1/reconciliation") => Ok(Some(ExecutionRestRequest::Reconcile(decode(body)?))),
         ("DELETE", _) if path.starts_with("/v1/orders/") => {
             Ok(Some(ExecutionRestRequest::CancelOrder {
-                order_id: path.trim_start_matches("/v1/orders/").to_owned(),
+                order_id: kairos_primitives::OrderId::new(
+                    path.trim_start_matches("/v1/orders/").to_owned(),
+                )
+                .map_err(|error| error_response(error))?,
                 request: decode_or_default(body)?,
             }))
         },
         ("PATCH", _) if path.starts_with("/v1/orders/") => {
             Ok(Some(ExecutionRestRequest::ReplaceOrder {
-                order_id: path.trim_start_matches("/v1/orders/").to_owned(),
+                order_id: kairos_primitives::OrderId::new(
+                    path.trim_start_matches("/v1/orders/").to_owned(),
+                )
+                .map_err(|error| error_response(error))?,
                 request: decode(body)?,
             }))
         },
@@ -165,6 +171,10 @@ fn routes_query(query: &str) -> Result<ExecutionRoutesQuery, Response> {
             .transpose()
             .map_err(invalid)?,
     })
+}
+
+fn error_response(domain_error: kairos_primitives::DomainTypeError) -> Response {
+    error(StatusCode::BAD_REQUEST, &domain_error.to_string())
 }
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, Response> {

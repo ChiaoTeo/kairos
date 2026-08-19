@@ -75,6 +75,8 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
         proposal: TradeRiskProposal {
             notional: amount(value),
             initial_margin_rate_bps: 10_000.into(),
+            account_segment: kairos_primitives::SegmentKey::new("usd-m").unwrap(),
+            collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
             reduce_only: false,
             margin_rule_id: "test:fully-funded".into(),
         },
@@ -410,6 +412,8 @@ fn proposal_calculates_margin_and_returns_a_structured_shortfall() {
     assert_eq!(funding.available_margin, amount(9));
     assert_eq!(funding.shortfall, amount(1));
     assert_eq!(funding.margin_rule_id, "reference:binance-usdm:tier-1:v1");
+    assert_eq!(funding.account_segment.as_str(), "usd-m");
+    assert_eq!(funding.collateral_asset.as_str(), "USDT");
     assert!(app.snapshot().reservations.is_empty());
 
     while !matches!(
@@ -429,6 +433,8 @@ fn proposal_calculates_margin_and_returns_a_structured_shortfall() {
     assert_eq!(encoded.required_margin().mantissa(), 10);
     assert_eq!(encoded.shortfall().mantissa(), 1);
     assert_eq!(encoded.margin_rule_id(), "reference:binance-usdm:tier-1:v1");
+    assert_eq!(encoded.account_segment(), "usd-m");
+    assert_eq!(encoded.collateral_asset(), "USDT");
 }
 
 #[test]

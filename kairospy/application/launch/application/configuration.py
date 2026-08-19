@@ -616,10 +616,104 @@ class LaunchConfig:
             if not isinstance(enabled, bool):
                 issues.append("capital.enabled must be a boolean")
             if enabled:
+                automatic_execution = capital.get("automatic_execution", False)
+                if not isinstance(automatic_execution, bool):
+                    issues.append("capital.automatic_execution must be a boolean")
+                plan_ttl_millis = capital.get("plan_ttl_millis", 30_000)
+                if (
+                    isinstance(plan_ttl_millis, bool)
+                    or not isinstance(plan_ttl_millis, int)
+                    or plan_ttl_millis <= 0
+                ):
+                    issues.append("capital.plan_ttl_millis must be a positive integer")
                 for field in ("capital_group_id", "strategy_id"):
                     value = capital.get(field)
                     if not isinstance(value, str) or not value.strip():
                         issues.append(f"capital.{field} is required when Capital is enabled")
+                policies = capital.get("policies")
+                if not isinstance(policies, list) or not policies:
+                    issues.append(
+                        "capital.policies requires at least one policy when Capital is enabled"
+                    )
+                else:
+                    for index, policy in enumerate(policies):
+                        prefix = f"capital.policies[{index}]"
+                        if not isinstance(policy, Mapping):
+                            issues.append(f"{prefix} must be a table")
+                            continue
+                        destination = policy.get("destination")
+                        if not isinstance(destination, Mapping):
+                            issues.append(f"{prefix}.destination must be a table")
+                        else:
+                            for field in ("broker", "account_id", "segment", "asset"):
+                                value = destination.get(field)
+                                if not isinstance(value, str) or not value.strip():
+                                    issues.append(f"{prefix}.destination.{field} is required")
+                        amounts: dict[str, Decimal] = {}
+                        for field in (
+                            "minimum",
+                            "default_target",
+                            "maximum",
+                            "stress_buffer",
+                            "minimum_movement",
+                            "hysteresis",
+                        ):
+                            raw = policy.get(field, "0")
+                            try:
+                                amount = Decimal(str(raw))
+                            except Exception:
+                                issues.append(f"{prefix}.{field} must be an exact decimal")
+                                continue
+                            if not amount.is_finite() or amount < 0:
+                                issues.append(f"{prefix}.{field} cannot be negative")
+                            amounts[field] = amount
+                        if all(
+                            field in amounts
+                            for field in ("minimum", "default_target", "maximum")
+                        ) and not (
+                            amounts["minimum"]
+                            <= amounts["default_target"]
+                            <= amounts["maximum"]
+                        ):
+                            issues.append(
+                                f"{prefix} requires minimum <= default_target <= maximum"
+                            )
+                        max_age = policy.get("max_fact_age_millis")
+                        if not isinstance(max_age, int) or max_age <= 0:
+                            issues.append(
+                                f"{prefix}.max_fact_age_millis must be a positive integer"
+                            )
+                routes = capital.get("routes", [])
+                if not isinstance(routes, list):
+                    issues.append("capital.routes must be an array of tables")
+                elif automatic_execution and not routes:
+                    issues.append(
+                        "capital.routes requires at least one route when automatic execution is enabled"
+                    )
+                else:
+                    for index, route in enumerate(routes):
+                        prefix = f"capital.routes[{index}]"
+                        if not isinstance(route, Mapping):
+                            issues.append(f"{prefix} must be a table")
+                            continue
+                        for field in ("route_id", "kind", "settlement_class"):
+                            value = route.get(field)
+                            if not isinstance(value, str) or not value.strip():
+                                issues.append(f"{prefix}.{field} is required")
+                        kind = route.get("kind")
+                        if isinstance(kind, str) and kind not in {
+                            "internal_transfer",
+                            "account_transfer",
+                            "earn_redemption_then_transfer",
+                        }:
+                            issues.append(f"{prefix}.kind is unsupported: {kind}")
+                        if automatic_execution and kind != "internal_transfer":
+                            issues.append(
+                                f"{prefix}.kind cannot execute automatically until its Conflux rail is available"
+                            )
+                        for endpoint in ("source", "destination"):
+                            if not isinstance(route.get(endpoint), Mapping):
+                                issues.append(f"{prefix}.{endpoint} must be a table")
         execution = self.values.get("execution")
         if mode == "live" and not isinstance(execution, Mapping):
             issues.append(

@@ -1,4 +1,4 @@
-use kairos_integration::{
+use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
     AssetTransferStatusQuery, CommandOutcome, ExternalAccountIdentity, ExternalAccountSegment,
     IntegrationError,

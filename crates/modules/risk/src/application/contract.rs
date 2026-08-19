@@ -166,6 +166,8 @@ pub(crate) fn decision(
                 available_margin: amount(requirement.available_margin),
                 shortfall: amount(requirement.shortfall),
                 margin_rule_id: requirement.margin_rule_id.clone(),
+                account_segment: requirement.account_segment.clone(),
+                collateral_asset: requirement.collateral_asset.clone(),
             }
         }),
         evaluated_at_unix_nanos: value.evaluated_at_unix_nanos,
@@ -212,6 +214,8 @@ pub(crate) fn authorize_from(
         proposal: crate::TradeRiskProposal {
             notional: amount_from(value.proposal.notional)?,
             initial_margin_rate_bps: value.proposal.initial_margin_rate_bps,
+            account_segment: value.proposal.account_segment,
+            collateral_asset: value.proposal.collateral_asset,
             reduce_only: value.proposal.reduce_only,
             margin_rule_id: value.proposal.margin_rule_id,
         },

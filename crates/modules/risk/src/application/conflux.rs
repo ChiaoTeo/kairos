@@ -340,6 +340,9 @@ mod tests {
                             proposal: kairos_risk_contract::TradeRiskProposal {
                                 notional: Amount::new(10, 0).unwrap(),
                                 initial_margin_rate_bps: 10_000.into(),
+                                account_segment: kairos_primitives::SegmentKey::new("usd-m")
+                                    .unwrap(),
+                                collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
                                 reduce_only: false,
                                 margin_rule_id: "test:fully-funded".into(),
                             },

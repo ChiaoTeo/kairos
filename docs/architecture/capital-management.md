@@ -500,7 +500,13 @@ The ownership boundary determines the operation owner:
 
 ## Integration primitives
 
-Integration exposes two separate axes:
+Capital does not depend on `kairos-integration` directly. Its composition uses
+the typed connection and capability surface exported by Conflux; Conflux alone
+selects and owns the concrete Integration connection. This keeps participant
+construction, connection lifecycle, and provider credentials outside the
+Capital business package.
+
+Behind that boundary, Integration exposes two separate axes:
 
 - `AssetTransferCommand` submits a movement between two locations belonging
   to one participant. `AssetTransferStatusQuery` establishes participant

@@ -30,6 +30,9 @@ pub use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
     BinanceStocksWebSocketConnection,
 };
+pub use kairos_integration::participants::binance::capital::{
+    BinanceCapitalRestConfig, BinanceCapitalRestConnection, BinanceTransferAccount,
+};
 pub use kairos_integration::participants::binance::coinm::{
     BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
     BinanceCoinMWebSocketConnection,
@@ -77,8 +80,10 @@ pub use kairos_integration::participants::okx::{
     OkxWebSocketConfig,
 };
 pub use kairos_integration::{
-    AccountCredentialQuery, AccountMarketProfileQuery, AccountQuery, AccountStream, Bar,
-    CommandOutcome, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionKey,
+    AccountCredentialQuery, AccountMarketProfileQuery, AccountQuery, AccountStream,
+    AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
+    AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission, Bar, CommandOutcome,
+    CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionKey,
     ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, DecimalValue,
     EarnLiquidity, EarnPosition, EarnPositionState, EarnPositionsRequest, EarnProductFamily,
     EarnProductQuery, ExecutionStream, ExternalAccountCredentialProfile, ExternalAccountEvent,

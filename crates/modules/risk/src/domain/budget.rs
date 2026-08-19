@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
 
 use kairos_primitives::{
-    AccountId, BasisPoints, DurationNanos, Exchange, Generation, IdempotencyKey, InstrumentId,
-    Money, PolicyId, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
+    AccountId, BasisPoints, Currency, DurationNanos, Exchange, Generation, IdempotencyKey,
+    InstrumentId, Money, PolicyId, RequestId, ReservationId, SegmentKey, Sequence, StrategyId,
+    UnixNanos,
 };
 use rust_decimal::Decimal as RustDecimal;
 use serde::{Deserialize, Serialize};
@@ -230,8 +231,8 @@ impl PolicyScope {
             .is_none_or(|v| request.account_id == v)
             && self
                 .strategy_id
-                .as_deref()
-                .is_none_or(|v| request.strategy_id == v)
+                .as_ref()
+                .is_none_or(|v| &request.strategy_id == v)
             && self
                 .instrument_id
                 .as_deref()
@@ -353,6 +354,8 @@ pub struct TradeRiskProposal {
     /// Initial margin requirement for this concrete product/account route.
     /// Execution supplies the normalized rule; Risk owns the calculation.
     pub initial_margin_rate_bps: BasisPoints,
+    pub account_segment: SegmentKey,
+    pub collateral_asset: Currency,
     #[serde(default)]
     pub reduce_only: bool,
     /// Identifies the Reference/configuration rule used for audit and replay.
@@ -435,8 +438,8 @@ impl CircuitScope {
             .is_none_or(|v| request.account_id == v)
             && self
                 .strategy_id
-                .as_deref()
-                .is_none_or(|v| request.strategy_id == v)
+                .as_ref()
+                .is_none_or(|v| &request.strategy_id == v)
             && self
                 .exchange_id
                 .as_deref()

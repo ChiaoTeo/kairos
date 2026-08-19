@@ -70,6 +70,10 @@ runtime_id!(InstanceId);
 runtime_id!(ActorId);
 runtime_id!(ProducerId);
 runtime_id!(EventId);
+runtime_id!(StrategyId);
+runtime_id!(StrategyDecisionId);
+runtime_id!(RequestId);
+runtime_id!(IdempotencyKey);
 
 /// Runtime ownership identity carried by instance-scoped transport headers.
 #[derive(Clone, Debug, Eq, PartialEq)]

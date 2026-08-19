@@ -1,7 +1,8 @@
 use kairos_primitives::runtime::ActorId;
 use kairos_primitives::{
-    AccountId, BasisPoints, DecisionId, DurationNanos, Exchange, Generation, IdempotencyKey,
-    InstrumentId, PolicyId, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
+    AccountId, BasisPoints, Currency, DecisionId, DurationNanos, Exchange, Generation,
+    IdempotencyKey, InstrumentId, PolicyId, RequestId, ReservationId, SegmentKey, Sequence,
+    StrategyId, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -197,6 +198,8 @@ pub struct AuthorizeRequest {
 pub struct TradeRiskProposal {
     pub notional: Amount,
     pub initial_margin_rate_bps: BasisPoints,
+    pub account_segment: SegmentKey,
+    pub collateral_asset: Currency,
     #[serde(default)]
     pub reduce_only: bool,
     pub margin_rule_id: String,
@@ -396,6 +399,8 @@ pub struct FundingRequirement {
     pub available_margin: Amount,
     pub shortfall: Amount,
     pub margin_rule_id: String,
+    pub account_segment: SegmentKey,
+    pub collateral_asset: Currency,
 }
 
 /// mmap current-state contract. It cannot carry event history or positions.

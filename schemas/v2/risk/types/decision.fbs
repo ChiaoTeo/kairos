@@ -63,6 +63,8 @@ table FundingRequirement {
   available_margin:kairos.common.v2.Decimal64 (required);
   shortfall:kairos.common.v2.Decimal64 (required);
   margin_rule_id:string (required);
+  account_segment:string (required);
+  collateral_asset:string (required);
 }
 
 table RiskDecision {

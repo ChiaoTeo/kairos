@@ -236,6 +236,9 @@ impl CapitalActor {
         command.policy.validate().map_err(ActorError::Invalid)?;
         self.validate_location(&command.policy.destination)?;
         if let Some(existing) = self.policies.get(&command.policy.destination) {
+            if command.policy == *existing {
+                return Ok(());
+            }
             if command.policy.version <= existing.version {
                 return Err(ActorError::Rejected(
                     "capital policy version must increase".into(),
@@ -257,6 +260,9 @@ impl CapitalActor {
             ));
         }
         if let Some(existing) = self.facts.get(&command.facts.destination) {
+            if command.facts == *existing {
+                return Ok(());
+            }
             if command.facts.account_watermark < existing.account_watermark
                 || command.facts.risk_watermark < existing.risk_watermark
                 || command.facts.risk_policy_version < existing.risk_policy_version
@@ -301,6 +307,9 @@ impl CapitalActor {
         self.validate_location(&command.route.source)?;
         self.validate_location(&command.route.destination)?;
         if let Some(existing) = self.routes.get(&command.route.route_id) {
+            if command.route == *existing {
+                return Ok(());
+            }
             if command.route.version <= existing.version {
                 return Err(ActorError::Rejected(
                     "capital route version must increase".into(),

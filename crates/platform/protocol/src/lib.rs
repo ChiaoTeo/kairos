@@ -9,6 +9,7 @@
 
 pub mod context;
 pub mod generated;
+pub mod metadata;
 
 pub use context::ProtocolContext;
 

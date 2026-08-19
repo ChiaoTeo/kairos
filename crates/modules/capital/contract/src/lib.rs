@@ -7,7 +7,8 @@
 pub mod control;
 
 pub use control::{
-    CancelFundingObjectiveRequest, CapitalControlError, CapitalControlResponse,
-    CapitalDemandResponse, CapitalDemandStatus, FundingLocation, FundingObjectivePriority,
-    FundingObjectiveStatus, ObserveCapitalDemandRequest, PublishFundingObjectiveRequest,
+    CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalControlError,
+    CapitalControlResponse, CapitalDemandResponse, CapitalDemandStatus, CapitalReadinessStatus,
+    FundingLocation, FundingObjectivePriority, FundingObjectiveStatus, ObserveCapitalDemandRequest,
+    PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
 };

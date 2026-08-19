@@ -108,7 +108,7 @@ impl ReferenceApplication {
                             generation: result.generation.get(),
                             event_sequence: result.event_sequence.get(),
                             changed: result.changed,
-                            change_count: result.change_count,
+                            change_count: result.change_count as u64,
                             publication_pending,
                         })
                     },
@@ -122,7 +122,7 @@ impl ReferenceApplication {
                         .await
                         .map(|events| ReferencePublishResponse {
                             generation: self.generation().get(),
-                            events,
+                            events: events as u64,
                         });
                 ReferenceRestResponse::Publish(response)
             },
@@ -274,7 +274,7 @@ impl ReferenceApplication {
         context: &mut Context<'_, Self>,
     ) -> Result<ReferenceMutationResponse, ReferenceControlError> {
         let events = self.publish_pending(context).await?;
-        Ok(ReferenceMutationResponse { generation, events })
+        Ok(ReferenceMutationResponse { generation, events: events as u64 })
     }
 
     async fn publish_pending(

@@ -13,14 +13,17 @@ path = "src/lib.rs"
 [dependencies]
 axum.workspace = true
 clap.workspace = true
+kairos-account-contract.workspace = true
 kairos-capital-contract.workspace = true
-kairos-integration.workspace = true
+kairos-conflux.workspace = true
 kairos-primitives.workspace = true
+kairos-protocol.workspace = true
+kairos-risk-contract.workspace = true
 kairos-workspace = { workspace = true, features = ["otel"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync"] }
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

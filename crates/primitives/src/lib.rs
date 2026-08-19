@@ -8,7 +8,6 @@ pub mod capital;
 mod decimal;
 mod error;
 pub mod execution;
-mod identity;
 pub mod integration;
 pub mod market;
 pub mod reference;
@@ -24,7 +23,6 @@ pub use capital::*;
 pub use decimal::*;
 pub use error::*;
 pub use execution::*;
-pub use identity::*;
 pub use integration::*;
 pub use market::*;
 pub use reference::*;
@@ -71,6 +69,19 @@ mod tests {
                 .unwrap()
                 .as_str(),
             "provider:binance"
+        );
+    }
+
+    #[test]
+    fn runtime_identity_deserialization_enforces_constructor_invariants() {
+        assert!(serde_json::from_str::<crate::runtime::ActorId>("\"\"").is_err());
+        assert!(serde_json::from_str::<crate::runtime::EventId>("\" event \"").is_err());
+        let id = crate::runtime::ProducerId::new("producer:market").unwrap();
+        assert_eq!(serde_json::to_string(&id).unwrap(), "\"producer:market\"");
+        assert_eq!(
+            serde_json::from_str::<crate::runtime::ProducerId>("\"producer:market\"")
+                .unwrap(),
+            id
         );
     }
 }

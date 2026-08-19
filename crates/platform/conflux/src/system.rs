@@ -16,6 +16,9 @@ use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
     BinanceStocksWebSocketConnection,
 };
+use kairos_integration::participants::binance::capital::{
+    BinanceCapitalRestConfig, BinanceCapitalRestConnection,
+};
 use kairos_integration::participants::binance::coinm::{
     BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
     BinanceCoinMWebSocketConnection,
@@ -418,6 +421,8 @@ impl TypedConnectionCollection<'_, MassiveRestConnection, MassiveRestConfig> {
 }
 
 pub struct ConnectionCollections<'a> {
+    pub binance_capital_rest:
+        TypedConnectionCollection<'a, BinanceCapitalRestConnection, BinanceCapitalRestConfig>,
     pub binance_spot_rest:
         TypedConnectionCollection<'a, BinanceSpotRestConnection, BinanceRestConfig>,
     pub binance_funding_rest:
@@ -553,6 +558,8 @@ pub struct ConfluxSystem {
     pub mmap_writers: NamedResources<String, SharedSnapshotWriter>,
 
     pub(crate) binance_spot_rest_connections: ManagedConnections<String, BinanceSpotRestConnection>,
+    pub(crate) binance_capital_rest_connections:
+        ManagedConnections<String, BinanceCapitalRestConnection>,
     pub(crate) binance_spot_websocket_connections:
         ManagedConnections<String, BinanceSpotWebSocketConnection>,
     pub(crate) binance_spot_user_websocket_connections:
@@ -650,6 +657,7 @@ impl ConfluxSystem {
             mmap_readers: NamedResources::new(),
             mmap_writers: NamedResources::new(),
             binance_spot_rest_connections: ManagedConnections::new(),
+            binance_capital_rest_connections: ManagedConnections::new(),
             binance_spot_websocket_connections: ManagedConnections::new(),
             binance_spot_user_websocket_connections: ManagedConnections::new(),
             binance_funding_rest_connections: ManagedConnections::new(),
@@ -688,6 +696,11 @@ impl ConfluxSystem {
 
     pub fn connections(&mut self) -> ConnectionCollections<'_> {
         ConnectionCollections {
+            binance_capital_rest: TypedConnectionCollection::new(
+                &mut self.binance_capital_rest_connections,
+                BinanceCapitalRestConnection::new,
+                false,
+            ),
             binance_spot_rest: TypedConnectionCollection::new(
                 &mut self.binance_spot_rest_connections,
                 BinanceSpotRestConnection::new,
@@ -2116,5 +2129,37 @@ mod tests {
             .descriptor()
             .clone();
         assert_eq!(descriptor.connection_key, key);
+    }
+
+    #[test]
+    fn binance_capital_transfer_is_part_of_the_typed_connection_universe() {
+        let mut system = ConfluxSystem::new();
+        let key = ConnectionKey::new("capital-main").unwrap();
+        let mut segment_accounts = BTreeMap::new();
+        segment_accounts.insert(
+            kairos_primitives::SegmentKey::new("funding").unwrap(),
+            kairos_integration::participants::binance::capital::BinanceTransferAccount::Funding,
+        );
+        segment_accounts.insert(
+            kairos_primitives::SegmentKey::new("usd-m").unwrap(),
+            kairos_integration::participants::binance::capital::BinanceTransferAccount::UsdMFutures,
+        );
+        system
+            .connections()
+            .binance_capital_rest
+            .create(
+                key.clone(),
+                BinanceCapitalRestConfig {
+                    rest: BinanceRestConfig {
+                        environment: "test".into(),
+                        endpoint: "https://api.binance.com".into(),
+                        credential: None,
+                    },
+                    segment_accounts,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(system.connections().binance_capital_rest.keys(), vec![key]);
     }
 }

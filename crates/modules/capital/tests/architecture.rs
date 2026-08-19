@@ -34,3 +34,19 @@ fn capital_application_does_not_publish_provider_or_persistence_ports() {
     assert!(!application.contains("Binance"));
     assert!(!application.contains("StateStore"));
 }
+
+#[test]
+fn capital_uses_conflux_instead_of_integration_directly() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(crate_root.join("Cargo.toml")).unwrap();
+    assert!(manifest.contains("kairos-conflux.workspace = true"));
+    assert!(!manifest.contains("kairos-integration"));
+    for path in rust_files(&crate_root.join("src")) {
+        let source = fs::read_to_string(path).unwrap();
+        assert!(
+            !source.contains("kairos_integration"),
+            "{} bypasses Conflux",
+            path.display()
+        );
+    }
+}

@@ -1,5 +1,6 @@
 use kairos_capital_contract::{
     FundingLocation, FundingObjectivePriority, PublishFundingObjectiveRequest,
+    QueryCapitalAvailabilityRequest,
 };
 use kairos_primitives::{
     AccountId, BasisPoints, BrokerId, CapitalGroupId, Currency, FundingObjectiveId, Generation,
@@ -35,4 +36,22 @@ fn funding_objective_control_has_no_route_or_source_authority() {
     assert!(value.get("source_account_id").is_none());
     assert!(value.get("route_id").is_none());
     assert!(value.get("participant_endpoint").is_none());
+}
+
+#[test]
+fn availability_query_is_scoped_to_one_group_location() {
+    let request = QueryCapitalAvailabilityRequest {
+        request_id: RequestId::new("availability-1").unwrap(),
+        capital_group_id: CapitalGroupId::new("group-a").unwrap(),
+        location: FundingLocation {
+            broker: BrokerId::new("binance").unwrap(),
+            account_id: AccountId::new("account-a").unwrap(),
+            segment: SegmentKey::new("usd-m").unwrap(),
+            asset: Currency::new("USDT").unwrap(),
+        },
+    };
+
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(value["location"]["segment"], "usd-m");
+    assert!(value.get("source").is_none());
 }

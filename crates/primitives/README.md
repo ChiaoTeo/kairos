@@ -8,10 +8,10 @@ and it does not own business workflows.
 
 Business types are grouped by their governing vocabulary: account, capital,
 execution, market, reference, risk, and integration. Genuinely cross-cutting value
-mechanics such as decimal and time remain separate groups. The current broad
-`identity` and `trading` files are migration sources, not the desired final
-taxonomy: their members should move into the governing group without changing
-their meaning or wire representations. The target public paths are namespaced,
+mechanics such as decimal and time remain separate groups. The former broad
+`identity` and `trading` files have been removed; their members now live in
+owner namespaces without changing their meaning or wire representations. The
+target public paths are namespaced,
 for example `kairos_primitives::account::AccountId` and
 `kairos_primitives::execution::OrderId`; broad root wildcard re-exports should
 be removed as callers migrate. These groups make ownership visible; they are

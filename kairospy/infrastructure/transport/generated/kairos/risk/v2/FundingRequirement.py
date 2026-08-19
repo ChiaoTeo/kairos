@@ -64,8 +64,22 @@ class FundingRequirement(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # FundingRequirement
+    def AccountSegment(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # FundingRequirement
+    def CollateralAsset(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def FundingRequirementStart(builder):
-    builder.StartObject(4)
+    builder.StartObject(6)
 
 def Start(builder):
     FundingRequirementStart(builder)
@@ -93,6 +107,18 @@ def FundingRequirementAddMarginRuleId(builder, marginRuleId):
 
 def AddMarginRuleId(builder, marginRuleId):
     FundingRequirementAddMarginRuleId(builder, marginRuleId)
+
+def FundingRequirementAddAccountSegment(builder, accountSegment):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(accountSegment), 0)
+
+def AddAccountSegment(builder, accountSegment):
+    FundingRequirementAddAccountSegment(builder, accountSegment)
+
+def FundingRequirementAddCollateralAsset(builder, collateralAsset):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(collateralAsset), 0)
+
+def AddCollateralAsset(builder, collateralAsset):
+    FundingRequirementAddCollateralAsset(builder, collateralAsset)
 
 def FundingRequirementEnd(builder):
     return builder.EndObject()

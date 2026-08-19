@@ -629,6 +629,8 @@ fn decision_fb<'a>(
             let available_margin = decimal(value.available_margin);
             let shortfall = decimal(value.shortfall);
             let margin_rule_id = b.create_string(&value.margin_rule_id);
+            let account_segment = b.create_string(value.account_segment.as_str());
+            let collateral_asset = b.create_string(value.collateral_asset.as_str());
             Ok::<_, String>(fb::FundingRequirement::create(
                 b,
                 &fb::FundingRequirementArgs {
@@ -636,6 +638,8 @@ fn decision_fb<'a>(
                     available_margin: Some(&available_margin),
                     shortfall: Some(&shortfall),
                     margin_rule_id: Some(margin_rule_id),
+                    account_segment: Some(account_segment),
+                    collateral_asset: Some(collateral_asset),
                 },
             ))
         })

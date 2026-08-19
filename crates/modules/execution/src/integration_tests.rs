@@ -1246,6 +1246,8 @@ fn insufficient_funding_is_audited_and_releases_unsubmitted_capacity() {
     let requirement = reservation.funding_requirement.as_ref().unwrap();
     assert_eq!(requirement.shortfall, Money::new(60, 0).unwrap());
     assert_eq!(requirement.account_snapshot_watermark, 11.into());
+    assert_eq!(requirement.segment.as_str(), "usd-m");
+    assert_eq!(requirement.collateral_asset.as_str(), "USDT");
 
     let restored = ExecutionApplication::assemble_for_test(
         "execution",

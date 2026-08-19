@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from decimal import Decimal
 
-from kairospy.application.capital.models import CapitalDemand, FundingObjective
+from kairospy.application.capital.models import (
+    CapitalAvailability,
+    CapitalDemand,
+    CapitalReadiness,
+    FundingLocation,
+    FundingObjective,
+)
 from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
 
 
@@ -72,6 +79,37 @@ class CapitalContractClient:
             },
         )
 
+    def availability(
+        self, *, capital_group_id: str, location: FundingLocation
+    ) -> CapitalAvailability:
+        value = self._post(
+            "/v1/availability/query",
+            {
+                "request_id": f"capital.availability:{time.time_ns()}",
+                "capital_group_id": capital_group_id,
+                "location": _location(location),
+            },
+        )
+        return CapitalAvailability(
+            capital_group_id=str(value["capital_group_id"]),
+            readiness=CapitalReadiness(str(value["readiness"])),
+            location=location,
+            policy_minimum=Decimal(str(value["policy_minimum"])),
+            policy_default_target=Decimal(str(value["policy_default_target"])),
+            policy_maximum=Decimal(str(value["policy_maximum"])),
+            policy_version=_required_int(value, "policy_version"),
+            active_objective_ids=_string_tuple(value, "active_objective_ids"),
+            active_demand_ids=_string_tuple(value, "active_demand_ids"),
+            desired_target=Decimal(str(value["desired_target"])),
+            observed_available=Decimal(str(value["observed_available"])),
+            effective_target=Decimal(str(value["effective_target"])),
+            deficit=Decimal(str(value["deficit"])),
+            account_watermark=_required_int(value, "account_watermark"),
+            risk_policy_version=_required_int(value, "risk_policy_version"),
+            risk_watermark=_required_int(value, "risk_watermark"),
+            reason=None if value.get("reason") is None else str(value["reason"]),
+        )
+
     def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
         status, value = self._client.request("POST", path, body)
         if status >= 400:
@@ -90,3 +128,19 @@ def _location(value: object) -> dict[str, str]:
 
 def _nanos(value: object) -> int:
     return int(getattr(value, "timestamp")() * 1_000_000_000)
+
+
+def _required_int(value: dict[str, object], field: str) -> int:
+    raw = value.get(field)
+    if isinstance(raw, bool) or not isinstance(raw, int | str):
+        raise ValueError(f"Capital response field {field!r} must be an integer")
+    return int(raw)
+
+
+def _string_tuple(value: dict[str, object], field: str) -> tuple[str, ...]:
+    raw = value.get(field)
+    if not isinstance(raw, list):
+        raise ValueError(f"Capital response field {field!r} must be an array")
+    if not all(isinstance(item, str) for item in raw):
+        raise ValueError(f"Capital response field {field!r} must contain strings")
+    return tuple(raw)

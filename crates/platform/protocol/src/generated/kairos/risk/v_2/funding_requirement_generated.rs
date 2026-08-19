@@ -24,6 +24,8 @@ impl<'a> FundingRequirement<'a> {
     pub const VT_AVAILABLE_MARGIN: ::flatbuffers::VOffsetT = 6;
     pub const VT_SHORTFALL: ::flatbuffers::VOffsetT = 8;
     pub const VT_MARGIN_RULE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_ACCOUNT_SEGMENT: ::flatbuffers::VOffsetT = 12;
+    pub const VT_COLLATERAL_ASSET: ::flatbuffers::VOffsetT = 14;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -40,6 +42,12 @@ impl<'a> FundingRequirement<'a> {
         args: &'args FundingRequirementArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<FundingRequirement<'bldr>> {
         let mut builder = FundingRequirementBuilder::new(_fbb);
+        if let Some(x) = args.collateral_asset {
+            builder.add_collateral_asset(x);
+        }
+        if let Some(x) = args.account_segment {
+            builder.add_account_segment(x);
+        }
         if let Some(x) = args.margin_rule_id {
             builder.add_margin_rule_id(x);
         }
@@ -108,6 +116,34 @@ impl<'a> FundingRequirement<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn account_segment(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(
+                    FundingRequirement::VT_ACCOUNT_SEGMENT,
+                    None,
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn collateral_asset(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(
+                    FundingRequirement::VT_COLLATERAL_ASSET,
+                    None,
+                )
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for FundingRequirement<'_> {
@@ -137,6 +173,16 @@ impl ::flatbuffers::Verifiable for FundingRequirement<'_> {
                 Self::VT_MARGIN_RULE_ID,
                 true,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "account_segment",
+                Self::VT_ACCOUNT_SEGMENT,
+                true,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "collateral_asset",
+                Self::VT_COLLATERAL_ASSET,
+                true,
+            )?
             .finish();
         Ok(())
     }
@@ -146,6 +192,8 @@ pub struct FundingRequirementArgs<'a> {
     pub available_margin: Option<&'a super::super::common::v_2::Decimal64>,
     pub shortfall: Option<&'a super::super::common::v_2::Decimal64>,
     pub margin_rule_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub account_segment: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub collateral_asset: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for FundingRequirementArgs<'a> {
     #[inline]
@@ -155,6 +203,8 @@ impl<'a> Default for FundingRequirementArgs<'a> {
             available_margin: None, // required field
             shortfall: None,        // required field
             margin_rule_id: None,   // required field
+            account_segment: None,  // required field
+            collateral_asset: None, // required field
         }
     }
 }
@@ -199,6 +249,20 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FundingRequirementBuilder<'a,
         );
     }
     #[inline]
+    pub fn add_account_segment(&mut self, account_segment: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            FundingRequirement::VT_ACCOUNT_SEGMENT,
+            account_segment,
+        );
+    }
+    #[inline]
+    pub fn add_collateral_asset(&mut self, collateral_asset: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            FundingRequirement::VT_COLLATERAL_ASSET,
+            collateral_asset,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> FundingRequirementBuilder<'a, 'b, A> {
@@ -222,6 +286,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FundingRequirementBuilder<'a,
             .required(o, FundingRequirement::VT_SHORTFALL, "shortfall");
         self.fbb_
             .required(o, FundingRequirement::VT_MARGIN_RULE_ID, "margin_rule_id");
+        self.fbb_
+            .required(o, FundingRequirement::VT_ACCOUNT_SEGMENT, "account_segment");
+        self.fbb_.required(
+            o,
+            FundingRequirement::VT_COLLATERAL_ASSET,
+            "collateral_asset",
+        );
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -233,6 +304,8 @@ impl ::core::fmt::Debug for FundingRequirement<'_> {
         ds.field("available_margin", &self.available_margin());
         ds.field("shortfall", &self.shortfall());
         ds.field("margin_rule_id", &self.margin_rule_id());
+        ds.field("account_segment", &self.account_segment());
+        ds.field("collateral_asset", &self.collateral_asset());
         ds.finish()
     }
 }

@@ -2766,9 +2766,12 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
+ "kairos-account-contract",
  "kairos-capital-contract",
- "kairos-integration",
+ "kairos-conflux",
  "kairos-primitives",
+ "kairos-protocol",
+ "kairos-risk-contract",
  "kairos-workspace",
  "serde",
  "serde_json",

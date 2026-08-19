@@ -69,6 +69,7 @@ pub enum ConnectionControlError {
 macro_rules! for_each_handle_collection {
     ($macro:ident) => {
         $macro! {
+            (binance_capital_rest, BinanceCapitalRestHandle, crate::BinanceCapitalRestConfig, CreateBinanceCapitalRest, RemoveBinanceCapitalRest, binance_capital_rest, binance_capital_rest_connections, Rest),
             (binance_spot_rest, BinanceSpotRestHandle, crate::BinanceRestConfig, CreateBinanceSpotRest, RemoveBinanceSpotRest, binance_spot_rest, binance_spot_rest_connections, Rest),
             (binance_funding_rest, BinanceFundingRestHandle, crate::BinanceRestConfig, CreateBinanceFundingRest, RemoveBinanceFundingRest, binance_funding_rest, binance_funding_rest_connections, Rest),
             (binance_earn_rest, BinanceEarnRestHandle, crate::BinanceRestConfig, CreateBinanceEarnRest, RemoveBinanceEarnRest, binance_earn_rest, binance_earn_rest_connections, Rest),

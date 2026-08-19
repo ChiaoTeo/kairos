@@ -497,6 +497,20 @@ class LaunchRuntimeApplication:
                     "permitted_segments": sorted(configured_segments),
                     "view_root": str(instance_workspace.snapshot()),
                     "broker": str(account_records[bound_account_id].get("broker") or ""),
+                    "integration_provider": str(
+                        account_records[bound_account_id].get("integration_provider")
+                        or account_records[bound_account_id].get("broker")
+                        or ""
+                    ),
+                    "environment": str(
+                        account_records[bound_account_id].get("environment") or mode
+                    ),
+                    "credential_id": account_records[bound_account_id].get(
+                        "credential_id"
+                    ),
+                    "segment_products": dict(
+                        account_records[bound_account_id].get("segment_products") or {}
+                    ),
                     "lease_fence": account_lease_fences[bound_account_id],
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)

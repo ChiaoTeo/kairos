@@ -102,16 +102,44 @@ enabled = true
 capital_group_id = "strategy-capital"
 strategy_id = "strategy-a"
 
+[[capital.policies]]
+minimum = "100"
+default_target = "200"
+maximum = "500"
+stress_buffer = "25"
+minimum_movement = "10"
+hysteresis = "5"
+deficit_dwell_millis = 1000
+cooldown_millis = 5000
+max_fact_age_millis = 3000
+
+[capital.policies.destination]
+broker = "binance"
+account_id = "paper-account"
+segment = "usd-m"
+asset = "USDT"
+
 [paper]
 """,
         encoding="utf-8",
     )
     plan = LaunchConfigurationApplication().load(enabled).plan()
-    assert plan.capital == {
-        "enabled": True,
-        "capital_group_id": "strategy-capital",
-        "strategy_id": "strategy-a",
-    }
+    assert plan.capital["enabled"] is True
+    assert plan.capital["capital_group_id"] == "strategy-capital"
+    assert plan.capital["strategy_id"] == "strategy-a"
+    assert plan.capital["policies"][0]["maximum"] == "500"
+
+    automatic = tmp_path / "capital-automatic.toml"
+    automatic.write_text(
+        enabled.read_text(encoding="utf-8").replace(
+            "strategy_id = \"strategy-a\"",
+            "strategy_id = \"strategy-a\"\nautomatic_execution = true",
+        ),
+        encoding="utf-8",
+    )
+    automatic_report = LaunchConfigurationApplication().validate(automatic)
+    assert automatic_report["valid"] is False
+    assert "capital.routes" in " ".join(automatic_report["issues"])
 
     missing_identity = enabled.read_text(encoding="utf-8").replace(
         'capital_group_id = "strategy-capital"\n', ""

@@ -156,7 +156,7 @@ class CapitalApplication:
         return CapitalDemandReceipt(
             demand_id=str(value["demand_id"]),
             status=FundingObjectiveStatus(str(value["status"])),
-            message=None if value.get("message") is None else str(value["message"]),
+            message=_control_message(value),
         )
 
     def availability(
@@ -186,10 +186,18 @@ class CapitalApplication:
                     else "Capital availability projection is unavailable"
                 ),
             )
-        return self._projection.availability(
-            capital_group_id=self._capital_group_id,
-            location=location,
-        )
+        try:
+            return self._projection.availability(
+                capital_group_id=self._capital_group_id,
+                location=location,
+            )
+        except Exception as error:
+            return CapitalAvailability(
+                self._capital_group_id,
+                CapitalReadiness.DEGRADED,
+                location=location,
+                reason=f"Capital availability query failed: {error}",
+            )
 
     def _scope_error(self, location: FundingLocation) -> str | None:
         if self._account_ids and location.account_id not in self._account_ids:
@@ -225,5 +233,13 @@ def _receipt(
         objective_id=str(value["objective_id"]),
         version=version,
         status=FundingObjectiveStatus(str(value["status"])),
-        message=None if value.get("message") is None else str(value["message"]),
+        message=_control_message(value),
     )
+
+
+def _control_message(value: dict[str, object]) -> str | None:
+    error = value.get("error")
+    if isinstance(error, dict) and error.get("message") is not None:
+        return str(error["message"])
+    message = value.get("message")
+    return None if message is None else str(message)

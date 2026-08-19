@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from kairospy.domain_types import AccountId
+from kairospy.infrastructure.contracts.capital import CapitalContractClient
 from kairospy.strategy import StrategyIdentity
 
 from .application import CapitalApplication
@@ -22,9 +23,7 @@ def build_strategy_access(
     """Build one Strategy facade; transport adapters are injected by composition."""
 
     if endpoint is not None and commands is None:
-        raise RuntimeError(
-            "Capital endpoint is configured but no contract client exists"
-        )
+        commands = CapitalContractClient(endpoint)
     if endpoint is None:
         return CapitalApplication.disabled(
             strategy_id=identity.strategy_id,

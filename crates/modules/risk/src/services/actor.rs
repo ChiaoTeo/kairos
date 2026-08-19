@@ -868,6 +868,8 @@ impl RiskActor {
             available_margin: available,
             shortfall,
             margin_rule_id: request.proposal.margin_rule_id.clone(),
+            account_segment: request.proposal.account_segment.clone(),
+            collateral_asset: request.proposal.collateral_asset.clone(),
         })
     }
 
