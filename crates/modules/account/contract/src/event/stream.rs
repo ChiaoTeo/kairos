@@ -1,7 +1,9 @@
-use crate::{AccountEventFrame, ContractError, ContractResult};
-use kairos_transport::{AeronByteSubscription, AeronEndpoint};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use kairos_transport::{AeronByteSubscription, AeronEndpoint};
+
+use crate::{AccountEventFrame, ContractError, ContractResult};
 
 pub struct AccountEventStream {
     subscription: AeronByteSubscription,

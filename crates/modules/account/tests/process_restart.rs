@@ -7,8 +7,7 @@ use std::time::{Duration, Instant};
 
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account_contract::{
-    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader, DecimalValue,
-    SimulatedSettlement,
+    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader, SimulatedSettlement,
 };
 use kairos_transport::SnapshotEnvelopeMetadata;
 use kairos_workspace::Workspace;
@@ -89,9 +88,9 @@ fn wait_for_snapshot(
         match reader.and_then(|reader| reader.read()) {
             Ok(frame) => match frame.account_current() {
                 Ok(view)
-                    if previous_incarnation
-                        .is_none_or(|value| value != frame.envelope_metadata().producer_incarnation)
-                        && frame.generation() >= minimum_generation =>
+                    if previous_incarnation.is_none_or(|value| {
+                        value != frame.envelope_metadata().producer_incarnation
+                    }) && frame.generation() >= minimum_generation =>
                 {
                     let balances = view.segments().get(0).balances();
                     if !balances.is_empty() {
@@ -122,14 +121,14 @@ fn wait_for_snapshot(
                     } else {
                         last_error = "snapshot has no balances".into();
                     }
-                }
+                },
                 Ok(_) => {
                     last_error = format!(
                         "snapshot has not reached the expected incarnation/generation; incarnation={} generation={}",
                         frame.envelope_metadata().producer_incarnation,
                         frame.generation()
                     )
-                }
+                },
                 Err(error) => last_error = error.to_string(),
             },
             Err(error) => last_error = error.to_string(),
@@ -192,18 +191,18 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
     let client = AccountContractClient::connect(&socket_path).unwrap();
     client
         .apply_simulated_settlement(&SimulatedSettlement {
-            fill_id: "restart-persisted-fill".into(),
-            order_id: Some("restart-persisted-order".into()),
-            segment_key: "spot".into(),
-            instrument_id: "paper:BTC-USDT".into(),
-            quantity: DecimalValue::new(1, 0).unwrap(),
-            price: DecimalValue::new(100, 0).unwrap(),
-            side: "buy".into(),
-            settlement_asset: Some("USDT".into()),
-            settlement_delta: Some(DecimalValue::new(-100, 0).unwrap()),
+            fill_id: kairos_primitives::FillId::new("restart-persisted-fill").unwrap(),
+            order_id: Some(kairos_primitives::OrderId::new("restart-persisted-order").unwrap()),
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("paper:BTC-USDT").unwrap(),
+            quantity: kairos_primitives::Quantity::new(1, 0).unwrap(),
+            price: kairos_primitives::Price::new(100, 0).unwrap(),
+            side: kairos_primitives::OrderSide::Buy,
+            settlement_asset: Some(kairos_primitives::Currency::new("USDT").unwrap()),
+            settlement_delta: Some(kairos_primitives::SignedQuantity::new(-100, 0).unwrap()),
             fee_asset: None,
             fee_amount: None,
-            occurred_at_unix_nanos: 1_000_000_000,
+            occurred_at_unix_nanos: 1_000_000_000.into(),
         })
         .unwrap();
     let (persisted_metadata, persisted_balance) = wait_for_snapshot(

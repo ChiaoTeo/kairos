@@ -13,6 +13,6 @@ mod stream;
 
 pub(crate) use driver::SourceHandle;
 pub(crate) use normalization::{normalize, with_epoch};
-pub(crate) use replay::{load_replay_checkpoint, spawn_replay, ReplayClock, ReplaySource};
+pub(crate) use replay::{ReplayClock, ReplaySource, load_replay_checkpoint, spawn_replay};
 pub(crate) use snapshot::quote_event;
 pub(crate) use stream::{confirmed_subscription, confirmed_unsubscription, subscription_request};

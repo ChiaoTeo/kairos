@@ -71,7 +71,7 @@ pub(crate) fn encode_active_orders(
         identity.clone(),
         generation,
         key.canonical_key(),
-    );
+    )?;
     let metadata = view_metadata(
         &mut builder,
         &context,
@@ -125,7 +125,7 @@ pub(crate) fn encode_current_execution(
         identity.clone(),
         generation,
         key.canonical_key(),
-    );
+    )?;
     let metadata = view_metadata(
         &mut builder,
         &context,
@@ -419,10 +419,10 @@ pub(super) fn encode_unknown_remote_order<'a>(
         crate::application::UnknownRemoteOrderResolution::Pending => "pending",
         crate::application::UnknownRemoteOrderResolution::LinkedToLocalOrder => {
             "linked_to_local_order"
-        }
+        },
         crate::application::UnknownRemoteOrderResolution::ImportedAsExternalOrder => {
             "imported_as_external_order"
-        }
+        },
         crate::application::UnknownRemoteOrderResolution::ManualReview => "manual_review",
     });
     let reason = (!order.reason.is_empty()).then(|| builder.create_string(&order.reason));
@@ -457,10 +457,10 @@ pub(super) fn encode_commitment_state<'a>(
         CommitmentResource::Asset(value) => (fb::CommitmentResourceKind::ASSET, value.as_str()),
         CommitmentResource::Instrument(value) => {
             (fb::CommitmentResourceKind::INSTRUMENT, value.as_str())
-        }
+        },
         CommitmentResource::MarginNotional(value) => {
             (fb::CommitmentResourceKind::MARGIN_NOTIONAL, value.as_str())
-        }
+        },
     };
     let resource_id = builder.create_string(resource_id);
     let settlement_asset = commitment
@@ -486,7 +486,7 @@ pub(super) fn encode_commitment_state<'a>(
         ),
         CommitmentBasis::SimulationQuantity => {
             (fb::CommitmentBasisKind::SIMULATION_QUANTITY, None, None)
-        }
+        },
     };
     Ok(fb::OrderCommitmentState::create(
         builder,
@@ -546,8 +546,8 @@ pub(super) fn encode_risk_reservation_state<'a>(
                 shortfall: Some(&shortfall),
                 margin_rule_id: Some(margin_rule_id),
                 risk_decision_id: Some(risk_decision_id),
-                risk_policy_version: requirement.risk_policy_version,
-                account_snapshot_watermark: requirement.account_snapshot_watermark,
+                risk_policy_version: requirement.risk_policy_version.get(),
+                account_snapshot_watermark: requirement.account_snapshot_watermark.get(),
                 broker: Some(broker),
                 segment: Some(segment),
                 collateral_asset: Some(collateral_asset),
@@ -565,26 +565,26 @@ pub(super) fn encode_risk_reservation_state<'a>(
             lifecycle: match reservation.status {
                 RiskReservationSagaStatus::AuthorizePending => {
                     fb::RiskReservationSagaLifecycle::AUTHORIZE_PENDING
-                }
+                },
                 RiskReservationSagaStatus::Active => fb::RiskReservationSagaLifecycle::ACTIVE,
                 RiskReservationSagaStatus::ResizePending => {
                     fb::RiskReservationSagaLifecycle::RESIZE_PENDING
-                }
+                },
                 RiskReservationSagaStatus::ReleasePending => {
                     fb::RiskReservationSagaLifecycle::RELEASE_PENDING
-                }
+                },
                 RiskReservationSagaStatus::ConsumePending => {
                     fb::RiskReservationSagaLifecycle::CONSUME_PENDING
-                }
+                },
                 RiskReservationSagaStatus::Released => fb::RiskReservationSagaLifecycle::RELEASED,
                 RiskReservationSagaStatus::Consumed => fb::RiskReservationSagaLifecycle::CONSUMED,
                 RiskReservationSagaStatus::Expired => fb::RiskReservationSagaLifecycle::EXPIRED,
                 RiskReservationSagaStatus::Failed => fb::RiskReservationSagaLifecycle::FAILED,
                 RiskReservationSagaStatus::Uncertain => fb::RiskReservationSagaLifecycle::UNCERTAIN,
             },
-            risk_generation: reservation.risk_generation,
-            risk_event_sequence: reservation.risk_event_sequence,
-            policy_version: reservation.policy_version,
+            risk_generation: reservation.risk_generation.get(),
+            risk_event_sequence: reservation.risk_event_sequence.get(),
+            policy_version: reservation.policy_version.get(),
             expires_at_unix_nanos: reservation.expires_at_unix_nanos.get(),
             updated_at_unix_nanos: reservation.updated_at_unix_nanos.get(),
             funding_requirement,
@@ -612,7 +612,7 @@ fn encode_selected_route<'a>(
                 crate::domain::RouteSelectionKind::Explicit => fb::RouteSelectionKind::EXPLICIT,
                 crate::domain::RouteSelectionKind::UniqueCandidate => {
                     fb::RouteSelectionKind::UNIQUE_CANDIDATE
-                }
+                },
             },
             participant_id: Some(participant_id),
             destination_market_id,
@@ -645,7 +645,7 @@ fn encode_attempt<'a>(
                 crate::domain::DeliveryCertainty::NotSent => fb::DeliveryCertainty::NOT_SENT,
                 crate::domain::DeliveryCertainty::Indeterminate => {
                     fb::DeliveryCertainty::INDETERMINATE
-                }
+                },
                 crate::domain::DeliveryCertainty::Confirmed => fb::DeliveryCertainty::CONFIRMED,
                 crate::domain::DeliveryCertainty::Rejected => fb::DeliveryCertainty::REJECTED,
             },
@@ -815,7 +815,7 @@ pub(crate) fn encode_active_intents(
         identity.clone(),
         generation,
         key.canonical_key(),
-    );
+    )?;
     let metadata = view_metadata(
         &mut builder,
         &context,
@@ -1002,10 +1002,10 @@ pub(super) fn encode_plan<'a>(
                     side: match leg.side {
                         OrderSide::Buy => {
                             kairos_protocol::generated::kairos::common::v_2::Side::BUY
-                        }
+                        },
                         OrderSide::Sell => {
                             kairos_protocol::generated::kairos::common::v_2::Side::SELL
-                        }
+                        },
                     },
                     target_quantity: Some(&target_quantity),
                     order_ids: Some(order_ids),
@@ -1060,15 +1060,15 @@ pub(super) fn completion_policy(value: crate::domain::CompletionPolicy) -> fb::C
     match value {
         crate::domain::CompletionPolicy::AllLegsSatisfied => {
             fb::CompletionPolicy::ALL_LEGS_SATISFIED
-        }
+        },
         crate::domain::CompletionPolicy::AllOrNothing => fb::CompletionPolicy::ALL_OR_NOTHING,
         crate::domain::CompletionPolicy::BestEffort => fb::CompletionPolicy::BEST_EFFORT,
         crate::domain::CompletionPolicy::HedgeWithinTolerance => {
             fb::CompletionPolicy::HEDGE_WITHIN_TOLERANCE
-        }
+        },
         crate::domain::CompletionPolicy::TargetQuantityReached => {
             fb::CompletionPolicy::TARGET_QUANTITY_REACHED
-        }
+        },
     }
 }
 
@@ -1079,9 +1079,9 @@ pub(super) fn failure_policy(value: crate::domain::FailurePolicy) -> fb::Failure
         crate::domain::FailurePolicy::Compensate => fb::FailurePolicy::COMPENSATE,
         crate::domain::FailurePolicy::PauseForManualIntervention => {
             fb::FailurePolicy::PAUSE_FOR_MANUAL_INTERVENTION
-        }
+        },
         crate::domain::FailurePolicy::MarkReconciliationRequired => {
             fb::FailurePolicy::MARK_RECONCILIATION_REQUIRED
-        }
+        },
     }
 }

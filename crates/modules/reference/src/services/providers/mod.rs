@@ -1,6 +1,8 @@
 //! Concrete provider connections, Reference mapping, and source fan-in.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Display;
+use std::str::FromStr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
@@ -26,26 +28,25 @@ mod massive;
 mod okx;
 mod plan;
 
-#[cfg(test)]
-use fan_in::provider_catalog_uses_current_canonical_shape;
-pub use fan_in::CompositeSource;
-pub(crate) use fan_in::ParticipantAugmentedSource;
-use fan_in::{merge_provider_catalog_views, MASSIVE_PAGES_PER_REFRESH, MASSIVE_PAGE_TIMEOUT};
-
-#[cfg(test)]
-use binance::{binance_equity_provider_catalog, binance_provider_catalog};
 pub use binance::{
     BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
 };
 #[cfg(test)]
-use hyperliquid::hyperliquid_provider_catalog;
+use binance::{binance_equity_provider_catalog, binance_provider_catalog};
+pub use fan_in::CompositeSource;
+pub(crate) use fan_in::ParticipantAugmentedSource;
+#[cfg(test)]
+use fan_in::provider_catalog_uses_current_canonical_shape;
+use fan_in::{MASSIVE_PAGE_TIMEOUT, MASSIVE_PAGES_PER_REFRESH, merge_provider_catalog_views};
 pub use hyperliquid::HyperliquidSource;
+#[cfg(test)]
+use hyperliquid::hyperliquid_provider_catalog;
 #[cfg(test)]
 use massive::massive_provider_catalog;
 pub use massive::{MassiveEquitySource, MassiveOptionsCoverageSource};
+pub use okx::OkxSource;
 #[cfg(test)]
 use okx::okx_provider_catalog;
-pub use okx::OkxSource;
 pub(crate) use plan::{ReferenceProviderPlan, ReferenceSourcePlan};
 
 use crate::domain::{
@@ -112,10 +113,24 @@ fn canonical_instrument_kind(kind: ExternalInstrumentKind) -> ReferenceResult<In
         ExternalInstrumentKind::Spot | ExternalInstrumentKind::Margin => Ok(InstrumentKind::Spot),
         ExternalInstrumentKind::Perpetual | ExternalInstrumentKind::EquityPerpetual => {
             Ok(InstrumentKind::Perpetual)
-        }
+        },
         ExternalInstrumentKind::Future => Ok(InstrumentKind::Future),
         ExternalInstrumentKind::Option => Ok(InstrumentKind::Option),
     }
+}
+
+fn optional_decimal<T>(value: Option<String>, label: &str) -> ReferenceResult<Option<T>>
+where
+    T: FromStr,
+    T::Err: Display,
+{
+    value
+        .map(|value| {
+            value.parse::<T>().map_err(|error| {
+                ReferenceError::Provider(format!("invalid {label} {value:?}: {error}"))
+            })
+        })
+        .transpose()
 }
 
 fn merge_provider_catalog(

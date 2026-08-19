@@ -88,10 +88,10 @@ impl ExecutionApplication {
                     }
                 }
                 return Err(ExecutionError::Invalid("conflicting duplicate fill".into()));
-            }
+            },
             crate::services::actor::FillTransition::Applied { order, fill, event } => {
                 (order, fill, event)
-            }
+            },
         };
         if next.status == ExecutionOrderStatus::Filled {
             self.actor.set_commitment_status(
@@ -296,14 +296,14 @@ impl ExecutionApplication {
                     } else {
                         ExecutionError::Invalid(error.to_string())
                     });
-                }
+                },
             },
             None if !self.live_trading => simulation_risk_reservation(&request, now)?,
             None => {
                 return Err(ExecutionError::Invalid(
                     "live order submission requires configured Risk reservations".into(),
-                ))
-            }
+                ));
+            },
         };
         let (order, submitting_event) = self
             .actor
@@ -352,11 +352,11 @@ impl ExecutionApplication {
         match risk_effect {
             Some(RiskReservationSagaStatus::ReleasePending) => {
                 self.complete_risk_release(order_id, order.updated_at_unix_nanos.get())?
-            }
+            },
             Some(RiskReservationSagaStatus::ConsumePending) => {
                 self.complete_risk_consume(order_id, order.updated_at_unix_nanos.get())?
-            }
-            _ => {}
+            },
+            _ => {},
         }
         if let Some(intent_id) = order
             .intent_id
@@ -393,7 +393,7 @@ impl ExecutionApplication {
                 self.actor
                     .resize_commitment(order.order_id.as_str(), remaining, occurred_at)
                     .map_err(ExecutionError::Invalid)?;
-            }
+            },
             _ => self.actor.set_commitment_status(
                 order.order_id.as_str(),
                 CommitmentStatus::Active,
@@ -583,7 +583,7 @@ impl ExecutionApplication {
                 warn!(event = "order_submission_indeterminate", component = "execution", order_id = %order.order_id, error = %command.message, "provider order submission requires reconciliation");
                 self.mark_unknown_after_gateway_error(&order.order_id, command.message.clone())?;
                 return Err(ExecutionError::Indeterminate(command.message));
-            }
+            },
             Err(error) => {
                 warn!(event = "order_submission_failed", component = "execution", order_id = %order.order_id, error = %error, "provider order submission failed");
                 let message = error.to_string();
@@ -592,7 +592,7 @@ impl ExecutionApplication {
                 // after command dispatch must be returned as Indeterminate.
                 self.mark_not_sent(&order.order_id, message.clone())?;
                 return Err(ExecutionError::Gateway(message));
-            }
+            },
         };
         self.apply_order_entry_event(&order.order_id, event)
     }
@@ -679,19 +679,19 @@ impl ExecutionApplication {
             Ok(CommandOutcome::Rejected(rejection)) => {
                 warn!(event = "order_cancel_rejected", component = "execution", order_id = %order.order_id, error = %rejection.message, "provider rejected order cancellation");
                 return Err(ExecutionError::ProviderRejected(rejection.message));
-            }
+            },
             Ok(CommandOutcome::Indeterminate(command)) => {
                 warn!(event = "order_cancel_indeterminate", component = "execution", order_id = %order.order_id, error = %command.message, "provider order cancellation requires reconciliation");
                 self.mark_unknown_after_gateway_error(&order.order_id, command.message.clone())?;
                 return Err(ExecutionError::Indeterminate(command.message));
-            }
+            },
             Err(error) => {
                 warn!(event = "order_cancel_failed", component = "execution", order_id = %order.order_id, error = %error, "provider order cancellation failed");
                 // No cancel command reached the provider. The original order
                 // remains in its current state and does not require recovery
                 // solely because a local/pre-delivery cancel attempt failed.
                 return Err(ExecutionError::Gateway(error.to_string()));
-            }
+            },
         };
         let now = now_nanos();
         let (provider_order, _) = self
@@ -751,10 +751,10 @@ impl ExecutionApplication {
         match &result {
             Ok(order) => {
                 info!(event = "order_replaced", component = "execution", order_id = %order.order_id, status = ?order.status, "order replacement completed")
-            }
+            },
             Err(error) => {
                 warn!(event = "order_replace_failed", component = "execution", error = %error, "order replacement failed")
-            }
+            },
         }
         result
     }
@@ -933,7 +933,7 @@ impl ExecutionApplication {
                         dependency_watermarks: current.dependency_watermarks,
                     })?;
                     return Err(error);
-                }
+                },
             };
             self.attach_plan_order(request.intent_id.as_str(), &leg_id, &order.order_id)?;
             new_order_ids.push(order.order_id);

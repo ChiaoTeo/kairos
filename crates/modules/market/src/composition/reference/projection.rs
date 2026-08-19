@@ -7,10 +7,11 @@ use crate::{MarketDataRoute, ReconcileMarketUniverse, ResolvedMarket};
 pub(crate) fn build_reference_projection(
     sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> crate::services::reference_projection::ReferenceUniverseProjection {
+    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+
     use crate::composition::config::{
         BinanceDerivativeProduct, HyperliquidMarketType, OkxInstrumentType,
     };
-    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
 
     let sources = sources
         .iter()
@@ -51,7 +52,8 @@ pub(crate) fn build_reference_projection(
             let (provider_id, provider_product) = binding_provider_product(binding);
             Some(
                 crate::services::reference_projection::ReferenceSourceProjection {
-                    source_id: source_id.clone(),
+                    source_id: crate::SourceId::new(source_id)
+                        .expect("validated source binding key is a valid source identity"),
                     provider_id: provider_id.into(),
                     provider_product: provider_product.into(),
                     exchange_id: exchange_id.into(),
@@ -138,7 +140,7 @@ pub(crate) fn project_market_universe(
             provider_id,
             provider_product,
         ));
-        let mut descriptor = ResolvedMarket::new(
+        let mut descriptor = ResolvedMarket::from_reference(
             market.market_id.clone(),
             market.instrument_id.clone(),
             instrument.instrument_type,
@@ -146,12 +148,7 @@ pub(crate) fn project_market_universe(
             route,
         )?;
         descriptor.asset_type = market.asset_type;
-        descriptor.underlying_instrument_id = market
-            .underlying_instrument_id
-            .clone()
-            .map(kairos_primitives::InstrumentId::new)
-            .transpose()
-            .map_err(|error| error.to_string())?;
+        descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
         if let Some(source_id) = source_id {
             descriptor = descriptor.with_source(*source_id)?;
         }
@@ -159,8 +156,8 @@ pub(crate) fn project_market_universe(
     }
 
     Ok(ReconcileMarketUniverse {
-        generation: snapshot.generation.into(),
-        event_sequence: snapshot.event_sequence.into(),
+        generation: snapshot.generation,
+        event_sequence: snapshot.event_sequence,
         markets,
     })
 }
@@ -173,10 +170,10 @@ pub(crate) fn adapter_observation_capabilities(
     match provider_id.to_ascii_lowercase().as_str() {
         "binance" if provider_product.eq_ignore_ascii_case("spot") => {
             vec![Quote, Trade, Bar, OrderBook]
-        }
+        },
         "binance" if provider_product.eq_ignore_ascii_case("options") => {
             vec![Quote, Trade, OrderBook, OptionGreeks]
-        }
+        },
         "binance" | "okx" | "hyperliquid" => vec![Quote, Trade, OrderBook],
         "massive" => vec![Quote, Trade],
         _ => Vec::new(),
@@ -189,7 +186,7 @@ pub(super) fn project_market_universe_at_sequence(
     required_sequence: u64,
     sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> Result<ReconcileMarketUniverse, String> {
-    if snapshot.event_sequence < required_sequence {
+    if snapshot.event_sequence < required_sequence.into() {
         return Err(format!(
             "Reference view sequence {} is behind required sequence {}",
             snapshot.event_sequence, required_sequence
@@ -198,8 +195,11 @@ pub(super) fn project_market_universe_at_sequence(
     project_market_universe(snapshot, sources)
 }
 
-fn is_active(status: &str) -> bool {
-    matches!(status, "active" | "trading")
+fn is_active(status: &kairos_primitives::ReferenceStatus) -> bool {
+    matches!(
+        status,
+        kairos_primitives::ReferenceStatus::Active | kairos_primitives::ReferenceStatus::Trading
+    )
 }
 
 #[cfg(test)]
@@ -211,24 +211,24 @@ mod tests {
     #[test]
     fn maps_reference_view_to_market_owned_universe() {
         let mut snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
-            generation: 7,
-            event_sequence: 11,
+            generation: 7.into(),
+            event_sequence: 11.into(),
             ..Default::default()
         };
         snapshot
             .instruments
             .push(kairos_reference_contract::Instrument {
-                instrument_id: "instrument:btc".into(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
                 instrument_type: kairos_primitives::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             });
         snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: "market:btc".into(),
-            instrument_id: "instrument:btc".into(),
-            exchange_id: "exchange:binance".into(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
             instrument_kind: kairos_primitives::InstrumentKind::Spot,
-            venue_symbol: Some("BTCUSDT".into()),
+            venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
         });
@@ -244,10 +244,12 @@ mod tests {
         assert_eq!(update.markets[0].route.provider_id, "binance");
         assert_eq!(update.markets[0].route.provider_product, "spot");
         assert_eq!(update.markets[0].route.provider_symbol, "BTCUSDT");
-        assert!(update.markets[0]
-            .route
-            .observation_capabilities
-            .contains(&crate::ObservationKind::Quote));
+        assert!(
+            update.markets[0]
+                .route
+                .observation_capabilities
+                .contains(&crate::ObservationKind::Quote)
+        );
     }
 
     #[test]
@@ -261,7 +263,8 @@ mod tests {
     #[test]
     fn excludes_market_without_a_configured_or_builtin_venue_adapter() {
         let mut snapshot = fixture();
-        snapshot.markets[0].exchange_id = "exchange:curated".into();
+        snapshot.markets[0].exchange_id =
+            kairos_primitives::Exchange::new("exchange:curated").unwrap();
         let update = project_market_universe(&snapshot, &BTreeMap::new()).unwrap();
         assert!(update.markets.is_empty());
     }
@@ -269,7 +272,7 @@ mod tests {
     #[test]
     fn rejects_a_view_behind_the_required_event_sequence() {
         let snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
-            event_sequence: 4,
+            event_sequence: 4.into(),
             ..Default::default()
         };
         let error =
@@ -282,17 +285,17 @@ mod tests {
         snapshot
             .instruments
             .push(kairos_reference_contract::Instrument {
-                instrument_id: "instrument:btc".into(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
                 instrument_type: kairos_primitives::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             });
         snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: "market:btc".into(),
-            instrument_id: "instrument:btc".into(),
-            exchange_id: "exchange:binance".into(),
+            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
             instrument_kind: kairos_primitives::InstrumentKind::Spot,
-            venue_symbol: Some("BTCUSDT".into()),
+            venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
         });

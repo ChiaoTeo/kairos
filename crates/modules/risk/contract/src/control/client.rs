@@ -1,7 +1,10 @@
-use reqwest::blocking::{Client, Response};
-use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 use std::time::Duration;
+
+use kairos_primitives::{Generation, Sequence};
+use reqwest::blocking::{Client, Response};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::control::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Amount, AuthorizeRequest, CloseCircuitRequest,
@@ -13,12 +16,12 @@ use crate::{ContractError, ContractResult};
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Eq, PartialEq)]
 pub struct Health {
     pub status: String,
-    pub generation: u64,
-    pub event_sequence: u64,
-    pub policy_version: u64,
-    pub reservation_count: usize,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub policy_version: Generation,
+    pub reservation_count: u64,
     #[serde(default)]
-    pub open_circuit_count: usize,
+    pub open_circuit_count: u64,
 }
 
 pub struct RiskControlClient {
@@ -56,7 +59,7 @@ impl RiskControlClient {
 
     pub fn advance_time(
         &self,
-        event_time_unix_nanos: u64,
+        event_time_unix_nanos: kairos_primitives::UnixNanos,
     ) -> ContractResult<AdvanceRiskTimeResponse> {
         self.post(
             "/v1/time/advance",
@@ -82,35 +85,43 @@ impl RiskControlClient {
 
     pub fn resize(
         &self,
-        reservation_id: &str,
+        reservation_id: &kairos_primitives::ReservationId,
         amount: &Amount,
-        at_unix_nanos: u64,
+        at_unix_nanos: kairos_primitives::UnixNanos,
     ) -> ContractResult<Reservation> {
         self.post(
             "/v1/resize",
             &ResizeReservationRequest {
-                reservation_id: reservation_id.to_owned(),
+                reservation_id: reservation_id.clone(),
                 amount: *amount,
                 at_unix_nanos,
             },
         )
     }
 
-    pub fn release(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
+    pub fn release(
+        &self,
+        reservation_id: &kairos_primitives::ReservationId,
+        at_unix_nanos: kairos_primitives::UnixNanos,
+    ) -> ContractResult<Reservation> {
         self.post(
             "/v1/release",
             &ReleaseReservationRequest {
-                reservation_id: reservation_id.to_owned(),
+                reservation_id: reservation_id.clone(),
                 at_unix_nanos,
             },
         )
     }
 
-    pub fn consume(&self, reservation_id: &str, at_unix_nanos: u64) -> ContractResult<Reservation> {
+    pub fn consume(
+        &self,
+        reservation_id: &kairos_primitives::ReservationId,
+        at_unix_nanos: kairos_primitives::UnixNanos,
+    ) -> ContractResult<Reservation> {
         self.post(
             "/v1/consume",
             &ConsumeReservationRequest {
-                reservation_id: reservation_id.to_owned(),
+                reservation_id: reservation_id.clone(),
                 at_unix_nanos,
             },
         )

@@ -4,14 +4,15 @@
 //! domain observations are mapped field-by-field into the contract-owned
 //! FlatBuffers roots.  No JSON round trip is used as a model adapter.
 
-use crate::domain::events::{MarketEvent, OrderBookResyncRequired};
-use crate::domain::observation::order_book::{DepthPolicy, OrderBook, OrderBookDelta, PriceLevel};
-use crate::domain::observation::MarketObservation;
 use flatbuffers::FlatBufferBuilder;
-use kairos_market_contract::{event_metadata, EncodeContext};
+use kairos_market_contract::{EncodeContext, event_metadata};
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, Side};
 use kairos_protocol::generated::kairos::market::v_2 as fb;
-use kairos_protocol::InstanceIdentity;
+
+use crate::domain::events::{MarketEvent, OrderBookResyncRequired};
+use crate::domain::observation::MarketObservation;
+use crate::domain::observation::order_book::{DepthPolicy, OrderBook, OrderBookDelta, PriceLevel};
 
 pub(super) fn encode_contract_event(
     actor_id: &str,
@@ -23,13 +24,13 @@ pub(super) fn encode_contract_event(
         MarketEvent::Observation(value) => encode_observation(actor_id, identity, sequence, value),
         MarketEvent::OrderBookSnapshot(book) => {
             encode_orderbook_snapshot(actor_id, identity, sequence, book)
-        }
+        },
         MarketEvent::OrderBookDelta(delta) => {
             encode_orderbook_delta(actor_id, identity, sequence, delta)
-        }
+        },
         MarketEvent::OrderBookResyncRequired(value) => {
             encode_orderbook_resync(actor_id, identity, sequence, value)
-        }
+        },
     }
 }
 
@@ -40,6 +41,7 @@ fn context(actor_id: &str, identity: &InstanceIdentity, sequence: u64) -> Encode
         sequence,
         format!("market:{sequence}"),
     )
+    .expect("market publication actor identity and event id are valid")
 }
 
 fn dec(value: impl Into<kairos_primitives::DecimalParts>) -> Decimal64 {
@@ -184,7 +186,7 @@ fn encode_observation(
                     fb::finish_quote_updated_buffer(b, root);
                 },
             ))
-        }
+        },
         MarketObservation::Trade(value) => {
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
@@ -246,7 +248,7 @@ fn encode_observation(
                     fb::finish_trade_occurred_buffer(b, root);
                 },
             ))
-        }
+        },
         MarketObservation::Bar(value)
         | MarketObservation::TradeBar(crate::domain::observation::TradeBar { bar: value })
         | MarketObservation::QuoteBar(crate::domain::observation::QuoteBar { bar: value }) => {
@@ -304,7 +306,7 @@ fn encode_observation(
                     fb::finish_bar_completed_buffer(b, root);
                 },
             ))
-        }
+        },
         MarketObservation::OptionGreeks(value) => {
             let mut b = FlatBufferBuilder::new();
             let metadata = event_metadata(
@@ -359,21 +361,21 @@ fn encode_observation(
                     fb::finish_greeks_updated_buffer(b, root);
                 },
             ))
-        }
+        },
         MarketObservation::Rate(value) => encode_rate(actor_id, identity, sequence, value),
         MarketObservation::Ticker24h(value) => encode_ticker(actor_id, identity, sequence, value),
         MarketObservation::MarkPrice(value) => {
             encode_mark_price(actor_id, identity, sequence, value)
-        }
+        },
         MarketObservation::FundingRate(value) => {
             encode_funding(actor_id, identity, sequence, value)
-        }
+        },
         MarketObservation::OpenInterest(value) => {
             encode_open_interest(actor_id, identity, sequence, value)
-        }
+        },
         MarketObservation::IndexPrice(value) => {
             encode_index_price(actor_id, identity, sequence, value)
-        }
+        },
     }
 }
 
@@ -767,8 +769,8 @@ fn encode_orderbook_snapshot(
     let depth = b.create_string(match book.depth_policy {
         DepthPolicy::Full => "full",
         DepthPolicy::TopN(n) => {
-            return encode_orderbook_snapshot_top(actor_id, identity, sequence, book, n)
-        }
+            return encode_orderbook_snapshot_top(actor_id, identity, sequence, book, n);
+        },
     });
     let bids = levels(&mut b, &book.bids, fb::OrderBookSide::BID);
     let asks = levels(&mut b, &book.asks, fb::OrderBookSide::ASK);
@@ -958,12 +960,13 @@ fn encode_orderbook_resync(
 
 #[cfg(test)]
 mod tests {
+    use kairos_market_contract::event::decode_event;
+    use kairos_primitives::runtime::InstanceIdentity;
+    use kairos_primitives::{InstrumentId, Price, Quantity, Rate as FixedRate, UnixNanos};
+
     use super::encode_contract_event as encode_event;
     use crate::domain::events::MarketEvent;
     use crate::domain::observation::{Quote, Rate};
-    use kairos_market_contract::event::decode_event;
-    use kairos_primitives::{InstrumentId, Price, Quantity, Rate as FixedRate, UnixNanos};
-    use kairos_protocol::InstanceIdentity;
 
     #[test]
     fn quote_event_is_a_v2_root() {
@@ -978,7 +981,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: "source".into(),
+            source_id: kairos_primitives::SourceId::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",
@@ -1001,7 +1004,7 @@ mod tests {
             value: "0.01".parse::<FixedRate>().unwrap(),
             mark_price: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: "source".into(),
+            source_id: kairos_primitives::SourceId::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",

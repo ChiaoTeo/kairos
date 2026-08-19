@@ -5,16 +5,17 @@
 //! contract and sent over Aeron or mmap.  Keeping the adapters here prevents
 //! generated FlatBuffers types from leaking into the Actor.
 
+use flatbuffers::FlatBufferBuilder;
+use kairos_execution_contract::{EncodeContext, ExecutionViewKey, event_metadata, view_metadata};
+use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::generated::kairos::common::v_2 as common_fb;
+use kairos_protocol::generated::kairos::execution::v_2 as fb;
+
 use crate::application::ExecutionCurrentView;
 use crate::domain::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, ExecutionOrder, ExecutionOrderStatus,
     OrderCommitment, OrderSide, OrderType, RiskReservationEvidence, RiskReservationSagaStatus,
 };
-use flatbuffers::FlatBufferBuilder;
-use kairos_execution_contract::{event_metadata, view_metadata, EncodeContext, ExecutionViewKey};
-use kairos_protocol::generated::kairos::common::v_2 as common_fb;
-use kairos_protocol::generated::kairos::execution::v_2 as fb;
-use kairos_protocol::InstanceIdentity;
 
 mod encoding;
 mod events;
@@ -24,6 +25,14 @@ pub(crate) use events::encode_business_change;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use kairos_execution_contract::ExecutionViewKind;
+    use kairos_primitives::{
+        AccountId, Currency, Generation, InstrumentId, Money, OrderId, Quantity, SegmentKey,
+        Sequence, UnixNanos,
+    };
+
     use super::*;
     use crate::application::{
         DependencyWatermarks, ExecuteStrategyIntent, ExecutionBusinessChange, IntentEvent,
@@ -33,12 +42,6 @@ mod tests {
         CommitmentBasis, CommitmentResource, OrderCommitment, RiskReservationEvidence,
         RiskReservationSagaStatus,
     };
-    use kairos_execution_contract::ExecutionViewKind;
-    use kairos_primitives::{
-        AccountId, Currency, Generation, InstrumentId, Money, OrderId, Quantity, SegmentKey,
-        Sequence, UnixNanos,
-    };
-    use std::collections::BTreeMap;
 
     #[test]
     fn active_orders_mmap_encodes_commitments_and_risk_saga() {
@@ -69,14 +72,15 @@ mod tests {
             commitments: vec![commitment],
             risk_reservations: vec![RiskReservationEvidence {
                 order_id,
-                reservation_id: "execution:order-1".into(),
-                idempotency_key: "execution:order-1".into(),
+                reservation_id: kairos_primitives::ReservationId::new("execution:order-1").unwrap(),
+                idempotency_key: kairos_primitives::IdempotencyKey::new("execution:order-1")
+                    .unwrap(),
                 account_id,
                 amount: Money::new(100, 0).unwrap(),
                 status: RiskReservationSagaStatus::Active,
-                risk_generation: 7,
-                risk_event_sequence: 8,
-                policy_version: 2,
+                risk_generation: 7.into(),
+                risk_event_sequence: 8.into(),
+                policy_version: 2.into(),
                 expires_at_unix_nanos: UnixNanos::new(1000),
                 updated_at_unix_nanos: UnixNanos::new(11),
                 funding_requirement: None,
@@ -88,14 +92,8 @@ mod tests {
             unknown_remote_orders: Vec::new(),
             exchange_event_watermark_unix_nanos: UnixNanos::new(0),
         };
-        let identity = InstanceIdentity::new("workspace", "launch", "instance");
-        let key = ExecutionViewKey::new(
-            identity.workspace_id.clone(),
-            ExecutionViewKind::ActiveOrders,
-            Some(identity.launch_id.clone()),
-            Some(identity.instance_id.clone()),
-        )
-        .unwrap();
+        let identity = InstanceIdentity::new("workspace", "launch", "instance").unwrap();
+        let key = ExecutionViewKey::from_identity(&identity, ExecutionViewKind::ActiveOrders);
         let bytes = encode_active_orders("execution", &identity, 3, &key, &snapshot).unwrap();
         let decoded = fb::root_as_active_orders_view(&bytes).unwrap();
         assert_eq!(decoded.commitments().len(), 1);
@@ -113,13 +111,8 @@ mod tests {
             fb::RiskReservationSagaLifecycle::ACTIVE
         );
 
-        let current_key = ExecutionViewKey::new(
-            identity.workspace_id.clone(),
-            ExecutionViewKind::CurrentExecution,
-            Some(identity.launch_id.clone()),
-            Some(identity.instance_id.clone()),
-        )
-        .unwrap();
+        let current_key =
+            ExecutionViewKey::from_identity(&identity, ExecutionViewKind::CurrentExecution);
         let bytes =
             encode_current_execution("execution", &identity, 3, &current_key, &snapshot).unwrap();
         let current = fb::root_as_current_execution_view(&bytes).unwrap();
@@ -182,7 +175,7 @@ mod tests {
         };
         let payloads = encode_business_change(
             "execution",
-            &InstanceIdentity::new("workspace", "launch-1", "instance-1"),
+            &InstanceIdentity::new("workspace", "launch-1", "instance-1").unwrap(),
             9,
             20,
             0,
@@ -217,7 +210,7 @@ mod tests {
         rejected_event.reason = rejected_state.reason.clone();
         let rejected_payloads = encode_business_change(
             "execution",
-            &InstanceIdentity::new("workspace", "launch-1", "instance-1"),
+            &InstanceIdentity::new("workspace", "launch-1", "instance-1").unwrap(),
             10,
             21,
             0,

@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
 };
@@ -115,7 +113,7 @@ fn decode_request(
     match (method, path) {
         ("POST", "/v1/stop") => Ok(None),
         ("GET", "/v1/health") => Ok(Some(ExecutionRestRequest::Health)),
-        ("GET", "/v1/routes") => Ok(Some(ExecutionRestRequest::Routes(routes_query(query)))),
+        ("GET", "/v1/routes") => Ok(Some(ExecutionRestRequest::Routes(routes_query(query)?))),
         ("POST", "/v1/intents") => Ok(Some(ExecutionRestRequest::SubmitIntent(decode(body)?))),
         ("POST", "/v1/reconciliation") => Ok(Some(ExecutionRestRequest::Reconcile(decode(body)?))),
         ("DELETE", _) if path.starts_with("/v1/orders/") => {
@@ -123,18 +121,18 @@ fn decode_request(
                 order_id: path.trim_start_matches("/v1/orders/").to_owned(),
                 request: decode_or_default(body)?,
             }))
-        }
+        },
         ("PATCH", _) if path.starts_with("/v1/orders/") => {
             Ok(Some(ExecutionRestRequest::ReplaceOrder {
                 order_id: path.trim_start_matches("/v1/orders/").to_owned(),
                 request: decode(body)?,
             }))
-        }
+        },
         _ => Err(error(StatusCode::NOT_FOUND, "unknown Execution endpoint")),
     }
 }
 
-fn routes_query(query: &str) -> ExecutionRoutesQuery {
+fn routes_query(query: &str) -> Result<ExecutionRoutesQuery, Response> {
     let value = |key: &str| {
         query.split('&').find_map(|part| {
             part.split_once('=')
@@ -142,13 +140,31 @@ fn routes_query(query: &str) -> ExecutionRoutesQuery {
                 .map(|(_, value)| value.to_owned())
         })
     };
-    ExecutionRoutesQuery {
-        account_id: value("account_id"),
-        segment_key: value("segment_key"),
-        instrument_id: value("instrument_id"),
-        market_id: value("market_id"),
-        participant_id: value("participant_id"),
-    }
+    let invalid = |domain_error: kairos_primitives::DomainTypeError| {
+        error(StatusCode::BAD_REQUEST, &domain_error.to_string())
+    };
+    Ok(ExecutionRoutesQuery {
+        account_id: value("account_id")
+            .map(kairos_primitives::AccountId::new)
+            .transpose()
+            .map_err(invalid)?,
+        segment_key: value("segment_key")
+            .map(kairos_primitives::SegmentKey::new)
+            .transpose()
+            .map_err(invalid)?,
+        instrument_id: value("instrument_id")
+            .map(kairos_primitives::InstrumentId::new)
+            .transpose()
+            .map_err(invalid)?,
+        market_id: value("market_id")
+            .map(kairos_primitives::MarketId::new)
+            .transpose()
+            .map_err(invalid)?,
+        participant_id: value("participant_id")
+            .map(kairos_primitives::ParticipantId::new)
+            .transpose()
+            .map_err(invalid)?,
+    })
 }
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, Response> {
@@ -167,20 +183,20 @@ fn encode_response(response: ExecutionRestResponse) -> Response {
     match response {
         ExecutionRestResponse::Health(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         ExecutionRestResponse::Routes(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         ExecutionRestResponse::SubmitIntent(Ok(value)) => {
             (StatusCode::CREATED, Json(json!(value))).into_response()
-        }
+        },
         ExecutionRestResponse::CancelOrder(Ok(value))
         | ExecutionRestResponse::ReplaceOrder(Ok(value)) => {
             (StatusCode::ACCEPTED, Json(json!(value))).into_response()
-        }
+        },
         ExecutionRestResponse::Reconcile(Ok(value)) => {
             (StatusCode::ACCEPTED, Json(json!(value))).into_response()
-        }
+        },
         ExecutionRestResponse::Health(Err(value))
         | ExecutionRestResponse::Routes(Err(value))
         | ExecutionRestResponse::SubmitIntent(Err(value))

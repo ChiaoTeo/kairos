@@ -38,8 +38,8 @@ pub(crate) fn normalize(
                 value => {
                     return Err(IntegrationError::InvalidPayload(format!(
                         "unsupported Massive instrument type: {value}"
-                    )))
-                }
+                    )));
+                },
             };
             if row.ticker.trim().is_empty() {
                 return Err(IntegrationError::InvalidPayload(
@@ -91,7 +91,7 @@ pub(crate) fn normalize(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, MassiveMarketRow};
+    use super::{MassiveMarketRow, normalize};
     use crate::ExternalInstrumentKind;
 
     #[test]

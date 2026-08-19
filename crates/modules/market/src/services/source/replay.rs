@@ -1,12 +1,13 @@
 //! Deterministic finite source driven by the same messages as live providers.
 
-use std::{collections::BTreeMap, collections::VecDeque, path::PathBuf};
+use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use super::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
 use super::SourceHandle;
+use super::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::MarketObservation;
 use crate::domain::source::{
@@ -363,9 +364,10 @@ async fn send_status(
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::{InstrumentId, UnixNanos};
+
     use super::{ReplayClock, ReplaySource};
     use crate::domain::observation::{Bar, MarketObservation};
-    use kairos_primitives::{InstrumentId, UnixNanos};
 
     fn bar(time: u64) -> MarketObservation {
         MarketObservation::Bar(Bar {
@@ -378,7 +380,7 @@ mod tests {
             close: "1".parse().unwrap(),
             volume: None,
             observed_at_unix_nanos: UnixNanos::new(time),
-            source_id: "replay-fixture".into(),
+            source_id: kairos_primitives::SourceId::new("replay-fixture").unwrap(),
             derivation: "test".into(),
         })
     }

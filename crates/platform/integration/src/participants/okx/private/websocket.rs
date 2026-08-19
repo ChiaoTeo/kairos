@@ -3,16 +3,14 @@ use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use secrecy::ExposeSecret;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::okx::{OkxCredential, OkxPrivateWebSocketConfig};
-use crate::services::clock::{unix_millis, ServerClock};
-use crate::services::participants::okx::{
-    signing::okx_signature,
-    socket::SocketService,
-    stream::{parse_event, parse_execution_events},
-};
+use crate::services::clock::{ServerClock, unix_millis};
+use crate::services::participants::okx::signing::okx_signature;
+use crate::services::participants::okx::socket::SocketService;
+use crate::services::participants::okx::stream::{parse_event, parse_execution_events};
 use crate::{
     AccountStream, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
     ConnectionLifecycleCommand, ExecutionStream, ExternalAccountEventEnvelope,
@@ -191,13 +189,13 @@ impl OkxPrivateWebSocketConnection {
                 Message::Text(text) if text.as_str() == "pong" => continue,
                 Message::Text(text) => {
                     return serde_json::from_str(&text)
-                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))
-                }
+                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()));
+                },
                 Message::Close(_) => {
                     return Err(IntegrationError::Transport(
                         "OKX private WebSocket closed".into(),
-                    ))
-                }
+                    ));
+                },
                 _ => continue,
             }
         }
@@ -216,13 +214,13 @@ impl OkxPrivateWebSocketConnection {
                     return Poll::Ready(
                         serde_json::from_str(&text)
                             .map_err(|error| IntegrationError::InvalidPayload(error.to_string())),
-                    )
-                }
+                    );
+                },
                 Message::Close(_) => {
                     return Poll::Ready(Err(IntegrationError::Transport(
                         "OKX private WebSocket closed".into(),
-                    )))
-                }
+                    )));
+                },
                 _ => continue,
             }
         }
@@ -339,7 +337,7 @@ impl AccountStream for OkxPrivateWebSocketConnection {
                 return Poll::Ready(Ok(event));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -357,7 +355,7 @@ impl ExecutionStream for OkxPrivateWebSocketConnection {
                 return Poll::Ready(Ok(event));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -378,7 +376,7 @@ impl ParticipantEventStream for OkxPrivateWebSocketConnection {
                 return Poll::Ready(Ok(ExternalParticipantEvent::Execution(event)));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }

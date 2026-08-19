@@ -38,8 +38,8 @@ impl ExecutionSimulator {
         let limit_price = match request.limit_price {
             Some(value) => Some(positive_number(&value.to_string(), "limit_price")?),
             None if request.order_type == OrderType::Limit => {
-                return Err("limit order requires limit_price".into())
-            }
+                return Err("limit order requires limit_price".into());
+            },
             None => None,
         };
         let order = SimulationOrder {

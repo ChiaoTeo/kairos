@@ -2,10 +2,8 @@
 
 use std::path::Path;
 
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Row, SqlitePool,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, SqlitePool};
 
 use super::{ExecutionAuditEvent, ExecutionAuditQuery, IntentAdmissionAuditRecord};
 use crate::application::{ExecutionEvent, IntentEvent};

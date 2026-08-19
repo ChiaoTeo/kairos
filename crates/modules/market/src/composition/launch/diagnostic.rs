@@ -7,7 +7,7 @@ use kairos_conflux::{
     ConnectionKey, ShutdownMode,
 };
 use kairos_market_contract::{MarketRestRequest, MarketRestResponse};
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 
 use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
 use crate::domain::source::{SourceDescriptor, SourceId};
@@ -39,7 +39,7 @@ pub async fn run_diagnostic_once(
         Duration::from_secs(5),
         view_root.clone(),
         4 * 1024 * 1024,
-        InstanceIdentity::new("diagnostic", "diagnostic", "market-cli"),
+        InstanceIdentity::new("diagnostic", "diagnostic", "market-cli")?,
         vec![plan],
         None,
         None,
@@ -109,7 +109,7 @@ fn install_connection(
                 descriptor(source_id, "spot", [ObservationKind::Quote])?,
                 MarketSourceMode::Snapshot(Duration::from_secs(1)),
             )
-        }
+        },
         DiagnosticProvider::BinanceSpotWebsocket => {
             let source_id = "binance.public.websocket";
             system
@@ -130,7 +130,7 @@ fn install_connection(
                 descriptor(source_id, "spot", stream_kinds())?,
                 MarketSourceMode::MarketScopedStream,
             )
-        }
+        },
         DiagnosticProvider::BinanceOptionsRest => {
             let source_id = "binance.public.rest.options";
             system
@@ -154,7 +154,7 @@ fn install_connection(
                 )?,
                 MarketSourceMode::Snapshot(Duration::from_secs(1)),
             )
-        }
+        },
     };
     debug_assert_eq!(descriptor.id.as_str(), source_id);
     Ok(MarketSourcePlan { descriptor, mode })

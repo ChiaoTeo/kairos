@@ -1,10 +1,10 @@
+use kairos_primitives::InstrumentKind;
+
+use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
 use crate::domain::subscription::{
     SubscriptionId, SubscriptionMemberRequirement, SubscriptionStatus,
 };
-use kairos_primitives::InstrumentKind;
-
-use super::super::{MarketApplication, MarketError};
 
 impl MarketApplication {
     pub fn set_subscription_member_requirement(
@@ -122,9 +122,10 @@ fn exchange_matches(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::InstrumentKind;
+
     use super::resolve_market;
     use crate::domain::market::{MarketDataRoute, ResolvedMarket};
-    use kairos_primitives::InstrumentKind;
 
     #[test]
     fn resolves_canonical_exchange_from_business_selector() {

@@ -2,9 +2,9 @@ use kairos_primitives::{AssetId, Currency, UnixNanos};
 use serde_json::Value;
 
 use crate::{
-    external_instrument_ref, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
-    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalPosition,
-    IntegrationError, ParticipantKind,
+    ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus,
+    ExternalBalance, ExternalDecimal, ExternalMarginMode, ExternalPosition, IntegrationError,
+    ParticipantKind, external_instrument_ref,
 };
 
 pub(crate) fn spot(

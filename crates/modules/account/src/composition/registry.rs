@@ -1,8 +1,9 @@
 //! Account-owned binding and credential-file configuration persistence.
 
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AccountRegistry {
@@ -198,12 +199,12 @@ fn load_account_toml(path: &std::path::Path) -> Result<Option<AccountBindingReco
                 "cross-margin" => {
                     product = "margin".into();
                     trading_mode.get_or_insert_with(|| "cross".into());
-                }
+                },
                 "isolated-margin" => {
                     product = "margin".into();
                     trading_mode.get_or_insert_with(|| "isolated".into());
-                }
-                _ => {}
+                },
+                _ => {},
             }
             segments.push(key.clone());
             segment_products.insert(key.clone(), product);

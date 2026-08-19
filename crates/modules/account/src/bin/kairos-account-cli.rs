@@ -3,24 +3,22 @@ use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
 use kairos_account::composition::account::{
-    compose_binance_async_account_application, compose_ibkr_async_account_application,
-    compose_local_account_application_for_segments, compose_okx_async_account_application,
-    default_rest_endpoint, inspect_account_credential, AccountOptions, AccountSegmentBinding,
+    AccountOptions, AccountSegmentBinding, compose_binance_async_account_application,
+    compose_ibkr_async_account_application, compose_local_account_application_for_segments,
+    compose_okx_async_account_application, default_rest_endpoint, inspect_account_credential,
 };
 use kairos_account::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use kairos_account::domain::{AccountFill, AccountModel};
-use kairos_account_contract::{
-    AccountRestRequest, AccountRestResponse, DecimalValue, SimulatedSettlement,
-};
+use kairos_account_contract::{AccountRestRequest, AccountRestResponse, SimulatedSettlement};
 use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, CredentialRecord, CredentialStore,
     ExternalAccountCredentialProfile, ShutdownMode,
 };
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
-use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
+use kairos_workspace::cli::{OutputFormat, render};
 
 async fn inspect_credential(
     options: &AccountOptions,
@@ -405,31 +403,18 @@ impl FillArgs {
     fn to_contract(&self) -> Result<SimulatedSettlement, String> {
         let fill = self.to_domain()?;
         Ok(SimulatedSettlement {
-            fill_id: fill.fill_id.to_string(),
-            order_id: fill.order_id.map(|value| value.to_string()),
-            segment_key: fill.segment_key.to_string(),
-            instrument_id: fill.instrument_id.to_string(),
-            quantity: DecimalValue::new(fill.quantity.mantissa(), fill.quantity.scale())
-                .map_err(|error| error.to_string())?,
-            price: DecimalValue::new(fill.price.mantissa(), fill.price.scale())
-                .map_err(|error| error.to_string())?,
-            side: match fill.side {
-                kairos_account::domain::OrderSide::Buy => "buy".into(),
-                kairos_account::domain::OrderSide::Sell => "sell".into(),
-            },
-            settlement_asset: fill.settlement_asset.map(|value| value.to_string()),
-            settlement_delta: fill
-                .settlement_delta
-                .map(|value| DecimalValue::new(value.mantissa(), value.scale()))
-                .transpose()
-                .map_err(|error| error.to_string())?,
-            fee_asset: fill.fee_asset.map(|value| value.to_string()),
-            fee_amount: fill
-                .fee_amount
-                .map(|value| DecimalValue::new(value.mantissa(), value.scale()))
-                .transpose()
-                .map_err(|error| error.to_string())?,
-            occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
+            fill_id: fill.fill_id,
+            order_id: fill.order_id,
+            segment_key: fill.segment_key,
+            instrument_id: fill.instrument_id,
+            quantity: fill.quantity,
+            price: fill.price,
+            side: fill.side,
+            settlement_asset: fill.settlement_asset,
+            settlement_delta: fill.settlement_delta,
+            fee_asset: fill.fee_asset,
+            fee_amount: fill.fee_amount,
+            occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
         })
     }
 }
@@ -491,7 +476,7 @@ async fn run_direct(
         Command::List => {
             print_json(serde_json::to_value(&registry.accounts)?);
             return Ok(());
-        }
+        },
         Command::Browse { query } => {
             let query = query.as_deref().map(str::to_ascii_lowercase);
             let accounts: Vec<_> = registry
@@ -515,7 +500,7 @@ async fn run_direct(
                 "count": accounts.len(),
             }));
             return Ok(());
-        }
+        },
         Command::Model {
             command:
                 ModelCommand::Switch {
@@ -552,7 +537,7 @@ async fn run_direct(
                 "account": record,
             }));
             return Ok(());
-        }
+        },
         Command::Show { account_id } => {
             let value = registry
                 .accounts
@@ -561,7 +546,7 @@ async fn run_direct(
                 .ok_or_else(|| format!("account not found: {account_id}"))?;
             print_json(serde_json::to_value(value)?);
             return Ok(());
-        }
+        },
         Command::Register {
             account_id,
             broker,
@@ -602,7 +587,7 @@ async fn run_direct(
             registry.save(&registry_path)?;
             print_json(serde_json::json!({"account_id": account_id, "status": "registered"}));
             return Ok(());
-        }
+        },
         Command::Modify {
             account_id,
             broker,
@@ -696,7 +681,7 @@ async fn run_direct(
             registry.save(&registry_path)?;
             print_json(serde_json::to_value(record)?);
             return Ok(());
-        }
+        },
         Command::Simulate {
             account_id,
             segment,
@@ -733,14 +718,14 @@ async fn run_direct(
                 "status": "simulated"
             }));
             return Ok(());
-        }
+        },
         Command::Remove { account_id, force } => {
             let _ = force;
             let removed = registry.remove_account(account_id);
             registry.save(&registry_path)?;
             print_json(serde_json::json!({"account_id": account_id, "removed": removed}));
             return Ok(());
-        }
+        },
         Command::CredentialList => {
             let values: Vec<_> = credential_store
                 .credentials
@@ -756,7 +741,7 @@ async fn run_direct(
                 .collect();
             print_json(serde_json::to_value(values)?);
             return Ok(());
-        }
+        },
         Command::CredentialAdd {
             account_id,
             name,
@@ -845,7 +830,7 @@ async fn run_direct(
                 "account": record,
             }));
             return Ok(());
-        }
+        },
         Command::CredentialCreate {
             credential_id,
             provider,
@@ -865,7 +850,7 @@ async fn run_direct(
             credential_store.save(&credentials_path)?;
             print_json(serde_json::json!({"credential_id": credential_id, "status": "created"}));
             return Ok(());
-        }
+        },
         Command::CredentialDelete {
             credential_id,
             force,
@@ -885,7 +870,7 @@ async fn run_direct(
             credential_store.save(&credentials_path)?;
             print_json(serde_json::json!({"credential_id": credential_id, "removed": removed}));
             return Ok(());
-        }
+        },
         Command::CredentialShow {
             credential_id,
             reveal_secrets,
@@ -904,7 +889,7 @@ async fn run_direct(
                 "passphrase": if *reveal_secrets { credential.passphrase_value().unwrap_or_default() } else { "***".to_string() },
             }));
             return Ok(());
-        }
+        },
         Command::Schemas => {
             print_json(serde_json::json!({
                 "binance": {"credential_fields": ["api_key", "api_secret"], "segments": ["spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding", "options"]},
@@ -913,27 +898,27 @@ async fn run_direct(
                 "paper": {"credential_fields": [], "segments": ["spot", "margin", "futures"]}
             }));
             return Ok(());
-        }
+        },
         Command::Schema { provider } => {
             let provider = provider.to_ascii_lowercase();
             let value = match provider.as_str() {
                 "binance" => {
                     serde_json::json!({"provider":"binance","credential_fields":["api_key","api_secret"],"segments":["spot","cross_margin","isolated_margin","usd_m_futures","coin_m_futures","funding","options"]})
-                }
+                },
                 "okx" | "okex" => {
                     serde_json::json!({"provider":"okx","credential_fields":["api_key","api_secret","passphrase"],"segments":["spot","cross_margin","isolated_margin","swap","futures","options"]})
-                }
+                },
                 "ibkr" => {
                     serde_json::json!({"provider":"ibkr","credential_fields":[],"connection_fields":["host","port","client_id"],"segments":["equity"]})
-                }
+                },
                 "paper" => {
                     serde_json::json!({"provider":"paper","credential_fields":[],"segments":["spot","margin","futures"]})
-                }
+                },
                 _ => return Err(format!("unsupported provider: {provider}").into()),
             };
             print_json(value);
             return Ok(());
-        }
+        },
         Command::Doctor { account_id } => {
             let selected_account_id = account_id
                 .as_deref()
@@ -990,8 +975,8 @@ async fn run_direct(
                 "runtime": runtime,
             }));
             return Ok(());
-        }
-        _ => {}
+        },
+        _ => {},
     }
     let account_id = args.connection.account_id.clone();
     let selected_segment = selected_segment(&args.connection);
@@ -1133,11 +1118,12 @@ async fn run_direct(
             .collect::<Result<Vec<_>, _>>()?
     } else {
         let binding = AccountSegmentBinding::new(&selected_segment, &options.product);
-        vec![args
-            .connection
-            .trading_mode
-            .as_ref()
-            .map_or(binding.clone(), |mode| binding.with_trading_mode(mode))]
+        vec![
+            args.connection
+                .trading_mode
+                .as_ref()
+                .map_or(binding.clone(), |mode| binding.with_trading_mode(mode)),
+        ]
     };
     let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
         && configured_segments.iter().all(|segment| {
@@ -1217,7 +1203,7 @@ async fn run_direct(
             .await
             .map_err(|_| "Account Conflux stopped during startup".to_string())?;
         match ready {
-            Some(AccountRestResponse::Health(Ok(_))) => {}
+            Some(AccountRestResponse::Health(Ok(_))) => {},
             Some(AccountRestResponse::Health(Err(error))) => return Err(error.message),
             _ => return Err("Account Actor omitted its health response".into()),
         }
@@ -1229,10 +1215,10 @@ async fn run_direct(
                 .await
                 .map_err(|_| "Account Conflux stopped during settlement".to_string())?;
             match response {
-                Some(AccountRestResponse::ApplySimulatedSettlement(Ok(_))) => {}
+                Some(AccountRestResponse::ApplySimulatedSettlement(Ok(_))) => {},
                 Some(AccountRestResponse::ApplySimulatedSettlement(Err(error))) => {
-                    return Err(error.message)
-                }
+                    return Err(error.message);
+                },
                 _ => return Err("Account Actor omitted its settlement response".into()),
             }
         }
@@ -1789,8 +1775,9 @@ fn redact(value: &str) -> String {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::Cli;
     use clap::Parser;
+
+    use super::Cli;
 
     #[test]
     fn command_surface_builds_without_duplicate_aliases() {

@@ -1,10 +1,8 @@
-use super::{
-    freshness::MarketFreshness,
-    observation::{
-        order_book::{OrderBook, OrderBookDelta},
-        MarketObservation,
-    },
-};
+use kairos_primitives::SourceId;
+
+use super::freshness::MarketFreshness;
+use super::observation::MarketObservation;
+use super::observation::order_book::{OrderBook, OrderBookDelta};
 
 /// Every mutation which advances Market's public event sequence must have a
 /// corresponding event-plane representation. Keeping this enum beside the
@@ -20,7 +18,7 @@ pub enum MarketEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderBookResyncRequired {
-    pub source_id: String,
+    pub source_id: SourceId,
     pub market_id: kairos_primitives::MarketId,
     pub instrument_id: kairos_primitives::InstrumentId,
     pub expected_sequence: kairos_primitives::Sequence,

@@ -57,7 +57,7 @@ pub(crate) fn binding_supports_canonical_market(
     match binding {
         MarketSourceBinding::BinanceSpot { .. } => {
             exchange_id.eq_ignore_ascii_case("exchange:binance") && kind == Spot
-        }
+        },
         MarketSourceBinding::BinanceDerivatives { product, .. } => {
             exchange_id.eq_ignore_ascii_case("exchange:binance")
                 && match product {
@@ -65,9 +65,9 @@ pub(crate) fn binding_supports_canonical_market(
                     BinanceDerivativeProduct::UsdMFutures
                     | BinanceDerivativeProduct::CoinMFutures => {
                         matches!(kind, Future | Perpetual)
-                    }
+                    },
                 }
-        }
+        },
         MarketSourceBinding::Okx {
             instrument_type, ..
         } => {
@@ -78,7 +78,7 @@ pub(crate) fn binding_supports_canonical_market(
                     config::OkxInstrumentType::Futures => kind == Future,
                     config::OkxInstrumentType::Options => kind == Option,
                 }
-        }
+        },
         MarketSourceBinding::Hyperliquid {
             market_type: configured,
             ..
@@ -88,7 +88,7 @@ pub(crate) fn binding_supports_canonical_market(
                     config::HyperliquidMarketType::Spot => kind == Spot,
                     config::HyperliquidMarketType::Perpetual => kind == Perpetual,
                 }
-        }
+        },
         // Both are broker/data-provider surfaces rather than canonical venues.
         MarketSourceBinding::BinanceEquity { .. }
         | MarketSourceBinding::Massive { .. }

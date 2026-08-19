@@ -1,9 +1,11 @@
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{
+    BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
+};
+
 use crate::domain::{
     Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, EarnHolding, InstrumentId,
     MarginMode, Money, OpenOrder, Position, PositionMode, SegmentKey,
-};
-use kairos_primitives::{
-    ActorId, BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

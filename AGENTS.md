@@ -28,7 +28,8 @@ Platform crates live under `crates/platform/<capability>`. Do not put business
 state or module-owned vocabulary in platform crates. `crates/primitives` is a
 shared semantic kernel, not a generic common-types or utilities bucket. It may
 contain business identities, exact values, units, and closed vocabulary whose
-meaning and invariants are stable and genuinely shared by multiple modules.
+meaning and invariants are stable across an owner's domain/contract boundary
+or genuinely shared by multiple modules.
 Organize business primitives by their governing business vocabulary, such as
 account, execution, market, reference, risk, and integration. Keep genuinely
 cross-cutting value mechanics such as decimal and time in their own groups.
@@ -124,6 +125,11 @@ owner's server or transport adapter maps contract-owned input into its
 application API and maps application/domain results into contract-owned
 output. Contract crates may use primitives and platform protocol/transport
 capabilities without transferring business ownership to those lower layers.
+Shared process-boundary mechanics belong to `kairos_protocol`: runtime
+metadata, event/view encoding context, frame/version handling, and protocol
+errors. Module contracts compose that common context with their own commands,
+queries, events, snapshots, and business keys; they must not duplicate a
+second metadata builder or move business DTOs into protocol.
 
 Contract-to-contract dependencies are not the default. Shared identity and
 value atoms should normally come from primitives, allowing contracts to use a
@@ -181,6 +187,16 @@ the foreign package.
   infrastructure-free representation, and a stable validation path. A purely
   internal type stays in its domain. Similar field names or identical Rust
   representations are not sufficient.
+- Once a primitive exists, contract, application, and domain models use that
+  type directly for the same meaning. Do not downgrade `AccountId`,
+  `MarketId`, `UnixNanos`, `Price`, or another established value to
+  `String`/integer and reconstruct it in the next layer merely to preserve a
+  JSON, FlatBuffers, SQL, CLI, or provider representation. Serde-transparent
+  primitives and explicit adapters preserve the wire shape.
+- Raw representations may remain in generated wire accessors, provider SDK
+  DTOs, CLI/config input, and private persistence rows. Convert them once at
+  the boundary with a fallible constructor; do not let raw semantic values
+  flow through contract, application, or domain models.
 - Do not put DTOs, orchestration, lifecycle state, persistence/wire records,
   SDK types, generic helpers, or convenience utilities in primitives.
 - `application/` is the use-case entry point for targets and tests belonging
@@ -223,6 +239,17 @@ the foreign package.
   expose vendor payloads or persistence records. Contract APIs use
   contract-owned request/result/event/snapshot types and do not re-export the
   owner's application or domain models.
+- Cross-package and cross-process contract DTOs use fixed-width numeric types
+  or semantic wrappers; do not expose `usize` or `isize`. Counts, revisions,
+  sequences, versions, timestamps, and durations are distinct meanings and
+  must not be treated as interchangeable merely because they share an integer
+  representation.
+- `serde_json::Value` is allowed only for an explicitly named extension,
+  diagnostic details, configuration, or provider-specific boundary. It must
+  not carry a core command, query, event, snapshot, intent, admission record,
+  or other business payload when a typed contract can be defined. When a
+  closed request enum replaces a generic JSON envelope, migrate current
+  callers and remove the duplicate facade.
 - Cross-process business event and snapshot publishers must map application or
   domain models directly into contract-owned types and encode those types with
   the declared wire format (normally FlatBuffers). Do not use
@@ -380,7 +407,7 @@ to the change:
 ```text
 cargo test --workspace
 uv run pytest -q
-cargo fmt --all -- --check
+make rust-fmt-check
 git diff --check
 python3 scripts/check/check_crate_layout.py
 python3 scripts/check/check_workspace_dependencies.py

@@ -28,11 +28,11 @@ impl ObservationScope {
                     .is_none_or(|value| !value.trim().is_empty()) =>
             {
                 Ok(())
-            }
+            },
             Self::Market { .. } => Err("market observation scope requires market_id".into()),
             Self::Consolidated { .. } => {
                 Err("consolidated observation scope must match the observation instrument".into())
-            }
+            },
         }
     }
 }

@@ -2,10 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -13,10 +11,8 @@ use kairos_account_contract::{
     AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader,
     DecimalValue as AccountDecimal, Health,
 };
-use kairos_protocol::generated::kairos::{
-    account::v_2::{AccountStatus, FreshnessState},
-    common::v_2::ViewCompleteness,
-};
+use kairos_protocol::generated::kairos::account::v_2::{AccountStatus, FreshnessState};
+use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
 use kairos_risk_contract::{Health as RiskHealth, RiskControlClient};
 
@@ -101,7 +97,7 @@ impl DependencyProjectionRuntime {
                         Ok(client) => break client,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
-                        }
+                        },
                         Err(_) => return,
                     }
                 };
@@ -115,7 +111,7 @@ impl DependencyProjectionRuntime {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
-                        }
+                        },
                         Err(_) => return,
                     }
                 };
@@ -188,7 +184,7 @@ impl DependencyProjectionRuntime {
                         Ok(client) => break client,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
-                        }
+                        },
                         Err(_) => return,
                     }
                 };
@@ -348,8 +344,8 @@ pub(super) fn read_reference_projection(
             instrument_id: value.instrument_id,
             listing_id: value.listing_id,
             exchange_id: value.exchange_id,
-            instrument_kind: value.instrument_kind.to_string(),
-            asset_type: value.asset_type.map(|item| item.to_string()),
+            instrument_kind: value.instrument_kind,
+            asset_type: value.asset_type,
             venue_symbol: value.venue_symbol,
             base_asset_id: value.base_asset_id,
             quote_asset_id: value.quote_asset_id,
@@ -386,8 +382,8 @@ pub(super) fn read_account_projection(
     let view = frame.account_current().map_err(|error| error.to_string())?;
     let metadata = view.metadata();
     if frame.generation() != metadata.generation()
-        || metadata.generation() != health.generation
-        || metadata.applied_revision() != Some(health.event_sequence)
+        || metadata.generation() != health.generation.get()
+        || metadata.applied_revision() != Some(health.event_sequence.get())
     {
         return Err("Account health and mmap watermark disagree".into());
     }

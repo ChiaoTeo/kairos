@@ -1,3 +1,7 @@
+use kairos_primitives::{
+    AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId, SourceId, StrategyId,
+    SubscriptionId,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -6,7 +10,7 @@ pub struct MarketCommandEnvelope<T> {
     pub command_id: String,
     pub idempotency_key: String,
     pub operation: String,
-    pub strategy_id: String,
+    pub strategy_id: StrategyId,
     #[serde(default)]
     pub launch_id: Option<String>,
     pub instance_id: String,
@@ -18,11 +22,11 @@ pub struct MarketSubscribePayload {
     pub subject: String,
     pub selectors: Vec<String>,
     #[serde(default)]
-    pub source_id: Option<String>,
-    pub exchange: Option<String>,
-    pub market_type: Option<String>,
+    pub source_id: Option<SourceId>,
+    pub exchange: Option<Exchange>,
+    pub market_type: Option<InstrumentKind>,
     #[serde(default)]
-    pub asset_type: Option<String>,
+    pub asset_type: Option<AssetClass>,
     #[serde(default)]
     pub params: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
@@ -31,30 +35,11 @@ pub struct MarketSubscribePayload {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketUnsubscribePayload {
-    pub subscription_id: String,
+    pub subscription_id: SubscriptionId,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketReleaseOwnerPayload {}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct MarketControlRequest {
-    pub command_id: String,
-    pub idempotency_key: String,
-    pub caller_id: String,
-    pub workspace_id: String,
-    pub payload: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct MarketControlResponse {
-    pub status: Option<String>,
-    pub operation: Option<String>,
-    pub resource_id: Option<String>,
-    pub error: Option<MarketControlError>,
-    #[serde(flatten)]
-    pub details: std::collections::BTreeMap<String, serde_json::Value>,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MarketControlError {
@@ -92,11 +77,11 @@ pub enum MarketRestResponse {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataSourcesQuery {
-    pub market_id: Option<String>,
-    pub instrument_id: Option<String>,
-    pub exchange: Option<String>,
-    pub market_type: Option<String>,
-    pub asset_type: Option<String>,
+    pub market_id: Option<MarketId>,
+    pub instrument_id: Option<InstrumentId>,
+    pub exchange: Option<Exchange>,
+    pub market_type: Option<InstrumentKind>,
+    pub asset_type: Option<AssetClass>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -109,7 +94,7 @@ pub struct MarketHealthResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataSource {
-    pub source_id: String,
+    pub source_id: SourceId,
     pub status: String,
     pub ready: bool,
     pub stale: bool,
@@ -122,14 +107,14 @@ pub struct MarketDataSourcesResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketSubscriptionResponse {
-    pub subscription_id: String,
+    pub subscription_id: SubscriptionId,
     pub owner_id: String,
     pub status: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketReleaseOwnerResponse {
-    pub released_subscriptions: Vec<String>,
+    pub released_subscriptions: Vec<SubscriptionId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -148,15 +133,15 @@ mod tests {
             command_id: "command-1".into(),
             idempotency_key: "key-1".into(),
             operation: "market.subscribe".into(),
-            strategy_id: "strategy-1".into(),
+            strategy_id: kairos_primitives::StrategyId::new("strategy-1").unwrap(),
             launch_id: Some("launch-1".into()),
             instance_id: "instance-1".into(),
             payload: MarketSubscribePayload {
                 subject: "BTCUSDT".into(),
                 selectors: vec!["trades".into()],
-                source_id: Some("binance-spot".into()),
-                exchange: Some("binance".into()),
-                market_type: Some("spot".into()),
+                source_id: Some(kairos_primitives::SourceId::new("binance-spot").unwrap()),
+                exchange: Some(kairos_primitives::Exchange::new("binance").unwrap()),
+                market_type: Some(kairos_primitives::InstrumentKind::Spot),
                 asset_type: None,
                 params: Default::default(),
                 dynamic: false,

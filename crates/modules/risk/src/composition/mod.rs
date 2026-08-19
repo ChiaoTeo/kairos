@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use kairos_conflux::ConfluxSystem;
 
+use crate::RiskApplication;
 use crate::domain::RiskPolicy;
 use crate::services::actor::RiskActor;
-use crate::RiskApplication;
 
 const RISK_VIEW_RESOURCE: &str = "risk-latest";
 const RISK_EVENT_RESOURCE: &str = "risk-events";
@@ -23,7 +23,7 @@ pub struct RiskHostConfig {
     pub aeron_dir: Option<String>,
     pub event_channel: String,
     pub event_stream_id: i32,
-    pub identity: kairos_protocol::InstanceIdentity,
+    pub identity: kairos_primitives::runtime::InstanceIdentity,
 }
 
 /// Assemble the Risk Actor/Contract and its concrete Conflux resources.
@@ -123,7 +123,7 @@ impl FlatbuffersRiskEventWriter {
 
     pub fn new_with_identity(
         actor_id: impl Into<String>,
-        identity: kairos_protocol::InstanceIdentity,
+        identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> Self {
         Self {
             inner: kairos_risk_contract::FlatbuffersRiskEventWriter::new_with_identity(

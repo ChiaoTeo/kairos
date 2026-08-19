@@ -2,13 +2,13 @@
 
 use secrecy::ExposeSecret;
 
+use super::rest::map_exchange_error;
+use super::{MassiveIndexDefinition, MassiveIndicesRestConfig};
 use crate::services::participants::massive::indices::{IndexBarRow, IndicesRestService};
 use crate::{
     ConnectionDescriptor, HistoricalBarQuery, HistoricalBarRequest, IntegrationError, MarketBar,
     ParticipantKind, ParticipantRef,
 };
-
-use super::{rest::map_exchange_error, MassiveIndexDefinition, MassiveIndicesRestConfig};
 
 pub struct MassiveIndicesRestConnection {
     descriptor: ConnectionDescriptor,

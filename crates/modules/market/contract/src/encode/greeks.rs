@@ -1,6 +1,5 @@
-use crate::{ContractResult, MarketViewKey};
-
 use super::EncodeContext;
+use crate::{ContractResult, MarketViewKey};
 
 pub trait GreeksEncoder {
     fn encode_greeks_updated(&self, context: &EncodeContext) -> ContractResult<Vec<u8>>;

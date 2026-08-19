@@ -12,8 +12,8 @@ pub use config::{
     MarketSourceBinding, MassiveMarketProduct, OkxInstrumentType, PublicMarketTransport,
 };
 pub use host::MarketHost;
-pub use launch::{build_market_host, run_diagnostic_once, DiagnosticProvider, MarketStartupError};
-pub use sources::default_endpoint;
+pub use launch::{DiagnosticProvider, MarketStartupError, build_market_host, run_diagnostic_once};
 pub use sources::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
+    default_endpoint,
 };

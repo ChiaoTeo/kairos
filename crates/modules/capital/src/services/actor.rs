@@ -431,7 +431,7 @@ impl CapitalActor {
         }
         let reservation_id =
             CapitalReservationId::new(format!("capital-reservation:{}", command.plan_id.as_str()))
-                .map_err(ActorError::Invalid)?;
+                .map_err(|error| ActorError::Invalid(error.to_string()))?;
         let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
             "{}:0:transfer",
             command.plan_id.as_str()
@@ -531,7 +531,7 @@ impl CapitalActor {
             "capital-operation:{}:0:transfer",
             plan.plan_id.as_str()
         ))
-        .map_err(ActorError::Invalid)?;
+        .map_err(|error| ActorError::Invalid(error.to_string()))?;
         let operation = CapitalOperation {
             operation_id,
             plan_id: plan.plan_id.clone(),
@@ -601,16 +601,16 @@ impl CapitalActor {
             CapitalSubmissionOutcome::Confirmed => {
                 plan.status = CapitalPlanStatus::AwaitingTransfer;
                 operation.status = CapitalOperationStatus::AwaitingParticipant;
-            }
+            },
             CapitalSubmissionOutcome::Rejected => {
                 plan.status = CapitalPlanStatus::Rejected;
                 operation.status = CapitalOperationStatus::Rejected;
                 reservation.status = CapitalReservationStatus::Released;
-            }
+            },
             CapitalSubmissionOutcome::Indeterminate => {
                 plan.status = CapitalPlanStatus::Indeterminate;
                 operation.status = CapitalOperationStatus::Indeterminate;
-            }
+            },
         }
         self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
         Ok(plan)
@@ -661,21 +661,21 @@ impl CapitalActor {
             CapitalParticipantOperationState::Pending => {
                 plan.status = CapitalPlanStatus::AwaitingTransfer;
                 operation.status = CapitalOperationStatus::AwaitingParticipant;
-            }
+            },
             CapitalParticipantOperationState::Succeeded => {
                 plan.status = CapitalPlanStatus::Reconciling;
                 operation.status = CapitalOperationStatus::AwaitingAccountObservation;
-            }
+            },
             CapitalParticipantOperationState::Failed
             | CapitalParticipantOperationState::Cancelled => {
                 plan.status = CapitalPlanStatus::Failed;
                 operation.status = CapitalOperationStatus::Failed;
                 reservation.status = CapitalReservationStatus::Released;
-            }
+            },
             CapitalParticipantOperationState::Unknown => {
                 plan.status = CapitalPlanStatus::Indeterminate;
                 operation.status = CapitalOperationStatus::Indeterminate;
-            }
+            },
         }
         self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
         Ok(plan)
@@ -1225,9 +1225,7 @@ impl CapitalActor {
                             | CapitalPlanStatus::Failed
                     )
             })
-            .map(|plan| {
-                UnixNanos::new(plan.created_at.get().saturating_add(policy.cooldown_nanos))
-            })
+            .map(|plan| UnixNanos::new(plan.created_at.get().saturating_add(policy.cooldown_nanos)))
             .max();
         let dwell_satisfied = deficit_observed_since.is_some_and(|since| {
             evaluated_at.get().saturating_sub(since.get()) >= policy.deficit_dwell_nanos
@@ -1427,7 +1425,7 @@ impl CapitalActor {
                 }
                 self.journal_sequence = Sequence::new(journal_sequence);
                 self.apply_record(*objective, Sequence::new(event_sequence));
-            }
+            },
             CapitalJournalRecord::DemandChanged {
                 journal_sequence,
                 event_sequence,
@@ -1447,7 +1445,7 @@ impl CapitalActor {
                         record: *demand,
                         event_sequence: self.event_sequence,
                     });
-            }
+            },
             CapitalJournalRecord::PolicyChanged {
                 journal_sequence,
                 event_sequence,
@@ -1460,7 +1458,7 @@ impl CapitalActor {
                     policy: *policy,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::FactsObserved {
                 journal_sequence,
                 event_sequence,
@@ -1473,7 +1471,7 @@ impl CapitalActor {
                     facts: *facts,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::AvailabilityBatchEvaluated {
                 journal_sequence,
                 event_sequence,
@@ -1489,7 +1487,7 @@ impl CapitalActor {
                         availability,
                         event_sequence: self.event_sequence,
                     });
-            }
+            },
             CapitalJournalRecord::RouteChanged {
                 journal_sequence,
                 event_sequence,
@@ -1506,7 +1504,7 @@ impl CapitalActor {
                     route: *route,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::PlanAuthorized {
                 journal_sequence,
                 event_sequence,
@@ -1529,7 +1527,7 @@ impl CapitalActor {
                     reservation,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::PlanStateChanged {
                 journal_sequence,
                 event_sequence,
@@ -1558,7 +1556,7 @@ impl CapitalActor {
                     operation,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::PlanExpired {
                 journal_sequence,
                 event_sequence,
@@ -1589,7 +1587,7 @@ impl CapitalActor {
                     operation,
                     event_sequence: self.event_sequence,
                 });
-            }
+            },
             CapitalJournalRecord::PublicationAcknowledged {
                 journal_sequence,
                 event_sequence,
@@ -1604,7 +1602,7 @@ impl CapitalActor {
                     | CapitalEvent::FactsObserved { event_sequence, .. }
                     | CapitalEvent::AvailabilityEvaluated { event_sequence, .. } => {
                         event_sequence.get()
-                    }
+                    },
                     CapitalEvent::RouteChanged { event_sequence, .. }
                     | CapitalEvent::PlanAuthorized { event_sequence, .. }
                     | CapitalEvent::PlanStateChanged { event_sequence, .. }
@@ -1615,7 +1613,7 @@ impl CapitalActor {
                 }
                 self.journal_sequence = Sequence::new(journal_sequence);
                 self.pending_events.remove(0);
-            }
+            },
         }
         Ok(())
     }

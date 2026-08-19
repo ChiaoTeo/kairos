@@ -9,13 +9,12 @@ mod connections;
 mod replay;
 mod routing;
 
-pub(crate) use connections::install as install_connections;
-pub(crate) use routing::{binding_provider_product, binding_supports_canonical_market};
-
 pub use activation::default_endpoint;
+pub(crate) use connections::install as install_connections;
 pub use replay::{
     attach_replay_source, attach_replay_source_with_checkpoint, attach_replay_source_with_policy,
 };
+pub(crate) use routing::{binding_provider_product, binding_supports_canonical_market};
 
 pub(super) fn positive_interval(
     source_id: &str,

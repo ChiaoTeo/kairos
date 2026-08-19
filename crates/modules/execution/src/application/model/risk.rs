@@ -1,5 +1,6 @@
+use kairos_primitives::{BrokerId, Currency, Exchange, Money, SegmentKey};
+
 use super::SnapshotWatermark;
-use kairos_primitives::Money;
 
 pub type ExecutionFundingRequirement = crate::domain::FundingRequirementEvidence;
 
@@ -11,9 +12,10 @@ pub struct RiskAuthorizationContext {
     pub available_margin: Option<Money>,
     pub initial_margin_rate_bps: Option<u32>,
     pub margin_rule_id: Option<String>,
-    pub funding_broker: Option<String>,
-    pub funding_segment: Option<String>,
-    pub collateral_asset: Option<String>,
+    pub exchange_id: Option<Exchange>,
+    pub funding_broker: Option<BrokerId>,
+    pub funding_segment: Option<SegmentKey>,
+    pub collateral_asset: Option<Currency>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]

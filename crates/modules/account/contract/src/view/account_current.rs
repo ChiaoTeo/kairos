@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use kairos_protocol::generated::kairos::account::v_2 as fb;
+
+use crate::{ContractError, ContractResult};
 pub type AccountCurrentView<'a> = fb::AccountCurrentView<'a>;
 pub fn decode(bytes: &[u8]) -> ContractResult<AccountCurrentView<'_>> {
     if !fb::account_current_view_buffer_has_identifier(bytes) {

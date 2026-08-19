@@ -1,7 +1,9 @@
-use super::dto::*;
-use kairos_workspace::Workspace;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use kairos_workspace::Workspace;
+
+use super::dto::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketHostRequest {
@@ -116,13 +118,13 @@ impl MarketRuntimeProfile {
                 return Err(format!(
                     "Market profile {name} is shared but launch/instance identity was supplied"
                 ));
-            }
+            },
             (MarketRuntimeScope::Instance | MarketRuntimeScope::Replay, false) => {
                 return Err(format!(
                     "Market profile {name} requires launch/instance identity"
                 ));
-            }
-            _ => {}
+            },
+            _ => {},
         }
         for (field, value) in [
             ("source_input_capacity", configured.source_input_capacity),
@@ -180,12 +182,12 @@ impl MarketRuntimeProfile {
                     speed_multiplier: configured.speed_multiplier,
                     start_paused: configured.start_paused,
                 })
-            }
+            },
             (_, Some(_)) => {
                 return Err(format!(
                     "Market profile {name} configures replay policy outside replay scope"
                 ));
-            }
+            },
             (_, None) => None,
         };
 
@@ -210,8 +212,9 @@ impl MarketRuntimeProfile {
 mod tests {
     use std::fs;
 
-    use super::{MarketRuntimeProfile, MarketRuntimeScope};
     use kairos_workspace::Workspace;
+
+    use super::{MarketRuntimeProfile, MarketRuntimeScope};
 
     fn workspace(manifest: &str) -> (tempfile::TempDir, Workspace) {
         let root = tempfile::tempdir().unwrap();
@@ -298,9 +301,11 @@ scope = "replay"
 speed_multiplier = 0
 "#,
         );
-        assert!(MarketRuntimeProfile::resolve(&workspace, None, true)
-            .unwrap_err()
-            .contains("speed_multiplier must be positive"));
+        assert!(
+            MarketRuntimeProfile::resolve(&workspace, None, true)
+                .unwrap_err()
+                .contains("speed_multiplier must be positive")
+        );
     }
 
     #[test]
@@ -317,9 +322,11 @@ default_profile = "instance"
 scope = "instance"
 "#,
         );
-        assert!(MarketRuntimeProfile::resolve(&workspace, None, false)
-            .unwrap_err()
-            .contains("requires launch/instance identity"));
+        assert!(
+            MarketRuntimeProfile::resolve(&workspace, None, false)
+                .unwrap_err()
+                .contains("requires launch/instance identity")
+        );
         MarketRuntimeProfile::resolve(&workspace, None, true).unwrap();
     }
 

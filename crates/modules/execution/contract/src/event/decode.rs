@@ -1,6 +1,7 @@
+use kairos_protocol::generated::kairos::execution::v_2 as fb;
+
 use super::view::ExecutionEvent;
 use crate::{ContractError, ContractResult};
-use kairos_protocol::generated::kairos::execution::v_2 as fb;
 pub fn decode_event(bytes: &[u8]) -> ContractResult<ExecutionEvent<'_>> {
     macro_rules! root {
         ($check:ident, $decode:ident, $variant:ident) => {

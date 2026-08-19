@@ -3,10 +3,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::domain::account::{
-    external_instrument_ref, ExternalAccountModel as AccountModel,
-    ExternalAccountSegment as AccountSegment, ExternalAccountSnapshot as AccountSnapshot,
-    ExternalAccountStatus as AccountStatus, ExternalBalance as Balance,
-    ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder, ExternalPosition as Position,
+    ExternalAccountModel as AccountModel, ExternalAccountSegment as AccountSegment,
+    ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
+    ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder,
+    ExternalPosition as Position, external_instrument_ref,
 };
 use crate::{
     ExternalAccountCredentialProfile, ExternalMarketProfile as AccountMarketProfile,
@@ -253,10 +253,10 @@ fn now_nanos() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{normalize_account, normalize_market_profile};
+    use crate::ExternalMarketProfileRequest as AccountMarketProfileRequest;
     use crate::domain::account::{
         ExternalAccountIdentity, ExternalAccountSegment as AccountSegment,
     };
-    use crate::ExternalMarketProfileRequest as AccountMarketProfileRequest;
     #[test]
     fn normalizes_okx_balance_and_short_position() {
         let segment = AccountSegment {

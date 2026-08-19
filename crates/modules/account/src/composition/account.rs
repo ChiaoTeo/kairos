@@ -1,5 +1,13 @@
 use std::path::PathBuf;
 
+use kairos_conflux::{
+    AccountCredentialQuery, BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig,
+    ConnectionKey, ExternalAccountCredentialProfile, IbkrAccountQueryConfig,
+    IbkrAccountStreamConfig, OkxCredential, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
+    OkxRestConfig, OkxWebSocketConfig,
+};
+use secrecy::SecretString;
+
 use crate::application::AccountApplication;
 use crate::composition::empty_snapshot;
 use crate::domain::{
@@ -11,13 +19,6 @@ use crate::services::integration::{
     AccountSnapshotGateway,
 };
 use crate::services::persistence::JsonAccountStore;
-use kairos_conflux::{
-    AccountCredentialQuery, BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig,
-    ConnectionKey, ExternalAccountCredentialProfile, IbkrAccountQueryConfig,
-    IbkrAccountStreamConfig, OkxCredential, OkxPrivateRestConfig, OkxPrivateWebSocketConfig,
-    OkxRestConfig, OkxWebSocketConfig,
-};
-use secrecy::SecretString;
 
 #[derive(Clone, Debug)]
 pub struct AccountOptions {
@@ -160,13 +161,13 @@ pub fn default_rest_endpoint(provider: &str, product: &str) -> Result<&'static s
     match (provider.as_str(), product.as_str()) {
         ("binance", "spot" | "funding" | "cross-margin" | "isolated-margin") => {
             Ok("https://api.binance.com")
-        }
+        },
         ("binance", "usd-m-futures") => Ok("https://fapi.binance.com"),
         ("binance", "coin-m-futures") => Ok("https://dapi.binance.com"),
         ("binance", "options") => Ok("https://eapi.binance.com"),
         ("okx", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
             Ok("https://www.okx.com")
-        }
+        },
         ("ibkr", "equity" | "stocks" | "spot") | ("paper" | "simulated", _) => Ok(""),
         _ => Err(format!(
             "unsupported Account provider/product: {provider}/{product}"
@@ -263,7 +264,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.spot.rest.{segment_key}"),
                 ))
-            }
+            },
             "funding" => {
                 let mut rest_options = options.clone();
                 rest_options.base_url = binance_rest_base_url(options, "spot");
@@ -271,7 +272,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.funding.rest.{segment_key}"),
                 ))
-            }
+            },
             "cross-margin" => {
                 let rest_endpoint = binance_rest_base_url(options, "spot");
                 streams.push(AccountAsyncEventSource::BinanceMargin {
@@ -291,7 +292,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.cross-margin.rest.{segment_key}"),
                 ))
-            }
+            },
             "isolated-margin" => {
                 let provider_symbol =
                     options.isolated_margin_symbol.as_deref().ok_or_else(|| {
@@ -316,7 +317,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.isolated-margin.rest.{segment_key}"),
                 ))
-            }
+            },
             "usd-m-futures" => {
                 let rest_endpoint = binance_rest_base_url(options, "usd-m-futures");
                 streams.push(AccountAsyncEventSource::BinanceUsdM {
@@ -336,7 +337,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.usdm.rest.{segment_key}"),
                 ))
-            }
+            },
             "coin-m-futures" => {
                 let rest_endpoint = binance_rest_base_url(options, "coin-m-futures");
                 streams.push(AccountAsyncEventSource::BinanceCoinM {
@@ -356,7 +357,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.coinm.rest.{segment_key}"),
                 ))
-            }
+            },
             "options" => {
                 let rest_endpoint = binance_rest_base_url(options, "options");
                 streams.push(AccountAsyncEventSource::BinanceOptions {
@@ -376,7 +377,7 @@ pub fn compose_binance_async_account_application(
                     &rest_options,
                     format!("account.binance.options.rest.{segment_key}"),
                 ))
-            }
+            },
             _ => unreachable!("validated Binance Account segment"),
         };
         sources.insert(segment_key, read);
@@ -417,16 +418,17 @@ pub fn compose_okx_async_account_application(
         let product = normalized_segment(&segment.provider_product);
         let mode = segment.trading_mode.as_deref().map(normalized_segment);
         match (product.as_str(), mode.as_deref()) {
-            ("spot", None | Some("cash")) => {}
-            ("margin" | "swap" | "futures" | "option" | "options", Some("cross" | "isolated")) => {}
+            ("spot", None | Some("cash")) => {},
+            ("margin" | "swap" | "futures" | "option" | "options", Some("cross" | "isolated")) => {
+            },
             ("spot", Some(_)) => return Err("OKX spot Account requires cash trading_mode".into()),
             ("margin" | "swap" | "futures" | "option" | "options", None) => {
                 return Err(format!(
-                "OKX {product} Account segment requires explicit trading_mode (cross or isolated)"
-            ))
-            }
+                    "OKX {product} Account segment requires explicit trading_mode (cross or isolated)"
+                ));
+            },
             (_, Some(value)) => return Err(format!("unsupported OKX trading mode: {value}")),
-            _ => {}
+            _ => {},
         }
     }
     let identity = ExternalAccountIdentity::new("okx", options.account_id.clone())
@@ -780,9 +782,9 @@ pub fn account_product(options: &AccountOptions) -> Result<AccountProduct, Strin
 #[cfg(test)]
 mod secret_tests {
     use super::{
-        account_product, binance_endpoint_family, binance_rest_base_url,
-        compose_binance_async_account_application, compose_ibkr_async_account_application,
-        compose_okx_async_account_application, AccountOptions, AccountSegmentBinding,
+        AccountOptions, AccountSegmentBinding, account_product, binance_endpoint_family,
+        binance_rest_base_url, compose_binance_async_account_application,
+        compose_ibkr_async_account_application, compose_okx_async_account_application,
     };
 
     fn account_stream_count(system: &mut kairos_conflux::ConfluxSystem) -> usize {

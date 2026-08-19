@@ -4,10 +4,11 @@ mod asynchronous {
     //! Async WebSocket transport directly owned and polled by its concrete
     //! Integration connection.
 
-    use futures_util::{Sink, SinkExt, Stream, StreamExt};
     use std::collections::VecDeque;
     use std::pin::Pin;
     use std::task::{Context, Poll};
+
+    use futures_util::{Sink, SinkExt, Stream, StreamExt};
     use tokio::net::TcpStream;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -69,24 +70,24 @@ mod asynchronous {
             loop {
                 while let Some(message) = self.pending_control.pop_front() {
                     match Pin::new(&mut self.stream).poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {}
+                        Poll::Ready(Ok(())) => {},
                         Poll::Ready(Err(error)) => {
-                            return Poll::Ready(SocketEvent::Error(error.to_string()))
-                        }
+                            return Poll::Ready(SocketEvent::Error(error.to_string()));
+                        },
                         Poll::Pending => {
                             self.pending_control.push_front(message);
                             return Poll::Pending;
-                        }
+                        },
                     }
                     if let Err(error) = Pin::new(&mut self.stream).start_send(message) {
                         return Poll::Ready(SocketEvent::Error(error.to_string()));
                     }
                 }
                 match Pin::new(&mut self.stream).poll_flush(cx) {
-                    Poll::Ready(Ok(())) => {}
+                    Poll::Ready(Ok(())) => {},
                     Poll::Ready(Err(error)) => {
-                        return Poll::Ready(SocketEvent::Error(error.to_string()))
-                    }
+                        return Poll::Ready(SocketEvent::Error(error.to_string()));
+                    },
                     Poll::Pending => return Poll::Pending,
                 }
 
@@ -99,17 +100,17 @@ mod asynchronous {
                             ));
                         }
                         self.pending_control.push_back(Message::Pong(payload));
-                    }
+                    },
                     Poll::Ready(Some(Ok(message))) => {
                         self.last_activity = tokio::time::Instant::now();
                         return Poll::Ready(SocketEvent::Message(message));
-                    }
+                    },
                     Poll::Ready(Some(Err(error))) => {
-                        return Poll::Ready(SocketEvent::Error(error.to_string()))
-                    }
+                        return Poll::Ready(SocketEvent::Error(error.to_string()));
+                    },
                     Poll::Ready(None) => {
-                        return Poll::Ready(SocketEvent::Error("WebSocket stream closed".into()))
-                    }
+                        return Poll::Ready(SocketEvent::Error("WebSocket stream closed".into()));
+                    },
                     Poll::Pending => return Poll::Pending,
                 }
             }
@@ -123,11 +124,11 @@ mod asynchronous {
                         if let Err(error) = self.stream.send(Message::Pong(payload)).await {
                             return SocketEvent::Error(error.to_string());
                         }
-                    }
+                    },
                     Some(Ok(message)) => {
                         self.last_activity = tokio::time::Instant::now();
                         return SocketEvent::Message(message);
-                    }
+                    },
                     Some(Err(error)) => return SocketEvent::Error(error.to_string()),
                     None => return SocketEvent::Error("WebSocket stream closed".into()),
                 }
@@ -147,7 +148,8 @@ mod asynchronous {
     mod tests {
         use futures_util::SinkExt;
         use tokio::net::TcpListener;
-        use tokio_tungstenite::{accept_async, tungstenite::Message};
+        use tokio_tungstenite::accept_async;
+        use tokio_tungstenite::tungstenite::Message;
 
         use super::{SocketEvent, TokioSocket};
 
@@ -170,7 +172,7 @@ mod asynchronous {
             match socket.next_event().await {
                 SocketEvent::Message(Message::Text(text)) => {
                     assert_eq!(text, "shared-runtime")
-                }
+                },
                 _ => panic!("expected text event"),
             }
             socket.close().await;

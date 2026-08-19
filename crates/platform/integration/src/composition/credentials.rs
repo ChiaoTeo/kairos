@@ -354,7 +354,7 @@ fn value_from_table(table: &toml::map::Map<String, toml::Value>, key: &str) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::{load_workspace_credential, CredentialRecord};
+    use super::{CredentialRecord, load_workspace_credential};
 
     #[test]
     fn loads_workspace_credential_by_id_from_toml_only() {

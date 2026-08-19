@@ -1,22 +1,22 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_conflux::{
-    load_workspace_credential, BinanceRestConfig, ConfluxSystem, ConnectionKey, HistoricalBarQuery,
-    HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow,
-    MarketEvent, MarketEventKind, MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig,
+    BinanceRestConfig, ConfluxSystem, ConnectionKey, HistoricalBarQuery, HistoricalBarRequest,
+    HistoricalQuoteQuery, HistoricalTradeQuery, HistoricalWindow, MarketEvent, MarketEventKind,
+    MassiveInstrumentQuery as InstrumentQuery, MassiveRestConfig, load_workspace_credential,
 };
 use kairos_market::composition::{
-    attach_replay_source, default_endpoint, run_diagnostic_once, DiagnosticProvider,
+    DiagnosticProvider, attach_replay_source, default_endpoint, run_diagnostic_once,
 };
 use kairos_market::{
-    load_replay_events_many, MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId,
+    MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId, load_replay_events_many,
 };
-use kairos_primitives::InstrumentId;
-use kairos_workspace::cli::{render, OutputFormat};
+use kairos_primitives::{InstrumentId, SourceId};
 use kairos_workspace::Workspace;
-use serde_json::{json, Value};
-use std::str::FromStr;
+use kairos_workspace::cli::{OutputFormat, render};
+use serde_json::{Value, json};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -124,7 +124,7 @@ async fn download(
             let mut connections = system.connections();
             let provider = connections.massive_rest.get(&key)?;
             fetch_historical(provider, command.data_kind, &window, &bar_request).await?
-        }
+        },
         HistoricalProvider::Binance => {
             let key = ConnectionKey::new("market-history")?;
             let mut system = ConfluxSystem::new();
@@ -139,7 +139,7 @@ async fn download(
             let mut connections = system.connections();
             let provider = connections.binance_spot_rest.get(&key)?;
             fetch_historical(provider, command.data_kind, &window, &bar_request).await?
-        }
+        },
     };
     let instrument_id = command
         .instrument_id
@@ -179,10 +179,10 @@ async fn download(
                     close: bar.close,
                     volume: bar.volume,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
-                    source_id: provider.as_str().into(),
+                    source_id: SourceId::new(provider.as_str())?,
                     derivation: bar.derivation,
                 })
-            }
+            },
             MarketEventKind::Quote => {
                 kairos_market::MarketObservation::Quote(kairos_market::Quote {
                     scope: aggregate_scope.clone(),
@@ -195,9 +195,9 @@ async fn download(
                     ask_venue_code: event.venue.ask_exchange,
                     tape: event.venue.tape,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
-                    source_id: provider.as_str().into(),
+                    source_id: SourceId::new(provider.as_str())?,
                 })
-            }
+            },
             MarketEventKind::Trade => {
                 if matches!(provider, HistoricalProvider::Massive) {
                     return Err(
@@ -223,9 +223,9 @@ async fn download(
                     participant_timestamp_unix_nanos: event.venue.participant_timestamp_unix_nanos,
                     trf_timestamp_unix_nanos: event.venue.trf_timestamp_unix_nanos,
                     observed_at_unix_nanos: event.observed_at_unix_nanos,
-                    source_id: provider.as_str().into(),
+                    source_id: SourceId::new(provider.as_str())?,
                 })
-            }
+            },
             _ => continue,
         };
         body.push_str(&serde_json::to_string(&observation)?);

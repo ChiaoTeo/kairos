@@ -161,7 +161,7 @@ fn normalize_command(outcome: CommandOutcome<Value>) -> CommandResult<BinanceAlg
             } else {
                 CommandOutcome::Confirmed(normalize_order(value.get("data").unwrap_or(&value))?)
             }
-        }
+        },
         CommandOutcome::Rejected(error) => CommandOutcome::Rejected(error),
         CommandOutcome::Indeterminate(error) => CommandOutcome::Indeterminate(error),
     })

@@ -55,7 +55,7 @@ pub(crate) fn command_error_outcome<T>(
                 || (400..500).contains(&status) && !matches!(status, 408 | 409 | 425 | 429) =>
         {
             Ok(CommandOutcome::Rejected(provider_rejection(status, &body)))
-        }
+        },
         other => Ok(CommandOutcome::Indeterminate(
             IndeterminateCommand::may_have_been_sent(other.to_string()),
         )),
@@ -247,7 +247,7 @@ impl HttpClient {
                             self.observe(&response.metadata);
                             response.body
                         });
-                }
+                },
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let metadata = response_metadata(response.headers());
@@ -269,7 +269,7 @@ impl HttpClient {
                         tokio::time::sleep(query_retry_delay(endpoint, attempt, &metadata)).await;
                         continue;
                     }
-                }
+                },
                 Err(error) => last_error = Some(ExchangeError::Transport(error)),
             }
             if attempt + 1 < HttpRequestSemantics::Query.max_attempts() {
@@ -302,7 +302,7 @@ impl HttpClient {
                 parse_async_response_with_metadata(response)
                     .await
                     .inspect(|response| self.observe(&response.metadata))
-            }
+            },
             Ok(response) => {
                 let status = response.status().as_u16();
                 let metadata = response_metadata(response.headers());
@@ -313,7 +313,7 @@ impl HttpClient {
                     body,
                     metadata,
                 })
-            }
+            },
             Err(error) => Err(ExchangeError::Transport(error)),
         }
     }
@@ -353,7 +353,7 @@ impl HttpClient {
                     return parse_async_response_with_metadata(response)
                         .await
                         .inspect(|response| self.observe(&response.metadata));
-                }
+                },
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let metadata = response_metadata(response.headers());
@@ -375,7 +375,7 @@ impl HttpClient {
                         tokio::time::sleep(query_retry_delay(endpoint, attempt, &metadata)).await;
                         continue;
                     }
-                }
+                },
                 Err(error) => last_error = Some(ExchangeError::Transport(error)),
             }
             if attempt + 1 < semantics.max_attempts() {
@@ -460,14 +460,16 @@ fn diagnostic_body(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_error_outcome, ExchangeError, HttpClient};
-    use crate::{CommandOutcome, IntegrationError};
-    use serde_json::json;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::{ExchangeError, HttpClient, command_error_outcome};
+    use crate::{CommandOutcome, IntegrationError};
 
     fn json_server(statuses: Vec<u16>) -> (String, Arc<AtomicUsize>, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test server binds");

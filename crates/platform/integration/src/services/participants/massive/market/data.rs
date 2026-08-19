@@ -1,16 +1,17 @@
 //! Massive Stocks and Options WebSocket market streams.
 
-use kairos_primitives::{ParticipantSymbol, Price, Quantity, Sequence};
-use serde_json::{json, Value};
 use std::task::{Context, Poll};
+
+use kairos_primitives::{ParticipantSymbol, Price, Quantity, Sequence};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::transport::websocket::{SocketEvent, TokioSocket};
 use crate::{
-    Bar, HistoricalBarRequest, HistoricalWindow, IntegrationError, MarketBar, MarketEvent,
+    Bar, ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState,
+    HistoricalBarRequest, HistoricalWindow, IntegrationError, MarketBar, MarketEvent,
     MarketEventKind, MarketQuote, MarketTrade, MarketVenueEvidence,
 };
-use crate::{ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState};
 
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
@@ -131,8 +132,8 @@ pub(crate) fn parse_interval(value: &str) -> Result<(u32, &'static str), Integra
         other => {
             return Err(IntegrationError::InvalidRequest(format!(
                 "unsupported Massive interval unit: {other}"
-            )))
-        }
+            )));
+        },
     };
     if multiplier == 0 {
         return Err(IntegrationError::InvalidRequest(
@@ -193,7 +194,7 @@ impl SocketService {
                     let value: Value = serde_json::from_str(text.as_ref())
                         .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?;
                     return Ok(value.as_array().cloned().unwrap_or_else(|| vec![value]));
-                }
+                },
                 Message::Ping(payload) => {
                     self.socket
                         .as_mut()
@@ -201,13 +202,13 @@ impl SocketService {
                         .send_pong(payload.to_vec())
                         .await
                         .map_err(IntegrationError::Transport)?;
-                }
+                },
                 Message::Close(_) => {
                     return Err(IntegrationError::Transport(
                         "Massive market WebSocket closed".into(),
-                    ))
-                }
-                _ => {}
+                    ));
+                },
+                _ => {},
             }
         }
     }
@@ -224,8 +225,8 @@ impl SocketService {
             let message = match socket.poll_next_event(cx) {
                 Poll::Ready(SocketEvent::Message(message)) => message,
                 Poll::Ready(SocketEvent::Error(error)) => {
-                    return Poll::Ready(Err(IntegrationError::Transport(error)))
-                }
+                    return Poll::Ready(Err(IntegrationError::Transport(error)));
+                },
                 Poll::Pending => return Poll::Pending,
             };
             match message {
@@ -235,21 +236,21 @@ impl SocketService {
                         Err(error) => {
                             return Poll::Ready(Err(IntegrationError::InvalidPayload(
                                 error.to_string(),
-                            )))
-                        }
+                            )));
+                        },
                     };
                     return Poll::Ready(Ok(value
                         .as_array()
                         .cloned()
                         .unwrap_or_else(|| vec![value])));
-                }
+                },
                 Message::Ping(_) => continue,
                 Message::Close(_) => {
                     return Poll::Ready(Err(IntegrationError::Transport(
                         "Massive market WebSocket closed".into(),
-                    )))
-                }
-                _ => {}
+                    )));
+                },
+                _ => {},
             }
         }
     }
@@ -316,7 +317,7 @@ impl SocketService {
                 Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
                     reason: "Massive WebSocket idle deadline elapsed".into(),
                 }))
-            }
+            },
             _ => Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy)),
         }
     }
@@ -532,9 +533,10 @@ pub(crate) fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::normalize;
     use crate::MarketEventKind;
-    use serde_json::json;
 
     #[test]
     fn official_numeric_quote_fields_are_preserved() {

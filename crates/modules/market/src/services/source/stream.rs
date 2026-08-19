@@ -35,7 +35,7 @@ pub(crate) fn subscription_request(
             crate::ObservationKind::IndexPrice => add(MarketDataKind::IndexPrice, None),
             crate::ObservationKind::FundingRate | crate::ObservationKind::Rate => {
                 add(MarketDataKind::FundingRate, None)
-            }
+            },
             crate::ObservationKind::OpenInterest => add(MarketDataKind::OpenInterest, None),
             crate::ObservationKind::OrderBook => add(MarketDataKind::OrderBook, None),
         }
@@ -54,12 +54,12 @@ pub(crate) fn confirmed_subscription(
         MarketSubscriptionOutcome::Confirmed(subscription) => Ok(subscription.id),
         MarketSubscriptionOutcome::Rejected(rejection) => {
             Err(IntegrationError::InvalidRequest(rejection.message))
-        }
+        },
         MarketSubscriptionOutcome::Indeterminate { reason, .. } => {
             Err(IntegrationError::ResyncRequired(format!(
                 "market subscription outcome is indeterminate: {reason}"
             )))
-        }
+        },
     }
 }
 
@@ -70,11 +70,11 @@ pub(crate) fn confirmed_unsubscription(
         MarketSubscriptionOutcome::Confirmed(()) => Ok(()),
         MarketSubscriptionOutcome::Rejected(rejection) => {
             Err(IntegrationError::InvalidRequest(rejection.message))
-        }
+        },
         MarketSubscriptionOutcome::Indeterminate { reason, .. } => {
             Err(IntegrationError::ResyncRequired(format!(
                 "market unsubscription outcome is indeterminate: {reason}"
             )))
-        }
+        },
     }
 }

@@ -5,34 +5,28 @@
 
 use kairos_conflux::{
     BlockingOrderCommand as OrderCommand, BlockingOrderQuery as OrderQuery, CommandOutcome,
-    ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError,
+    ExternalOrder, ExternalOrderQuery, IndeterminateCommand, IntegrationError, OrderEntryEvent,
+    OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind,
+    ParticipantRef,
 };
-use kairos_conflux::{
-    OrderEntryEvent, OrderEntryRequest, ParticipantInstrumentRef, ParticipantInstrumentTypeRef,
-    ParticipantKind, ParticipantRef,
-};
-use kairos_execution::application::RiskCommandFailure;
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
     ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RefreshQuoteIntent,
-    RemoteOrderUpdate, SubmitOrder,
+    RemoteOrderUpdate, RiskCommandFailure, SubmitOrder,
 };
-use kairos_execution::composition::SqlxExecutionAudit;
 use kairos_execution::composition::{
-    compose_order_entry, configure_simulated_risk, ExecutionConnectionOptions, FileExecutionStore,
-    SimulatedRiskBehavior, SimulatedRiskReconciliation, SimulationConfig, SimulationOrderRequest,
-    SimulationOrderStatus, SqlxExecutionStore,
+    ExecutionConnectionOptions, FileExecutionStore, SimulatedRiskBehavior,
+    SimulatedRiskReconciliation, SimulationConfig, SimulationOrderRequest, SimulationOrderStatus,
+    SqlxExecutionAudit, SqlxExecutionStore, compose_order_entry, configure_simulated_risk,
 };
 use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
-    OrderSide, OrderType, UnknownRemoteOrderResolution,
+    MarketObservation, OrderSide, OrderType, Quote, UnknownRemoteOrderResolution,
 };
-use kairos_execution::{MarketObservation, Quote};
 use kairos_primitives::{
     AccountId, ClientOrderId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId,
-    MarketId, OrderId, Quantity, SegmentKey, Symbol, UnixNanos,
+    MarketId, Money, OrderId, Price, Quantity, SegmentKey, Symbol, UnixNanos,
 };
-use kairos_primitives::{Money, Price};
 
 fn fill_report(
     fill_id: impl Into<String>,
@@ -362,9 +356,11 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             None,
         ))
         .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("configured for instrument BTCUSDT"));
+    assert!(
+        error
+            .to_string()
+            .contains("configured for instrument BTCUSDT")
+    );
     assert!(app.orders(None).is_empty());
 }
 
@@ -395,12 +391,13 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
         )
         .unwrap(),
     );
-    assert!(app
-        .available_execution_routes(&crate::application::ExecutionRouteQuery {
+    assert!(
+        app.available_execution_routes(&crate::application::ExecutionRouteQuery {
             order_type: Some(OrderType::Limit),
             ..Default::default()
         })
-        .is_empty());
+        .is_empty()
+    );
     let error = app
         .submit(submit_order(
             "unsupported-order-type",
@@ -491,12 +488,13 @@ fn insufficient_funding_risk() -> SimulatedRiskBehavior {
                 available_margin: Money::new(40, 0).unwrap(),
                 shortfall: Money::new(60, 0).unwrap(),
                 margin_rule_id: "binance-usdm-initial-margin:v1".into(),
-                risk_decision_id: "risk-decision:funding".into(),
-                risk_policy_version: 7,
-                account_snapshot_watermark: 11,
-                broker: "binance".into(),
-                segment: "usd-m".into(),
-                collateral_asset: "USDT".into(),
+                risk_decision_id: kairos_primitives::DecisionId::new("risk-decision:funding")
+                    .unwrap(),
+                risk_policy_version: 7.into(),
+                account_snapshot_watermark: 11.into(),
+                broker: kairos_primitives::BrokerId::new("binance").unwrap(),
+                segment: kairos_primitives::SegmentKey::new("usd-m").unwrap(),
+                collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
             },
         }),
         ..SimulatedRiskBehavior::default()
@@ -1247,7 +1245,7 @@ fn insufficient_funding_is_audited_and_releases_unsubmitted_capacity() {
     );
     let requirement = reservation.funding_requirement.as_ref().unwrap();
     assert_eq!(requirement.shortfall, Money::new(60, 0).unwrap());
-    assert_eq!(requirement.account_snapshot_watermark, 11);
+    assert_eq!(requirement.account_snapshot_watermark, 11.into());
 
     let restored = ExecutionApplication::assemble_for_test(
         "execution",
@@ -1569,10 +1567,11 @@ fn strategy_intent_is_execution_owned_and_restored_with_events() {
         Some("decision:strategy:intent:1")
     );
     assert_eq!(first.intent_events(None)[0].previous_status, None);
-    assert!(first
-        .intent_events(None)
-        .iter()
-        .all(|event| event.strategy_decision_id.as_deref() == Some("decision:strategy:intent:1")));
+    assert!(
+        first.intent_events(None).iter().all(
+            |event| event.strategy_decision_id.as_deref() == Some("decision:strategy:intent:1")
+        )
+    );
 
     let second = application(&path);
     assert_eq!(
@@ -1892,10 +1891,11 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
         None,
     ))
     .unwrap();
-    assert!(app
-        .orders(None)
-        .iter()
-        .any(|order| order.order_id.contains(":compensate:8")));
+    assert!(
+        app.orders(None)
+            .iter()
+            .any(|order| order.order_id.contains(":compensate:8"))
+    );
     assert_eq!(
         app.hedge_requirement("intent:hedge-compensation")
             .unwrap()
@@ -1992,12 +1992,14 @@ fn cancel_intent_cancels_all_active_child_orders() {
         })
         .unwrap();
     assert_eq!(canceled.status, kairos_execution::IntentStatus::Canceled);
-    assert!(state
-        .order_ids
-        .iter()
-        .all(|order_id| app.orders(None).iter().any(|order| {
-            order.order_id == *order_id && order.status == ExecutionOrderStatus::Canceled
-        })));
+    assert!(
+        state
+            .order_ids
+            .iter()
+            .all(|order_id| app.orders(None).iter().any(|order| {
+                order.order_id == *order_id && order.status == ExecutionOrderStatus::Canceled
+            }))
+    );
 }
 
 #[test]

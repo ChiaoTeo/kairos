@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::InstrumentKind;
+use kairos_primitives::{InstrumentKind, SourceId};
 
 use crate::{MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket};
 
 #[derive(Clone)]
 pub(crate) struct ReferenceSourceProjection {
-    pub(crate) source_id: String,
+    pub(crate) source_id: SourceId,
     pub(crate) provider_id: String,
     pub(crate) provider_product: String,
     pub(crate) exchange_id: String,
@@ -28,7 +28,7 @@ impl ReferenceUniverseProjection {
         snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
         required_sequence: u64,
     ) -> Result<ReconcileMarketUniverse, String> {
-        if snapshot.event_sequence < required_sequence {
+        if snapshot.event_sequence < required_sequence.into() {
             return Err(format!(
                 "Reference view sequence {} is behind required sequence {}",
                 snapshot.event_sequence, required_sequence
@@ -102,7 +102,7 @@ impl ReferenceUniverseProjection {
                 provider_symbol,
             )?
             .with_observation_capabilities(observation_capabilities(provider_id, provider_product));
-            let mut descriptor = ResolvedMarket::new(
+            let mut descriptor = ResolvedMarket::from_reference(
                 market.market_id.clone(),
                 market.instrument_id.clone(),
                 instrument.instrument_type,
@@ -110,12 +110,7 @@ impl ReferenceUniverseProjection {
                 route,
             )?;
             descriptor.asset_type = market.asset_type;
-            descriptor.underlying_instrument_id = market
-                .underlying_instrument_id
-                .clone()
-                .map(kairos_primitives::InstrumentId::new)
-                .transpose()
-                .map_err(|error| error.to_string())?;
+            descriptor.underlying_instrument_id = market.underlying_instrument_id.clone();
             if let Some(source_id) = source_id {
                 descriptor = descriptor.with_source(*source_id)?;
             }
@@ -137,10 +132,10 @@ pub(crate) fn observation_capabilities(
     match provider_id.to_ascii_lowercase().as_str() {
         "binance" if provider_product.eq_ignore_ascii_case("spot") => {
             vec![Quote, Trade, Bar, OrderBook]
-        }
+        },
         "binance" if provider_product.eq_ignore_ascii_case("options") => {
             vec![Quote, Trade, OrderBook, OptionGreeks]
-        }
+        },
         "binance" | "okx" | "hyperliquid" => vec![Quote, Trade, OrderBook],
         "massive" => vec![Quote, Trade],
         _ => Vec::new(),

@@ -3,23 +3,19 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
-
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 use clap::Parser;
-
+use kairos_account::AccountApplication;
 use kairos_account::composition::account::{
-    compose_binance_async_account_application, compose_ibkr_async_account_application,
-    compose_local_account_application_for_segments, compose_okx_async_account_application,
-    default_rest_endpoint, AccountOptions, AccountSegmentBinding,
+    AccountOptions, AccountSegmentBinding, compose_binance_async_account_application,
+    compose_ibkr_async_account_application, compose_local_account_application_for_segments,
+    compose_okx_async_account_application, default_rest_endpoint,
 };
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
-use kairos_account::AccountApplication;
 use kairos_account_contract::{
     AccountEventPublisher, AccountRestRequest, AccountRestResponse, AccountSegmentsRequest,
     AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
@@ -28,7 +24,7 @@ use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, CredentialStore,
     ShutdownMode,
 };
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -57,7 +53,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket_name = args.socket_name.as_deref().unwrap_or("account");
     let _process_lock = instance.process_lock(socket_name)?;
     let transport_identity =
-        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id());
+        InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id())?;
     let socket = instance.socket(socket_name)?;
     let health = instance.service_health(socket_name)?;
     tracing::info!(event = "workspace_ready", component = "account", workspace = %workspace.root().display(), socket = %socket.display(), "workspace and instance resources resolved");
@@ -354,7 +350,7 @@ async fn account_http_handler(State(host): State<AccountHost>, request: Request)
         HostRequest::Stop => {
             host.handle.shutdown(ShutdownMode::Drain);
             (StatusCode::ACCEPTED, Json(json!({"status":"stopping"}))).into_response()
-        }
+        },
         HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
             Ok(Some(response)) => encode_response(response, lease_valid(&host)),
             Ok(None) => json_error(
@@ -426,7 +422,7 @@ fn encode_response(response: AccountRestResponse, lease_valid: bool) -> Response
         AccountRestResponse::Health(Ok(mut value)) => {
             value.lease_valid = Some(lease_valid);
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         AccountRestResponse::Health(Err(error))
         | AccountRestResponse::ApplySimulatedSettlement(Err(error))
         | AccountRestResponse::MarkToMarket(Err(error))
@@ -434,17 +430,17 @@ fn encode_response(response: AccountRestResponse, lease_valid: bool) -> Response
         | AccountRestResponse::Refresh(Err(error))
         | AccountRestResponse::Reconcile(Err(error)) => {
             (StatusCode::CONFLICT, Json(json!({"error": error}))).into_response()
-        }
+        },
         AccountRestResponse::ApplySimulatedSettlement(Ok(value))
         | AccountRestResponse::MarkToMarket(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         AccountRestResponse::AdvanceTime(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         AccountRestResponse::Refresh(Ok(value)) | AccountRestResponse::Reconcile(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
     }
 }
 

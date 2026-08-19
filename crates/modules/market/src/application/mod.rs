@@ -7,26 +7,6 @@ pub mod replay;
 mod sources;
 mod subscriptions;
 mod universe;
-pub use crate::domain::{
-    events::{MarketChange, MarketEvent, MarketViewUpdate, OrderBookResyncRequired},
-    freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness},
-    market::{MarketDataRoute, MarketSelectionQuery, ResolvedMarket},
-    observation::{
-        order_book::{OrderBook, OrderBookDelta, PriceLevel},
-        Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketViewKey, ObservationKind,
-        ObservationQualifier, ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate,
-        Ticker24h, Trade, TradeBar,
-    },
-    source::{
-        MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId,
-        SourceRouteKey, SourceState, SourceStatus,
-    },
-    subscription::{
-        ObservationSelector, ReconcileResult, SubscriptionId, SubscriptionMemberRequirement,
-        SubscriptionMemberStatus, SubscriptionMode, SubscriptionState, SubscriptionStatus,
-    },
-    view::{MarketView, MarketViewFreshness},
-};
 pub use model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery, MarketError,
     MarketObservationResult, MarketQueryResult, OrderBookSide,
@@ -35,6 +15,27 @@ pub use replay::{load_replay_events, load_replay_events_many};
 pub(crate) use sources::source_accepts;
 pub(crate) use subscriptions::{resolve_market, resolve_option_markets};
 pub use universe::ReconcileMarketUniverse;
+
+pub use crate::domain::events::{
+    MarketChange, MarketEvent, MarketViewUpdate, OrderBookResyncRequired,
+};
+pub use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
+pub use crate::domain::market::{MarketDataRoute, MarketSelectionQuery, ResolvedMarket};
+pub use crate::domain::observation::order_book::{OrderBook, OrderBookDelta, PriceLevel};
+pub use crate::domain::observation::{
+    Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, MarketViewKey, ObservationKind,
+    ObservationQualifier, ObservationScope, OpenInterest, OptionGreeks, Quote, QuoteBar, Rate,
+    Ticker24h, Trade, TradeBar,
+};
+pub use crate::domain::source::{
+    MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey,
+    SourceState, SourceStatus,
+};
+pub use crate::domain::subscription::{
+    ObservationSelector, ReconcileResult, SubscriptionId, SubscriptionMemberRequirement,
+    SubscriptionMemberStatus, SubscriptionMode, SubscriptionState, SubscriptionStatus,
+};
+pub use crate::domain::view::{MarketView, MarketViewFreshness};
 
 /// Public Market use-case facade around the sole mutable Market Actor.
 pub struct MarketApplication {

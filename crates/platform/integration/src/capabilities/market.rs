@@ -5,6 +5,7 @@ use std::task::{Context, Poll};
 
 use kairos_primitives::ParticipantSymbol;
 
+use crate::IntegrationError;
 use crate::domain::market::{
     HistoricalBarRequest, HistoricalWindow, MarketBar, MarketBarRequest, MarketEvent,
     MarketFundingRate, MarketGreeks, MarketIndexPrice, MarketMarkPrice, MarketOpenInterest,
@@ -12,7 +13,6 @@ use crate::domain::market::{
     MarketSubscriptionId, MarketSubscriptionOutcome, MarketSubscriptionRequest, MarketTicker,
     MarketTrade,
 };
-use crate::IntegrationError;
 
 pub trait MarketQuoteQuery: Send {
     fn fetch_quotes(
@@ -95,8 +95,9 @@ pub trait MarketSubscriptionCommand: Send {
     fn subscribe(
         &mut self,
         request: MarketSubscriptionRequest,
-    ) -> impl Future<Output = Result<MarketSubscriptionOutcome<MarketSubscription>, IntegrationError>>
-           + Send;
+    ) -> impl Future<
+        Output = Result<MarketSubscriptionOutcome<MarketSubscription>, IntegrationError>,
+    > + Send;
     fn unsubscribe(
         &mut self,
         subscription: MarketSubscriptionId,

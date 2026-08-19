@@ -2,8 +2,8 @@ mod intent;
 mod order;
 
 pub use intent::{
-    split_quantity, CompletionPolicy, ExecutionLeg, ExecutionPlan, FailurePolicy, HedgePolicy,
-    IntentLifecycle, IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy,
+    CompletionPolicy, ExecutionLeg, ExecutionPlan, FailurePolicy, HedgePolicy, IntentLifecycle,
+    IntentType, LegLifecycle, MakerExecutionPolicy, SplitOrderPolicy, split_quantity,
 };
 pub use order::{
     CommitmentBasis, CommitmentResource, CommitmentStatus, DeliveryCertainty, ExecutionAttempt,

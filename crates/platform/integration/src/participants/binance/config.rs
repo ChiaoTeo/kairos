@@ -1,8 +1,9 @@
 //! Transport configuration shared by concrete Binance product connections.
 
-use crate::domain::{ConnectionDescriptor, ParticipantKind, ParticipantRef};
-use crate::IntegrationError;
 use secrecy::SecretString;
+
+use crate::IntegrationError;
+use crate::domain::{ConnectionDescriptor, ParticipantKind, ParticipantRef};
 
 #[derive(Clone)]
 pub struct BinanceCredential {

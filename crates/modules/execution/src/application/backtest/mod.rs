@@ -7,13 +7,14 @@ use serde::{Deserialize, Serialize};
 
 mod market;
 
+use kairos_primitives::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
+pub use market::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
+use rust_decimal::Decimal;
+
 use crate::domain::OrderSide;
 use crate::services::simulation::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
 };
-use kairos_primitives::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
-pub use market::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
-use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BacktestEquityPoint {
@@ -202,7 +203,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                         (current.quantity * current.entry_price + quantity * price) / total;
                     current.quantity = total;
                     current.fees += fee;
-                }
+                },
                 None => {
                     open.insert(
                         fill.instrument_id.to_string(),
@@ -212,7 +213,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                             fees: fee,
                         },
                     );
-                }
+                },
             },
             OrderSide::Sell => {
                 let Some(mut current) = open.remove(fill.instrument_id.as_str()) else {
@@ -231,7 +232,7 @@ fn closed_trades(fills: &[BacktestFill]) -> Result<Vec<ClosedTrade>, String> {
                 if current.quantity > Decimal::ZERO {
                     open.insert(fill.instrument_id.to_string(), current);
                 }
-            }
+            },
         }
     }
     Ok(trades)

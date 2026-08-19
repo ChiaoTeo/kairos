@@ -115,20 +115,20 @@ pub fn snapshot(py: Python<'_>, error: SnapshotError) -> PyErr {
     let py_error = match error {
         SnapshotError::Configuration(_) | SnapshotError::WriterLeaseHeld(_) => {
             PyErr::new::<ConfigurationError, _>(message)
-        }
+        },
         SnapshotError::NotInitialized => PyErr::new::<SnapshotNotInitializedError, _>(message),
         SnapshotError::UnsupportedVersion(_) => {
             PyErr::new::<UnsupportedEnvelopeVersionError, _>(message)
-        }
+        },
         SnapshotError::Corrupt(_) | SnapshotError::ChecksumMismatch { .. } => {
             PyErr::new::<CorruptSnapshotError, _>(message)
-        }
+        },
         SnapshotError::PayloadTooLarge { .. } => PyErr::new::<PayloadTooLargeError, _>(message),
         SnapshotError::ConcurrentChange => PyErr::new::<ConcurrentChangeError, _>(message),
         SnapshotError::ResourceChanged => PyErr::new::<ResourceChangedError, _>(message),
         SnapshotError::Io(_) | SnapshotError::CommitOverflow => {
             PyErr::new::<NativeTransportError, _>(message)
-        }
+        },
     };
     with_code(py, py_error, code)
 }

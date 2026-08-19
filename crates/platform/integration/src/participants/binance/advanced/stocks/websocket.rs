@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use std::task::{Context, Poll};
 
 use crate::participants::binance::BinanceWebSocketConfig;
-use crate::services::participants::binance::{socket::SocketService, stream};
+use crate::services::participants::binance::socket::SocketService;
+use crate::services::participants::binance::stream;
 use crate::transport::websocket::InboundDispatcher;
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionLifecycleCommand,
@@ -186,8 +187,8 @@ impl MarketDataStream for BinanceStocksWebSocketConnection {
             let value = match serde_json::from_str(&text) {
                 Ok(value) => value,
                 Err(error) => {
-                    return Poll::Ready(Err(IntegrationError::InvalidPayload(error.to_string())))
-                }
+                    return Poll::Ready(Err(IntegrationError::InvalidPayload(error.to_string())));
+                },
             };
             let mut events = match stream::normalize(&value) {
                 Ok(events) => events,

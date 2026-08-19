@@ -1,5 +1,6 @@
-use crate::{AccountEvent, ContractResult};
 use std::sync::Arc;
+
+use crate::{AccountEvent, ContractResult};
 
 pub struct AccountEventFrame {
     bytes: Arc<[u8]>,

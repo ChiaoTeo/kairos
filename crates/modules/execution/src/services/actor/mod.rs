@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
+use kairos_conflux::OrderEntryEvent;
+
 use crate::application::{
     ExecutionEvent, ExecutionFillReport, IntentEvent, IntentState, SubmitOrder, UnknownRemoteOrder,
     UnknownRemoteOrderResolution,
@@ -15,7 +17,6 @@ use crate::domain::{
     LegLifecycle, Money, OrderCommitment, OrderId, Quantity, RiskReservationEvidence,
     RiskReservationSagaStatus, UnixNanos,
 };
-use kairos_conflux::OrderEntryEvent;
 
 mod events;
 mod fills;

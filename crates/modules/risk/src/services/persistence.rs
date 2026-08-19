@@ -1,9 +1,11 @@
-use crate::application::RiskSnapshot;
-use crate::domain::RiskPolicy;
-use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::application::RiskSnapshot;
+use crate::domain::RiskPolicy;
 
 /// Durable facts are append-only.  The state owner acknowledges a mutating
 /// command only after this record has reached the journal; snapshots are

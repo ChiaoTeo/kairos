@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::future::{ready, Future};
+use std::future::{Future, ready};
 
 use crate::{ConfluxEvent, Context, Contract, RestResponseOf};
 

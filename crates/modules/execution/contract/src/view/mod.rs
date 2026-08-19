@@ -4,17 +4,18 @@ mod current_execution;
 mod key;
 mod metadata;
 
+use std::path::{Path, PathBuf};
+
 pub use active_intents::ActiveIntentsView;
 pub use active_orders::ActiveOrdersView;
 pub use current_execution::CurrentExecutionView;
+use kairos_transport::{
+    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
+};
 pub use key::{ExecutionViewKey, ExecutionViewKind};
 pub use metadata::ViewMetadata;
 
 use crate::{ContractError, ContractResult};
-use kairos_transport::{
-    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
-};
-use std::path::{Path, PathBuf};
 
 pub fn execution_view_path(
     root: impl AsRef<Path>,

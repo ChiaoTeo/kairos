@@ -3,7 +3,7 @@ use kairos_protocol::generated::kairos::risk::v_2::{
     root_as_reservation_reserved, root_as_risk_decision_made, root_as_risk_latest_view,
 };
 use kairos_risk::composition::{
-    compose_risk_application, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
+    FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, compose_risk_application,
 };
 use kairos_risk::{
     Amount, AuthorizeRequest, CircuitScope, CloseCircuit, ConsumeReservation, EnforcementMode,
@@ -120,12 +120,13 @@ fn consume_and_release_are_terminal_and_update_timestamp() {
     // consuming an order must not accumulate them permanently.
     assert_eq!(app.snapshot().limits[0].used, amount(0));
     assert_eq!(app.snapshot().limits[0].reserved, amount(0));
-    assert!(app
-        .release(ReleaseReservation {
+    assert!(
+        app.release(ReleaseReservation {
             reservation_id: reservation_id("reservation:order"),
             at_unix_nanos: 3.into(),
         })
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -241,7 +242,8 @@ fn risk_event_preserves_launch_instance_identity() {
     }
     let mut writer = FlatbuffersRiskEventWriter::new_with_identity(
         "risk",
-        kairos_protocol::InstanceIdentity::new("workspace", "launch", "instance"),
+        kairos_primitives::runtime::InstanceIdentity::new("workspace", "launch", "instance")
+            .unwrap(),
     );
     writer.publish(app.pending_event().unwrap()).unwrap();
     let payload = writer.last_payload.unwrap();
@@ -272,11 +274,12 @@ fn journal_recovers_reservation_state() {
 #[test]
 fn publish_policy_requires_monotonic_versions() {
     let mut app = application(100);
-    assert!(app
-        .publish_policy(PublishPolicy {
+    assert!(
+        app.publish_policy(PublishPolicy {
             policy: policy("account-notional", 200, "main")
         })
-        .is_err());
+        .is_err()
+    );
     let mut next = policy("account-notional", 200, "main");
     next.version = 2.into();
     app.publish_policy(PublishPolicy { policy: next }).unwrap();
@@ -314,12 +317,16 @@ fn pre_trade_rejects_stale_market_and_insufficient_margin() {
     });
     let decision = app.pre_trade_check(request).unwrap();
     assert!(!decision.allowed);
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::StaleMarket));
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::InsufficientMargin));
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::StaleMarket)
+    );
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::InsufficientMargin)
+    );
 }
 
 #[test]
@@ -339,9 +346,11 @@ fn circuit_blocks_and_resume_restores_admission() {
     .unwrap();
     let blocked = app.authorize_and_reserve(request("blocked", 10)).unwrap();
     assert!(!blocked.allowed);
-    assert!(blocked
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::CircuitOpen));
+    assert!(
+        blocked
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::CircuitOpen)
+    );
     app.close_circuit(CloseCircuit {
         scope,
         at_unix_nanos: 3.into(),
@@ -368,9 +377,11 @@ fn exposure_context_is_checked_against_policy_before_reservation() {
     });
     let decision = app.authorize_and_reserve(order).unwrap();
     assert!(!decision.allowed);
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::LimitExceeded));
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::LimitExceeded)
+    );
     assert!(app.snapshot().reservations.is_empty());
 }
 
@@ -437,14 +448,18 @@ fn proposal_reserves_all_configured_metrics_atomically() {
     let decision = app.authorize_and_reserve(order).unwrap();
     assert!(decision.allowed);
     let reservation = decision.reservation.unwrap();
-    assert!(reservation
-        .allocations
-        .iter()
-        .any(|value| value.metric == Metric::Notional && value.amount == amount(100)));
-    assert!(reservation
-        .allocations
-        .iter()
-        .any(|value| value.metric == Metric::Margin && value.amount == amount(10)));
+    assert!(
+        reservation
+            .allocations
+            .iter()
+            .any(|value| value.metric == Metric::Notional && value.amount == amount(100))
+    );
+    assert!(
+        reservation
+            .allocations
+            .iter()
+            .any(|value| value.metric == Metric::Margin && value.amount == amount(10))
+    );
     let resized = app
         .resize(ResizeReservation {
             reservation_id: reservation.reservation_id,
@@ -452,14 +467,18 @@ fn proposal_reserves_all_configured_metrics_atomically() {
             at_unix_nanos: 2.into(),
         })
         .unwrap();
-    assert!(resized
-        .allocations
-        .iter()
-        .any(|value| value.metric == Metric::Notional && value.amount == amount(50)));
-    assert!(resized
-        .allocations
-        .iter()
-        .any(|value| value.metric == Metric::Margin && value.amount == amount(5)));
+    assert!(
+        resized
+            .allocations
+            .iter()
+            .any(|value| value.metric == Metric::Notional && value.amount == amount(50))
+    );
+    assert!(
+        resized
+            .allocations
+            .iter()
+            .any(|value| value.metric == Metric::Margin && value.amount == amount(5))
+    );
 }
 
 #[test]
@@ -541,9 +560,11 @@ fn leverage_and_drawdown_policies_are_checked_from_context() {
     });
     let decision = app.pre_trade_check(leverage_request).unwrap();
     assert!(!decision.allowed);
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::LeverageExceeded));
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::LeverageExceeded)
+    );
 
     let mut request = request("drawdown", 1);
     request.context = Some(RiskContext {
@@ -552,9 +573,11 @@ fn leverage_and_drawdown_policies_are_checked_from_context() {
     });
     let decision = app.pre_trade_check(request).unwrap();
     assert!(!decision.allowed);
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::LossLimitExceeded));
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::LossLimitExceeded)
+    );
 }
 
 #[test]
@@ -594,9 +617,11 @@ fn order_rate_policy_limits_requests_inside_its_window() {
     let rejected = request("rate-3", 1);
     let decision = app.authorize_and_reserve(rejected).unwrap();
     assert!(!decision.allowed);
-    assert!(decision
-        .reason_codes
-        .contains(&kairos_risk::ReasonCode::LimitExceeded));
+    assert!(
+        decision
+            .reason_codes
+            .contains(&kairos_risk::ReasonCode::LimitExceeded)
+    );
 }
 
 #[test]

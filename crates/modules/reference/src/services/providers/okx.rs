@@ -46,7 +46,7 @@ impl ReferenceSource for OkxSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments_by_type(instrument_type)
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         okx_provider_catalog(facts)
@@ -103,8 +103,8 @@ fn append_okx_instrument(
             ExternalInstrumentKind::Equity | ExternalInstrumentKind::EquityPerpetual => {
                 return Err(ReferenceError::Provider(
                     "OKX catalog cannot contain Binance equity instrument kinds".into(),
-                ))
-            }
+                ));
+            },
             ExternalInstrumentKind::Spot => (
                 "spot",
                 "spot",
@@ -135,7 +135,7 @@ fn append_okx_instrument(
                     format!("{base}-{quote}-{expiry}"),
                     None,
                 )
-            }
+            },
             ExternalInstrumentKind::Option => {
                 let expiry = canonical_expiry(value.expiry_unix_nanos)?;
                 let strike = value.strike.as_deref().ok_or_else(|| {
@@ -173,12 +173,12 @@ fn append_okx_instrument(
                     format!("{base}-{quote}-{expiry}-{strike}-{canonical_right}"),
                     Some(underlying),
                 )
-            }
+            },
         };
     for code in [&base, &quote] {
         catalog.assets.push(Asset {
             asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-            code: code.clone(),
+            code: kairos_primitives::Symbol::new(code.clone())?,
             asset_class: AssetClass::Crypto,
             status: "active".into(),
             ..Asset::default()
@@ -215,7 +215,7 @@ fn append_okx_instrument(
         )
         .then_some(value.expiry_unix_nanos)
         .flatten(),
-        strike: value.strike.clone(),
+        strike: super::optional_decimal(value.strike.clone(), "OKX option strike")?,
         option_right: value.option_right.clone(),
         status,
         ..Instrument::default()
@@ -245,11 +245,11 @@ fn append_okx_instrument(
             "asset:crypto:{quote}"
         ))?),
         status,
-        price_tick: value.price_tick,
-        quantity_tick: value.quantity_tick,
-        minimum_quantity: value.minimum_quantity,
-        minimum_notional: value.minimum_notional,
-        contract_size: value.contract_value,
+        price_tick: super::optional_decimal(value.price_tick, "OKX price tick")?,
+        quantity_tick: super::optional_decimal(value.quantity_tick, "OKX quantity tick")?,
+        minimum_quantity: super::optional_decimal(value.minimum_quantity, "OKX minimum quantity")?,
+        minimum_notional: super::optional_decimal(value.minimum_notional, "OKX minimum notional")?,
+        contract_size: super::optional_decimal(value.contract_value, "OKX contract size")?,
         price_precision: value.price_precision.unwrap_or_default() as i32,
         quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
         effective_from_unix_nanos: 0.into(),

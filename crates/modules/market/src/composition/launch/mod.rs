@@ -1,5 +1,5 @@
 mod assembly;
 mod diagnostic;
 
-pub use assembly::{build_market_host, MarketStartupError};
-pub use diagnostic::{run_diagnostic_once, DiagnosticProvider};
+pub use assembly::{MarketStartupError, build_market_host};
+pub use diagnostic::{DiagnosticProvider, run_diagnostic_once};

@@ -1,13 +1,10 @@
 //! Shared workspace identity and layout validation for Rust processes.
 
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
-
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -697,8 +694,10 @@ fn read_fencing_token(path: &Path) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
     use super::Workspace;
-    use std::{fs, path::Path};
 
     #[test]
     fn production_workspace_source_has_no_provider_or_business_schema() {
@@ -735,15 +734,19 @@ mod tests {
         let workspace = Workspace::open(root.path()).unwrap();
         assert_eq!(workspace.id(), "demo");
         assert_eq!(workspace.cli_format(), "text");
-        assert!(workspace
-            .process_socket("risk")
-            .unwrap()
-            .ends_with("run/risk/control.sock"));
+        assert!(
+            workspace
+                .process_socket("risk")
+                .unwrap()
+                .ends_with("run/risk/control.sock")
+        );
         assert!(workspace.state_root().ends_with("state"));
-        assert!(workspace
-            .health_file("risk")
-            .unwrap()
-            .ends_with("run/risk/health.json"));
+        assert!(
+            workspace
+                .health_file("risk")
+                .unwrap()
+                .ends_with("run/risk/health.json")
+        );
     }
 
     #[test]
@@ -824,9 +827,11 @@ source_id = "binance-spot"
             std::io::ErrorKind::AlreadyExists
         );
         drop(first);
-        assert!(workspace
-            .exclusive_process_lock("ibkr-client", identity)
-            .is_ok());
+        assert!(
+            workspace
+                .exclusive_process_lock("ibkr-client", identity)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -896,9 +901,11 @@ source_id = "binance-spot"
             .unwrap();
         assert!(status.success());
         drop(first);
-        assert!(workspace
-            .exclusive_process_lock("ibkr-client", IDENTITY)
-            .is_ok());
+        assert!(
+            workspace
+                .exclusive_process_lock("ibkr-client", IDENTITY)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -929,11 +936,13 @@ source_id = "binance-spot"
             .unwrap();
         let socket = instance.socket("market").unwrap();
         assert_eq!(socket.parent().unwrap(), Path::new("/tmp"));
-        assert!(socket
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("-market.sock"));
+        assert!(
+            socket
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("-market.sock")
+        );
     }
 
     #[test]
@@ -947,11 +956,13 @@ source_id = "binance-spot"
         .unwrap();
         let socket = workspace.process_socket("reference").unwrap();
         assert_eq!(socket.parent().unwrap(), Path::new("/tmp"));
-        assert!(socket
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("-reference.sock"));
+        assert!(
+            socket
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("-reference.sock")
+        );
     }
 
     #[test]
@@ -959,19 +970,25 @@ source_id = "binance-spot"
         let root = tempfile::tempdir().unwrap();
         let workspace = Workspace::init(root.path(), "demo").unwrap();
         let instance = workspace.instance("paper", "launch", "default").unwrap();
-        assert!(instance
-            .service_snapshot("market")
-            .unwrap()
-            .ends_with("snapshots/market/market.snapshot"));
-        assert!(instance
-            .service_health("market")
-            .unwrap()
-            .ends_with("run/market/health.json"));
+        assert!(
+            instance
+                .service_snapshot("market")
+                .unwrap()
+                .ends_with("snapshots/market/market.snapshot")
+        );
+        assert!(
+            instance
+                .service_health("market")
+                .unwrap()
+                .ends_with("run/market/health.json")
+        );
         assert!(instance.service_snapshot("../market").is_err());
-        assert!(workspace
-            .service_snapshot("risk")
-            .unwrap()
-            .ends_with("snapshots/risk/risk.snapshot"));
+        assert!(
+            workspace
+                .service_snapshot("risk")
+                .unwrap()
+                .ends_with("snapshots/risk/risk.snapshot")
+        );
     }
 
     #[test]
@@ -981,32 +998,44 @@ source_id = "binance-spot"
         let instance = workspace.instance("paper", "launch", "run").unwrap();
         instance.prepare().unwrap();
 
-        assert!(workspace
-            .paths()
-            .process_dir("market")
-            .unwrap()
-            .ends_with("run/market"));
-        assert!(instance
-            .paths()
-            .process_dir("market")
-            .unwrap()
-            .ends_with("run/market"));
-        assert!(instance
-            .health("market")
-            .unwrap()
-            .ends_with("run/market/health.json"));
-        assert!(instance
-            .normalized_config()
-            .unwrap()
-            .ends_with("config/normalized.json"));
-        assert!(instance
-            .checkpoint("market", "replay.json")
-            .unwrap()
-            .ends_with("state/market/checkpoints/replay.json"));
-        assert!(instance
-            .component_manifest()
-            .unwrap()
-            .ends_with("manifest.json"));
+        assert!(
+            workspace
+                .paths()
+                .process_dir("market")
+                .unwrap()
+                .ends_with("run/market")
+        );
+        assert!(
+            instance
+                .paths()
+                .process_dir("market")
+                .unwrap()
+                .ends_with("run/market")
+        );
+        assert!(
+            instance
+                .health("market")
+                .unwrap()
+                .ends_with("run/market/health.json")
+        );
+        assert!(
+            instance
+                .normalized_config()
+                .unwrap()
+                .ends_with("config/normalized.json")
+        );
+        assert!(
+            instance
+                .checkpoint("market", "replay.json")
+                .unwrap()
+                .ends_with("state/market/checkpoints/replay.json")
+        );
+        assert!(
+            instance
+                .component_manifest()
+                .unwrap()
+                .ends_with("manifest.json")
+        );
         for legacy in ["sockets", "health", "locks", "checkpoints"] {
             assert!(!instance.root().join(legacy).exists());
         }

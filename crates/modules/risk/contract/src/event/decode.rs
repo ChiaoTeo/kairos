@@ -1,6 +1,7 @@
+use kairos_protocol::generated::kairos::risk::v_2 as fb;
+
 use super::view::DecodedRiskEvent;
 use crate::{ContractError, ContractResult};
-use kairos_protocol::generated::kairos::risk::v_2 as fb;
 pub fn decode_event(bytes: &[u8]) -> ContractResult<DecodedRiskEvent<'_>> {
     if fb::risk_decision_made_buffer_has_identifier(bytes) {
         return fb::root_as_risk_decision_made(bytes)

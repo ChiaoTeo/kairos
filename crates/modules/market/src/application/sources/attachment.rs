@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use super::super::{MarketApplication, MarketError};
 use crate::domain::source::{SourceId, SourceStatus};
 use crate::services::actor::{AttachedSource, MarketActor};
-use crate::services::source::messages::SourceInput;
 use crate::services::source::SourceHandle;
+use crate::services::source::messages::SourceInput;
 
 const SOURCE_INPUT_CAPACITY: usize = 4_096;
 
@@ -130,9 +130,9 @@ impl MarketApplication {
                     std::task::Poll::Ready(Some(input)) => {
                         self.actor.next_source_input_index = (index + 1) % source_count;
                         return std::task::Poll::Ready(Some(input));
-                    }
+                    },
                     std::task::Poll::Ready(None) => closed += 1,
-                    std::task::Poll::Pending => {}
+                    std::task::Poll::Pending => {},
                 }
             }
             if closed == source_count {

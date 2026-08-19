@@ -1,8 +1,9 @@
+use kairos_primitives::{Money, UnixNanos};
+
 use crate::application::{
     RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
 };
 use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
-use kairos_primitives::{Money, UnixNanos};
 
 #[derive(Clone, Debug)]
 pub enum SimulatedRiskReconciliation {
@@ -53,14 +54,22 @@ impl SimulatedRiskReservations {
         let at = request.submitted_at_unix_nanos.unwrap_or_default();
         Ok(RiskReservationEvidence {
             order_id: request.order_id.clone(),
-            reservation_id: format!("execution:{}", request.order_id),
-            idempotency_key: format!("execution:{}", request.order_id),
+            reservation_id: kairos_primitives::ReservationId::new(format!(
+                "execution:{}",
+                request.order_id
+            ))
+            .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+            idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+                "execution:{}",
+                request.order_id
+            ))
+            .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
             account_id: request.account_id.clone(),
             amount,
             status: RiskReservationSagaStatus::Active,
-            risk_generation: 1,
-            risk_event_sequence: 1,
-            policy_version: 1,
+            risk_generation: 1.into(),
+            risk_event_sequence: 1.into(),
+            policy_version: 1.into(),
             expires_at_unix_nanos: UnixNanos::new(at.get().saturating_add(60_000_000_000)),
             updated_at_unix_nanos: at,
             funding_requirement: None,
@@ -80,10 +89,10 @@ impl SimulatedRiskReservations {
             } => {
                 let mut observed = evidence.clone();
                 observed.status = status;
-                observed.risk_generation = 7;
-                observed.risk_event_sequence = event_sequence;
+                observed.risk_generation = 7.into();
+                observed.risk_event_sequence = event_sequence.into();
                 Some(observed)
-            }
+            },
         })
     }
 

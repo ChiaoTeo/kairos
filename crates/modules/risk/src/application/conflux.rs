@@ -53,7 +53,7 @@ impl ConfluxActor for RiskApplication {
             }) if name == "maintenance" => {
                 let _ = self.maintenance_tick(fired_at_unix_nanos.into());
                 None
-            }
+            },
             ConfluxEvent::Local(value) => match value {},
             _ => None,
         };
@@ -101,7 +101,7 @@ impl RiskApplication {
             let mut published_to_all = true;
             for key in publisher_keys {
                 match publishers.try_with(&key, |publisher| publisher.publish(&event)) {
-                    Ok(()) => {}
+                    Ok(()) => {},
                     Err(error) => {
                         published_to_all = false;
                         if let ResourceOperationError::Operation(error) = error {
@@ -112,7 +112,7 @@ impl RiskApplication {
                                 "Risk Conflux ordered event publication failed"
                             );
                         }
-                    }
+                    },
                 }
             }
             if !published_to_all {
@@ -128,17 +128,17 @@ impl RiskApplication {
                 let snapshot = self.snapshot();
                 RiskRestResponse::Health(Ok(Health {
                     status: "ready".into(),
-                    generation: snapshot.generation.get(),
-                    event_sequence: snapshot.event_sequence.get(),
-                    policy_version: snapshot.policy_version.get(),
-                    reservation_count: snapshot.reservations.len(),
+                    generation: snapshot.generation,
+                    event_sequence: snapshot.event_sequence,
+                    policy_version: snapshot.policy_version,
+                    reservation_count: snapshot.reservations.len() as u64,
                     open_circuit_count: snapshot
                         .circuits
                         .iter()
                         .filter(|circuit| circuit.open)
-                        .count(),
+                        .count() as u64,
                 }))
-            }
+            },
             RiskRestRequest::PublishPolicy(request) => {
                 let result = super::contract::policy_from(request.policy)
                     .map_err(invalid)
@@ -148,7 +148,7 @@ impl RiskApplication {
                         status: "active".into(),
                     });
                 RiskRestResponse::PublishPolicy(result)
-            }
+            },
             RiskRestRequest::AuthorizeAndReserve(request) => {
                 let result = super::contract::authorize_from(request)
                     .map_err(invalid)
@@ -170,7 +170,7 @@ impl RiskApplication {
                             })
                     });
                 RiskRestResponse::AuthorizeAndReserve(result)
-            }
+            },
             RiskRestRequest::PreTradeCheck(request) => {
                 let result = super::contract::authorize_from(request)
                     .map_err(invalid)
@@ -192,7 +192,7 @@ impl RiskApplication {
                             })
                     });
                 RiskRestResponse::PreTradeCheck(result)
-            }
+            },
             RiskRestRequest::PostTradeCheck(request) => {
                 let result = super::contract::authorize_from(request)
                     .map_err(invalid)
@@ -214,80 +214,73 @@ impl RiskApplication {
                             })
                     });
                 RiskRestResponse::PostTradeCheck(result)
-            }
+            },
             RiskRestRequest::OpenCircuit(request) => {
                 let result = super::contract::circuit_scope_from(request.scope)
                     .map_err(invalid)
                     .map(|scope| OpenCircuit {
                         scope,
-                        at_unix_nanos: request.at_unix_nanos.into(),
-                        reset_at_unix_nanos: request.reset_at_unix_nanos.map(Into::into),
+                        at_unix_nanos: request.at_unix_nanos,
+                        reset_at_unix_nanos: request.reset_at_unix_nanos,
                         reason: request.reason,
                     })
                     .and_then(|request| self.open_circuit(request).map_err(control_error))
                     .map(|value| super::contract::circuit(&value));
                 RiskRestResponse::OpenCircuit(result)
-            }
+            },
             RiskRestRequest::CloseCircuit(request) => {
                 let result = super::contract::circuit_scope_from(request.scope)
                     .map_err(invalid)
                     .map(|scope| CloseCircuit {
                         scope,
-                        at_unix_nanos: request.at_unix_nanos.into(),
+                        at_unix_nanos: request.at_unix_nanos,
                     })
                     .and_then(|request| self.close_circuit(request).map_err(control_error))
                     .map(|value| super::contract::circuit(&value));
                 RiskRestResponse::CloseCircuit(result)
-            }
+            },
             RiskRestRequest::ResizeReservation(request) => {
                 let result = super::contract::amount_from(request.amount)
                     .map_err(invalid)
                     .and_then(|amount| {
                         Ok(ResizeReservation {
-                            reservation_id: kairos_primitives::ReservationId::new(
-                                request.reservation_id,
-                            )
-                            .map_err(|error| invalid(error.to_string()))?,
+                            reservation_id: request.reservation_id,
                             amount,
-                            at_unix_nanos: request.at_unix_nanos.into(),
+                            at_unix_nanos: request.at_unix_nanos,
                         })
                     })
                     .and_then(|request| self.resize(request).map_err(control_error))
                     .map(|value| super::contract::reservation(&value));
                 RiskRestResponse::ResizeReservation(result)
-            }
+            },
             RiskRestRequest::ReleaseReservation(request) => {
-                let result = kairos_primitives::ReservationId::new(request.reservation_id)
-                    .map_err(|error| invalid(error.to_string()))
-                    .map(|reservation_id| ReleaseReservation {
-                        reservation_id,
-                        at_unix_nanos: request.at_unix_nanos.into(),
-                    })
-                    .and_then(|request| self.release(request).map_err(control_error))
-                    .map(|value| super::contract::reservation(&value));
+                let result = Ok(ReleaseReservation {
+                    reservation_id: request.reservation_id,
+                    at_unix_nanos: request.at_unix_nanos,
+                })
+                .and_then(|request| self.release(request).map_err(control_error))
+                .map(|value| super::contract::reservation(&value));
                 RiskRestResponse::ReleaseReservation(result)
-            }
+            },
             RiskRestRequest::ConsumeReservation(request) => {
-                let result = kairos_primitives::ReservationId::new(request.reservation_id)
-                    .map_err(|error| invalid(error.to_string()))
-                    .map(|reservation_id| ConsumeReservation {
-                        reservation_id,
-                        at_unix_nanos: request.at_unix_nanos.into(),
-                    })
-                    .and_then(|request| self.consume(request).map_err(control_error))
-                    .map(|value| super::contract::reservation(&value));
+                let result = Ok(ConsumeReservation {
+                    reservation_id: request.reservation_id,
+                    at_unix_nanos: request.at_unix_nanos,
+                })
+                .and_then(|request| self.consume(request).map_err(control_error))
+                .map(|value| super::contract::reservation(&value));
                 RiskRestResponse::ConsumeReservation(result)
-            }
+            },
             RiskRestRequest::AdvanceTime(request) => {
                 let result = self
-                    .advance_business_time(request.event_time_unix_nanos.into())
+                    .advance_business_time(request.event_time_unix_nanos)
                     .map_err(control_error)
                     .map(|expired| AdvanceRiskTimeResponse {
                         event_time_unix_nanos: request.event_time_unix_nanos,
-                        expired,
+                        expired: expired as u64,
                     });
                 RiskRestResponse::AdvanceTime(result)
-            }
+            },
         }
     }
 }
@@ -334,23 +327,26 @@ mod tests {
                 let response = handle
                     .handle(ConfluxEvent::Rest(RiskRestRequest::AuthorizeAndReserve(
                         AuthorizeRequest {
-                            request_id: "request-1".into(),
-                            idempotency_key: "key-1".into(),
-                            reservation_id: "reservation-1".into(),
-                            account_id: "account-1".into(),
-                            strategy_id: "strategy-1".into(),
-                            instrument_id: "instrument-1".into(),
-                            exchange_id: "exchange-1".into(),
+                            request_id: kairos_primitives::RequestId::new("request-1").unwrap(),
+                            idempotency_key: kairos_primitives::IdempotencyKey::new("key-1")
+                                .unwrap(),
+                            reservation_id: kairos_primitives::ReservationId::new("reservation-1")
+                                .unwrap(),
+                            account_id: kairos_primitives::AccountId::new("account-1").unwrap(),
+                            strategy_id: kairos_primitives::StrategyId::new("strategy-1").unwrap(),
+                            instrument_id: kairos_primitives::InstrumentId::new("instrument-1")
+                                .unwrap(),
+                            exchange_id: kairos_primitives::Exchange::new("exchange-1").unwrap(),
                             proposal: kairos_risk_contract::TradeRiskProposal {
                                 notional: Amount::new(10, 0).unwrap(),
-                                initial_margin_rate_bps: 10_000,
+                                initial_margin_rate_bps: 10_000.into(),
                                 reduce_only: false,
                                 margin_rule_id: "test:fully-funded".into(),
                             },
-                            at_unix_nanos: 1,
-                            reservation_ttl_nanos: 10,
-                            dependency_generation: 1,
-                            dependency_event_sequence: 1,
+                            at_unix_nanos: 1.into(),
+                            reservation_ttl_nanos: 10.into(),
+                            dependency_generation: 1.into(),
+                            dependency_event_sequence: 1.into(),
                             context: None,
                         },
                     )))

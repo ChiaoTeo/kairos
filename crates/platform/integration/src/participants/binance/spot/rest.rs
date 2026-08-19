@@ -1,3 +1,5 @@
+use kairos_primitives::ParticipantSymbol;
+
 use crate::services::participants::binance::{account, execution, market};
 use crate::{
     AccountQuery, CommandResult, ExternalAccountSegment, ExternalAccountSnapshot,
@@ -8,7 +10,6 @@ use crate::{
     MarketQuoteQuery, MarketTrade, MarketTradeQuery, OrderCommand, OrderEntryEvent,
     OrderEntryRequest, OrderQuery, ParticipantKind, ParticipantRef,
 };
-use kairos_primitives::ParticipantSymbol;
 
 rest_connection!(BinanceSpotRestConnection, "spot.rest");
 
@@ -52,11 +53,11 @@ impl BinanceSpotRestConnection {
         {
             crate::CommandOutcome::Confirmed(_) => {
                 Ok(crate::CommandOutcome::Confirmed(scope.clone()))
-            }
+            },
             crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
             crate::CommandOutcome::Indeterminate(error) => {
                 Ok(crate::CommandOutcome::Indeterminate(error))
-            }
+            },
         }
     }
 

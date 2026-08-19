@@ -1,11 +1,12 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::{
-    history, HyperliquidFillRecord, HyperliquidFundingRecord, HyperliquidHistoryPage,
-    HyperliquidHistoryQuery, HyperliquidLedgerRecord,
+    HyperliquidFillRecord, HyperliquidFundingRecord, HyperliquidHistoryPage,
+    HyperliquidHistoryQuery, HyperliquidLedgerRecord, history,
 };
 use crate::participants::hyperliquid::HyperliquidAccountRestConfig;
-use crate::services::participants::hyperliquid::{account, rest::RestService};
+use crate::services::participants::hyperliquid::account;
+use crate::services::participants::hyperliquid::rest::RestService;
 use crate::{
     AccountQuery, ConnectionDescriptor, ExternalAccountSegment, ExternalAccountSnapshot,
     ExternalOrder, ExternalOrderQuery, IntegrationError, OrderQuery,

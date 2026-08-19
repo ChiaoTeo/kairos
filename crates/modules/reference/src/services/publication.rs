@@ -1,6 +1,6 @@
 //! Typed Reference lifecycle publication preparation.
 
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_reference_contract::{EncodeContext, ReferenceEncoder};
 
 use crate::domain::{LifecycleEvent, ReferenceCatalog, ReferenceError, ReferenceResult};
@@ -49,7 +49,8 @@ fn encode_publication(
         sequence,
         event.event_id.clone(),
         event.generation.get(),
-    );
+    )
+    .map_err(ReferenceError::Invalid)?;
     let updated = !event.event_type.ends_with("_added") && event.event_type != "listed";
     let occurred_at = event.event_time_unix_nanos.get();
     let payload = match kind {
@@ -61,7 +62,7 @@ fn encode_publication(
             } else {
                 ReferenceEncoder::entity_upserted(&record, &context, occurred_at)
             }
-        }
+        },
         "asset" => {
             let record = catalog.assets.get(id).ok_or_else(|| missing(kind, id))?;
             let record = contract_asset(record);
@@ -70,7 +71,7 @@ fn encode_publication(
             } else {
                 ReferenceEncoder::asset_upserted(&record, &context, occurred_at)
             }
-        }
+        },
         "instrument" => {
             let record = catalog
                 .instruments
@@ -82,7 +83,7 @@ fn encode_publication(
             } else {
                 ReferenceEncoder::instrument_upserted(&record, &context, occurred_at)
             }
-        }
+        },
         "listing" => {
             let record = catalog.listings.get(id).ok_or_else(|| missing(kind, id))?;
             let record = contract_listing(record);
@@ -91,7 +92,7 @@ fn encode_publication(
             } else {
                 ReferenceEncoder::listing_upserted(&record, &context, occurred_at)
             }
-        }
+        },
         "market" => {
             let record = catalog.markets.get(id).ok_or_else(|| missing(kind, id))?;
             let record = contract_market(record);
@@ -100,12 +101,12 @@ fn encode_publication(
             } else {
                 ReferenceEncoder::market_upserted(&record, &context, occurred_at)
             }
-        }
+        },
         other => {
             return Err(ReferenceError::Publication(format!(
                 "Reference v2 event schema is not defined for record kind {other}"
-            )))
-        }
+            )));
+        },
     }
     .map_err(|error| ReferenceError::Publication(error.to_string()))?;
     Ok(StoredPublication {
@@ -124,17 +125,17 @@ pub(crate) fn contract_entity(value: &crate::domain::Entity) -> kairos_reference
         entity_id: value.entity_id.clone(),
         entity_type: value.entity_type.as_str().into(),
         name: value.name.clone(),
-        status: value.status.as_str().into(),
+        status: value.status,
     }
 }
 
 pub(crate) fn contract_asset(value: &crate::domain::Asset) -> kairos_reference_contract::Asset {
     kairos_reference_contract::Asset {
-        asset_id: value.asset_id.to_string(),
+        asset_id: value.asset_id.clone(),
         code: value.code.clone(),
         name: value.name.clone(),
         asset_class: value.asset_class,
-        status: value.status.as_str().into(),
+        status: value.status,
     }
 }
 
@@ -142,25 +143,19 @@ pub(crate) fn contract_instrument(
     value: &crate::domain::Instrument,
 ) -> kairos_reference_contract::Instrument {
     kairos_reference_contract::Instrument {
-        instrument_id: value.instrument_id.to_string(),
-        symbol: value.symbol.to_string(),
+        instrument_id: value.instrument_id.clone(),
+        symbol: value.symbol.clone(),
         name: value.name.clone(),
         instrument_type: value.instrument_type,
         product_family: None,
-        issuer_id: value.issuer_id.as_ref().map(ToString::to_string),
+        issuer_id: value.issuer_id.clone(),
         share_class: value.share_class.clone(),
-        primary_currency_asset_id: value
-            .primary_currency_asset_id
-            .as_ref()
-            .map(ToString::to_string),
-        underlying_instrument_id: value
-            .underlying_instrument_id
-            .as_ref()
-            .map(ToString::to_string),
-        expiry_unix_nanos: value.expiry_unix_nanos.map(|value| value.get()),
+        primary_currency_asset_id: value.primary_currency_asset_id.clone(),
+        underlying_instrument_id: value.underlying_instrument_id.clone(),
+        expiry_unix_nanos: value.expiry_unix_nanos,
         strike: value.strike.clone(),
         option_right: value.option_right.clone(),
-        status: value.status.as_str().into(),
+        status: value.status,
     }
 }
 
@@ -168,32 +163,29 @@ pub(crate) fn contract_listing(
     value: &crate::domain::Listing,
 ) -> kairos_reference_contract::Listing {
     kairos_reference_contract::Listing {
-        listing_id: value.listing_id.to_string(),
-        instrument_id: value.instrument_id.to_string(),
-        exchange_id: value.exchange_id.to_string(),
-        exchange_symbol: value.exchange_symbol.to_string(),
-        status: value.status.as_str().into(),
-        effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
-        effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+        listing_id: value.listing_id.clone(),
+        instrument_id: value.instrument_id.clone(),
+        exchange_id: value.exchange_id.clone(),
+        exchange_symbol: value.exchange_symbol.clone(),
+        status: value.status,
+        effective_from_unix_nanos: value.effective_from_unix_nanos,
+        effective_to_unix_nanos: value.effective_to_unix_nanos,
     }
 }
 
 pub(crate) fn contract_market(value: &crate::domain::Market) -> kairos_reference_contract::Market {
     kairos_reference_contract::Market {
-        market_id: value.market_id.to_string(),
-        instrument_id: value.instrument_id.to_string(),
-        listing_id: value.listing_id.as_ref().map(ToString::to_string),
-        exchange_id: value.exchange_id.to_string(),
+        market_id: value.market_id.clone(),
+        instrument_id: value.instrument_id.clone(),
+        listing_id: value.listing_id.clone(),
+        exchange_id: value.exchange_id.clone(),
         instrument_kind: value.instrument_kind,
         asset_type: value.asset_type,
-        underlying_instrument_id: value
-            .underlying_instrument_id
-            .as_ref()
-            .map(ToString::to_string),
-        venue_symbol: value.venue_symbol.as_ref().map(ToString::to_string),
-        base_asset_id: value.base_asset_id.as_ref().map(ToString::to_string),
-        quote_asset_id: value.quote_asset_id.as_ref().map(ToString::to_string),
-        status: value.status.as_str().into(),
+        underlying_instrument_id: value.underlying_instrument_id.clone(),
+        venue_symbol: value.venue_symbol.clone(),
+        base_asset_id: value.base_asset_id.clone(),
+        quote_asset_id: value.quote_asset_id.clone(),
+        status: value.status,
         price_tick: value.price_tick.clone(),
         quantity_tick: value.quantity_tick.clone(),
         price_precision: value.price_precision,
@@ -201,7 +193,7 @@ pub(crate) fn contract_market(value: &crate::domain::Market) -> kairos_reference
         minimum_quantity: value.minimum_quantity.clone(),
         minimum_notional: value.minimum_notional.clone(),
         contract_size: value.contract_size.clone(),
-        effective_from_unix_nanos: value.effective_from_unix_nanos.get(),
-        effective_to_unix_nanos: value.effective_to_unix_nanos.map(|value| value.get()),
+        effective_from_unix_nanos: value.effective_from_unix_nanos,
+        effective_to_unix_nanos: value.effective_to_unix_nanos,
     }
 }

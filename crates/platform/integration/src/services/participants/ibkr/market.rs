@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ibapi::contracts::{tick_types::TickType, Contract};
+use ibapi::contracts::Contract;
+use ibapi::contracts::tick_types::TickType;
 use ibapi::market_data::realtime::TickTypes;
 use kairos_primitives::{ParticipantSymbol, Price, Quantity, UnixNanos};
 
-use crate::{IntegrationError, MarketQuote};
-
 use super::execution::SessionService;
+use crate::{IntegrationError, MarketQuote};
 
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -62,8 +62,8 @@ fn normalize_quote(
             TickTypes::PriceSize(value) => {
                 set_price(&mut quote, &value.price_tick_type, value.price)?;
                 set_size(&mut quote, &value.size_tick_type, value.size)?;
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     Ok(quote)
@@ -75,7 +75,7 @@ fn set_price(quote: &mut MarketQuote, kind: &TickType, value: f64) -> Result<(),
         TickType::Bid | TickType::DelayedBid => quote.bid_price = value,
         TickType::Ask | TickType::DelayedAsk => quote.ask_price = value,
         TickType::Last | TickType::DelayedLast | TickType::Close => quote.last_price = value,
-        _ => {}
+        _ => {},
     }
     Ok(())
 }
@@ -85,7 +85,7 @@ fn set_size(quote: &mut MarketQuote, kind: &TickType, value: f64) -> Result<(), 
     match kind {
         TickType::BidSize | TickType::DelayedBidSize => quote.bid_quantity = value,
         TickType::AskSize | TickType::DelayedAskSize => quote.ask_quantity = value,
-        _ => {}
+        _ => {},
     }
     Ok(())
 }

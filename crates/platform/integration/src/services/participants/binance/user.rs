@@ -3,11 +3,12 @@ use kairos_primitives::{
 };
 use serde_json::Value;
 
+use crate::domain::execution::normalize_order_status;
 use crate::{
-    domain::execution::normalize_order_status, ExternalAccountEvent, ExternalAccountSnapshot,
-    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalEventEnvelope,
-    ExternalExecutionEvent, ExternalFillEvent, ExternalOrderEvent, ExternalOrderStatus,
-    ExternalPosition, IntegrationError, OrderSide, OrderType, ParticipantKind, ParticipantRef,
+    ExternalAccountEvent, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
+    ExternalDecimal, ExternalEventEnvelope, ExternalExecutionEvent, ExternalFillEvent,
+    ExternalOrderEvent, ExternalOrderStatus, ExternalPosition, IntegrationError, OrderSide,
+    OrderType, ParticipantKind, ParticipantRef,
 };
 
 pub(crate) fn account_event(
@@ -20,7 +21,7 @@ pub(crate) fn account_event(
     let account = match event_type {
         "outboundAccountPosition" => {
             ExternalAccountEvent::Snapshot(spot_account(segment_key, value)?)
-        }
+        },
         "balanceUpdate" => ExternalAccountEvent::Snapshot(spot_balance(segment_key, value)?),
         "ACCOUNT_UPDATE" => ExternalAccountEvent::Snapshot(futures_account(segment_key, value)?),
         "executionReport" | "ORDER_TRADE_UPDATE" => order_account(segment_key, value)?,

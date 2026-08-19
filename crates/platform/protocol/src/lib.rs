@@ -1,8 +1,5 @@
-//! Generated process-boundary contracts.
+//! Generated process-boundary contracts and protocol metadata helpers.
 
-// FlatBuffers emits these implementations and unsafe constructors. Keep the
-// generated boundary checked by rustc while excluding lints that the
-// generator cannot currently satisfy without hand-editing generated files.
 #![allow(
     clippy::derivable_impls,
     clippy::extra_unused_lifetimes,
@@ -10,30 +7,11 @@
     clippy::unnecessary_cast
 )]
 
+pub mod context;
 pub mod generated;
 
-/// Runtime ownership identity carried by instance-scoped transport headers.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct InstanceIdentity {
-    pub workspace_id: String,
-    pub launch_id: String,
-    pub instance_id: String,
-}
+pub use context::ProtocolContext;
 
-impl InstanceIdentity {
-    pub fn new(
-        workspace_id: impl Into<String>,
-        launch_id: impl Into<String>,
-        instance_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            workspace_id: workspace_id.into(),
-            launch_id: launch_id.into(),
-            instance_id: instance_id.into(),
-        }
-    }
-
-    pub fn is_instance_scoped(&self) -> bool {
-        !self.launch_id.is_empty() && !self.instance_id.is_empty()
-    }
-}
+// Runtime identity values are owned by primitives.  Re-exporting them here is
+// intentionally avoided: callers should make the primitives/protocol boundary
+// visible in their imports.

@@ -1,5 +1,6 @@
-use crate::control::AccountControlClient;
 use std::path::PathBuf;
+
+use crate::control::AccountControlClient;
 pub struct AccountUdsTransport {
     pub control: AccountControlClient,
 }

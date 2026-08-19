@@ -7,6 +7,7 @@ command -v flatc >/dev/null 2>&1 || {
 }
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+rustfmt_toolchain="${RUSTFMT_TOOLCHAIN:-nightly-2025-08-26}"
 schema_root="$repo_root/schemas"
 python_out="$repo_root/kairospy/infrastructure/transport/generated"
 rust_out="$repo_root/crates/platform/protocol/src/generated"
@@ -40,7 +41,7 @@ for index in "${!schemas[@]}"; do
 done
 
 find "$rust_stage" -type f -name '*.rs' -print0 \
-  | xargs -0 rustfmt --edition 2021
+  | xargs -0 rustup run "$rustfmt_toolchain" rustfmt --edition 2021
 
 mkdir -p "$python_out/kairos" "$rust_out/kairos"
 rsync -a --delete "$python_stage/kairos/" "$python_out/kairos/"

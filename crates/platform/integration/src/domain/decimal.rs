@@ -117,10 +117,12 @@ mod tests {
         let value = DecimalValue::parse("1.2300").unwrap();
         assert_eq!(value, DecimalValue::new(12300, 4));
         assert_eq!(value.rescale_exact(2).unwrap(), DecimalValue::new(123, 2));
-        assert!(DecimalValue::parse("1.2310")
-            .unwrap()
-            .rescale_exact(2)
-            .is_err());
+        assert!(
+            DecimalValue::parse("1.2310")
+                .unwrap()
+                .rescale_exact(2)
+                .is_err()
+        );
         assert!(DecimalValue::parse("0.0000000000000000001").is_err());
         assert!(value.rescale_exact(19).is_err());
         assert!(serde_json::from_str::<DecimalValue>(r#"{"mantissa":1,"scale":19}"#).is_err());

@@ -1,8 +1,8 @@
-use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
-use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{env, fs};
+
+use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     kairos_workspace::logging::init("aeron");
@@ -25,7 +25,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--help" | "-h" => {
                 println!("Usage: kairos-aeron-driver [--aeron-dir <path>] [--health-file <path>]");
                 return Ok(());
-            }
+            },
             other => return Err(format!("unknown argument: {other}").into()),
         }
     }

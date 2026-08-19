@@ -1,10 +1,10 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use kairos_transport::{AeronByteSubscription, AeronEndpoint, stream_ids};
+
 use super::frame::RiskEventFrame;
 use crate::{ContractError, ContractResult};
-use kairos_transport::{stream_ids, AeronByteSubscription, AeronEndpoint};
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
 pub struct RiskEventStream {
     subscription: AeronByteSubscription,
 }

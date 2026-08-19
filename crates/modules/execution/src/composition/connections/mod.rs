@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 
-pub use crate::services::gateway::ExecutionWriterFence;
 use kairos_conflux::{
-    BlockingOrderCommand, CommandOutcome, IntegrationError, ParticipantInstrumentRef,
+    BlockingOrderCommand, CommandOutcome, ConnectionDescriptor, DecimalValue, IntegrationError,
+    OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, ParticipantInstrumentRef,
     ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
 };
-use kairos_conflux::{
-    ConnectionDescriptor, DecimalValue, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus,
-};
 use secrecy::SecretString;
+
+pub use crate::services::gateway::ExecutionWriterFence;
 
 mod entry;
 mod model;

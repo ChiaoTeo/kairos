@@ -2,10 +2,11 @@
 
 use std::future::Future;
 use std::task::{Context, Poll};
+
 use tokio::time::Instant;
 
-use crate::domain::{ConnectionHealth, MaintenanceOutcome};
 use crate::IntegrationError;
+use crate::domain::{ConnectionHealth, MaintenanceOutcome};
 
 /// Bounded observation of a concrete connection's current health.
 pub trait ConnectionHealthQuery: Send {

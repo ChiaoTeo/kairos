@@ -1,9 +1,10 @@
-use crate::domain::{AccountSegment, AccountSnapshot};
-use crate::services::integration::AccountSnapshotGateway;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use crate::domain::{AccountSegment, AccountSnapshot};
+use crate::services::integration::AccountSnapshotGateway;
 
 const SEGMENT_REFRESH_TIMEOUT: Duration = Duration::from_secs(30);
 const CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
@@ -130,7 +131,7 @@ impl AccountRefreshWorker {
                     TrySendError::Full(_) => "account refresh queue is full".to_string(),
                     TrySendError::Disconnected(_) => {
                         "account refresh worker is stopped".to_string()
-                    }
+                    },
                 })?;
         }
         drop(fetch_sender);

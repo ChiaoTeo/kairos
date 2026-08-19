@@ -1,3 +1,8 @@
+use super::order::{
+    OkxAmendOrderRequest, OkxOrderIdentity, OkxOrderOperationAck, amend_body, batch_acks,
+    cancel_body, one_ack, validate_batch,
+};
+use super::{OkxBillRecord, OkxFillRecord, OkxHistoryQuery, history};
 use crate::participants::okx::{OkxCredential, OkxPrivateRestConfig};
 use crate::services::participants::okx::rest::RestService;
 use crate::services::participants::okx::{
@@ -12,12 +17,6 @@ use crate::{
     ExternalOrderQuery, IndeterminateCommand, IntegrationError, OrderCommand, OrderEntryEvent,
     OrderEntryRequest, OrderQuery,
 };
-
-use super::order::{
-    amend_body, batch_acks, cancel_body, one_ack, validate_batch, OkxAmendOrderRequest,
-    OkxOrderIdentity, OkxOrderOperationAck,
-};
-use super::{history, OkxBillRecord, OkxFillRecord, OkxHistoryQuery};
 
 pub struct OkxPrivateRestConnection {
     service: RestService,
@@ -167,7 +166,7 @@ impl OkxPrivateRestConnection {
                     })
                     .collect::<Result<Vec<_>, IntegrationError>>()?;
                 Ok(CommandOutcome::Confirmed(outcomes))
-            }
+            },
             CommandOutcome::Rejected(error) => Ok(CommandOutcome::Rejected(error)),
             CommandOutcome::Indeterminate(error) => Ok(CommandOutcome::Indeterminate(error)),
         }
@@ -247,11 +246,11 @@ impl OrderCommand for OkxPrivateRestConnection {
         match self.post("/api/v5/trade/order", &body).await? {
             crate::CommandOutcome::Confirmed(payload) => {
                 normalize_order_submission(request, &payload)
-            }
+            },
             crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
             crate::CommandOutcome::Indeterminate(error) => {
                 Ok(crate::CommandOutcome::Indeterminate(error))
-            }
+            },
         }
     }
 
@@ -265,11 +264,11 @@ impl OrderCommand for OkxPrivateRestConnection {
         match self.post("/api/v5/trade/cancel-order", &body).await? {
             crate::CommandOutcome::Confirmed(payload) => {
                 normalize_order_cancellation(request, remote_order_id, at_unix_nanos, &payload)
-            }
+            },
             crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
             crate::CommandOutcome::Indeterminate(error) => {
                 Ok(crate::CommandOutcome::Indeterminate(error))
-            }
+            },
         }
     }
 }

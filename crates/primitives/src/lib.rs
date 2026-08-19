@@ -3,23 +3,38 @@
 //! Wire formats deliberately remain outside this crate. Adapters should use
 //! the fallible constructors and explicit accessors at contract boundaries.
 
+pub mod account;
+pub mod capital;
 mod decimal;
 mod error;
+pub mod execution;
 mod identity;
-mod reference;
-mod time;
-mod trading;
+pub mod integration;
+pub mod market;
+pub mod reference;
+pub mod risk;
+pub mod runtime;
+mod text;
+pub mod time;
 
+// Transitional root exports keep current callers compiling while imports move
+// to owner-qualified paths. They are not a second definition of these types.
+pub use account::*;
+pub use capital::*;
 pub use decimal::*;
 pub use error::*;
+pub use execution::*;
 pub use identity::*;
+pub use integration::*;
+pub use market::*;
 pub use reference::*;
+pub use risk::*;
+pub use runtime::*;
 pub use time::*;
-pub use trading::*;
 
 #[cfg(test)]
 mod tests {
-    use super::{BrokerId, Exchange, InstrumentId, ListingId, MarketId};
+    use super::{BrokerId, Exchange, InstrumentId, ListingId, MarketId, OrderId, ProviderId};
 
     #[test]
     fn spot_identity_keeps_asset_and_market_context_separate() {
@@ -44,6 +59,19 @@ mod tests {
         assert_eq!(BrokerId::new("binance").unwrap().as_str(), "binance");
         assert!(BrokerId::new("").is_err());
         assert!(BrokerId::new(" binance").is_err());
+    }
+
+    #[test]
+    fn text_identity_deserialization_enforces_constructor_invariants() {
+        assert!(serde_json::from_str::<MarketId>("\"\"").is_err());
+        assert!(serde_json::from_str::<BrokerId>("\" broker\"").is_err());
+        assert!(serde_json::from_str::<OrderId>("\"order-1 \"").is_err());
+        assert_eq!(
+            serde_json::from_str::<ProviderId>("\"provider:binance\"")
+                .unwrap()
+                .as_str(),
+            "provider:binance"
+        );
     }
 }
 
@@ -109,14 +137,18 @@ mod more_tests {
 
     #[test]
     fn increments_are_checked_with_exact_decimal_arithmetic() {
-        assert!(Quantity::new(125, 3)
-            .unwrap()
-            .is_multiple_of(Quantity::new(5, 3).unwrap())
-            .unwrap());
-        assert!(!Price::new(10_001, 2)
-            .unwrap()
-            .is_multiple_of(Price::new(5, 2).unwrap())
-            .unwrap());
+        assert!(
+            Quantity::new(125, 3)
+                .unwrap()
+                .is_multiple_of(Quantity::new(5, 3).unwrap())
+                .unwrap()
+        );
+        assert!(
+            !Price::new(10_001, 2)
+                .unwrap()
+                .is_multiple_of(Price::new(5, 2).unwrap())
+                .unwrap()
+        );
     }
 
     #[test]

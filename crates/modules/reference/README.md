@@ -180,5 +180,5 @@ not-found behavior, and SQLite query-plan checks for production indexes.
 
 ```text
 cargo test -p kairos-reference -p kairos-integration
-cargo fmt --all -- --check
+make rust-fmt-check
 ```

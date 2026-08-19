@@ -1,5 +1,6 @@
-use crate::domain::events::MarketEvent;
 use tokio::sync::mpsc::Sender;
+
+use crate::domain::events::MarketEvent;
 
 pub(crate) struct HistoryQueue {
     sender: Option<Sender<Vec<(u64, MarketEvent)>>>,

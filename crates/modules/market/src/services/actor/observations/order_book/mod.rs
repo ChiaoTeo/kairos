@@ -103,7 +103,7 @@ impl MarketActor {
 
     fn record_order_book_freshness(
         &mut self,
-        source_id: &str,
+        source_id: &crate::SourceId,
         market_id: &str,
         event_time_unix_nanos: u64,
         sequence: u64,
@@ -112,7 +112,7 @@ impl MarketActor {
         self.freshness.insert(
             format!("{source_id}:{market_id}:order_book"),
             MarketFreshness {
-                source_id: source_id.to_owned(),
+                source_id: source_id.clone(),
                 scope: crate::ObservationScope::market(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: crate::ObservationKind::OrderBook,

@@ -1,7 +1,8 @@
 //! Read-only order, fill, commitment, reservation, and audit use cases.
 
-use super::*;
 use kairos_primitives::FillId;
+
+use super::*;
 
 impl ExecutionApplication {
     pub(crate) fn simulated_settlement_fact(

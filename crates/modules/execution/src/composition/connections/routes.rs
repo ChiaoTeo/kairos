@@ -145,7 +145,7 @@ fn binance_route(
                 return Err("Binance isolated-margin route requires isolated_symbol".into());
             }
             family!(binance_margin_rest, binance_margin_user_websocket, "margin")
-        }
+        },
         "usd-m-futures" => family!(binance_usdm_rest, binance_usdm_user_websocket, "usdm"),
         "coin-m-futures" => family!(binance_coinm_rest, binance_coinm_user_websocket, "coinm"),
         "options" => family!(
@@ -155,7 +155,7 @@ fn binance_route(
         ),
         "equity" | "stocks" => {
             family!(binance_stocks_rest, binance_stocks_user_websocket, "stocks")
-        }
+        },
         _ => Err(format!("unsupported Binance execution product: {product}")),
     }
 }

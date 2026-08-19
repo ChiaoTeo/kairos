@@ -5,7 +5,8 @@ use serde_json::{Map, Value};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::binance::{BinanceCredential, BinanceWebSocketConfig};
-use crate::services::participants::binance::{signing::sign_query, socket::SocketService};
+use crate::services::participants::binance::signing::sign_query;
+use crate::services::participants::binance::socket::SocketService;
 use crate::{ConnectionDescriptor, ConnectionHealth, IntegrationError, ParticipantRejection};
 
 /// Reusable signed request/response protocol used by concrete Binance

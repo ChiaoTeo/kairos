@@ -4,8 +4,10 @@
 //! render. Keeping the format and generic rendering here prevents each
 //! canonical binary from inventing a different text/table representation.
 
+use std::fmt;
+use std::str::FromStr;
+
 use serde_json::Value;
-use std::{fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -53,7 +55,7 @@ pub fn render(value: &Value, format: OutputFormat) -> String {
             let mut output = String::new();
             render_text(value, "", &mut output);
             output.trim_end_matches('\n').to_owned()
-        }
+        },
         OutputFormat::Table => render_table(value),
     }
 }
@@ -69,12 +71,12 @@ fn render_text(value: &Value, prefix: &str, output: &mut String) {
                 };
                 render_text(value, &name, output);
             }
-        }
+        },
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
                 render_text(value, &format!("{prefix}[{index}]"), output);
             }
-        }
+        },
         _ => output.push_str(&format!("{prefix}: {value}\n")),
     }
 }
@@ -87,7 +89,7 @@ fn render_table(value: &Value) -> String {
                 .map(|(key, value)| vec![key.clone(), cell(value)])
                 .collect::<Vec<_>>();
             ascii_table(&["key", "value"], &rows)
-        }
+        },
         Value::Array(values) if values.is_empty() => String::new(),
         Value::Array(values) if values.iter().all(Value::is_object) => {
             let mut keys = values
@@ -112,7 +114,7 @@ fn render_table(value: &Value) -> String {
                 .collect::<Vec<_>>();
             let headers = keys.iter().map(String::as_str).collect::<Vec<_>>();
             ascii_table(&headers, &rows)
-        }
+        },
         Value::Array(values) => ascii_table(
             &["value"],
             &values
@@ -175,9 +177,11 @@ fn ascii_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render, OutputFormat};
-    use serde_json::json;
     use std::str::FromStr;
+
+    use serde_json::json;
+
+    use super::{OutputFormat, render};
 
     #[test]
     fn parses_all_supported_formats() {

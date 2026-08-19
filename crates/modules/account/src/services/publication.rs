@@ -2,11 +2,11 @@
 
 use flatbuffers::FlatBufferBuilder;
 use kairos_account_contract::{
-    event_metadata, view_metadata, AccountViewKey, AccountViewKind, EncodeContext,
+    AccountViewKey, AccountViewKind, EncodeContext, event_metadata, view_metadata,
 };
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::account::v_2 as account_fb;
 use kairos_protocol::generated::kairos::common::v_2::{self as common_fb, Decimal64};
-use kairos_protocol::InstanceIdentity;
 
 use crate::application::{
     AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentCompleteness,
@@ -54,7 +54,7 @@ pub(crate) fn encode_account_current_view(
         identity.clone(),
         view.generation.get(),
         key.canonical_key(),
-    )
+    )?
     .with_applied_revision(view.event_sequence.get());
     let metadata = view_metadata(
         &mut builder,
@@ -109,7 +109,7 @@ pub(crate) fn encode_observed_orders_current_view(
         identity.clone(),
         view.generation.get(),
         key.canonical_key(),
-    )
+    )?
     .with_applied_revision(view.event_sequence.get());
     let metadata = view_metadata(
         &mut builder,
@@ -303,7 +303,7 @@ fn encode_earn_holding<'a>(
         crate::domain::EarnHoldingState::Active => (account_fb::EarnHoldingState::ACTIVE, None),
         crate::domain::EarnHoldingState::Redeeming => {
             (account_fb::EarnHoldingState::REDEEMING, None)
-        }
+        },
         crate::domain::EarnHoldingState::Redeemed => (account_fb::EarnHoldingState::REDEEMED, None),
         crate::domain::EarnHoldingState::Unknown(raw) => (
             account_fb::EarnHoldingState::UNKNOWN,
@@ -313,10 +313,10 @@ fn encode_earn_holding<'a>(
     let (liquidity, notice_seconds, matures_at) = match value.liquidity {
         crate::domain::EarnHoldingLiquidity::Immediate => {
             (account_fb::EarnLiquidity::IMMEDIATE, 0, 0)
-        }
+        },
         crate::domain::EarnHoldingLiquidity::Notice { notice_seconds } => {
             (account_fb::EarnLiquidity::NOTICE, notice_seconds, 0)
-        }
+        },
         crate::domain::EarnHoldingLiquidity::FixedTerm {
             matures_at_unix_nanos,
         } => (
@@ -484,7 +484,7 @@ pub(crate) fn encode_business_change(
         identity.clone(),
         event.sequence.get(),
         format!("account:{}:{}", event.sequence.get(), index),
-    );
+    )?;
     let metadata = event_metadata(&mut builder, &context, event.occurred_at_unix_nanos.get());
     let account_id = builder.create_string(event.account_id.as_str());
     let provenance = event
@@ -506,7 +506,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_balance_upserted_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::BalanceRemoved {
             segment_key,
             asset_id,
@@ -524,7 +524,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_balance_removed_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::Position { segment_key, value } => {
             let segment_key = builder.create_string(segment_key.as_str());
             let position = encode_position(&mut builder, value);
@@ -539,7 +539,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_position_upserted_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::PositionRemoved {
             segment_key,
             instrument_id,
@@ -566,7 +566,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_position_removed_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::EarnHolding { segment_key, value } => {
             let segment_key = builder.create_string(segment_key.as_str());
             let holding = encode_earn_holding(&mut builder, value);
@@ -581,7 +581,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_earn_holding_upserted_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::EarnHoldingRemoved {
             segment_key,
             holding_key,
@@ -599,7 +599,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_earn_holding_removed_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::ObservedOrder { segment_key, value } => {
             let segment_key = builder.create_string(segment_key.as_str());
             let order = encode_observed_order(
@@ -619,7 +619,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_observed_order_upserted_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::ObservedOrderRemoved {
             segment_key,
             order_id,
@@ -646,7 +646,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_observed_order_removed_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::Equity { segment_key, value } => {
             let segment_key = builder.create_string(segment_key.as_str());
             let valuation =
@@ -662,7 +662,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_valuation_changed_buffer(&mut builder, root);
-        }
+        },
         AccountBusinessChange::Status {
             segment_key,
             status,
@@ -686,7 +686,7 @@ pub(crate) fn encode_business_change(
                 },
             );
             account_fb::finish_account_status_changed_buffer(&mut builder, root);
-        }
+        },
     }
     Ok(builder.finished_data().to_vec())
 }
@@ -861,7 +861,7 @@ fn account_model(value: AccountModel) -> account_fb::AccountModel {
         AccountModel::PortfolioMargin => account_fb::AccountModel::PORTFOLIO_MARGIN,
         AccountModel::Contract | AccountModel::ContractUnified => {
             account_fb::AccountModel::UNSPECIFIED
-        }
+        },
     }
 }
 
@@ -869,10 +869,10 @@ fn observed_order_status(value: kairos_primitives::OrderStatus) -> account_fb::O
     match value {
         kairos_primitives::OrderStatus::Acknowledged | kairos_primitives::OrderStatus::Accepted => {
             account_fb::ObservedOrderStatus::OPEN
-        }
+        },
         kairos_primitives::OrderStatus::PartiallyFilled => {
             account_fb::ObservedOrderStatus::PARTIALLY_FILLED
-        }
+        },
         kairos_primitives::OrderStatus::Canceled
         | kairos_primitives::OrderStatus::Filled
         | kairos_primitives::OrderStatus::Rejected
@@ -928,7 +928,7 @@ fn segment_sync_mode(value: AccountSegmentSyncMode) -> account_fb::SegmentSyncMo
         AccountSegmentSyncMode::Unknown => account_fb::SegmentSyncMode::UNSPECIFIED,
         AccountSegmentSyncMode::SnapshotThenStream => {
             account_fb::SegmentSyncMode::SNAPSHOT_THEN_STREAM
-        }
+        },
         AccountSegmentSyncMode::SnapshotOnly => account_fb::SegmentSyncMode::SNAPSHOT_ONLY,
     }
 }
@@ -938,11 +938,11 @@ fn segment_sync_lifecycle(value: AccountSegmentSyncLifecycle) -> account_fb::Seg
         AccountSegmentSyncLifecycle::Configured => account_fb::SegmentSyncLifecycle::CONFIGURED,
         AccountSegmentSyncLifecycle::Bootstrapping => {
             account_fb::SegmentSyncLifecycle::BOOTSTRAPPING
-        }
+        },
         AccountSegmentSyncLifecycle::Live => account_fb::SegmentSyncLifecycle::LIVE,
         AccountSegmentSyncLifecycle::SnapshotCurrent => {
             account_fb::SegmentSyncLifecycle::SNAPSHOT_CURRENT
-        }
+        },
         AccountSegmentSyncLifecycle::Degraded => account_fb::SegmentSyncLifecycle::DEGRADED,
         AccountSegmentSyncLifecycle::Resyncing => account_fb::SegmentSyncLifecycle::RESYNCING,
         AccountSegmentSyncLifecycle::Unavailable => account_fb::SegmentSyncLifecycle::UNAVAILABLE,

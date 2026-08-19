@@ -40,9 +40,9 @@ impl AccountActor {
                         "one Account Actor cannot own multiple account ids: {account_id} and {}",
                         segment.identity.account_id
                     ));
-                }
+                },
                 None => owner_account_id = Some(segment.identity.account_id.clone()),
-                _ => {}
+                _ => {},
             }
             let key = segment.segment_key.clone();
             if accounts.contains_key(&key) {
@@ -153,7 +153,7 @@ impl AccountActor {
                 account
                     .apply_snapshot(snapshot)
                     .map_err(|error| error.to_string())
-            }
+            },
             AccountEvent::EarnHoldings(snapshot) => {
                 let account = self
                     .accounts
@@ -167,13 +167,13 @@ impl AccountActor {
                 account
                     .apply_earn_snapshot(snapshot)
                     .map_err(|error| error.to_string())
-            }
+            },
             AccountEvent::Fill(fill) => {
                 let account = self.accounts.get_mut(&fill.segment_key).ok_or_else(|| {
                     format!("fill segment is not configured: {}", fill.segment_key)
                 })?;
                 account.record_fill(fill).map_err(|error| error.to_string())
-            }
+            },
             AccountEvent::ObservedFill(fill) => {
                 let account = self.accounts.get_mut(&fill.segment_key).ok_or_else(|| {
                     format!(
@@ -184,7 +184,7 @@ impl AccountActor {
                 account
                     .observe_fill(fill)
                     .map_err(|error| error.to_string())
-            }
+            },
             AccountEvent::OrderObserved(observation) => {
                 let Some(account) = self.accounts.values_mut().find(|account| {
                     account
@@ -195,7 +195,7 @@ impl AccountActor {
                     return Ok(ApplyOutcome::NoChange);
                 };
                 Ok(account.apply_order_observation(observation))
-            }
+            },
             AccountEvent::Batch(_) => Err("nested account event batch is not supported".into()),
         }
     }
@@ -286,7 +286,7 @@ impl AccountActor {
 
     pub fn current_view(&self) -> AccountCurrentView {
         AccountCurrentView {
-            actor_id: kairos_primitives::ActorId::new(self.actor_id.clone()).unwrap(),
+            actor_id: kairos_primitives::runtime::ActorId::new(self.actor_id.clone()).unwrap(),
             generation: self.generation,
             event_sequence: self.event_sequence,
             segments: self
@@ -523,7 +523,7 @@ fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_acco
             for event in events {
                 collect_event_keys(event, keys, all_accounts);
             }
-        }
+        },
     }
 }
 

@@ -1,17 +1,16 @@
-use super::{
-    simulated::SimulatedRiskReservations, SimulatedRiskBehavior, SocketExecutionRiskReservations,
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use kairos_primitives::{Money, UnixNanos};
+
+use super::simulated::SimulatedRiskReservations;
+use super::{SimulatedRiskBehavior, SocketExecutionRiskReservations};
 use crate::application::{
     RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
 };
 use crate::domain::RiskReservationEvidence;
-use kairos_primitives::{Money, UnixNanos};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use std::thread::JoinHandle;
-use std::time::Duration;
 
 enum RiskRequest {
     Authorize(
@@ -151,19 +150,19 @@ impl QueuedExecutionRiskReservations {
             match request {
                 RiskRequest::Authorize(request, context, reply) => {
                     let _ = reply.send(inner.authorize(&request, &context));
-                }
+                },
                 RiskRequest::Reconcile(evidence, reply) => {
                     let _ = reply.send(inner.reconcile(&evidence));
-                }
+                },
                 RiskRequest::Resize(evidence, amount, at, reply) => {
                     let _ = reply.send(inner.resize(&evidence, amount, at));
-                }
+                },
                 RiskRequest::Release(evidence, at, reply) => {
                     let _ = reply.send(inner.release(&evidence, at));
-                }
+                },
                 RiskRequest::Consume(evidence, at, reply) => {
                     let _ = reply.send(inner.consume(&evidence, at));
-                }
+                },
             }
         }
     }

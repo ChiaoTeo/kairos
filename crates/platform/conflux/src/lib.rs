@@ -24,37 +24,37 @@ pub use kairos_integration::blocking::{
     OrderCommand as BlockingOrderCommand, OrderQuery as BlockingOrderQuery,
 };
 pub use kairos_integration::composition::credentials::{
-    load_workspace_credential, CredentialRecord, CredentialStore,
+    CredentialRecord, CredentialStore, load_workspace_credential,
+};
+pub use kairos_integration::participants::binance::advanced::stocks::{
+    BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
+    BinanceStocksWebSocketConnection,
+};
+pub use kairos_integration::participants::binance::coinm::{
+    BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
+    BinanceCoinMWebSocketConnection,
+};
+pub use kairos_integration::participants::binance::earn::BinanceSimpleEarnRestConnection;
+pub use kairos_integration::participants::binance::funding::BinanceFundingRestConnection;
+pub use kairos_integration::participants::binance::margin::{
+    BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection,
+};
+pub use kairos_integration::participants::binance::options::{
+    BinanceOptionsRestConnection, BinanceOptionsUserWebSocketConnection,
+    BinanceOptionsWebSocketConnection,
+};
+pub use kairos_integration::participants::binance::spot::{
+    BinanceSpotRestConnection, BinanceSpotUserWebSocketConnection, BinanceSpotWebSocketConnection,
+};
+pub use kairos_integration::participants::binance::usdm::{
+    BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection, BinanceUsdMWebSocketConnection,
 };
 pub use kairos_integration::participants::binance::{
-    advanced::stocks::{
-        BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
-        BinanceStocksWebSocketConnection,
-    },
-    coinm::{
-        BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
-        BinanceCoinMWebSocketConnection,
-    },
-    earn::BinanceSimpleEarnRestConnection,
-    funding::BinanceFundingRestConnection,
-    margin::{BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection},
-    options::{
-        BinanceOptionsRestConnection, BinanceOptionsUserWebSocketConnection,
-        BinanceOptionsWebSocketConnection,
-    },
-    spot::{
-        BinanceSpotRestConnection, BinanceSpotUserWebSocketConnection,
-        BinanceSpotWebSocketConnection,
-    },
-    usdm::{
-        BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection,
-        BinanceUsdMWebSocketConnection,
-    },
     BinanceCredential, BinanceRestConfig, BinanceUserWebSocketConfig, BinanceWebSocketConfig,
 };
+pub use kairos_integration::participants::hyperliquid::info::HyperliquidInfoRestConnection;
 pub use kairos_integration::participants::hyperliquid::{
-    info::HyperliquidInfoRestConnection, HyperliquidRestConfig, HyperliquidWebSocketConfig,
-    HyperliquidWebSocketConnection,
+    HyperliquidRestConfig, HyperliquidWebSocketConfig, HyperliquidWebSocketConnection,
 };
 pub use kairos_integration::participants::ibkr::{
     IbkrAccountQueryConfig, IbkrAccountQueryConnection, IbkrAccountStreamConfig,

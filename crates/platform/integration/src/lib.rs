@@ -13,9 +13,13 @@ pub mod participants;
 pub(crate) mod services;
 pub(crate) mod transport;
 
-pub use capabilities::{
-    account::*, connection::*, earn::*, event::*, execution::*, market::*, reference::*,
-    transfer::*,
-};
+pub use capabilities::account::*;
+pub use capabilities::connection::*;
+pub use capabilities::earn::*;
+pub use capabilities::event::*;
+pub use capabilities::execution::*;
+pub use capabilities::market::*;
+pub use capabilities::reference::*;
+pub use capabilities::transfer::*;
 pub use domain::*;
 pub use error::{CommandResult, IntegrationError};

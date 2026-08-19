@@ -1,4 +1,6 @@
-use crate::composition::{build_application, ReferenceCompositionConfig};
+use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
+
+use crate::composition::{ReferenceCompositionConfig, build_application};
 use crate::domain::{Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult};
 use crate::services::source::ReferenceSource;
 use crate::services::sqlx_storage::SqlxCatalogStore;
@@ -6,7 +8,6 @@ use crate::{
     LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
     ReferenceRecord, UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand,
 };
-use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
 struct TestSource {
     catalog: ProviderCatalog,
@@ -96,7 +97,7 @@ fn provider_catalog() -> ProviderCatalog {
         assets: vec![
             Asset {
                 asset_id: asset_id("asset:BTC"),
-                code: "BTC".into(),
+                code: symbol("BTC"),
                 name: Some("Bitcoin".into()),
                 asset_class: kairos_primitives::AssetClass::Crypto,
                 status: "active".into(),
@@ -104,7 +105,7 @@ fn provider_catalog() -> ProviderCatalog {
             },
             Asset {
                 asset_id: asset_id("asset:USDT"),
-                code: "USDT".into(),
+                code: symbol("USDT"),
                 asset_class: kairos_primitives::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
@@ -237,7 +238,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
     let generation = application
         .upsert_asset(UpsertAssetCommand {
             asset_id: asset_id("asset:sol"),
-            code: "SOL".into(),
+            code: symbol("SOL"),
             asset_class: kairos_primitives::AssetClass::Crypto,
             status: "active".into(),
             name: None,
@@ -320,9 +321,10 @@ async fn application_query_covers_each_reference_record_kind() {
         text: Some("binance".into()),
         ..ReferenceQuery::default()
     });
-    assert!(all
-        .iter()
-        .any(|record| matches!(record, ReferenceRecord::Entity(_))));
+    assert!(
+        all.iter()
+            .any(|record| matches!(record, ReferenceRecord::Entity(_)))
+    );
     let asset_events = application.query(&ReferenceQuery {
         kind: ReferenceKind::Event,
         record_kind: Some("asset".into()),
@@ -384,10 +386,10 @@ async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
     assert!(events.iter().any(
         |event| event.event_type == "listed" && event.record_kind.as_deref() == Some("market")
     ));
-    assert!(events
-        .iter()
-        .any(|event| event.event_type == "delisted"
-            && event.record_kind.as_deref() == Some("market")));
+    assert!(
+        events.iter().any(|event| event.event_type == "delisted"
+            && event.record_kind.as_deref() == Some("market"))
+    );
 
     let delisted = application
         .lifecycle_events(&LifecycleQuery {

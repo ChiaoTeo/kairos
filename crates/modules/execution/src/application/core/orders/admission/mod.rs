@@ -33,24 +33,12 @@ pub(crate) fn validate_reference_rules(
     ) {
         return Err("instrument or market is not tradable".into());
     }
-    if let Some(minimum) = market
-        .minimum_quantity
-        .as_deref()
-        .map(str::parse::<Quantity>)
-        .transpose()
-        .map_err(|error| error.to_string())?
-    {
+    if let Some(minimum) = market.minimum_quantity {
         if request.quantity < minimum {
             return Err("order quantity is below the market minimum".into());
         }
     }
-    if let Some(tick) = market
-        .quantity_tick
-        .as_deref()
-        .map(str::parse::<Quantity>)
-        .transpose()
-        .map_err(|error| error.to_string())?
-    {
+    if let Some(tick) = market.quantity_tick {
         if !request
             .quantity
             .is_multiple_of(tick)
@@ -60,13 +48,7 @@ pub(crate) fn validate_reference_rules(
         }
     }
     if let Some(price_value) = request.limit_price {
-        if let Some(tick) = market
-            .price_tick
-            .as_deref()
-            .map(str::parse::<Price>)
-            .transpose()
-            .map_err(|error| error.to_string())?
-        {
+        if let Some(tick) = market.price_tick {
             if !price_value
                 .is_multiple_of(tick)
                 .map_err(|error| error.to_string())?
@@ -74,13 +56,7 @@ pub(crate) fn validate_reference_rules(
                 return Err("order price violates tick size".into());
             }
         }
-        if let Some(minimum) = market
-            .minimum_notional
-            .as_deref()
-            .map(str::parse::<Money>)
-            .transpose()
-            .map_err(|error| error.to_string())?
-        {
+        if let Some(minimum) = market.minimum_notional {
             if price_value
                 .checked_mul(request.quantity)
                 .map_err(|error| error.to_string())?
@@ -389,8 +365,9 @@ pub(crate) fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_available_capacity;
     use rust_decimal::Decimal;
+
+    use super::ensure_available_capacity;
 
     #[test]
     fn active_commitments_reduce_effective_available_capacity() {

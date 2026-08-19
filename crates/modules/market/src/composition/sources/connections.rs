@@ -1,14 +1,10 @@
 use std::path::Path;
 
 use kairos_conflux::{
-    load_workspace_credential, BinanceCredential, BinanceRestConfig, BinanceWebSocketConfig,
-    ConfluxSystem, ConnectionKey, HyperliquidRestConfig, HyperliquidWebSocketConfig,
-    IbkrMarketDataConfig, MassiveWebSocketConfig, OkxRestConfig, OkxWebSocketConfig,
+    BinanceCredential, BinanceRestConfig, BinanceWebSocketConfig, ConfluxSystem, ConnectionKey,
+    HyperliquidRestConfig, HyperliquidWebSocketConfig, IbkrMarketDataConfig,
+    MassiveWebSocketConfig, OkxRestConfig, OkxWebSocketConfig, load_workspace_credential,
 };
-
-use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
-use crate::domain::source::{SourceDescriptor, SourceId};
-use crate::ObservationKind;
 
 use super::super::config::{
     BinanceDerivativeProduct, BinanceDerivativeTransport, BinanceSpotTransport,
@@ -16,6 +12,9 @@ use super::super::config::{
     PublicMarketTransport,
 };
 use super::{default_endpoint, positive_interval};
+use crate::ObservationKind;
+use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
+use crate::domain::source::{SourceDescriptor, SourceId};
 
 pub(crate) fn install(
     system: &mut ConfluxSystem,
@@ -86,7 +85,7 @@ fn install_one(
                             *snapshot_interval_ms,
                         )?),
                     });
-                }
+                },
                 BinanceSpotTransport::Websocket => {
                     system
                         .connections()
@@ -107,9 +106,9 @@ fn install_one(
                         descriptor,
                         mode: MarketSourceMode::MarketScopedStream,
                     });
-                }
+                },
             }
-        }
+        },
         MarketSourceBinding::BinanceEquity {
             credential_id,
             endpoint,
@@ -152,7 +151,7 @@ fn install_one(
                     *snapshot_interval_ms,
                 )?),
             });
-        }
+        },
         MarketSourceBinding::BinanceDerivatives {
             product,
             transport,
@@ -215,7 +214,7 @@ fn install_one(
                             *snapshot_interval_ms,
                         )?),
                     });
-                }
+                },
                 BinanceDerivativeTransport::Websocket => {
                     let config = BinanceWebSocketConfig {
                         environment: "public".into(),
@@ -244,9 +243,9 @@ fn install_one(
                         descriptor,
                         mode: MarketSourceMode::MarketScopedStream,
                     });
-                }
+                },
             }
-        }
+        },
         MarketSourceBinding::Okx {
             instrument_type,
             transport,
@@ -288,7 +287,7 @@ fn install_one(
                             *snapshot_interval_ms,
                         )?),
                     });
-                }
+                },
                 PublicMarketTransport::Websocket => {
                     system
                         .connections()
@@ -314,9 +313,9 @@ fn install_one(
                         )?,
                         mode: MarketSourceMode::Stream,
                     });
-                }
+                },
             }
-        }
+        },
         MarketSourceBinding::Hyperliquid {
             market_type,
             transport,
@@ -356,7 +355,7 @@ fn install_one(
                             *snapshot_interval_ms,
                         )?),
                     });
-                }
+                },
                 PublicMarketTransport::Websocket => {
                     system
                         .connections()
@@ -383,9 +382,9 @@ fn install_one(
                         )?,
                         mode: MarketSourceMode::Stream,
                     });
-                }
+                },
             }
-        }
+        },
         MarketSourceBinding::Massive {
             product,
             credential_id,
@@ -438,7 +437,7 @@ fn install_one(
                 ]),
                 mode: MarketSourceMode::Stream,
             });
-        }
+        },
         MarketSourceBinding::Ibkr {
             host,
             port,
@@ -480,7 +479,7 @@ fn install_one(
                     *snapshot_interval_ms,
                 )?),
             });
-        }
+        },
     }
     Ok(())
 }

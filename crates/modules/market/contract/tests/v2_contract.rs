@@ -1,4 +1,4 @@
-use kairos_market_contract::{market_view_path, MarketViewKey, MarketViewKind};
+use kairos_market_contract::{MarketViewKey, MarketViewKind, market_view_path};
 
 #[test]
 fn mmap_resources_are_isolated_by_market_source_and_view() {
@@ -20,14 +20,18 @@ fn mmap_resources_are_isolated_by_market_source_and_view() {
         market_view_path("/runtime", &quote).unwrap(),
         market_view_path("/runtime", &bar).unwrap()
     );
-    assert!(market_view_path("/runtime", &quote)
-        .unwrap()
-        .to_string_lossy()
-        .ends_with(".e1.mmap"));
-    assert!(market_view_path("/runtime", &bar)
-        .unwrap()
-        .to_string_lossy()
-        .ends_with(".e1.mmap"));
+    assert!(
+        market_view_path("/runtime", &quote)
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".e1.mmap")
+    );
+    assert!(
+        market_view_path("/runtime", &bar)
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".e1.mmap")
+    );
     assert!(quote.resource_id().contains("quote"));
     assert!(bar.resource_id().contains("bar"));
 }

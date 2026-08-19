@@ -1,22 +1,19 @@
-use std::{
-    io,
-    os::unix::fs::FileTypeExt,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::io;
+use std::os::unix::fs::FileTypeExt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use axum::{
-    extract::{Path as RoutePath, State},
-    http::StatusCode,
-    response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
-};
+use axum::extract::{Path as RoutePath, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use http_body_util::{BodyExt, Full};
-use hyper::{body::Bytes, Request, Uri};
+use hyper::body::Bytes;
+use hyper::{Request, Uri};
 use hyperlocal_next::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::UnixListener;
 
 pub const CONTROL_API_VERSION: &str = "v1";
@@ -259,9 +256,12 @@ fn unix_nanos() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use tokio::time::timeout;
+
+    use super::*;
 
     #[tokio::test]
     async fn rest_round_trip_over_unix_socket() {

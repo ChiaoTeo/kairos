@@ -1,10 +1,11 @@
+use kairos_primitives::{ClientOrderId, OrderId, RemoteOrderId, Symbol, UnixNanos};
+use serde_json::Value;
+
 use crate::{
     CommandOutcome, DecimalValue, ExternalOrder, IndeterminateCommand, IntegrationError,
     OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
     ParticipantRejection,
 };
-use kairos_primitives::{ClientOrderId, OrderId, RemoteOrderId, Symbol, UnixNanos};
-use serde_json::Value;
 pub(crate) fn submitted_outcome(
     request: &OrderEntryRequest,
     outcome: CommandOutcome<Value>,
@@ -183,7 +184,7 @@ pub(crate) fn submitted_batch_outcome(
                     )
                     .collect::<Result<Vec<_>, _>>()?,
             ))
-        }
+        },
     }
 }
 
@@ -217,7 +218,7 @@ pub(crate) fn canceled_batch_outcome(
                     )
                     .collect::<Result<Vec<_>, _>>()?,
             ))
-        }
+        },
     }
 }
 pub(crate) fn submitted(

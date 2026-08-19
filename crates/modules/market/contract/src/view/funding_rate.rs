@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use kairos_protocol::generated::kairos::market::v_2 as fb;
+
+use crate::{ContractError, ContractResult};
 pub type FundingRateLatestView<'a> = fb::FundingRateLatestView<'a>;
 pub fn decode(bytes: &[u8]) -> ContractResult<FundingRateLatestView<'_>> {
     if !fb::funding_rate_latest_view_buffer_has_identifier(bytes) {

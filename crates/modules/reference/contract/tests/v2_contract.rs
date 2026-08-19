@@ -1,12 +1,13 @@
 use flatbuffers::FlatBufferBuilder;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, EventMetadataArgs};
 use kairos_protocol::generated::kairos::reference::v_2::{
-    finish_market_upserted_buffer, Market as FbMarket, MarketArgs, MarketUpserted,
-    MarketUpsertedArgs,
+    Market as FbMarket, MarketArgs, MarketUpserted, MarketUpsertedArgs,
+    finish_market_upserted_buffer,
 };
-use kairos_protocol::InstanceIdentity;
-use kairos_reference_contract::Market;
-use kairos_reference_contract::{decode_event, EncodeContext, ReferenceEncoder, ReferenceEvent};
+use kairos_reference_contract::{
+    EncodeContext, Market, ReferenceEncoder, ReferenceEvent, decode_event,
+};
 
 #[test]
 fn decodes_a_typed_reference_v2_event() {
@@ -61,7 +62,7 @@ fn decodes_a_typed_reference_v2_event() {
             assert_eq!(event.catalog_revision(), 3);
             assert_eq!(event.metadata().sequence(), 1);
             assert_eq!(event.market().market_id(), "market:binance:spot:BTCUSDT");
-        }
+        },
         _ => panic!("unexpected Reference event variant"),
     }
 }
@@ -74,15 +75,17 @@ fn rejects_non_reference_v2_payloads() {
 #[test]
 fn encoder_emits_typed_market_upsert_without_json_adapter() {
     let market = kairos_reference_contract::Market {
-        market_id: "market:binance:spot:BTCUSDT".into(),
-        instrument_id: "instrument:spot:BTC".into(),
-        listing_id: Some("listing:binance:spot:BTCUSDT".into()),
-        exchange_id: "exchange:binance".into(),
+        market_id: kairos_primitives::MarketId::new("market:binance:spot:BTCUSDT").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:spot:BTC").unwrap(),
+        listing_id: Some(
+            kairos_primitives::ListingId::new("listing:binance:spot:BTCUSDT").unwrap(),
+        ),
+        exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
         instrument_kind: kairos_primitives::InstrumentKind::Spot,
-        venue_symbol: Some("BTCUSDT".into()),
-        status: "active".into(),
-        price_tick: Some("0.01".into()),
-        quantity_tick: Some("0.00001".into()),
+        venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+        status: kairos_primitives::ReferenceStatus::Active,
+        price_tick: Some("0.01".parse().unwrap()),
+        quantity_tick: Some("0.00001".parse().unwrap()),
         ..Market::default()
     };
     let context = EncodeContext::event(
@@ -91,7 +94,8 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
         7,
         "reference:event:7",
         3,
-    );
+    )
+    .expect("valid reference event encoding context");
     let payload = ReferenceEncoder::market_upserted(&market, &context, 42)
         .expect("encode typed Reference market event");
     match decode_event(&payload).expect("decode typed Reference market event") {
@@ -101,7 +105,7 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
             assert_eq!(event.market().status().variant_name(), Some("ACTIVE"));
             assert_eq!(event.market().price_tick().unwrap().mantissa(), 1);
             assert_eq!(event.market().price_tick().unwrap().scale(), 2);
-        }
+        },
         _ => panic!("unexpected Reference event variant"),
     }
 }
@@ -109,30 +113,30 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
 #[test]
 fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
     let active_market = Market {
-        market_id: "market:active".into(),
-        instrument_id: "instrument:active".into(),
-        status: "active".into(),
+        market_id: kairos_primitives::MarketId::new("market:active").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:active").unwrap(),
+        status: kairos_primitives::ReferenceStatus::Active,
         ..Default::default()
     };
     let inactive_market = Market {
-        market_id: "market:inactive".into(),
-        instrument_id: "instrument:inactive".into(),
-        status: "inactive".into(),
+        market_id: kairos_primitives::MarketId::new("market:inactive").unwrap(),
+        instrument_id: kairos_primitives::InstrumentId::new("instrument:inactive").unwrap(),
+        status: kairos_primitives::ReferenceStatus::Inactive,
         ..Default::default()
     };
     let snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
         actor_id: "reference-actor".into(),
-        generation: 9,
-        event_sequence: 14,
+        generation: 9.into(),
+        event_sequence: 14.into(),
         instruments: vec![
             kairos_reference_contract::Instrument {
-                instrument_id: "instrument:active".into(),
-                status: "active".into(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:active").unwrap(),
+                status: kairos_primitives::ReferenceStatus::Active,
                 ..Default::default()
             },
             kairos_reference_contract::Instrument {
-                instrument_id: "instrument:inactive".into(),
-                status: "inactive".into(),
+                instrument_id: kairos_primitives::InstrumentId::new("instrument:inactive").unwrap(),
+                status: kairos_primitives::ReferenceStatus::Inactive,
                 ..Default::default()
             },
         ],
@@ -144,7 +148,10 @@ fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
     };
 
     let market = snapshot.market_projection();
-    assert_eq!((market.generation, market.event_sequence), (9, 14));
+    assert_eq!(
+        (market.generation, market.event_sequence),
+        (9.into(), 14.into())
+    );
     assert_eq!(market.markets.len(), 1);
     assert_eq!(market.instruments.len(), 1);
     assert!(market.provider_health.is_empty());

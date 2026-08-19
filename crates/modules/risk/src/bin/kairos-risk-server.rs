@@ -1,11 +1,11 @@
-use clap::Parser;
-use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kairos_risk::composition::{build_risk_host, RiskHostConfig};
+use clap::Parser;
+use kairos_risk::composition::{RiskHostConfig, build_risk_host};
 use kairos_risk::{Amount, EnforcementMode, Metric, PolicyScope, RiskPolicy};
 use kairos_workspace::workspace::Workspace;
+use serde::Deserialize;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -27,11 +27,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = Workspace::open(args.workspace)?;
     let instance = workspace.instance(&args.launch_mode, &args.launch_id, &args.instance_id)?;
     instance.prepare()?;
-    let transport_identity = kairos_protocol::InstanceIdentity::new(
+    let transport_identity = kairos_primitives::runtime::InstanceIdentity::new(
         workspace.id(),
         instance.launch_id(),
         instance.instance_id(),
-    );
+    )?;
     let _process_lock = instance.process_lock("risk")?;
     let socket = instance.socket("risk")?;
     let health = instance.health("risk")?;

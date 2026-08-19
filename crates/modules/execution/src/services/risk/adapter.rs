@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::{Money, StrategyId, UnixNanos};
-use kairos_protocol::generated::kairos::{
-    common::v_2::ViewCompleteness, risk::v_2::ReservationStatus as RiskViewReservationStatus,
+use kairos_primitives::{
+    Generation, IdempotencyKey, Money, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
 };
+use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
+use kairos_protocol::generated::kairos::risk::v_2::ReservationStatus as RiskViewReservationStatus;
 use kairos_risk_contract::{
     Amount, AuthorizeRequest, ContractError, RiskContext, RiskControlClient, TradeRiskProposal,
 };
@@ -60,21 +61,21 @@ impl SocketExecutionRiskReservations {
         request: &SubmitOrder,
         context: &RiskAuthorizationContext,
     ) -> RiskCommandResult<RiskReservationEvidence> {
-        let reservation_id = format!("execution:{}", request.order_id);
+        let reservation_id = ReservationId::new(format!("execution:{}", request.order_id))
+            .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?;
         let amount = notional_amount(request).map_err(RiskCommandFailure::NotSent)?;
         let now = request
             .submitted_at_unix_nanos
-            .map(UnixNanos::get)
-            .unwrap_or_else(now_unix_nanos);
+            .unwrap_or_else(|| UnixNanos::new(now_unix_nanos()));
         if self.skip_authorization {
             return evidence(
                 request,
                 reservation_id,
                 amount,
-                0,
-                0,
-                0,
-                now.saturating_add(self.reservation_ttl_nanos),
+                Generation::default(),
+                Sequence::default(),
+                Generation::default(),
+                now + self.reservation_ttl_nanos,
                 now,
             )
             .map_err(RiskCommandFailure::NotSent);
@@ -99,28 +100,30 @@ impl SocketExecutionRiskReservations {
         let decision = self
             .client()?
             .authorize_and_reserve(&AuthorizeRequest {
-                request_id: request.order_id.to_string(),
-                idempotency_key: reservation_id.clone(),
+                request_id: RequestId::new(request.order_id.to_string())
+                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+                idempotency_key: IdempotencyKey::new(reservation_id.to_string())
+                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
                 reservation_id: reservation_id.clone(),
-                account_id: request.account_id.to_string(),
+                account_id: request.account_id.clone(),
                 strategy_id: risk_strategy_id(request.strategy_id.as_ref())
                     .map_err(RiskCommandFailure::NotSent)?,
-                instrument_id: request.instrument_id.to_string(),
-                exchange_id: request
-                    .market_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| request.segment_key.to_string()),
+                instrument_id: request.instrument_id.clone(),
+                exchange_id: context.exchange_id.clone().ok_or_else(|| {
+                    RiskCommandFailure::NotSent(
+                        "Reference market is missing its exchange identity".into(),
+                    )
+                })?,
                 proposal: TradeRiskProposal {
                     notional: amount,
-                    initial_margin_rate_bps: context
-                        .initial_margin_rate_bps
-                        .ok_or_else(|| {
+                    initial_margin_rate_bps: u64::from(
+                        context.initial_margin_rate_bps.ok_or_else(|| {
                             RiskCommandFailure::NotSent(
                                 "execution route is missing an initial margin rule".into(),
                             )
-                        })?
-                        .into(),
+                        })?,
+                    )
+                    .into(),
                     reduce_only: request.options.reduce_only.unwrap_or(false),
                     margin_rule_id: context.margin_rule_id.clone().ok_or_else(|| {
                         RiskCommandFailure::NotSent(
@@ -129,25 +132,26 @@ impl SocketExecutionRiskReservations {
                     })?,
                 },
                 at_unix_nanos: now,
-                reservation_ttl_nanos,
+                reservation_ttl_nanos: reservation_ttl_nanos.into(),
                 dependency_generation: health.generation,
                 dependency_event_sequence: health.event_sequence,
                 context: Some(RiskContext {
-                    account_snapshot_watermark: context.account.generation.get(),
+                    account_snapshot_watermark: UnixNanos::new(context.account.generation.get()),
                     market_freshness_watermark: context
                         .market
                         .as_ref()
                         .map(|value| value.generation.get().max(value.event_sequence.get()))
+                        .map(UnixNanos::new)
                         .unwrap_or_default(),
-                    portfolio_version: context.account.event_sequence.get(),
+                    portfolio_version: context.account.generation,
                     current_exposure: zero,
                     current_margin: zero,
                     available_margin,
                     current_pnl: zero,
                     current_drawdown: zero,
                     market_is_fresh: context.market_is_fresh,
-                    leverage_bps: 0,
-                    price_deviation_bps: 0,
+                    leverage_bps: 0.into(),
+                    price_deviation_bps: 0.into(),
                     stress_loss: zero,
                 }),
             })
@@ -248,7 +252,7 @@ impl SocketExecutionRiskReservations {
                 &evidence.reservation_id,
                 &Amount::new(amount.mantissa(), amount.scale())
                     .expect("Money satisfies Risk contract decimal bounds"),
-                at.get(),
+                at,
             )
             .map(|_| ())
             .map_err(map_command_error)
@@ -263,7 +267,7 @@ impl SocketExecutionRiskReservations {
             return Ok(());
         }
         self.client()?
-            .release(&evidence.reservation_id, at.get())
+            .release(&evidence.reservation_id, at)
             .map(|_| ())
             .map_err(map_command_error)
     }
@@ -277,7 +281,7 @@ impl SocketExecutionRiskReservations {
             return Ok(());
         }
         self.client()?
-            .consume(&evidence.reservation_id, at.get())
+            .consume(&evidence.reservation_id, at)
             .map(|_| ())
             .map_err(map_command_error)
     }
@@ -288,11 +292,11 @@ fn map_command_error(error: ContractError) -> RiskCommandFailure {
         ContractError::NotSent(message) => RiskCommandFailure::NotSent(message),
         ContractError::Indeterminate(message) | ContractError::Transport(message) => {
             RiskCommandFailure::Indeterminate(message)
-        }
+        },
         ContractError::Rejected(message) => RiskCommandFailure::Rejected(message),
         ContractError::Invalid(message) | ContractError::Unsupported(message) => {
             RiskCommandFailure::NotSent(message)
-        }
+        },
     }
 }
 
@@ -323,26 +327,27 @@ fn notional_amount(request: &SubmitOrder) -> Result<Amount, String> {
     .map_err(|error| error.to_string())
 }
 
-fn risk_strategy_id(strategy_id: Option<&StrategyId>) -> Result<String, String> {
+fn risk_strategy_id(strategy_id: Option<&StrategyId>) -> Result<StrategyId, String> {
     strategy_id
-        .map(ToString::to_string)
+        .cloned()
         .ok_or_else(|| "risk authorization requires SubmitOrder.strategy_id".into())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn evidence(
     request: &SubmitOrder,
-    reservation_id: String,
+    reservation_id: ReservationId,
     amount: Amount,
-    risk_generation: u64,
-    risk_event_sequence: u64,
-    policy_version: u64,
-    expires_at_unix_nanos: u64,
-    updated_at_unix_nanos: u64,
+    risk_generation: Generation,
+    risk_event_sequence: Sequence,
+    policy_version: Generation,
+    expires_at_unix_nanos: UnixNanos,
+    updated_at_unix_nanos: UnixNanos,
 ) -> Result<RiskReservationEvidence, String> {
     Ok(RiskReservationEvidence {
         order_id: request.order_id.clone(),
-        idempotency_key: reservation_id.clone(),
+        idempotency_key: IdempotencyKey::new(reservation_id.to_string())
+            .map_err(|error| error.to_string())?,
         reservation_id,
         account_id: request.account_id.clone(),
         amount: Money::new(amount.mantissa(), amount.scale()).map_err(|error| error.to_string())?,
@@ -350,8 +355,8 @@ fn evidence(
         risk_generation,
         risk_event_sequence,
         policy_version,
-        expires_at_unix_nanos: expires_at_unix_nanos.into(),
-        updated_at_unix_nanos: updated_at_unix_nanos.into(),
+        expires_at_unix_nanos,
+        updated_at_unix_nanos,
         funding_requirement: None,
     })
 }
@@ -378,8 +383,8 @@ fn read_reservation(
         return Err("Risk mmap generation does not match its envelope".into());
     }
     let Some(reservation) = decoded.state().active_reservations().iter().find(|value| {
-        value.reservation_id() == evidence.reservation_id
-            || value.idempotency_key() == evidence.idempotency_key
+        evidence.reservation_id == value.reservation_id()
+            || evidence.idempotency_key == value.idempotency_key()
     }) else {
         return Ok(None);
     };
@@ -404,14 +409,16 @@ fn read_reservation(
         .unwrap_or(evidence.amount);
     Ok(Some(RiskReservationEvidence {
         order_id: evidence.order_id.clone(),
-        reservation_id: reservation.reservation_id().to_owned(),
-        idempotency_key: reservation.idempotency_key().to_owned(),
+        reservation_id: ReservationId::new(reservation.reservation_id())
+            .map_err(|error| error.to_string())?,
+        idempotency_key: IdempotencyKey::new(reservation.idempotency_key())
+            .map_err(|error| error.to_string())?,
         account_id: evidence.account_id.clone(),
         amount,
         status,
-        risk_generation: frame.generation(),
-        risk_event_sequence: frame.envelope_metadata().applied_event_sequence,
-        policy_version: reservation.policy_version(),
+        risk_generation: frame.generation().into(),
+        risk_event_sequence: frame.envelope_metadata().applied_event_sequence.into(),
+        policy_version: reservation.policy_version().into(),
         expires_at_unix_nanos: reservation.expires_at_unix_nanos().into(),
         updated_at_unix_nanos: reservation.updated_at_unix_nanos().into(),
         funding_requirement: evidence.funding_requirement.clone(),
@@ -427,8 +434,9 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::risk_strategy_id;
     use kairos_primitives::StrategyId;
+
+    use super::risk_strategy_id;
 
     #[test]
     fn risk_identity_uses_strategy_id_and_has_no_intent_fallback() {

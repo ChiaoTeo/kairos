@@ -44,8 +44,8 @@ impl MarketApplication {
                         return Err(format!(
                             "market {} matches multiple configured sources; select source_id",
                             market.scope.key()
-                        ))
-                    }
+                        ));
+                    },
                 };
                 desired
                     .entry(source_id)
@@ -62,7 +62,7 @@ impl MarketApplication {
                 PendingSourceRequest::Subscribe { source_id, key }
                 | PendingSourceRequest::Unsubscribe { source_id, key } => {
                     Some((source_id.clone(), key.clone()))
-                }
+                },
                 PendingSourceRequest::ResyncOrderBook { .. } => None,
             })
             .collect::<BTreeSet<_>>();

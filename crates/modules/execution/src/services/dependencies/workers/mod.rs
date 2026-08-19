@@ -1,9 +1,7 @@
 //! Focused bounded workers keeping dependency I/O off the Execution Actor.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -107,14 +105,14 @@ fn send_bounded<R>(
             Ok(()) => return Ok(()),
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                 return Err(format!("execution {queue_name} worker is stopped"));
-            }
+            },
             Err(std::sync::mpsc::TrySendError::Full(value)) => {
                 if Instant::now() >= deadline {
                     return Err(format!("execution {queue_name} queue is full"));
                 }
                 request = Some(value);
                 std::thread::sleep(Duration::from_millis(2));
-            }
+            },
         }
     }
 }
@@ -151,10 +149,10 @@ impl QueuedExecutionIntentPlanner {
                             reply,
                         } => {
                             let _ = reply.send(planner.advance_time(event_time_unix_nanos));
-                        }
+                        },
                         PlanningRequest::Plan { intent, reply } => {
                             let _ = reply.send(planner.plan_intent(&intent));
-                        }
+                        },
                         PlanningRequest::LatestQuote {
                             instrument_id,
                             market_id,
@@ -162,7 +160,7 @@ impl QueuedExecutionIntentPlanner {
                         } => {
                             let _ = reply
                                 .send(planner.latest_quote(&instrument_id, market_id.as_deref()));
-                        }
+                        },
                     }
                     if let Ok(mut value) = worker_watermarks.write() {
                         *value = planner.dependency_watermarks();
@@ -283,7 +281,7 @@ impl QueuedExecutionOrderAdmission {
                         } => {
                             let _ =
                                 reply.send(admission.validate_order(&request, &active_commitments));
-                        }
+                        },
                         AdmissionRequest::RiskContext {
                             request,
                             route,
@@ -291,7 +289,7 @@ impl QueuedExecutionOrderAdmission {
                         } => {
                             let _ =
                                 reply.send(admission.risk_authorization_context(&request, &route));
-                        }
+                        },
                     }
                     if let Ok(mut value) = worker_watermarks.write() {
                         *value = admission.dependency_watermarks();
@@ -371,8 +369,9 @@ impl QueuedExecutionOrderAdmission {
 
 #[cfg(test)]
 mod tests {
-    use super::DependencyCircuit;
     use std::time::{Duration, Instant};
+
+    use super::DependencyCircuit;
 
     #[test]
     fn dependency_circuit_opens_after_repeated_transport_failures() {

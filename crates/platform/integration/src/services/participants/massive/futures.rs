@@ -411,9 +411,11 @@ mod tests {
             assert!(request_line.contains("date=2025-02-26"));
             assert!(request_line.contains("limit=25"));
             assert!(!request_line.to_ascii_lowercase().contains("apikey"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("authorization: bearer futures-secret\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer futures-secret\r\n")
+            );
             let body = r#"{"results":[]}"#;
             write!(
                 stream,

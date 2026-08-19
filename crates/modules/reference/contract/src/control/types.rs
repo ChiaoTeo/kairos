@@ -1,14 +1,13 @@
-use serde::{Deserialize, Serialize};
-
 use kairos_primitives::{
-    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId,
+    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, Price,
     ReferenceStatus, Symbol, UnixNanos,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UpsertAssetRequest {
     pub asset_id: AssetId,
-    pub code: String,
+    pub code: Symbol,
     pub name: Option<String>,
     pub asset_class: AssetClass,
     pub status: ReferenceStatus,
@@ -28,7 +27,7 @@ pub struct UpsertInstrumentRequest {
     pub primary_currency_asset_id: Option<AssetId>,
     pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<UnixNanos>,
-    pub strike: Option<String>,
+    pub strike: Option<Price>,
     pub option_right: Option<String>,
     pub status: ReferenceStatus,
 }
@@ -52,25 +51,6 @@ pub struct ReferenceSourceControlRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceOptionCoverageRequest {
     pub underlying: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ReferenceControlRequest {
-    pub command_id: String,
-    pub idempotency_key: String,
-    pub caller_id: String,
-    pub workspace_id: String,
-    pub payload: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ReferenceControlResponse {
-    pub status: Option<String>,
-    pub operation: Option<String>,
-    pub resource_id: Option<String>,
-    pub error: Option<ReferenceControlError>,
-    #[serde(flatten)]
-    pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -116,20 +96,20 @@ pub struct ReferenceRefreshResponse {
     pub generation: u64,
     pub event_sequence: u64,
     pub changed: bool,
-    pub change_count: usize,
+    pub change_count: u64,
     pub publication_pending: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferencePublishResponse {
     pub generation: u64,
-    pub events: usize,
+    pub events: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceMutationResponse {
     pub generation: u64,
-    pub events: usize,
+    pub events: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -164,14 +144,15 @@ pub enum ReferenceRestResponse {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::{AssetClass, AssetId, ReferenceStatus, Symbol};
+
     use super::UpsertAssetRequest;
-    use kairos_primitives::{AssetClass, AssetId, ReferenceStatus};
 
     #[test]
     fn administrative_mutation_is_owned_by_the_reference_contract() {
         let request = UpsertAssetRequest {
             asset_id: AssetId::new("asset:btc").unwrap(),
-            code: "BTC".into(),
+            code: Symbol::new("BTC").unwrap(),
             name: Some("Bitcoin".into()),
             asset_class: AssetClass::Crypto,
             status: ReferenceStatus::Active,

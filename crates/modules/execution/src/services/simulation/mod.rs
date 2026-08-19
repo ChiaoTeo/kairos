@@ -6,21 +6,20 @@
 
 use std::collections::BTreeMap;
 
-use crate::application::{Bar, MarketObservation, Quote};
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-
-use crate::domain::{OrderSide, OrderType};
 use kairos_primitives::{
     Currency, FillId, InstrumentId, MarketId, Money, OrderId, Price, Quantity, Rate, UnixNanos,
 };
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+
+use crate::application::{Bar, MarketObservation, Quote};
+use crate::domain::{OrderSide, OrderType};
 
 mod account_settlement;
 mod matching;
 mod model;
 
 pub use account_settlement::SimulatedAccountSettlement;
-
 pub use model::{
     ExecutionSimulator, SimulationConfig, SimulationFill, SimulationOrder, SimulationOrderRequest,
     SimulationOrderStatus, SimulationResult,

@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use super::MarketActor;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::source::{
-    derive_readiness, MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId,
-    SourceState, SourceStatus,
+    MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
+    SourceStatus, derive_readiness,
 };
 use crate::domain::subscription::SubscriptionId;
 use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};

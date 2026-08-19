@@ -1,3 +1,3 @@
 mod jsonl;
 
-pub(crate) use jsonl::{spawn_jsonl_history, HistoryCollectionSpec};
+pub(crate) use jsonl::{HistoryCollectionSpec, spawn_jsonl_history};

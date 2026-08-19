@@ -95,22 +95,32 @@ impl OrderAdmissionContext {
         let balances = self
             .account_projection(request.account_id.as_str())?
             .balances;
-        let asset = match request.side {
-            OrderSide::Buy => reference_market
-                .as_ref()
-                .and_then(|market| market.quote_asset_id.clone())
-                .or_else(|| request.options.quote_asset.clone()),
-            OrderSide::Sell => reference_market
-                .as_ref()
-                .and_then(|market| market.base_asset_id.clone()),
-        };
-        let settlement_asset = reference_market
-            .as_ref()
-            .and_then(|market| market.quote_asset_id.clone())
-            .or_else(|| request.options.quote_asset.clone())
+        let configured_quote_asset = request
+            .options
+            .quote_asset
+            .as_deref()
             .map(kairos_primitives::Currency::new)
             .transpose()
             .map_err(|error| error.to_string())?;
+        let asset = match request.side {
+            OrderSide::Buy => reference_market
+                .as_ref()
+                .and_then(|market| market.quote_asset_id.as_ref())
+                .map(reference_asset_currency)
+                .transpose()?
+                .or_else(|| configured_quote_asset.clone()),
+            OrderSide::Sell => reference_market
+                .as_ref()
+                .and_then(|market| market.base_asset_id.as_ref())
+                .map(reference_asset_currency)
+                .transpose()?,
+        };
+        let settlement_asset = reference_market
+            .as_ref()
+            .and_then(|market| market.quote_asset_id.as_ref())
+            .map(reference_asset_currency)
+            .transpose()?
+            .or(configured_quote_asset.clone());
         let mut commitment = if !self.allow_backtest_balance_without_projection {
             let asset = asset.ok_or_else(|| {
                 "Reference must define the order commitment asset; symbol suffix inference is forbidden"
@@ -119,9 +129,12 @@ impl OrderAdmissionContext {
             if request.side == OrderSide::Buy {
                 if let (Some(configured), Some(reference)) = (
                     request.options.quote_asset.as_deref(),
-                    reference_market
-                        .as_ref()
-                        .and_then(|market| market.quote_asset_id.as_deref()),
+                    reference_market.as_ref().and_then(|market| {
+                        market
+                            .quote_asset_id
+                            .as_ref()
+                            .and_then(|value| value.as_str().rsplit(':').next())
+                    }),
                 ) {
                     if !configured.eq_ignore_ascii_case(reference) {
                         return Err(format!(
@@ -142,10 +155,7 @@ impl OrderAdmissionContext {
             } else {
                 quantity
             };
-            let commitment_resource = CommitmentResource::Asset(
-                kairos_primitives::Currency::new(asset.clone())
-                    .map_err(|error| error.to_string())?,
-            );
+            let commitment_resource = CommitmentResource::Asset(asset.clone());
             let committed = active_commitments
                 .iter()
                 .filter(|commitment| {
@@ -258,6 +268,10 @@ impl OrderAdmissionContext {
         request: &SubmitOrder,
         route: &crate::application::ExecutionRouteCandidate,
     ) -> Result<RiskAuthorizationContext, String> {
+        let reference_market = self.reference_market(
+            request.market_id.as_ref().map(MarketId::as_str),
+            request.instrument_id.as_str(),
+        )?;
         let account = self.account_projection(request.account_id.as_str())?;
         let market = if self.market_snapshot.is_some() {
             self.read_market_quote(request.market_id.as_deref(), request.instrument_id.as_str())?
@@ -288,9 +302,31 @@ impl OrderAdmissionContext {
             available_margin,
             initial_margin_rate_bps: route.initial_margin_rate_bps,
             margin_rule_id: route.margin_rule_id.clone(),
-            funding_broker: Some(route.participant_id.clone()),
-            funding_segment: Some(request.segment_key.to_string()),
-            collateral_asset: request.options.quote_asset.clone(),
+            exchange_id: Some(reference_market.exchange_id),
+            funding_broker: Some(
+                kairos_primitives::BrokerId::new(route.participant_id.clone())
+                    .map_err(|error| error.to_string())?,
+            ),
+            funding_segment: Some(request.segment_key.clone()),
+            collateral_asset: request
+                .options
+                .quote_asset
+                .as_deref()
+                .map(kairos_primitives::Currency::new)
+                .transpose()
+                .map_err(|error| error.to_string())?,
         })
     }
+}
+
+fn reference_asset_currency(
+    asset_id: &kairos_primitives::AssetId,
+) -> Result<kairos_primitives::Currency, String> {
+    let code = asset_id
+        .as_str()
+        .rsplit(':')
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Reference asset {} has no currency code", asset_id))?;
+    kairos_primitives::Currency::new(code).map_err(|error| error.to_string())
 }

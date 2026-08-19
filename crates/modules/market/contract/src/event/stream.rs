@@ -3,9 +3,8 @@ use std::task::{Context, Poll};
 
 use kairos_transport::{AeronByteSubscription, AeronEndpoint};
 
-use crate::{ContractError, ContractResult};
-
 use super::frame::MarketEventFrame;
+use crate::{ContractError, ContractResult};
 
 pub struct MarketEventStream {
     subscription: AeronByteSubscription,

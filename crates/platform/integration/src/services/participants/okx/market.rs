@@ -183,7 +183,7 @@ pub(crate) fn feed_argument(feed: &MarketFeed) -> Result<Value, IntegrationError
         },
         MarketDataKind::Bar | MarketDataKind::TradeBar | MarketDataKind::QuoteBar => {
             format!("candle{}", feed.interval.as_deref().unwrap_or("1m"))
-        }
+        },
         MarketDataKind::MarkPrice => "mark-price".into(),
         MarketDataKind::IndexPrice => "index-tickers".into(),
         MarketDataKind::FundingRate => "funding-rate".into(),
@@ -231,7 +231,7 @@ fn stream_event(
             event.kind = MarketEventKind::Trade;
             event.price = optional(row, "px")?;
             event.quantity = optional(row, "sz")?;
-        }
+        },
         value if value.starts_with("books") => {
             event.kind = if envelope.get("action").and_then(Value::as_str) == Some("update") {
                 MarketEventKind::BookDelta
@@ -243,7 +243,7 @@ fn stream_event(
             event.first_sequence = integer(row.get("prevSeqId")).map(Into::into);
             event.last_sequence = integer(row.get("seqId")).map(Into::into);
             event.sequence = event.last_sequence;
-        }
+        },
         value if value.starts_with("candle") => {
             let values = row.as_array().ok_or_else(|| {
                 IntegrationError::InvalidPayload("OKX candle row must be an array".into())
@@ -265,23 +265,23 @@ fn stream_event(
                 volume: optional_value(values.get(5))?,
                 derivation: "participant".into(),
             });
-        }
+        },
         "mark-price" => {
             event.kind = MarketEventKind::MarkPrice;
             event.price = optional(row, "markPx")?;
-        }
+        },
         "index-tickers" => {
             event.kind = MarketEventKind::IndexPrice;
             event.price = optional(row, "idxPx")?;
-        }
+        },
         "funding-rate" => {
             event.kind = MarketEventKind::FundingRate;
             event.rate = optional(row, "fundingRate")?;
-        }
+        },
         "open-interest" => {
             event.kind = MarketEventKind::OpenInterest;
             event.quantity = optional(row, "oi")?;
-        }
+        },
         "opt-summary" => {
             event.kind = MarketEventKind::Greeks;
             event.greeks = Some(Greeks {
@@ -294,17 +294,17 @@ fn stream_event(
                 implied_volatility: optional(row, "markVol")?,
                 derivation: "participant".into(),
             });
-        }
+        },
         "status" => {
             event.kind = MarketEventKind::InstrumentStatus;
-        }
+        },
         _ => {
             event.kind = MarketEventKind::Ticker24h;
             event.price = optional(row, "last")?;
             event.quantity = optional(row, "lastSz")?;
             event.ask_price = optional(row, "askPx")?;
             event.ask_quantity = optional(row, "askSz")?;
-        }
+        },
     }
     Ok(event)
 }

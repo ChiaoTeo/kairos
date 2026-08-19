@@ -12,7 +12,7 @@ impl std::fmt::Display for ContractError {
             Self::Transport(value) => write!(f, "Account contract transport failed: {value}"),
             Self::Unsupported(value) => {
                 write!(f, "unsupported Account contract operation: {value}")
-            }
+            },
         }
     }
 }

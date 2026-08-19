@@ -1,13 +1,14 @@
-use crate::participants::binance::BinanceCredential;
-use crate::services::clock::{unix_millis, ServerClock};
-use crate::services::participants::binance::signing::sign_query;
-use crate::transport::http::ExchangeError;
-use crate::transport::http::HttpClient;
-use crate::{CommandResult, ConnectionDescriptor, IntegrationError};
-use secrecy::ExposeSecret;
-use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+
+use secrecy::ExposeSecret;
+use serde_json::Value;
+
+use crate::participants::binance::BinanceCredential;
+use crate::services::clock::{ServerClock, unix_millis};
+use crate::services::participants::binance::signing::sign_query;
+use crate::transport::http::{ExchangeError, HttpClient};
+use crate::{CommandResult, ConnectionDescriptor, IntegrationError};
 
 /// Reusable HTTP pool and endpoint metadata shared by Binance REST families.
 /// The public lifecycle owner remains the concrete participant connection.
@@ -272,24 +273,24 @@ impl RestService {
                 self.client
                     .get_json_response_with_headers_and_query(&endpoint, &borrowed, &headers)
                     .await
-            }
+            },
             SignedMethod::Post => {
                 self.client
                     .post_json_response_with_headers_and_query(&endpoint, &borrowed, &headers)
                     .await
-            }
+            },
             SignedMethod::Put => {
                 self.client
                     .put_command_json_response_with_headers_and_query(
                         &endpoint, &borrowed, &headers,
                     )
                     .await
-            }
+            },
             SignedMethod::Delete => {
                 self.client
                     .delete_json_response_with_headers_and_query(&endpoint, &borrowed, &headers)
                     .await
-            }
+            },
         };
         response.map(|response| response.body)
     }
@@ -342,7 +343,7 @@ pub(crate) fn map_error(error: ExchangeError) -> IntegrationError {
         } => IntegrationError::RateLimited(body),
         ExchangeError::Http { status, body, .. } => {
             IntegrationError::Transport(format!("Binance HTTP {status}: {body}"))
-        }
+        },
         other => IntegrationError::Transport(other.to_string()),
     }
 }

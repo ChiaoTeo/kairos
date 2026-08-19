@@ -1,6 +1,5 @@
-use crate::domain::events::MarketEvent;
-
 use super::super::{MarketApplication, MarketQueryResult};
+use crate::domain::events::MarketEvent;
 
 impl MarketApplication {
     pub fn current_view(&self) -> crate::domain::view::MarketView {

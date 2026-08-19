@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use kairos_protocol::generated::kairos::market::v_2 as fb;
+
+use crate::{ContractError, ContractResult};
 
 pub type IndexPriceLatestView<'a> = fb::IndexPriceLatestView<'a>;
 

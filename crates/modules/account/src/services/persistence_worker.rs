@@ -1,10 +1,11 @@
-use crate::domain::Account;
-use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use crate::domain::Account;
+use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 
 enum PersistenceJob {
     Append {
@@ -168,11 +169,11 @@ impl AccountPersistenceWorker {
             Err(TrySendError::Full(_)) => {
                 self.pending.fetch_sub(1, Ordering::Relaxed);
                 Err("account persistence queue is full".to_string())
-            }
+            },
             Err(TrySendError::Disconnected(_)) => {
                 self.pending.fetch_sub(1, Ordering::Relaxed);
                 Err("account persistence worker is stopped".to_string())
-            }
+            },
         }
     }
 

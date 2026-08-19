@@ -1,19 +1,17 @@
 use std::fmt;
 
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
+use super::super::reference::{build_reference_projection, project_market_universe};
+use super::super::{
+    MarketCompositionConfig, MarketHost, MarketHostRequest, MarketRuntimeProfile,
+    MarketRuntimeScope, attach_replay_source_with_policy,
+};
 use crate::application::load_replay_events;
-use crate::composition::history::{spawn_jsonl_history, HistoryCollectionSpec};
+use crate::composition::history::{HistoryCollectionSpec, spawn_jsonl_history};
 use crate::services::source::load_replay_checkpoint;
 use crate::{MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId};
-
-use super::super::reference::{build_reference_projection, project_market_universe};
-
-use super::super::{
-    attach_replay_source_with_policy, MarketCompositionConfig, MarketHost, MarketHostRequest,
-    MarketRuntimeProfile, MarketRuntimeScope,
-};
 
 const VIEW_SLOT_SIZE: usize = 4_194_304;
 const MAX_DYNAMIC_MEMBERS: usize = 10_000;
@@ -81,7 +79,7 @@ fn collection_market_descriptor(
                     market.instrument_id
                 ))
             })?;
-        let mut value = ResolvedMarket::new(
+        let mut value = ResolvedMarket::from_reference(
             market.market_id.clone(),
             market.instrument_id.clone(),
             instrument.instrument_type,
@@ -90,12 +88,7 @@ fn collection_market_descriptor(
         )
         .map_err(MarketStartupError::new)?;
         value.asset_type = market.asset_type;
-        value.underlying_instrument_id = market
-            .underlying_instrument_id
-            .clone()
-            .map(kairos_primitives::InstrumentId::new)
-            .transpose()
-            .map_err(MarketStartupError::new)?;
+        value.underlying_instrument_id = market.underlying_instrument_id.clone();
         value
     } else {
         let instrument_id = collection
@@ -111,19 +104,14 @@ fn collection_market_descriptor(
                     "Market collection {name} references missing instrument {instrument_id}"
                 ))
             })?;
-        let mut value = ResolvedMarket::consolidated(
+        let mut value = ResolvedMarket::consolidated_reference(
             instrument.instrument_id.clone(),
             collection.network_id.clone(),
             instrument.instrument_type,
             route,
         )
         .map_err(MarketStartupError::new)?;
-        value.underlying_instrument_id = instrument
-            .underlying_instrument_id
-            .clone()
-            .map(kairos_primitives::InstrumentId::new)
-            .transpose()
-            .map_err(MarketStartupError::new)?;
+        value.underlying_instrument_id = instrument.underlying_instrument_id.clone();
         value.asset_type = collection
             .asset_type
             .as_deref()
@@ -210,10 +198,12 @@ pub async fn build_market_host(
             .process_lock("market")
             .map_err(MarketStartupError::new)?
     };
-    let identity = instance
-        .as_ref()
-        .map(|value| InstanceIdentity::new(workspace.id(), value.launch_id(), value.instance_id()))
-        .unwrap_or_default();
+    let identity = if let Some(value) = instance.as_ref() {
+        InstanceIdentity::new(workspace.id(), value.launch_id(), value.instance_id())
+    } else {
+        InstanceIdentity::unscoped(workspace.id())
+    }
+    .map_err(MarketStartupError::new)?;
     let view_root = instance
         .as_ref()
         .map(|value| value.snapshot(&[]))
@@ -325,10 +315,10 @@ pub async fn build_market_host(
                 replay.start_paused,
             )
             .map_err(MarketStartupError::new)?;
-        }
+        },
         MarketRuntimeScope::Shared
         | MarketRuntimeScope::Instance
-        | MarketRuntimeScope::Diagnostic => {}
+        | MarketRuntimeScope::Diagnostic => {},
     }
 
     let mut history_specs = Vec::new();

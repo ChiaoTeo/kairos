@@ -3,21 +3,20 @@
 mod config;
 mod publication;
 
+use std::path::Path;
+
 pub use config::{
     ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
 };
+use kairos_conflux::{BinanceCredential, load_workspace_credential};
 pub use publication::ReferenceEventPublisherRuntime;
 
-use std::path::Path;
-
+use crate::ReferenceApplication;
 use crate::domain::ReferenceResult;
 use crate::services::providers::{
     HyperliquidProduct, OkxProduct, ReferenceProviderPlan, ReferenceSourcePlan,
 };
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
-use crate::ReferenceApplication;
-
-use kairos_conflux::{load_workspace_credential, BinanceCredential};
 
 impl From<kairos_reference_contract::ContractError> for crate::domain::ReferenceError {
     fn from(error: kairos_reference_contract::ContractError) -> Self {
@@ -100,10 +99,10 @@ pub fn default_endpoint(provider: &str) -> &'static str {
         "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
         "binance-usdm-futures" | "binance-usdm-futures-rest" => {
             "https://fapi.binance.com/fapi/v1/exchangeInfo"
-        }
+        },
         "binance-coinm-futures" | "binance-coinm-futures-rest" => {
             "https://dapi.binance.com/dapi/v1/exchangeInfo"
-        }
+        },
         "okx-spot" | "okx-margin" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
         | "okx-spot-rest" | "okx-margin-rest" | "okx-swap-rest" | "okx-futures-rest"
         | "okx-options-rest" => "https://www.okx.com",

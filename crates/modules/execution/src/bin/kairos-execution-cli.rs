@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use clap::{Args, Parser, Subcommand};
 use kairos_execution::application::{
     BacktestApplication, BacktestRequest, ExecutionFillReport, ExecutionOrderOptions, OrderSide,
@@ -7,9 +9,8 @@ use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionVi
 use kairos_primitives::{
     AccountId, ExecutionRouteId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
 };
-use kairos_workspace::cli::{render, OutputFormat};
+use kairos_workspace::cli::{OutputFormat, render};
 use kairos_workspace::workspace::Workspace;
-use std::str::FromStr;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,7 +88,8 @@ fn read_current_execution_view(
     workspace_id: &str,
     command: &Command,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    use kairos_protocol::generated::kairos::{common::v_2 as common, execution::v_2 as fb};
+    use kairos_protocol::generated::kairos::common::v_2 as common;
+    use kairos_protocol::generated::kairos::execution::v_2 as fb;
     let key = ExecutionViewKey::new(
         workspace_id,
         ExecutionViewKind::CurrentExecution,
@@ -366,7 +368,7 @@ async fn execute_control_command(
                 },
                 None,
             )
-        }
+        },
         Command::Reconcile { order_id } => (
             "POST",
             "/v1/reconciliation".into(),
@@ -404,8 +406,12 @@ async fn execute_control_command(
                 provider_symbol: None,
                 remote_order_id: None,
             };
-            ("POST", "/v1/fill".into(), Some(serde_json::to_vec(&request)?))
-        }
+            (
+                "POST",
+                "/v1/fill".into(),
+                Some(serde_json::to_vec(&request)?),
+            )
+        },
         Command::Submit(args) => {
             let dry_run = args.dry_run;
             let request = submit_request(args)?;
@@ -419,7 +425,7 @@ async fn execute_control_command(
                 .into(),
                 Some(serde_json::to_vec(&request)?),
             )
-        }
+        },
         Command::Cancel { order_id, reason } => (
             "DELETE",
             format!("/v1/orders/{order_id}"),
@@ -657,8 +663,9 @@ fn print_json(value: serde_json::Value) {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::Cli;
     use clap::Parser;
+
+    use super::Cli;
 
     #[test]
     fn command_surface_builds_without_duplicate_aliases() {

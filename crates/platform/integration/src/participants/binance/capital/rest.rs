@@ -131,7 +131,7 @@ impl AssetTransferCommand for BinanceCapitalRestConnection {
             .and_then(|outcome| match outcome {
                 CommandOutcome::Confirmed(value) => {
                     parse_submission(&value).map(CommandOutcome::Confirmed)
-                }
+                },
                 CommandOutcome::Rejected(value) => Ok(CommandOutcome::Rejected(value)),
                 CommandOutcome::Indeterminate(value) => Ok(CommandOutcome::Indeterminate(value)),
             })
@@ -370,9 +370,9 @@ fn scalar_string(value: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use kairos_primitives::{AccountId, Currency, IdempotencyKey};
 
+    use super::*;
     use crate::{ExternalAccountIdentity, ExternalAccountSegment};
 
     fn segment(key: &str) -> ExternalAccountSegment {

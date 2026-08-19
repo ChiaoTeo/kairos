@@ -173,12 +173,16 @@ fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
     assert!(actor.contains(".reference_client(&client_key)"));
     assert!(assembly.contains("install_reference_contract"));
     assert!(!assembly.contains("spawn_market_universe_watcher"));
-    assert!(!crate_root()
-        .join("src/composition/reference/client.rs")
-        .exists());
-    assert!(!crate_root()
-        .join("src/composition/reference/events.rs")
-        .exists());
+    assert!(
+        !crate_root()
+            .join("src/composition/reference/client.rs")
+            .exists()
+    );
+    assert!(
+        !crate_root()
+            .join("src/composition/reference/events.rs")
+            .exists()
+    );
     assert!(!crate_root().join("src/domain/reference").exists());
     let composition = source("src/composition/reference/projection.rs");
     assert!(composition.contains("ReferenceProjectionSnapshot"));
@@ -302,13 +306,17 @@ fn every_public_observation_has_a_symmetric_vertical_directory() {
     }
     assert!(!crate_root().join("src/domain/orderbook.rs").exists());
     assert!(!crate_root().join("src/domain/orderbook").exists());
-    assert!(!crate_root()
-        .join("src/domain/observation/kind/mod.rs")
-        .exists());
+    assert!(
+        !crate_root()
+            .join("src/domain/observation/kind/mod.rs")
+            .exists()
+    );
     for file in ["book.rs", "level.rs", "delta.rs", "continuity.rs"] {
-        assert!(crate_root()
-            .join(format!("src/domain/observation/order_book/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/domain/observation/order_book/{file}"))
+                .is_file()
+        );
     }
     let observation = source("src/domain/observation/mod.rs");
     assert!(observation.contains("pub fn kind(&self) -> ObservationKind"));
@@ -321,9 +329,11 @@ fn every_public_observation_has_a_symmetric_vertical_directory() {
 #[test]
 fn view_checkpoint_and_change_have_distinct_boundaries() {
     assert!(!crate_root().join("src/domain/snapshot").exists());
-    assert!(crate_root()
-        .join("src/services/actor/checkpoint.rs")
-        .is_file());
+    assert!(
+        crate_root()
+            .join("src/services/actor/checkpoint.rs")
+            .is_file()
+    );
     let root = source("src/lib.rs");
     assert!(!root.contains("ReplayCheckpoint"));
     assert!(!root.contains("MarketSnapshot"));
@@ -342,30 +352,40 @@ fn canonical_market_capabilities_do_not_create_stateless_kind_wrappers() {
     let capability = source("src/domain/observation/identity/capability.rs");
     assert!(capability.contains("fn supports_observation("));
     for kind in ["spot", "perpetual", "future", "option"] {
-        assert!(!crate_root()
-            .join(format!("src/domain/market/{kind}.rs"))
-            .exists());
+        assert!(
+            !crate_root()
+                .join(format!("src/domain/market/{kind}.rs"))
+                .exists()
+        );
     }
 }
 
 #[test]
 fn observation_identity_and_order_book_behavior_live_in_their_owned_modules() {
     for file in ["kind.rs", "key.rs", "qualifier.rs", "capability.rs"] {
-        assert!(crate_root()
-            .join(format!("src/domain/observation/identity/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/domain/observation/identity/{file}"))
+                .is_file()
+        );
     }
     for file in ["projection.rs", "continuity.rs", "resync.rs"] {
-        assert!(crate_root()
-            .join(format!("src/application/observations/order_book/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/application/observations/order_book/{file}"))
+                .is_file()
+        );
     }
-    assert!(crate_root()
-        .join("src/services/actor/observations/views.rs")
-        .is_file());
-    assert!(crate_root()
-        .join("src/services/actor/observations/order_book/continuity.rs")
-        .is_file());
+    assert!(
+        crate_root()
+            .join("src/services/actor/observations/views.rs")
+            .is_file()
+    );
+    assert!(
+        crate_root()
+            .join("src/services/actor/observations/order_book/continuity.rs")
+            .is_file()
+    );
 
     let actor_state = source("src/services/actor/state.rs");
     for migrated in [
@@ -386,9 +406,11 @@ fn observation_identity_and_order_book_behavior_live_in_their_owned_modules() {
 #[test]
 fn subscription_and_universe_slices_have_owned_vertical_modules() {
     for file in ["intent.rs", "member.rs", "selector.rs", "status.rs"] {
-        assert!(crate_root()
-            .join(format!("src/domain/subscription/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/domain/subscription/{file}"))
+                .is_file()
+        );
     }
     for file in [
         "static_subscription.rs",
@@ -396,24 +418,34 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
         "lifecycle.rs",
         "resolution.rs",
     ] {
-        assert!(crate_root()
-            .join(format!("src/application/subscriptions/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/application/subscriptions/{file}"))
+                .is_file()
+        );
     }
     for file in ["reconciliation.rs", "recovery.rs"] {
-        assert!(crate_root()
-            .join(format!("src/application/universe/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/application/universe/{file}"))
+                .is_file()
+        );
     }
-    assert!(crate_root()
-        .join("src/services/actor/subscriptions.rs")
-        .is_file());
-    assert!(crate_root()
-        .join("src/services/actor/universe/mod.rs")
-        .is_file());
-    assert!(!crate_root()
-        .join("src/application/universe/resolution.rs")
-        .exists());
+    assert!(
+        crate_root()
+            .join("src/services/actor/subscriptions.rs")
+            .is_file()
+    );
+    assert!(
+        crate_root()
+            .join("src/services/actor/universe/mod.rs")
+            .is_file()
+    );
+    assert!(
+        !crate_root()
+            .join("src/application/universe/resolution.rs")
+            .exists()
+    );
 
     let actor_state = source("src/services/actor/state.rs");
     for migrated in [
@@ -436,36 +468,50 @@ fn subscription_and_universe_slices_have_owned_vertical_modules() {
 #[test]
 fn source_and_freshness_slices_have_owned_modules() {
     for file in ["identity.rs", "route.rs", "state.rs", "readiness.rs"] {
-        assert!(crate_root()
-            .join(format!("src/domain/source/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/domain/source/{file}"))
+                .is_file()
+        );
     }
     for file in ["status.rs", "evaluation.rs"] {
-        assert!(crate_root()
-            .join(format!("src/domain/freshness/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/domain/freshness/{file}"))
+                .is_file()
+        );
     }
     for file in ["attachment.rs", "subscriptions.rs", "recovery.rs"] {
-        assert!(crate_root()
-            .join(format!("src/application/sources/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/application/sources/{file}"))
+                .is_file()
+        );
     }
     for file in ["driver.rs", "normalization.rs"] {
-        assert!(crate_root()
-            .join(format!("src/services/source/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/services/source/{file}"))
+                .is_file()
+        );
     }
-    assert!(!crate_root()
-        .join("src/services/source/recovery.rs")
-        .exists());
+    assert!(
+        !crate_root()
+            .join("src/services/source/recovery.rs")
+            .exists()
+    );
     for file in ["routing.rs", "activation.rs", "replay.rs"] {
-        assert!(crate_root()
-            .join(format!("src/composition/sources/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/composition/sources/{file}"))
+                .is_file()
+        );
     }
-    assert!(!crate_root()
-        .join("src/application/sources/orchestration.rs")
-        .exists());
+    assert!(
+        !crate_root()
+            .join("src/application/sources/orchestration.rs")
+            .exists()
+    );
 
     let actor_state = source("src/services/actor/state.rs");
     for migrated in [
@@ -538,24 +584,34 @@ fn provider_connections_enter_market_through_named_conflux_collections() {
 
 #[test]
 fn publication_history_and_replay_implementations_have_final_owners() {
-    assert!(crate_root()
-        .join("src/services/publication/queue.rs")
-        .is_file());
-    assert!(!crate_root()
-        .join("src/services/publication/fanout.rs")
-        .exists());
+    assert!(
+        crate_root()
+            .join("src/services/publication/queue.rs")
+            .is_file()
+    );
+    assert!(
+        !crate_root()
+            .join("src/services/publication/fanout.rs")
+            .exists()
+    );
     for file in ["events.rs", "encoding.rs", "mmap.rs"] {
-        assert!(crate_root()
-            .join(format!("src/services/publication/contract/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/services/publication/contract/{file}"))
+                .is_file()
+        );
     }
-    assert!(crate_root()
-        .join("src/composition/history/jsonl.rs")
-        .is_file());
+    assert!(
+        crate_root()
+            .join("src/composition/history/jsonl.rs")
+            .is_file()
+    );
     for file in ["model.rs", "loader.rs"] {
-        assert!(crate_root()
-            .join(format!("src/application/replay/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/application/replay/{file}"))
+                .is_file()
+        );
     }
     for old in [
         "src/services/publication/encoding.rs",
@@ -581,19 +637,25 @@ fn publication_history_and_replay_implementations_have_final_owners() {
 #[test]
 fn composition_uses_symmetric_launch_config_and_reference_modules() {
     for file in ["mod.rs", "assembly.rs", "diagnostic.rs"] {
-        assert!(crate_root()
-            .join(format!("src/composition/launch/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/composition/launch/{file}"))
+                .is_file()
+        );
     }
     for file in ["dto.rs", "profile.rs", "sources.rs", "defaults.rs"] {
-        assert!(crate_root()
-            .join(format!("src/composition/config/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/composition/config/{file}"))
+                .is_file()
+        );
     }
     for file in ["mod.rs", "projection.rs"] {
-        assert!(crate_root()
-            .join(format!("src/composition/reference/{file}"))
-            .is_file());
+        assert!(
+            crate_root()
+                .join(format!("src/composition/reference/{file}"))
+                .is_file()
+        );
     }
     for old in [
         "src/composition/assembly/mod.rs",

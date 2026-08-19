@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use std::path::{Path, PathBuf};
+
+use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExecutionViewKind {
@@ -19,9 +20,9 @@ impl ExecutionViewKind {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ExecutionViewKey {
-    pub workspace_id: String,
-    pub launch_id: Option<String>,
-    pub instance_id: Option<String>,
+    pub workspace_id: kairos_primitives::runtime::WorkspaceId,
+    pub launch_id: Option<kairos_primitives::runtime::LaunchId>,
+    pub instance_id: Option<kairos_primitives::runtime::InstanceId>,
     pub kind: ExecutionViewKind,
 }
 impl ExecutionViewKey {
@@ -31,18 +32,34 @@ impl ExecutionViewKey {
         launch_id: Option<impl Into<String>>,
         instance_id: Option<impl Into<String>>,
     ) -> ContractResult<Self> {
-        let workspace_id = workspace_id.into();
-        if workspace_id.trim().is_empty() {
-            return Err(ContractError::Invalid(
-                "view workspace identity is incomplete".into(),
-            ));
-        }
+        let workspace_id = kairos_primitives::runtime::WorkspaceId::new(workspace_id)
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
+        let launch_id = launch_id
+            .map(|value| kairos_primitives::runtime::LaunchId::new(value))
+            .transpose()
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
+        let instance_id = instance_id
+            .map(|value| kairos_primitives::runtime::InstanceId::new(value))
+            .transpose()
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
         Ok(Self {
             workspace_id,
-            launch_id: launch_id.map(Into::into),
-            instance_id: instance_id.map(Into::into),
+            launch_id,
+            instance_id,
             kind,
         })
+    }
+
+    pub fn from_identity(
+        identity: &kairos_primitives::runtime::InstanceIdentity,
+        kind: ExecutionViewKind,
+    ) -> Self {
+        Self {
+            workspace_id: identity.workspace_id.clone(),
+            launch_id: identity.launch_id().cloned(),
+            instance_id: identity.instance_id().cloned(),
+            kind,
+        }
     }
     pub fn canonical_key(&self) -> String {
         format!(

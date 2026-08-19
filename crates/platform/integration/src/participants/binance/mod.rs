@@ -256,7 +256,7 @@ macro_rules! market_websocket_capabilities {
                     Ok(()) => {
                         self.subscriptions.insert(id, (request.feeds, streams));
                         Ok(crate::MarketSubscriptionOutcome::Confirmed(subscription))
-                    }
+                    },
                     Err(crate::IntegrationError::InvalidRequest(message)) => Ok(
                         crate::MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
                             code: None,
@@ -266,14 +266,14 @@ macro_rules! market_websocket_capabilities {
                     ),
                     Err(crate::IntegrationError::NotReady) => {
                         Err(crate::IntegrationError::NotReady)
-                    }
+                    },
                     Err(error) => {
                         self.subscriptions.insert(id, (request.feeds, streams));
                         Ok(crate::MarketSubscriptionOutcome::Indeterminate {
                             provisional: Some(subscription),
                             reason: error.to_string(),
                         })
-                    }
+                    },
                 }
             }
 
@@ -294,7 +294,7 @@ macro_rules! market_websocket_capabilities {
                     Ok(()) => {
                         self.subscriptions.remove(&subscription);
                         Ok(crate::MarketSubscriptionOutcome::Confirmed(()))
-                    }
+                    },
                     Err(crate::IntegrationError::InvalidRequest(message)) => Ok(
                         crate::MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
                             code: None,
@@ -304,7 +304,7 @@ macro_rules! market_websocket_capabilities {
                     ),
                     Err(crate::IntegrationError::NotReady) => {
                         Err(crate::IntegrationError::NotReady)
-                    }
+                    },
                     Err(error) => Ok(crate::MarketSubscriptionOutcome::Indeterminate {
                         provisional: Some(()),
                         reason: error.to_string(),
@@ -325,8 +325,8 @@ macro_rules! market_websocket_capabilities {
                     let value = match self.poll_next_value(cx) {
                         std::task::Poll::Ready(Ok(value)) => value,
                         std::task::Poll::Ready(Err(error)) => {
-                            return std::task::Poll::Ready(Err(error))
-                        }
+                            return std::task::Poll::Ready(Err(error));
+                        },
                         std::task::Poll::Pending => return std::task::Poll::Pending,
                     };
                     let mut events =
@@ -748,10 +748,10 @@ macro_rules! websocket_api_connection {
                         crate::services::participants::binance::execution::submitted(
                             request, &value,
                         )
-                    }
+                    },
                     Ok(crate::services::participants::binance::api::ApiReply::Rejected(error)) => {
                         Ok(crate::CommandOutcome::Rejected(error))
-                    }
+                    },
                     Err(
                         error @ (crate::IntegrationError::Authentication(_)
                         | crate::IntegrationError::Authorization(_)
@@ -785,10 +785,10 @@ macro_rules! websocket_api_connection {
                             at_unix_nanos,
                             &value,
                         )
-                    }
+                    },
                     Ok(crate::services::participants::binance::api::ApiReply::Rejected(error)) => {
                         Ok(crate::CommandOutcome::Rejected(error))
-                    }
+                    },
                     Err(
                         error @ (crate::IntegrationError::Authentication(_)
                         | crate::IntegrationError::Authorization(_)
@@ -1232,13 +1232,13 @@ macro_rules! futures_native_order_extensions {
                 {
                     crate::CommandOutcome::Confirmed(_) => {
                         Ok(crate::CommandOutcome::Confirmed(scope.clone()))
-                    }
+                    },
                     crate::CommandOutcome::Rejected(error) => {
                         Ok(crate::CommandOutcome::Rejected(error))
-                    }
+                    },
                     crate::CommandOutcome::Indeterminate(error) => {
                         Ok(crate::CommandOutcome::Indeterminate(error))
-                    }
+                    },
                 }
             }
 

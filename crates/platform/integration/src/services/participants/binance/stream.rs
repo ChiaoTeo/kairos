@@ -21,7 +21,7 @@ pub(crate) fn stream_name(feed: &MarketFeed, family: &str) -> Result<String, Int
         ("stocks", MarketDataKind::Quote) => "quote".into(),
         ("stocks", MarketDataKind::Bar | MarketDataKind::TradeBar | MarketDataKind::QuoteBar) => {
             format!("kline_{}", feed.interval.as_deref().unwrap_or("1m"))
-        }
+        },
         ("stocks", MarketDataKind::InstrumentStatus) => "tradingStatus".into(),
         (_, MarketDataKind::Quote) => "bookTicker".into(),
         (_, MarketDataKind::Ticker24h) => "ticker".into(),
@@ -32,15 +32,15 @@ pub(crate) fn stream_name(feed: &MarketFeed, family: &str) -> Result<String, Int
         },
         (_, MarketDataKind::Bar | MarketDataKind::TradeBar | MarketDataKind::QuoteBar) => {
             format!("kline_{}", feed.interval.as_deref().unwrap_or("1m"))
-        }
+        },
         (_, MarketDataKind::MarkPrice) => "markPrice".into(),
         (_, MarketDataKind::IndexPrice) => "indexPrice".into(),
         (_, MarketDataKind::FundingRate) => "markPrice".into(),
         (_, unsupported) => {
             return Err(IntegrationError::InvalidRequest(format!(
                 "Binance {family} WebSocket does not support {unsupported:?}"
-            )))
-        }
+            )));
+        },
     };
     Ok(format!("{symbol}@{channel}"))
 }
@@ -71,7 +71,7 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
             event.kind = MarketEventKind::Trade;
             event.price = parse(value.get("p").or_else(|| value.get("price")))?;
             event.quantity = parse(value.get("q").or_else(|| value.get("quantity")))?;
-        }
+        },
         "depthUpdate" | "depth" => {
             event.kind = MarketEventKind::BookDelta;
             event.bids = levels(value.get("b").or_else(|| value.get("bids")))?;
@@ -88,20 +88,20 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
                 .map(Into::into);
             event.last_sequence = value.get("u").and_then(Value::as_u64).map(Into::into);
             event.sequence = event.last_sequence;
-        }
+        },
         "kline" => normalize_kline(&mut event, value.get("k").unwrap_or(value))?,
         "markPriceUpdate" => {
             event.kind = MarketEventKind::MarkPrice;
             event.price = parse(value.get("p"))?;
             event.rate = parse(value.get("r"))?;
-        }
+        },
         "indexPriceUpdate" => {
             event.kind = MarketEventKind::IndexPrice;
             event.price = parse(value.get("p"))?;
-        }
+        },
         "tradingStatus" => {
             event.kind = MarketEventKind::InstrumentStatus;
-        }
+        },
         _ => {
             event.kind = MarketEventKind::Quote;
             event.price = parse(
@@ -134,7 +134,7 @@ pub(crate) fn normalize(value: &Value) -> Result<VecDeque<MarketEvent>, Integrat
             ) {
                 event.bids.push((price, quantity));
             }
-        }
+        },
     }
     Ok(VecDeque::from([event]))
 }

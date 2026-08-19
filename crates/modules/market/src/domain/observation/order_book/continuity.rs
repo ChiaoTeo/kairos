@@ -73,7 +73,7 @@ mod tests {
             };
             let mut book = OrderBook::snapshot("BTC-USD", "BTC-USD", 10_u64, 1_u64, vec![initial], vec![]).unwrap();
             let delta = OrderBookDelta {
-                source_id: "market".into(),
+                source_id: kairos_primitives::SourceId::new("market").unwrap(),
                 market_id: kairos_primitives::MarketId::new("BTC-USD").unwrap(),
                 instrument_id: kairos_primitives::InstrumentId::new("BTC-USD").unwrap(),
                 first_sequence: 11_u64.into(),

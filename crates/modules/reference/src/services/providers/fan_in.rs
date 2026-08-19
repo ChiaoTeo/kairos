@@ -446,7 +446,7 @@ where
                             .await?;
                     }
                     self.mark_success(&source_id);
-                }
+                },
                 Ok(update) => {
                     tracing::info!(
                         event = "reference_provider_sync_in_progress",
@@ -465,7 +465,7 @@ where
                     if !has_last_good {
                         unavailable.push(source_id);
                     }
-                }
+                },
                 Err(error) => {
                     let has_last_good = self
                         .sync_store
@@ -491,7 +491,7 @@ where
                         unavailable.push(source_id);
                         unavailable_due_to_failure = true;
                     }
-                }
+                },
             }
         }
         if !unavailable.is_empty() {
@@ -673,7 +673,7 @@ where
                                 .get(&source_id)
                                 .expect("inserted provider snapshot")
                         }
-                    }
+                    },
                     Err(error) => {
                         failures.push(format!("{source_id}: {error}"));
                         self.mark_failure(&source_id, self.last_good.contains_key(&source_id));
@@ -682,7 +682,7 @@ where
                             continue;
                         };
                         catalog
-                    }
+                    },
                 };
                 for value in &catalog.entities {
                     if entities
@@ -745,10 +745,10 @@ where
                     });
                 }
                 return Err(ReferenceError::Provider(format!(
-                "reference providers unavailable without a last-known-good snapshot: {}; failures: {}",
-                unavailable_without_last_good.join(", "),
-                failures.join("; ")
-            )));
+                    "reference providers unavailable without a last-known-good snapshot: {}; failures: {}",
+                    unavailable_without_last_good.join(", "),
+                    failures.join("; ")
+                )));
             }
             if successful_sources == 0 && self.last_good.is_empty() {
                 #[cfg(not(test))]
@@ -862,11 +862,11 @@ where
                     }
                     self.mark_success(source_id);
                     Ok(Some(ProviderCatalog::default()))
-                }
+                },
                 Ok(_) => {
                     self.mark_syncing(source_id);
                     Ok(None)
-                }
+                },
                 Err(error) => {
                     let has_last_good = self
                         .sync_store
@@ -876,7 +876,7 @@ where
                         .await?;
                     self.mark_failure(source_id, has_last_good);
                     Err(error)
-                }
+                },
             };
         }
         #[cfg(not(test))]
@@ -928,7 +928,7 @@ where
                     #[cfg(not(test))]
                     self.last_good.clear();
                     Ok(None)
-                }
+                },
                 Ok(update) => {
                     self.last_good.insert(source_id.to_owned(), update.catalog);
                     if let Some(store) = self.sync_store.as_mut() {
@@ -946,13 +946,13 @@ where
                     #[cfg(not(test))]
                     self.last_good.clear();
                     result
-                }
+                },
                 Err(error) => {
                     self.mark_failure(source_id, self.last_good.contains_key(source_id));
                     #[cfg(not(test))]
                     self.last_good.clear();
                     Err(error)
-                }
+                },
             }
         }
     }

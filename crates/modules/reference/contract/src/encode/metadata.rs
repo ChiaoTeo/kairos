@@ -1,20 +1,25 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
+use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{
     Decimal64, EventMetadata, EventMetadataArgs,
 };
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
-use kairos_protocol::InstanceIdentity;
 
+use crate::ContractResult;
 use crate::transport::{Asset, Entity, Instrument, Listing, Market};
-use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
-    pub producer_id: String,
-    pub identity: InstanceIdentity,
-    pub sequence: u64,
-    pub event_id: String,
-    pub catalog_revision: u64,
+    pub common: ProtocolContext,
+    pub catalog_revision: kairos_primitives::Generation,
+}
+
+impl std::ops::Deref for EncodeContext {
+    type Target = ProtocolContext;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
 }
 
 impl EncodeContext {
@@ -24,14 +29,11 @@ impl EncodeContext {
         sequence: u64,
         event_id: impl Into<String>,
         catalog_revision: u64,
-    ) -> Self {
-        Self {
-            producer_id: producer_id.into(),
-            identity,
-            sequence,
-            event_id: event_id.into(),
-            catalog_revision,
-        }
+    ) -> Result<Self, String> {
+        Ok(Self {
+            common: ProtocolContext::event(producer_id, identity, sequence, event_id)?,
+            catalog_revision: catalog_revision.into(),
+        })
     }
 }
 
@@ -40,18 +42,30 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    let event_id = builder.create_string(&context.event_id);
+    let event_id = builder.create_string(
+        context
+            .event_id
+            .as_ref()
+            .expect("reference event context carries event identity")
+            .as_str(),
+    );
     let stream_id = builder.create_string("reference.events");
     let producer_id = builder.create_string(&context.producer_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = non_empty(builder, &context.identity.launch_id);
-    let instance_id = non_empty(builder, &context.identity.instance_id);
+    let launch_id = context
+        .identity
+        .launch_id()
+        .map(|value| builder.create_string(value.as_str()));
+    let instance_id = context
+        .identity
+        .instance_id()
+        .map(|value| builder.create_string(value.as_str()));
     EventMetadata::create(
         builder,
         &EventMetadataArgs {
             event_id: Some(event_id),
             stream_id: Some(stream_id),
-            sequence: context.sequence,
+            sequence: context.sequence.get(),
             producer_id: Some(producer_id),
             workspace_id: Some(workspace_id),
             launch_id,
@@ -159,7 +173,7 @@ fn encode_entity(
         entity_id: Some(builder.create_string(&record.entity_id)),
         entity_type: Some(builder.create_string(&record.entity_type)),
         name: Some(builder.create_string(&record.name)),
-        status: status(&record.status)?,
+        status: status(record.status),
     };
     let entity = fb::Entity::create(&mut builder, &args);
     if updated {
@@ -167,7 +181,7 @@ fn encode_entity(
             &mut builder,
             &fb::EntityUpdatedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 entity: Some(entity),
             },
         );
@@ -177,7 +191,7 @@ fn encode_entity(
             &mut builder,
             &fb::EntityUpsertedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 entity: Some(entity),
             },
         );
@@ -199,7 +213,7 @@ fn encode_asset(
         code: Some(builder.create_string(&record.code)),
         name: optional_string(&mut builder, record.name.as_deref()),
         asset_class: Some(builder.create_string(record.asset_class.as_str())),
-        status: status(&record.status)?,
+        status: status(record.status),
     };
     let asset = fb::Asset::create(&mut builder, &args);
     if updated {
@@ -207,7 +221,7 @@ fn encode_asset(
             &mut builder,
             &fb::AssetUpdatedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 asset: Some(asset),
             },
         );
@@ -217,7 +231,7 @@ fn encode_asset(
             &mut builder,
             &fb::AssetUpsertedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 asset: Some(asset),
             },
         );
@@ -253,12 +267,12 @@ fn encode_instrument(
         instrument_type: Some(instrument_type),
         product_family,
         underlying_instrument_id,
-        expiry_unix_nanos: record.expiry_unix_nanos.unwrap_or_default(),
+        expiry_unix_nanos: record.expiry_unix_nanos.unwrap_or_default().get(),
         option_right,
         issuer_id,
         share_class,
         primary_currency_asset_id,
-        status: status(&record.status)?,
+        status: status(record.status),
         ..Default::default()
     };
     let instrument = fb::Instrument::create(&mut builder, &instrument_args);
@@ -267,7 +281,7 @@ fn encode_instrument(
             &mut builder,
             &fb::InstrumentUpdatedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 instrument: Some(instrument),
             },
         );
@@ -277,7 +291,7 @@ fn encode_instrument(
             &mut builder,
             &fb::InstrumentUpsertedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 instrument: Some(instrument),
             },
         );
@@ -303,9 +317,9 @@ fn encode_listing(
         instrument_id: Some(instrument_id),
         exchange_id: Some(exchange_id),
         exchange_symbol: Some(exchange_symbol),
-        status: status(&record.status)?,
-        effective_from_unix_nanos: record.effective_from_unix_nanos,
-        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default(),
+        status: status(record.status),
+        effective_from_unix_nanos: record.effective_from_unix_nanos.get(),
+        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default().get(),
     };
     let listing = fb::Listing::create(&mut builder, &listing_args);
     if updated {
@@ -313,7 +327,7 @@ fn encode_listing(
             &mut builder,
             &fb::ListingUpdatedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 listing: Some(listing),
             },
         );
@@ -323,7 +337,7 @@ fn encode_listing(
             &mut builder,
             &fb::ListingUpsertedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 listing: Some(listing),
             },
         );
@@ -340,11 +354,21 @@ fn encode_market(
 ) -> ContractResult<Vec<u8>> {
     let mut builder = FlatBufferBuilder::new();
     let metadata = event_metadata(&mut builder, context, occurred_at_unix_nanos);
-    let price_tick = decimal(record.price_tick.as_deref())?;
-    let quantity_tick = decimal(record.quantity_tick.as_deref())?;
-    let minimum_quantity = decimal(record.minimum_quantity.as_deref())?;
-    let minimum_notional = decimal(record.minimum_notional.as_deref())?;
-    let contract_size = decimal(record.contract_size.as_deref())?;
+    let price_tick = record
+        .price_tick
+        .map(|value| decimal(value.mantissa(), value.scale()));
+    let quantity_tick = record
+        .quantity_tick
+        .map(|value| decimal(value.mantissa(), value.scale()));
+    let minimum_quantity = record
+        .minimum_quantity
+        .map(|value| decimal(value.mantissa(), value.scale()));
+    let minimum_notional = record
+        .minimum_notional
+        .map(|value| decimal(value.mantissa(), value.scale()));
+    let contract_size = record
+        .contract_size
+        .map(|value| decimal(value.mantissa(), value.scale()));
     let market_id = builder.create_string(&record.market_id);
     let instrument_id = builder.create_string(&record.instrument_id);
     let listing_id = optional_string(&mut builder, record.listing_id.as_deref());
@@ -368,7 +392,7 @@ fn encode_market(
         venue_symbol,
         base_asset_id,
         quote_asset_id,
-        status: status(&record.status)?,
+        status: status(record.status),
         price_tick: price_tick.as_ref(),
         quantity_tick: quantity_tick.as_ref(),
         price_precision: record.price_precision,
@@ -376,8 +400,8 @@ fn encode_market(
         minimum_quantity: minimum_quantity.as_ref(),
         minimum_notional: minimum_notional.as_ref(),
         contract_size: contract_size.as_ref(),
-        effective_from_unix_nanos: record.effective_from_unix_nanos,
-        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default(),
+        effective_from_unix_nanos: record.effective_from_unix_nanos.get(),
+        effective_to_unix_nanos: record.effective_to_unix_nanos.unwrap_or_default().get(),
         asset_type,
         underlying_instrument_id,
     };
@@ -387,7 +411,7 @@ fn encode_market(
             &mut builder,
             &fb::MarketUpdatedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 market: Some(market),
             },
         );
@@ -397,7 +421,7 @@ fn encode_market(
             &mut builder,
             &fb::MarketUpsertedArgs {
                 metadata: Some(metadata),
-                catalog_revision: context.catalog_revision,
+                catalog_revision: context.catalog_revision.get(),
                 market: Some(market),
             },
         );
@@ -413,39 +437,24 @@ fn optional_string<'a, A: Allocator + 'a>(
     value.map(|value| builder.create_string(value))
 }
 
-fn status(value: &str) -> ContractResult<fb::ReferenceLifecycleStatus> {
-    match value.to_ascii_lowercase().as_str() {
-        "draft" => Ok(fb::ReferenceLifecycleStatus::DRAFT),
-        "active" => Ok(fb::ReferenceLifecycleStatus::ACTIVE),
-        "trading" => Ok(fb::ReferenceLifecycleStatus::TRADING),
-        "suspended" => Ok(fb::ReferenceLifecycleStatus::SUSPENDED),
-        "inactive" => Ok(fb::ReferenceLifecycleStatus::INACTIVE),
-        "retired" | "delisted" => Ok(fb::ReferenceLifecycleStatus::RETIRED),
-        "expired" => Ok(fb::ReferenceLifecycleStatus::EXPIRED),
-        "" | "unspecified" => Ok(fb::ReferenceLifecycleStatus::UNSPECIFIED),
-        other => Err(ContractError::Invalid(format!(
-            "unknown Reference lifecycle status: {other}"
-        ))),
+fn status(value: kairos_primitives::ReferenceStatus) -> fb::ReferenceLifecycleStatus {
+    match value {
+        kairos_primitives::ReferenceStatus::Draft => fb::ReferenceLifecycleStatus::DRAFT,
+        kairos_primitives::ReferenceStatus::Active => fb::ReferenceLifecycleStatus::ACTIVE,
+        kairos_primitives::ReferenceStatus::Trading => fb::ReferenceLifecycleStatus::TRADING,
+        kairos_primitives::ReferenceStatus::Suspended => fb::ReferenceLifecycleStatus::SUSPENDED,
+        kairos_primitives::ReferenceStatus::Inactive => fb::ReferenceLifecycleStatus::INACTIVE,
+        kairos_primitives::ReferenceStatus::Retired
+        | kairos_primitives::ReferenceStatus::Delisted => fb::ReferenceLifecycleStatus::RETIRED,
+        kairos_primitives::ReferenceStatus::Expired => fb::ReferenceLifecycleStatus::EXPIRED,
+        kairos_primitives::ReferenceStatus::Unknown => fb::ReferenceLifecycleStatus::UNSPECIFIED,
     }
 }
 
-fn decimal(value: Option<&str>) -> ContractResult<Option<Decimal64>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let value = value
-        .trim()
-        .parse::<kairos_primitives::DecimalParts>()
-        .map_err(|error| ContractError::Invalid(error.to_string()))?;
-    Ok(Some(Decimal64::new(value.mantissa(), value.scale())))
+fn decimal(mantissa: i64, scale: u8) -> Decimal64 {
+    Decimal64::new(mantissa, scale)
 }
 
-fn non_empty<'a, A: Allocator + 'a>(
-    builder: &mut FlatBufferBuilder<'a, A>,
-    value: &str,
-) -> Option<WIPOffset<&'a str>> {
-    (!value.is_empty()).then(|| builder.create_string(value))
-}
 fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

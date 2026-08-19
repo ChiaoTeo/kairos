@@ -32,10 +32,11 @@ impl MarketActor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::domain::freshness::{DataFreshnessStatus, MarketFreshness};
-    use crate::ObservationKind;
     use kairos_primitives::{Sequence, UnixNanos};
+
+    use super::*;
+    use crate::ObservationKind;
+    use crate::domain::freshness::{DataFreshnessStatus, MarketFreshness};
 
     #[test]
     fn freshness_view_change_does_not_create_an_event_stream_gap() {
@@ -44,7 +45,7 @@ mod tests {
         actor.freshness.insert(
             "aapl".into(),
             MarketFreshness {
-                source_id: "source".into(),
+                source_id: kairos_primitives::SourceId::new("source").unwrap(),
                 scope: crate::ObservationScope::market("market:exchange:nasdaq:equity:AAPL")
                     .unwrap(),
                 data_kind: ObservationKind::Quote,

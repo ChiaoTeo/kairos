@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use kairos_primitives::{
-    Money, Price, PriceDelta, Quantity, Rate, SignedQuantity, MAX_DECIMAL_SCALE,
+    MAX_DECIMAL_SCALE, Money, Price, PriceDelta, Quantity, Rate, SignedQuantity,
 };
 use proptest::prelude::*;
 

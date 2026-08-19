@@ -1,8 +1,9 @@
+use std::task::{Context, Poll};
+
 use crate::transport::websocket::{SocketEvent, TokioSocket};
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionLifecycle, ConnectionState, IntegrationError,
 };
-use std::task::{Context, Poll};
 
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
@@ -49,11 +50,11 @@ impl SocketService {
                 self.socket = Some(socket);
                 self.state.mark_ready(false);
                 Ok(())
-            }
+            },
             Err(error) => {
                 self.state.mark_failed(error.clone());
                 Err(IntegrationError::Transport(error))
-            }
+            },
         }
     }
 
@@ -96,7 +97,7 @@ impl SocketService {
                 Poll::Ready(Ok(crate::MaintenanceOutcome::ReconnectRequired {
                     reason: "Binance WebSocket idle deadline elapsed".into(),
                 }))
-            }
+            },
             _ => Poll::Ready(Ok(crate::MaintenanceOutcome::Healthy)),
         }
     }
@@ -128,7 +129,7 @@ impl SocketService {
                         .send_pong(payload.to_vec())
                         .await
                         .map_err(IntegrationError::Transport)?;
-                }
+                },
                 SocketEvent::Message(message) => return Ok(message),
                 SocketEvent::Error(error) => return Err(IntegrationError::Transport(error)),
             }
@@ -150,8 +151,8 @@ impl SocketService {
                 )) => continue,
                 Poll::Ready(SocketEvent::Message(message)) => return Poll::Ready(Ok(message)),
                 Poll::Ready(SocketEvent::Error(error)) => {
-                    return Poll::Ready(Err(IntegrationError::Transport(error)))
-                }
+                    return Poll::Ready(Err(IntegrationError::Transport(error)));
+                },
                 Poll::Pending => return Poll::Pending,
             }
         }

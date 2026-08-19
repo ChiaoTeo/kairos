@@ -1,3 +1,8 @@
+use std::sync::Arc;
+use std::time::Instant;
+
+use tracing::{info, warn};
+
 use super::{
     AccountCurrentView, AccountError, AccountRefreshReport, MarkToMarket, ReconcileAccount,
     RefreshAccount,
@@ -6,9 +11,6 @@ use crate::domain::{AccountEvent, AccountObservedFill, AccountSegment};
 use crate::services::integration::AccountSnapshotGateway;
 use crate::services::persistence::JsonAccountStore;
 use crate::services::runtime::AccountRuntime;
-use std::sync::Arc;
-use std::time::Instant;
-use tracing::{info, warn};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AccountRuntimeMode {
@@ -147,11 +149,11 @@ impl AccountApplication {
                     warn!(event = "account_refresh_degraded", component = "account", account_id = %report.account_id, refreshed_segments = report.refreshed_segments.len(), issues = report.issues.len(), differences = report.differences.len(), duration_ms = started.elapsed().as_millis(), "account refresh completed with issues");
                 }
                 Ok(report)
-            }
+            },
             Err(error) => {
                 warn!(event = "account_refresh_failed", component = "account", account_id = %request.account_id, duration_ms = started.elapsed().as_millis(), error = %error, "account refresh failed");
                 Err(error)
-            }
+            },
         }
     }
 
@@ -241,11 +243,11 @@ impl AccountApplication {
                     "account fill applied"
                 );
                 Ok(())
-            }
+            },
             Err(error) => {
                 warn!(event = "account_fill_rejected", component = "account", error = %error, "account fill rejected");
                 Err(error)
-            }
+            },
         }
     }
 

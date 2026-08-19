@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use super::view::ExecutionEvent;
 use crate::ContractResult;
-use std::sync::Arc;
 pub struct ExecutionEventFrame {
     bytes: Arc<[u8]>,
 }

@@ -1,3 +1,7 @@
+use kairos_primitives::{
+    AccountId, ExecutionRouteId, InstrumentId, MarketId, OrderId, OrderOptionCode, OrderType,
+    ParticipantId, Price, ProviderProductCode, ProviderSymbol, Quantity, SegmentKey,
+};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionControlResponse {
@@ -16,16 +20,16 @@ pub struct ExecutionControlError {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionRouteCandidateResponse {
-    pub route_id: String,
-    pub account_id: Option<String>,
-    pub segment_key: Option<String>,
-    pub instrument_id: Option<String>,
-    pub market_id: Option<String>,
-    pub participant_id: String,
-    pub provider_product: String,
-    pub provider_symbol: String,
-    pub supported_order_types: Vec<String>,
-    pub supported_options: Vec<String>,
+    pub route_id: ExecutionRouteId,
+    pub account_id: Option<AccountId>,
+    pub segment_key: Option<SegmentKey>,
+    pub instrument_id: Option<InstrumentId>,
+    pub market_id: Option<MarketId>,
+    pub participant_id: ParticipantId,
+    pub provider_product: ProviderProductCode,
+    pub provider_symbol: ProviderSymbol,
+    pub supported_order_types: Vec<OrderType>,
+    pub supported_options: Vec<OrderOptionCode>,
     pub ready: bool,
 }
 
@@ -59,17 +63,17 @@ pub struct CancelOrderRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReplaceOrderRequest {
-    pub quantity: Option<String>,
-    pub limit_price: Option<String>,
+    pub quantity: Option<Quantity>,
+    pub limit_price: Option<Price>,
     pub options: Option<serde_json::Value>,
     pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReconcileExecutionRequest {
-    pub account_id: Option<String>,
-    pub execution_route_id: Option<String>,
-    pub order_id: Option<String>,
+    pub account_id: Option<AccountId>,
+    pub execution_route_id: Option<ExecutionRouteId>,
+    pub order_id: Option<OrderId>,
     pub reason: Option<String>,
 }
 
@@ -79,7 +83,7 @@ pub enum ExecutionRestRequest {
     Routes(ExecutionRoutesQuery),
     SubmitIntent(SubmitIntentRequest),
     CancelOrder {
-        order_id: String,
+        order_id: OrderId,
         request: CancelOrderRequest,
     },
     ReplaceOrder {
@@ -101,16 +105,16 @@ pub enum ExecutionRestResponse {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionRoutesQuery {
-    pub account_id: Option<String>,
-    pub segment_key: Option<String>,
-    pub instrument_id: Option<String>,
-    pub market_id: Option<String>,
-    pub participant_id: Option<String>,
+    pub account_id: Option<AccountId>,
+    pub segment_key: Option<SegmentKey>,
+    pub instrument_id: Option<InstrumentId>,
+    pub market_id: Option<MarketId>,
+    pub participant_id: Option<ParticipantId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionRouteHealth {
-    pub route_id: String,
+    pub route_id: ExecutionRouteId,
     pub status: String,
     pub required: bool,
 }
@@ -119,7 +123,7 @@ pub struct ExecutionRouteHealth {
 pub struct ExecutionHealthResponse {
     pub status: String,
     pub writer_recovery_ready: bool,
-    pub outbox_backlog: usize,
+    pub outbox_backlog: u64,
     pub oldest_outbox_event_age_ms: Option<u64>,
     pub outbox_error: Option<String>,
     pub routes: Vec<ExecutionRouteHealth>,
@@ -135,5 +139,5 @@ pub struct ExecutionCommandStatus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionReconcileResponse {
-    pub changed: usize,
+    pub changed: u64,
 }

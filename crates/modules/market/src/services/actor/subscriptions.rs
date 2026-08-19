@@ -6,8 +6,8 @@ use crate::domain::market::{MarketSelectionQuery, ResolvedMarket};
 use crate::domain::observation::identity::validate_observation_selectors;
 use crate::domain::source::SourceStatus;
 use crate::domain::subscription::{
-    derive_subscription_status, ObservationSelector, ReconcileResult, SubscriptionId,
-    SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode, SubscriptionState,
+    ObservationSelector, ReconcileResult, SubscriptionId, SubscriptionMemberRequirement,
+    SubscriptionMemberStatus, SubscriptionMode, SubscriptionState, derive_subscription_status,
 };
 
 pub(super) struct DynamicIntent {
@@ -37,7 +37,7 @@ impl MarketActor {
         selectors: Vec<ObservationSelector>,
     ) -> Result<(), String> {
         if self.static_subscriptions.contains_key(&id) || self.dynamic_intents.contains_key(&id) {
-            return Err(format!("subscription id already exists: {}", id.0));
+            return Err(format!("subscription id already exists: {id}"));
         }
         market.validate()?;
         validate_observation_selectors(market.instrument_kind, &selectors)?;
@@ -87,7 +87,7 @@ impl MarketActor {
         selectors: Vec<ObservationSelector>,
     ) -> Result<ReconcileResult, String> {
         if self.static_subscriptions.contains_key(&id) || self.dynamic_intents.contains_key(&id) {
-            return Err(format!("subscription id already exists: {}", id.0));
+            return Err(format!("subscription id already exists: {id}"));
         }
         let owner_id = owner_id.into();
         if owner_id.trim().is_empty() {
@@ -154,10 +154,7 @@ impl MarketActor {
             return Ok(false);
         };
         if existing_owner != owner_id {
-            return Err(format!(
-                "subscription {} belongs to a different owner",
-                id.0
-            ));
+            return Err(format!("subscription {} belongs to a different owner", id));
         }
         Ok(self.unsubscribe(id))
     }
@@ -212,7 +209,7 @@ impl MarketActor {
             self.generation += 1;
             return Ok(());
         }
-        Err(format!("subscription not found: {}", subscription_id.0))
+        Err(format!("subscription not found: {subscription_id}"))
     }
 
     pub(crate) fn subscription_states(&self) -> Vec<SubscriptionState> {
@@ -285,10 +282,10 @@ impl MarketActor {
                             match source_status {
                                 Some(SourceStatus::Degraded | SourceStatus::Reconnecting) => {
                                     SubscriptionMemberStatus::Degraded
-                                }
+                                },
                                 Some(SourceStatus::Stopped) => {
                                     SubscriptionMemberStatus::Unavailable
-                                }
+                                },
                                 _ => SubscriptionMemberStatus::Ready,
                             }
                         } else if pending
@@ -306,7 +303,7 @@ impl MarketActor {
                         } else {
                             SubscriptionMemberStatus::Unavailable
                         }
-                    }
+                    },
                     _ => SubscriptionMemberStatus::Rejected,
                 };
                 (market_id.clone(), status)

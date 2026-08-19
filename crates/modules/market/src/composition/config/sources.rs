@@ -1,5 +1,6 @@
-use super::defaults::*;
 use serde::Deserialize;
+
+use super::defaults::*;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]

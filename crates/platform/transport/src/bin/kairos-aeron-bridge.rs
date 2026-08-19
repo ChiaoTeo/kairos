@@ -1,6 +1,7 @@
-use clap::Parser;
 use std::io::{self, Write};
 use std::time::Duration;
+
+use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(

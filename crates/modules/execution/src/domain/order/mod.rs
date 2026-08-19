@@ -1,10 +1,8 @@
-use serde::{Deserialize, Serialize};
-
-pub use kairos_primitives::IntentId;
 pub use kairos_primitives::{
-    AccountId, Currency, ExecutionRouteId, FillId, InstrumentId, LegId, MarketId, Money, OrderId,
-    OrderSide, PlanId, Price, Quantity, RemoteOrderId, SegmentKey, UnixNanos,
+    AccountId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId, MarketId, Money,
+    OrderId, OrderSide, OrderType, PlanId, Price, Quantity, RemoteOrderId, SegmentKey, UnixNanos,
 };
+use serde::{Deserialize, Serialize};
 
 mod commitment;
 mod entity;

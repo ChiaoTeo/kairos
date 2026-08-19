@@ -4,10 +4,9 @@ use kairos_primitives::{
     AccountId, ClientOrderId, Currency, DomainTypeError, FillId, InstrumentId, IntentId, MarketId,
     Money, OrderId, Price, Quantity, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
 };
-
-pub use super::decimal::DecimalValue;
 pub use kairos_primitives::{OrderSide, OrderStatus};
 
+pub use super::decimal::DecimalValue;
 use crate::domain::ParticipantInstrumentRef;
 
 pub(crate) fn normalize_order_side(value: &str) -> OrderSide {
@@ -232,8 +231,9 @@ pub struct ExternalExecutionEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{OrderRequest, OrderSide, OrderType};
     use kairos_primitives::Symbol;
+
+    use super::{OrderRequest, OrderSide, OrderType};
 
     #[test]
     fn limit_order_requires_a_limit_price() {

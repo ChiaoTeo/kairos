@@ -1,7 +1,8 @@
 //! Participant instrument catalog facts consumed by Reference.
 
-use crate::domain::ParticipantRef;
 use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+
+use crate::domain::ParticipantRef;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExternalInstrumentKind {

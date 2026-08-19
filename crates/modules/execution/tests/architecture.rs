@@ -273,12 +273,16 @@ fn execution_dependencies_follow_their_concrete_owner_modules() {
             "missing concrete dependency module: {required}"
         );
     }
-    assert!(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/application/core/orders/admission/mod.rs")
-        .is_file());
-    assert!(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src/services/simulation/account_settlement.rs")
-        .is_file());
+    assert!(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/application/core/orders/admission/mod.rs")
+            .is_file()
+    );
+    assert!(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/services/simulation/account_settlement.rs")
+            .is_file()
+    );
     let services = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services");
     for required in ["risk/mod.rs", "risk/adapter.rs", "risk/worker.rs"] {
         assert!(

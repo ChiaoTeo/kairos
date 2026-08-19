@@ -1,18 +1,18 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{ActorId, Generation};
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{Generation, SourceId};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    freshness::{DataFreshnessStatus, FeedStatus},
-    observation::{order_book::OrderBook, MarketObservation, ObservationKind, ObservationScope},
-    source::{MarketReadiness, SourceId, SourceState},
-    subscription::SubscriptionState,
-};
+use super::freshness::{DataFreshnessStatus, FeedStatus};
+use super::observation::order_book::OrderBook;
+use super::observation::{MarketObservation, ObservationKind, ObservationScope};
+use super::source::{MarketReadiness, SourceState};
+use super::subscription::SubscriptionState;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketViewFreshness {
-    pub source_id: String,
+    pub source_id: SourceId,
     pub scope: ObservationScope,
     pub data_kind: ObservationKind,
     pub last_event_time_unix_nanos: kairos_primitives::UnixNanos,

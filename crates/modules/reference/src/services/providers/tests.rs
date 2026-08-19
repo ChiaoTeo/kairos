@@ -1,12 +1,9 @@
-use super::{
-    binance_equity_provider_catalog, binance_provider_catalog, hyperliquid_provider_catalog,
-    massive_provider_catalog, okx_provider_catalog, provider_catalog_uses_current_canonical_shape,
-    BinanceProduct, BinanceSpotSource, CompositeSource, HyperliquidProduct, HyperliquidSource,
-    MassiveEquitySource, MassiveOptionsCoverageSource, OkxProduct, OkxSource, ReferenceSource,
-};
-use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
-use crate::services::actor::ReferenceActor;
-use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
 use kairos_conflux::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ParticipantKind,
     ParticipantRef,
@@ -15,12 +12,16 @@ use kairos_primitives::{
     AssetClass, Currency, InstrumentId, InstrumentKind, MarketId,
     ParticipantSymbol as ProviderSymbol, Symbol,
 };
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+
+use super::{
+    BinanceProduct, BinanceSpotSource, CompositeSource, HyperliquidProduct, HyperliquidSource,
+    MassiveEquitySource, MassiveOptionsCoverageSource, OkxProduct, OkxSource, ReferenceSource,
+    binance_equity_provider_catalog, binance_provider_catalog, hyperliquid_provider_catalog,
+    massive_provider_catalog, okx_provider_catalog, provider_catalog_uses_current_canonical_shape,
 };
-use std::time::Duration;
-use std::{io::Read, io::Write, net::TcpListener};
+use crate::domain::{Asset, Entity, Instrument, Market, ProviderCatalog, ReferenceResult};
+use crate::services::actor::ReferenceActor;
+use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 
 fn typed_market_id(value: &str) -> MarketId {
     MarketId::new(value).unwrap()
@@ -177,11 +178,13 @@ async fn normalized_composite_persists_facts_without_returning_a_full_catalog() 
     );
     let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
     assert!(reopened.has_last_good("provider-a").await.unwrap());
-    assert!(reopened
-        .load_last_good("provider-a")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        reopened
+            .load_last_good("provider-a")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -388,22 +391,30 @@ fn okx_provider_facts_receive_canonical_identity_only_in_reference() {
     };
 
     let catalog = okx_provider_catalog(facts).unwrap();
-    assert!(catalog
-        .instruments
-        .iter()
-        .any(|value| value.instrument_id == "instrument:spot:BTC"));
-    assert!(catalog
-        .instruments
-        .iter()
-        .any(|value| value.instrument_id == "instrument:perpetual:BTC-USDT"));
-    assert!(catalog
-        .markets
-        .iter()
-        .any(|value| value.market_id == "market:okx:perpetual:BTC-USDT-SWAP"));
-    assert!(catalog
-        .markets
-        .iter()
-        .all(|value| value.exchange_id == "exchange:okx"));
+    assert!(
+        catalog
+            .instruments
+            .iter()
+            .any(|value| value.instrument_id == "instrument:spot:BTC")
+    );
+    assert!(
+        catalog
+            .instruments
+            .iter()
+            .any(|value| value.instrument_id == "instrument:perpetual:BTC-USDT")
+    );
+    assert!(
+        catalog
+            .markets
+            .iter()
+            .any(|value| value.market_id == "market:okx:perpetual:BTC-USDT-SWAP")
+    );
+    assert!(
+        catalog
+            .markets
+            .iter()
+            .all(|value| value.exchange_id == "exchange:okx")
+    );
 }
 
 #[test]
@@ -516,17 +527,23 @@ fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
         BinanceProduct::Option,
     )
     .unwrap();
-    assert!(spot_catalog
-        .instruments
-        .iter()
-        .any(|value| value.instrument_id == "instrument:spot:BTC"));
+    assert!(
+        spot_catalog
+            .instruments
+            .iter()
+            .any(|value| value.instrument_id == "instrument:spot:BTC")
+    );
     assert!(option_catalog.instruments.iter().any(|value| {
         value.instrument_id == "instrument:option:BTC-USDT:20260528:50000:C"
             && value.underlying_instrument_id.as_deref() == Some("instrument:spot:BTC")
     }));
     assert!(spot_catalog.markets.iter().any(|value| {
         value.market_id == "market:binance:spot:BTCUSDT"
-            && value.minimum_notional.as_deref() == Some("10")
+            && value
+                .minimum_notional
+                .map(|value| value.to_string())
+                .as_deref()
+                == Some("10")
     }));
 }
 
@@ -689,10 +706,12 @@ fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
     assert!(catalog.entities.iter().any(|value| {
         value.entity_id == "exchange:cboe-bzx-options" && value.name == "Cboe BZX Options Exchange"
     }));
-    assert!(catalog
-        .instruments
-        .iter()
-        .any(|value| { value.instrument_id == "instrument:equity:US:SPY:common" }));
+    assert!(
+        catalog
+            .instruments
+            .iter()
+            .any(|value| { value.instrument_id == "instrument:equity:US:SPY:common" })
+    );
     assert!(catalog.instruments.iter().any(|value| {
         value.instrument_id == "instrument:option:SPY:20270115:500:C"
             && value.underlying_instrument_id.as_deref() == Some("instrument:equity:US:SPY:common")
@@ -870,10 +889,12 @@ async fn targeted_refresh_does_not_poll_unrelated_provider() {
 
     assert_eq!(peer_calls.load(Ordering::SeqCst), 0);
     assert_eq!(catalog.markets.len(), 2);
-    assert!(catalog
-        .markets
-        .iter()
-        .any(|market| market.market_id == "market:page-2"));
+    assert!(
+        catalog
+            .markets
+            .iter()
+            .any(|market| market.market_id == "market:page-2")
+    );
 }
 
 #[tokio::test]
@@ -1101,7 +1122,7 @@ async fn shared_canonical_instrument_is_enriched_by_an_authoritative_optional_fa
 async fn shared_canonical_asset_is_active_when_any_provider_observes_it_active() {
     let asset = |status| Asset {
         asset_id: kairos_primitives::AssetId::new("asset:equity:AVB").unwrap(),
-        code: "AVB".into(),
+        code: kairos_primitives::Symbol::new("AVB").unwrap(),
         asset_class: AssetClass::Equity,
         status,
         ..Asset::default()
@@ -1281,8 +1302,16 @@ async fn binance_async_capability_maps_through_reference_end_to_end() {
 
     assert_eq!(catalog.markets.len(), 1);
     assert_eq!(catalog.markets[0].market_id, "market:binance:spot:BTCUSDT");
-    assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.01"));
-    assert_eq!(catalog.markets[0].minimum_notional.as_deref(), Some("10"));
+    assert_eq!(
+        catalog.markets[0].price_tick.map(|value| value.to_string()),
+        Some("0.01".into())
+    );
+    assert_eq!(
+        catalog.markets[0]
+            .minimum_notional
+            .map(|value| value.to_string()),
+        Some("10".into())
+    );
 }
 
 #[tokio::test]
@@ -1293,8 +1322,10 @@ async fn okx_async_capability_maps_through_reference_end_to_end() {
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0_u8; 4096];
         let length = stream.read(&mut request).unwrap();
-        assert!(String::from_utf8_lossy(&request[..length])
-            .starts_with("GET /api/v5/public/instruments?instType=SWAP "));
+        assert!(
+            String::from_utf8_lossy(&request[..length])
+                .starts_with("GET /api/v5/public/instruments?instType=SWAP ")
+        );
         let body = r#"{"code":"0","data":[{"instId":"BTC-USDT-SWAP","uly":"BTC-USDT","settleCcy":"USDT","state":"live","tickSz":"0.1","lotSz":"0.01","minSz":"0.01","ctVal":"0.01"}]}"#;
         write!(
                 stream,
@@ -1329,8 +1360,16 @@ async fn okx_async_capability_maps_through_reference_end_to_end() {
         catalog.markets[0].market_id,
         "market:okx:perpetual:BTC-USDT-SWAP"
     );
-    assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.1"));
-    assert_eq!(catalog.markets[0].contract_size.as_deref(), Some("0.01"));
+    assert_eq!(
+        catalog.markets[0].price_tick.map(|value| value.to_string()),
+        Some("0.1".into())
+    );
+    assert_eq!(
+        catalog.markets[0]
+            .contract_size
+            .map(|value| value.to_string()),
+        Some("0.01".into())
+    );
 }
 
 #[tokio::test]
@@ -1341,8 +1380,10 @@ async fn okx_margin_is_spot_identity_with_explicit_margin_access() {
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0_u8; 4096];
         let length = stream.read(&mut request).unwrap();
-        assert!(String::from_utf8_lossy(&request[..length])
-            .starts_with("GET /api/v5/public/instruments?instType=MARGIN "));
+        assert!(
+            String::from_utf8_lossy(&request[..length])
+                .starts_with("GET /api/v5/public/instruments?instType=MARGIN ")
+        );
         let body = r#"{"code":"0","data":[{"instId":"BTC-USDT","baseCcy":"BTC","quoteCcy":"USDT","state":"live","tickSz":"0.1","lotSz":"0.001","minSz":"0.001"}]}"#;
         write!(
                 stream,
@@ -1415,10 +1456,12 @@ async fn massive_persists_each_successful_page_before_a_later_page_fails() {
         .unwrap();
     assert!(!first.complete);
     assert_eq!(first.page_count, 1);
-    assert!(source
-        .fetch_catalog_step_with_connections(&mut system.connections())
-        .await
-        .is_err());
+    assert!(
+        source
+            .fetch_catalog_step_with_connections(&mut system.connections())
+            .await
+            .is_err()
+    );
     server.join().unwrap();
 
     let mut reopened = SqlxProviderSyncStore::open_legacy(&path).await.unwrap();
@@ -1429,13 +1472,15 @@ async fn massive_persists_each_successful_page_before_a_later_page_fails() {
         .unwrap();
     assert_eq!(cursor.as_deref(), Some("page-2"));
     assert!(accumulated.is_none());
-    assert!(reopened
-        .staged_pages("massive-equity")
-        .await
-        .unwrap()
-        .into_iter()
-        .flat_map(|catalog| catalog.instruments)
-        .any(|instrument| instrument.symbol == "AAPL"));
+    assert!(
+        reopened
+            .staged_pages("massive-equity")
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|catalog| catalog.instruments)
+            .any(|instrument| instrument.symbol == "AAPL")
+    );
 }
 
 #[tokio::test]
@@ -1477,16 +1522,20 @@ async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
         .unwrap();
     server.join().unwrap();
     assert!(completed.complete);
-    assert!(completed
-        .catalog
-        .instruments
-        .iter()
-        .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:500:C"));
-    assert!(!completed
-        .catalog
-        .instruments
-        .iter()
-        .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:400:P"));
+    assert!(
+        completed
+            .catalog
+            .instruments
+            .iter()
+            .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:500:C")
+    );
+    assert!(
+        !completed
+            .catalog
+            .instruments
+            .iter()
+            .any(|instrument| instrument.instrument_id == "instrument:option:SPY:20260821:400:P")
+    );
     assert!(completed.catalog.listings.is_empty());
     assert!(completed.catalog.markets.is_empty());
 
@@ -1583,16 +1632,20 @@ async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
             .count(),
         9
     );
-    assert!(complete
-        .catalog
-        .instruments
-        .iter()
-        .any(|instrument| instrument.symbol == "TEST0"));
-    assert!(complete
-        .catalog
-        .instruments
-        .iter()
-        .any(|instrument| instrument.symbol == "TEST8"));
+    assert!(
+        complete
+            .catalog
+            .instruments
+            .iter()
+            .any(|instrument| instrument.symbol == "TEST0")
+    );
+    assert!(
+        complete
+            .catalog
+            .instruments
+            .iter()
+            .any(|instrument| instrument.symbol == "TEST8")
+    );
 }
 
 #[tokio::test]
@@ -1611,10 +1664,12 @@ async fn partial_provider_pages_do_not_drop_previous_page() {
     assert_eq!(source.provider_health()[0].status, "syncing");
     let second = source.fetch_catalog().await.unwrap();
     assert_eq!(second.markets.len(), 2);
-    assert!(second
-        .markets
-        .iter()
-        .any(|market| market.market_id == "market:page-1"));
+    assert!(
+        second
+            .markets
+            .iter()
+            .any(|market| market.market_id == "market:page-1")
+    );
 }
 
 #[tokio::test]

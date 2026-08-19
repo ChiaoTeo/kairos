@@ -1,3 +1,8 @@
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{
+    AccountId, BasisPoints, DecisionId, DurationNanos, Exchange, Generation, IdempotencyKey,
+    InstrumentId, PolicyId, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
+};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RiskControlResponse {
@@ -49,9 +54,9 @@ mod amount_tests {
     #[test]
     fn mutation_controls_have_typed_contract_shapes() {
         let resize = ResizeReservationRequest {
-            reservation_id: "reservation-1".into(),
+            reservation_id: kairos_primitives::ReservationId::new("reservation-1").unwrap(),
             amount: Amount::new(125, 2).unwrap(),
-            at_unix_nanos: 10,
+            at_unix_nanos: 10.into(),
         };
         assert_eq!(
             serde_json::to_value(resize).unwrap(),
@@ -63,8 +68,8 @@ mod amount_tests {
         );
 
         let consume = ConsumeReservationRequest {
-            reservation_id: "reservation-1".into(),
-            at_unix_nanos: 11,
+            reservation_id: kairos_primitives::ReservationId::new("reservation-1").unwrap(),
+            at_unix_nanos: 11.into(),
         };
         assert_eq!(
             serde_json::to_value(consume).unwrap(),
@@ -76,7 +81,7 @@ mod amount_tests {
 
         assert_eq!(
             serde_json::to_value(AdvanceRiskTimeRequest {
-                event_time_unix_nanos: 12
+                event_time_unix_nanos: 12.into()
             })
             .unwrap(),
             serde_json::json!({"event_time_unix_nanos": 12})
@@ -120,17 +125,17 @@ impl Metric {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskContext {
-    pub account_snapshot_watermark: u64,
-    pub market_freshness_watermark: u64,
-    pub portfolio_version: u64,
+    pub account_snapshot_watermark: UnixNanos,
+    pub market_freshness_watermark: UnixNanos,
+    pub portfolio_version: Generation,
     pub current_exposure: Amount,
     pub current_margin: Amount,
     pub available_margin: Amount,
     pub current_pnl: Amount,
     pub current_drawdown: Amount,
     pub market_is_fresh: bool,
-    pub leverage_bps: u64,
-    pub price_deviation_bps: u64,
+    pub leverage_bps: BasisPoints,
+    pub price_deviation_bps: BasisPoints,
     pub stress_loss: Amount,
 }
 
@@ -144,46 +149,46 @@ pub enum EnforcementMode {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PolicyScope {
-    pub account_id: Option<String>,
-    pub strategy_id: Option<String>,
-    pub instrument_id: Option<String>,
-    pub exchange_id: Option<String>,
+    pub account_id: Option<AccountId>,
+    pub strategy_id: Option<StrategyId>,
+    pub instrument_id: Option<InstrumentId>,
+    pub exchange_id: Option<Exchange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskPolicy {
-    pub policy_id: String,
-    pub version: u64,
+    pub policy_id: PolicyId,
+    pub version: Generation,
     pub scope: PolicyScope,
     pub metric: Metric,
     pub limit: Amount,
     pub enforcement: EnforcementMode,
-    pub valid_from_unix_nanos: u64,
-    pub valid_until_unix_nanos: Option<u64>,
+    pub valid_from_unix_nanos: UnixNanos,
+    pub valid_until_unix_nanos: Option<UnixNanos>,
     #[serde(default)]
-    pub window_nanos: Option<u64>,
+    pub window_nanos: Option<DurationNanos>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DependencyWatermarks {
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AuthorizeRequest {
-    pub request_id: String,
-    pub idempotency_key: String,
-    pub reservation_id: String,
-    pub account_id: String,
-    pub strategy_id: String,
-    pub instrument_id: String,
-    pub exchange_id: String,
+    pub request_id: RequestId,
+    pub idempotency_key: IdempotencyKey,
+    pub reservation_id: ReservationId,
+    pub account_id: AccountId,
+    pub strategy_id: StrategyId,
+    pub instrument_id: InstrumentId,
+    pub exchange_id: Exchange,
     pub proposal: TradeRiskProposal,
-    pub at_unix_nanos: u64,
-    pub reservation_ttl_nanos: u64,
-    pub dependency_generation: u64,
-    pub dependency_event_sequence: u64,
+    pub at_unix_nanos: UnixNanos,
+    pub reservation_ttl_nanos: DurationNanos,
+    pub dependency_generation: Generation,
+    pub dependency_event_sequence: Sequence,
     #[serde(default)]
     pub context: Option<RiskContext>,
 }
@@ -191,7 +196,7 @@ pub struct AuthorizeRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TradeRiskProposal {
     pub notional: Amount,
-    pub initial_margin_rate_bps: u64,
+    pub initial_margin_rate_bps: BasisPoints,
     #[serde(default)]
     pub reduce_only: bool,
     pub margin_rule_id: String,
@@ -199,23 +204,23 @@ pub struct TradeRiskProposal {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CircuitScope {
-    pub account_id: Option<String>,
-    pub strategy_id: Option<String>,
-    pub exchange_id: Option<String>,
+    pub account_id: Option<AccountId>,
+    pub strategy_id: Option<StrategyId>,
+    pub exchange_id: Option<Exchange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OpenCircuitRequest {
     pub scope: CircuitScope,
-    pub at_unix_nanos: u64,
-    pub reset_at_unix_nanos: Option<u64>,
+    pub at_unix_nanos: UnixNanos,
+    pub reset_at_unix_nanos: Option<UnixNanos>,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CloseCircuitRequest {
     pub scope: CircuitScope,
-    pub at_unix_nanos: u64,
+    pub at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -225,32 +230,32 @@ pub struct PublishPolicyRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ResizeReservationRequest {
-    pub reservation_id: String,
+    pub reservation_id: ReservationId,
     pub amount: Amount,
-    pub at_unix_nanos: u64,
+    pub at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReleaseReservationRequest {
-    pub reservation_id: String,
-    pub at_unix_nanos: u64,
+    pub reservation_id: ReservationId,
+    pub at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConsumeReservationRequest {
-    pub reservation_id: String,
-    pub at_unix_nanos: u64,
+    pub reservation_id: ReservationId,
+    pub at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceRiskTimeRequest {
-    pub event_time_unix_nanos: u64,
+    pub event_time_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceRiskTimeResponse {
-    pub event_time_unix_nanos: u64,
-    pub expired: usize,
+    pub event_time_unix_nanos: UnixNanos,
+    pub expired: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -299,14 +304,14 @@ pub enum RiskRestResponse {
 pub struct CircuitState {
     pub scope: CircuitScope,
     pub open: bool,
-    pub opened_at_unix_nanos: Option<u64>,
-    pub reset_at_unix_nanos: Option<u64>,
+    pub opened_at_unix_nanos: Option<UnixNanos>,
+    pub reset_at_unix_nanos: Option<UnixNanos>,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Allocation {
-    pub policy_id: String,
+    pub policy_id: PolicyId,
     pub metric: Metric,
     pub amount: Amount,
 }
@@ -322,19 +327,19 @@ pub enum ReservationStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Reservation {
-    pub reservation_id: String,
-    pub request_id: String,
+    pub reservation_id: ReservationId,
+    pub request_id: RequestId,
     #[serde(default)]
-    pub account_id: Option<String>,
+    pub account_id: Option<AccountId>,
     #[serde(default)]
-    pub strategy_id: Option<String>,
-    pub idempotency_key: String,
+    pub strategy_id: Option<StrategyId>,
+    pub idempotency_key: IdempotencyKey,
     pub allocations: Vec<Allocation>,
     pub status: ReservationStatus,
-    pub created_at_unix_nanos: u64,
-    pub updated_at_unix_nanos: u64,
-    pub expires_at_unix_nanos: u64,
-    pub policy_version: u64,
+    pub created_at_unix_nanos: UnixNanos,
+    pub updated_at_unix_nanos: UnixNanos,
+    pub expires_at_unix_nanos: UnixNanos,
+    pub policy_version: Generation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -365,24 +370,24 @@ pub struct LimitView {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskDecision {
-    pub decision_id: String,
-    pub request_id: String,
-    pub account_id: String,
-    pub strategy_id: String,
-    pub instrument_id: String,
+    pub decision_id: DecisionId,
+    pub request_id: RequestId,
+    pub account_id: AccountId,
+    pub strategy_id: StrategyId,
+    pub instrument_id: Option<InstrumentId>,
     pub allowed: bool,
     pub degraded: bool,
     pub reason_codes: Vec<ReasonCode>,
     pub violations: Vec<String>,
     pub allocations: Vec<Allocation>,
     pub reservation: Option<Reservation>,
-    pub policy_version: u64,
+    pub policy_version: Generation,
     pub dependency_watermarks: DependencyWatermarks,
     #[serde(default)]
     pub context: Option<RiskContext>,
     #[serde(default)]
     pub funding_requirement: Option<FundingRequirement>,
-    pub evaluated_at_unix_nanos: u64,
+    pub evaluated_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -396,10 +401,10 @@ pub struct FundingRequirement {
 /// mmap current-state contract. It cannot carry event history or positions.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskCurrentView {
-    pub actor_id: String,
-    pub generation: u64,
-    pub event_sequence: u64,
-    pub policy_version: u64,
+    pub actor_id: ActorId,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub policy_version: Generation,
     pub limits: Vec<LimitView>,
     pub reservations: Vec<Reservation>,
     #[serde(default)]
@@ -410,20 +415,20 @@ pub struct RiskCurrentView {
 pub enum RiskEvent {
     PolicyActivated {
         policy: RiskPolicy,
-        event_sequence: u64,
+        event_sequence: Sequence,
     },
     ReservationChanged {
         reservation: Reservation,
-        event_sequence: u64,
+        event_sequence: Sequence,
     },
     DecisionEvaluated {
         decision: RiskDecision,
-        account_id: String,
-        strategy_id: String,
-        event_sequence: u64,
+        account_id: AccountId,
+        strategy_id: StrategyId,
+        event_sequence: Sequence,
     },
     CircuitChanged {
         circuit: CircuitState,
-        event_sequence: u64,
+        event_sequence: Sequence,
     },
 }

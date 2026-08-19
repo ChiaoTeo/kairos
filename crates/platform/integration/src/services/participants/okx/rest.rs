@@ -1,12 +1,13 @@
+use secrecy::ExposeSecret;
+
 use crate::participants::okx::{OkxCredential, OkxRestConfig};
-use crate::services::clock::{unix_millis, ServerClock};
+use crate::services::clock::{ServerClock, unix_millis};
 use crate::services::participants::okx::signing::okx_signature;
 use crate::transport::http::{ExchangeError, HttpClient};
 use crate::{
     CommandOutcome, CommandResult, ConnectionDescriptor, ConnectionKey, IntegrationError,
     ParticipantKind, ParticipantRef,
 };
-use secrecy::ExposeSecret;
 
 pub(crate) struct RestService {
     descriptor: ConnectionDescriptor,
@@ -270,7 +271,7 @@ pub(crate) fn map_error(error: ExchangeError) -> IntegrationError {
         } => IntegrationError::RateLimited(body),
         ExchangeError::Http { status, body, .. } => {
             IntegrationError::Transport(format!("OKX HTTP {status}: {body}"))
-        }
+        },
         other => IntegrationError::Transport(other.to_string()),
     }
 }

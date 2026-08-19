@@ -11,29 +11,26 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
+use std::path::PathBuf;
+
 pub use control::{
-    AccountCommandStatus, AccountControlError, AccountRefreshResponse, AccountRestRequest,
-    AccountRestResponse, AccountSegmentsRequest, AdvanceAccountTimeResponse,
+    AccountCommandStatus, AccountContractClient, AccountControlClient, AccountControlError,
+    AccountRefreshResponse, AccountRestRequest, AccountRestResponse, AccountSegmentsRequest,
+    AdvanceAccountTimeRequest, AdvanceAccountTimeResponse, DecimalValue, Health,
+    MarkToMarketRequest, SimulatedSettlement,
 };
-pub use control::{
-    AccountContractClient, AdvanceAccountTimeRequest, DecimalValue, Health, MarkToMarketRequest,
-    SimulatedSettlement,
-};
-pub use control::{AccountControlClient, AccountControlResponse};
 pub use encode::{
-    event_metadata, view_metadata, BalanceEncoder, EncodeContext, ObservedOrderEncoder,
-    PositionEncoder, StatusEncoder, ValuationEncoder,
+    BalanceEncoder, EncodeContext, ObservedOrderEncoder, PositionEncoder, StatusEncoder,
+    ValuationEncoder, event_metadata, view_metadata,
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{AccountEvent, AccountEventFrame, AccountEventPublisher, AccountEventStream};
 pub use kairos_transport::AeronEndpoint;
 pub use transport::AccountUdsTransport;
 pub use view::{
-    account_view_path, decode_account_current, AccountViewKey, AccountViewKind,
-    AccountViewPublisher, AccountViewReader, ViewFrame, ViewMetadata,
+    AccountViewKey, AccountViewKind, AccountViewPublisher, AccountViewReader, ViewFrame,
+    ViewMetadata, account_view_path, decode_account_current,
 };
-
-use std::path::PathBuf;
 
 /// Unified public entry point. Control, events and views remain separate
 /// capabilities underneath this facade.

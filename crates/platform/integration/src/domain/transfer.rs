@@ -77,9 +77,10 @@ pub struct AssetTransferStatus {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::{AccountId, SegmentKey};
+
     use super::*;
     use crate::{ExternalAccountIdentity, ExternalAccountSegment};
-    use kairos_primitives::{AccountId, SegmentKey};
 
     fn segment(account: &str, segment: &str) -> ExternalAccountSegment {
         ExternalAccountSegment {

@@ -52,7 +52,7 @@ pub(crate) fn settle_paper_fill(
                     fill.price
                 };
             (next_quantity, next_average, Money::ZERO)
-        }
+        },
         OrderSide::Sell => {
             let next_quantity = previous_quantity.checked_sub(fill_quantity)?;
             let closing_quantity = if previous_quantity.is_positive() {
@@ -80,7 +80,7 @@ pub(crate) fn settle_paper_fill(
                 kairos_primitives::Price::new(1, 0).expect("positive fallback price")
             };
             (next_quantity, next_average, realized_pnl)
-        }
+        },
     };
     position.quantity = next_quantity;
     position.average_price = if next_quantity.is_zero() {

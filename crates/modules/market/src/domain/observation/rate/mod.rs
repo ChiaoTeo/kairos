@@ -1,4 +1,4 @@
-use kairos_primitives::{InstrumentId, Price, Rate as FixedRate, UnixNanos};
+use kairos_primitives::{InstrumentId, Price, Rate as FixedRate, SourceId, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -10,5 +10,5 @@ pub struct Rate {
     pub value: FixedRate,
     pub mark_price: Option<Price>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: String,
+    pub source_id: SourceId,
 }

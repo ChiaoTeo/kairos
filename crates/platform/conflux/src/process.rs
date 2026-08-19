@@ -1,15 +1,16 @@
 use std::collections::{HashMap, VecDeque};
+use std::future::poll_fn;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
-use std::{future::poll_fn, pin::Pin};
 
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::system::{ConnectionDriverOutput, ConnectionDriverState};
 use crate::{
-    system::{ConnectionDriverOutput, ConnectionDriverState},
     ConfluxActor, ConfluxEvent, ConfluxSystem, ConnectionCreateError, ConnectionKey, Context,
     ContractEvent, ProcessPhase, ResourceState, RestRequestOf, RestResponseOf, ShutdownMode,
 };
@@ -250,7 +251,7 @@ impl<A: ConfluxActor> Conflux<A> {
                 )
                 .await;
                 return Err(error);
-            }
+            },
         };
         let actor_shutdown = self.run_started().await.map_err(|error| {
             self.set_phase(ProcessPhase::Failed);
@@ -274,7 +275,7 @@ impl<A: ConfluxActor> Conflux<A> {
             }
             match self.system.startup_status(&self.connection_driver) {
                 Ok(true) => return Ok(None),
-                Ok(false) => {}
+                Ok(false) => {},
                 Err(error) => return Err(RunError::RequiredConnection(error)),
             }
 
@@ -305,13 +306,13 @@ impl<A: ConfluxActor> Conflux<A> {
                     return Ok(Some(
                         self.shutdown.borrow().unwrap_or(ShutdownMode::Immediate),
                     ));
-                }
+                },
                 StartupInput::Connection(output) => {
                     self.startup_connection_outputs.push_back(output);
-                }
+                },
                 StartupInput::Timer(now) => {
                     self.system.update_timer(now, &mut self.connection_driver);
-                }
+                },
             }
         }
     }
@@ -365,44 +366,44 @@ impl<A: ConfluxActor> Conflux<A> {
                     if let Some(mode) = *self.shutdown.borrow() {
                         return Ok(mode);
                     }
-                }
+                },
                 LoopInput::Envelope(envelope) => {
                     let Some(envelope) = envelope else {
                         return Ok(ShutdownMode::Drain);
                     };
                     match self.run_event(envelope).await {
                         Ok(Some(mode)) => return Ok(mode),
-                        Ok(None) => {}
+                        Ok(None) => {},
                         Err(error) => {
                             self.set_phase(ProcessPhase::Failed);
                             return Err(RunError::Actor(error));
-                        }
+                        },
                     }
-                }
+                },
                 LoopInput::Rest(request) => {
                     let Some(request) = request else {
                         continue;
                     };
                     match self.run_rest(request).await {
                         Ok(Some(mode)) => return Ok(mode),
-                        Ok(None) => {}
+                        Ok(None) => {},
                         Err(error) => {
                             self.set_phase(ProcessPhase::Failed);
                             return Err(RunError::Actor(error));
-                        }
+                        },
                     }
-                }
+                },
                 LoopInput::Control(Some(control)) => self.apply_connection_control(control).await,
-                LoopInput::Control(None) => {}
+                LoopInput::Control(None) => {},
                 LoopInput::Connection(output) => {
                     if let Some(mode) = self.run_connection_output(output).await? {
                         return Ok(mode);
                     }
-                }
+                },
                 LoopInput::Timer(now) => {
                     self.system.update_timer(now, &mut self.connection_driver);
                     self.expire_connection_removals(now);
-                }
+                },
             }
         }
     }
@@ -415,30 +416,30 @@ impl<A: ConfluxActor> Conflux<A> {
             ConnectionDriverOutput::Integration(event) => {
                 self.run_contract_event(ConfluxEvent::Integration(event))
                     .await
-            }
+            },
             ConnectionDriverOutput::System(event) => {
                 self.run_contract_event(ConfluxEvent::System(event)).await
-            }
+            },
             ConnectionDriverOutput::Account { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Account(ContractEvent { client, frame }))
                     .await
-            }
+            },
             ConnectionDriverOutput::Execution { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Execution(ContractEvent { client, frame }))
                     .await
-            }
+            },
             ConnectionDriverOutput::Market { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Market(ContractEvent { client, frame }))
                     .await
-            }
+            },
             ConnectionDriverOutput::Reference { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Reference(ContractEvent { client, frame }))
                     .await
-            }
+            },
             ConnectionDriverOutput::Risk { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Risk(ContractEvent { client, frame }))
                     .await
-            }
+            },
             ConnectionDriverOutput::LifecycleStopped {
                 collection,
                 key,
@@ -446,7 +447,7 @@ impl<A: ConfluxActor> Conflux<A> {
             } => {
                 self.finish_connection_removal(collection, key, result);
                 Ok(None)
-            }
+            },
         }
     }
 
@@ -482,12 +483,12 @@ impl<A: ConfluxActor> Conflux<A> {
                     None => Err(ConnectionControlError::NotFound(key.clone())),
                     Some(value) if value.state() == ResourceState::Retiring => {
                         Err(ConnectionControlError::Retiring(key.clone()))
-                    }
+                    },
                     Some(value) => {
                         value.set_state(ResourceState::Retiring);
                         self.system.$collection.remove(&key.to_string());
                         Ok(())
-                    }
+                    },
                 };
                 let _ = $reply.send(result);
             }};
@@ -498,10 +499,10 @@ impl<A: ConfluxActor> Conflux<A> {
                 match self.system.$collection.get_mut(&key.to_string()) {
                     None => {
                         let _ = $reply.send(Err(ConnectionControlError::NotFound(key.clone())));
-                    }
+                    },
                     Some(value) if value.state() == ResourceState::Retiring => {
                         let _ = $reply.send(Err(ConnectionControlError::Retiring(key.clone())));
-                    }
+                    },
                     Some(value)
                         if value.state() == ResourceState::Created
                             || (value.state() == ResourceState::Starting
@@ -515,7 +516,7 @@ impl<A: ConfluxActor> Conflux<A> {
                         self.connection_driver
                             .clear_removed_connection(stringify!($collection), key.as_str());
                         let _ = $reply.send(Ok(()));
-                    }
+                    },
                     Some(value) => {
                         let identity = crate::ManagedConnectionIdentity {
                             descriptor: value.connection().descriptor().clone(),
@@ -532,7 +533,7 @@ impl<A: ConfluxActor> Conflux<A> {
                                 reply: $reply,
                             },
                         );
-                    }
+                    },
                 }
             }};
         }
@@ -702,34 +703,34 @@ impl<A: ConfluxActor> Conflux<A> {
                 let result = match input {
                     DrainInput::Event(Some(envelope)) => {
                         tokio::time::timeout_at(deadline, self.run_event(envelope)).await
-                    }
+                    },
                     DrainInput::Rest(Some(request)) => {
                         tokio::time::timeout_at(deadline, self.run_rest(request)).await
-                    }
+                    },
                     DrainInput::Event(None) => {
                         events_open = false;
                         continue;
-                    }
+                    },
                     DrainInput::Rest(None) => {
                         rest_open = false;
                         continue;
-                    }
+                    },
                 };
                 match result {
                     Ok(Ok(Some(ShutdownMode::Immediate))) => {
                         mode = ShutdownMode::Immediate;
                         break;
-                    }
-                    Ok(Ok(_)) => {}
+                    },
+                    Ok(Ok(_)) => {},
                     Ok(Err(error)) => {
                         self.set_phase(ProcessPhase::Failed);
                         return Err(RunError::Actor(error));
-                    }
+                    },
                     Err(_) => {
                         discarded_inputs += 1;
                         mode = ShutdownMode::Immediate;
                         break;
-                    }
+                    },
                 }
             }
         }
@@ -751,11 +752,11 @@ impl<A: ConfluxActor> Conflux<A> {
             &mut self.source_tasks,
         );
         match tokio::time::timeout_at(deadline, self.actor.stopping(&mut context)).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {},
             Ok(Err(error)) => {
                 self.set_phase(ProcessPhase::Failed);
                 return Err(RunError::Actor(error));
-            }
+            },
             Err(_) => mode = ShutdownMode::Immediate,
         }
         for task in self.source_tasks.drain(..) {
@@ -893,10 +894,10 @@ impl<A: ConfluxActor> ConfluxHandle<A> {
                     .map_err(|error| match error {
                         HandleError::Closed(request) => {
                             HandleError::Closed(ConfluxEvent::Rest(request))
-                        }
+                        },
                         HandleError::ActorStopped => HandleError::ActorStopped,
                     });
-            }
+            },
             event => event,
         };
         let (completed, response) = oneshot::channel();
@@ -995,9 +996,10 @@ pub enum RunError<E> {
 mod tests {
     use std::convert::Infallible;
 
+    use futures_util::{SinkExt, StreamExt};
+
     use super::*;
     use crate::{Contract, RestContract, SystemEvent};
-    use futures_util::{SinkExt, StreamExt};
 
     struct TestRest;
 
@@ -1046,7 +1048,7 @@ mod tests {
                 ConfluxEvent::Local(value) => {
                     self.total += value;
                     Ok(None)
-                }
+                },
                 _ => Ok(None),
             }
         }

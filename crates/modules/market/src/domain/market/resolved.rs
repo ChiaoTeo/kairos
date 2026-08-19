@@ -29,6 +29,31 @@ pub struct ResolvedMarket {
 }
 
 impl ResolvedMarket {
+    pub fn from_reference(
+        market_id: MarketId,
+        instrument_id: InstrumentId,
+        instrument_kind: InstrumentKind,
+        exchange_id: Exchange,
+        route: MarketDataRoute,
+    ) -> Result<Self, String> {
+        if instrument_kind == InstrumentKind::Unknown {
+            return Err("market instrument kind must be known".into());
+        }
+        let value = Self {
+            scope: ObservationScope::from(market_id),
+            instrument_id,
+            instrument_kind,
+            exchange_id: Some(exchange_id),
+            asset_type: None,
+            underlying_instrument_id: None,
+            route,
+            source_id: None,
+            status: ReferenceStatus::Active,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     pub fn new(
         market_id: impl Into<String>,
         instrument_id: impl Into<String>,
@@ -74,6 +99,39 @@ impl ResolvedMarket {
             InstrumentId::new(instrument_id.into()).map_err(|error| error.to_string())?;
         let value = Self {
             scope: ObservationScope::consolidated(instrument_id.to_string(), network_id)?,
+            instrument_id,
+            instrument_kind,
+            exchange_id: None,
+            asset_type: None,
+            underlying_instrument_id: None,
+            route,
+            source_id: None,
+            status: ReferenceStatus::Active,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn consolidated_reference(
+        instrument_id: InstrumentId,
+        network_id: Option<String>,
+        instrument_kind: InstrumentKind,
+        route: MarketDataRoute,
+    ) -> Result<Self, String> {
+        if instrument_kind == InstrumentKind::Unknown {
+            return Err("market instrument kind must be known".into());
+        }
+        if network_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("observation network_id must be non-empty when present".into());
+        }
+        let value = Self {
+            scope: ObservationScope::Consolidated {
+                instrument_id: instrument_id.clone(),
+                network_id,
+            },
             instrument_id,
             instrument_kind,
             exchange_id: None,

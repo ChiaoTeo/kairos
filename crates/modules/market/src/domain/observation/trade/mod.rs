@@ -1,4 +1,4 @@
-use kairos_primitives::{InstrumentId, Money, Price, Quantity, UnixNanos};
+use kairos_primitives::{InstrumentId, Money, Price, Quantity, SourceId, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -16,5 +16,5 @@ pub struct Trade {
     pub participant_timestamp_unix_nanos: Option<UnixNanos>,
     pub trf_timestamp_unix_nanos: Option<UnixNanos>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: String,
+    pub source_id: SourceId,
 }

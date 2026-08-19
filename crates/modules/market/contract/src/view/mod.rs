@@ -12,11 +12,16 @@ mod quote;
 mod rate;
 mod ticker_24h;
 
+use std::path::{Path, PathBuf};
+
 pub use bar::BarWindowView;
 pub use freshness::FreshnessView;
 pub use funding_rate::FundingRateLatestView;
 pub use greeks::GreeksLatestView;
 pub use index_price::IndexPriceLatestView;
+use kairos_transport::{
+    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
+};
 pub use key::{MarketViewKey, MarketViewKind};
 pub use mark_price::MarkPriceLatestView;
 pub use metadata::ViewMetadata;
@@ -25,12 +30,6 @@ pub use order_book::OrderBookLatestView;
 pub use quote::QuoteLatestView;
 pub use rate::RateLatestView;
 pub use ticker_24h::Ticker24hLatestView;
-
-use std::path::{Path, PathBuf};
-
-use kairos_transport::{
-    ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
-};
 
 use crate::{ContractError, ContractResult};
 

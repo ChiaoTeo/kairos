@@ -1,17 +1,18 @@
 //! Read-side queries for the Market application.
 
-use crate::domain::observation::order_book::OrderBook;
-use crate::domain::observation::{MarketObservation, MarketViewKey, ObservationKind};
-use crate::domain::subscription::SubscriptionState;
-use crate::domain::view::MarketView;
-use rust_decimal::Decimal;
 use std::str::FromStr;
 
+use rust_decimal::Decimal;
+
+use super::MarketApplication;
 use super::model::{
     ExecutionEstimate, MarketDataAvailability, MarketDataAvailabilityQuery,
     MarketObservationResult, MarketQueryResult, OrderBookSide,
 };
-use super::MarketApplication;
+use crate::domain::observation::order_book::OrderBook;
+use crate::domain::observation::{MarketObservation, MarketViewKey, ObservationKind};
+use crate::domain::subscription::SubscriptionState;
+use crate::domain::view::MarketView;
 
 impl MarketApplication {
     pub fn available_market_data(
@@ -45,11 +46,10 @@ impl MarketApplication {
                 .collect::<Vec<_>>();
             if matching_sources.is_empty() {
                 if !query.configured_only && !query.ready_only {
-                    let source_id = market
-                        .source_id
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| market.route.provider_id.to_string());
+                    let source_id = market.source_id.clone().unwrap_or_else(|| {
+                        crate::SourceId::new(market.route.provider_id.as_str())
+                            .expect("provider identity is a valid fallback source identity")
+                    });
                     result.push(MarketDataAvailability {
                         market_id: market_id.clone(),
                         instrument_id: market.instrument_id.clone(),
@@ -98,7 +98,7 @@ impl MarketApplication {
                 result.push(MarketDataAvailability {
                     market_id: market_id.clone(),
                     instrument_id: market.instrument_id.clone(),
-                    source_id: source.descriptor.id.to_string(),
+                    source_id: source.descriptor.id.clone(),
                     provider_id: market.route.provider_id.to_string(),
                     provider_product: market.route.provider_product.to_string(),
                     provider_symbol: market.route.provider_symbol.to_string(),
@@ -268,7 +268,11 @@ impl MarketQueryResult {
         matches.next().is_none().then_some(first)
     }
 
-    pub fn order_book_from_source(&self, source_id: &str, market_id: &str) -> Option<&OrderBook> {
+    pub fn order_book_from_source(
+        &self,
+        source_id: &crate::SourceId,
+        market_id: &str,
+    ) -> Option<&OrderBook> {
         self.view
             .order_books
             .get(&format!("{source_id}:{market_id}"))
@@ -319,7 +323,7 @@ impl MarketQueryResult {
     /// introduces floating-point price or quantity errors.
     pub fn estimate_execution(
         &self,
-        source_id: &str,
+        source_id: &crate::SourceId,
         market_id: &str,
         side: OrderBookSide,
         requested_quantity: &str,

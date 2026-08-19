@@ -21,15 +21,17 @@ mod tests {
         )
         .unwrap();
         let second = first.clone();
-        assert!(ExecutionPlan::new(
-            "plan",
-            "intent",
-            IntentType::PairArbitrage,
-            vec![first, second],
-            CompletionPolicy::AllLegsSatisfied,
-            FailurePolicy::CancelRemaining,
-        )
-        .is_err());
+        assert!(
+            ExecutionPlan::new(
+                "plan",
+                "intent",
+                IntentType::PairArbitrage,
+                vec![first, second],
+                CompletionPolicy::AllLegsSatisfied,
+                FailurePolicy::CancelRemaining,
+            )
+            .is_err()
+        );
     }
 
     #[test]

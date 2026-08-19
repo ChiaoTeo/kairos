@@ -3,11 +3,11 @@
 use std::future::Future;
 use std::task::{Context, Poll};
 
+use crate::IntegrationError;
 use crate::domain::account::{
     ExternalAccountCredentialProfile, ExternalAccountEventEnvelope, ExternalAccountSegment,
     ExternalAccountSnapshot, ExternalMarketProfile, ExternalMarketProfileRequest,
 };
-use crate::IntegrationError;
 
 pub trait AccountQuery: Send {
     fn fetch_account(

@@ -2,20 +2,21 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::domain::account::{
-    external_instrument_ref, ExternalAccountEvent as AccountEvent,
-    ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
-    ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
-    ExternalOrderEvent as OrderEvent, ExternalOrderStatus as OrderStatus,
-    ExternalPosition as Position,
-};
-use crate::{
-    domain::execution::normalize_order_status, DecimalValue as ExecutionDecimal, OrderSide,
-    OrderType,
-};
-use crate::{ExternalEventEnvelope, ExternalExecutionEvent};
 use kairos_primitives::{Currency, FillId, OrderId, Symbol, UnixNanos};
 use serde_json::Value;
+
+use crate::domain::account::{
+    ExternalAccountEvent as AccountEvent, ExternalAccountSnapshot as AccountSnapshot,
+    ExternalAccountStatus as AccountStatus, ExternalBalance as Balance,
+    ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
+    ExternalOrderEvent as OrderEvent, ExternalOrderStatus as OrderStatus,
+    ExternalPosition as Position, external_instrument_ref,
+};
+use crate::domain::execution::normalize_order_status;
+use crate::{
+    DecimalValue as ExecutionDecimal, ExternalEventEnvelope, ExternalExecutionEvent, OrderSide,
+    OrderType,
+};
 pub(crate) fn parse_event(segment_key: &str, text: &str) -> Result<Option<AccountEvent>, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     if value.get("event").is_some() {
@@ -325,7 +326,7 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             } else {
                 OrderStatus::Acknowledged
             }
-        }
+        },
         "filled" => OrderStatus::Filled,
         "canceled" | "mmp_canceled" => OrderStatus::Canceled,
         _ => OrderStatus::Unknown,
@@ -443,12 +444,13 @@ fn now_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::{OrderStatus, UnixNanos};
+
     use super::{parse_event, parse_execution_events};
     use crate::domain::account::{
         ExternalAccountEvent as AccountEvent, ExternalOrderStatus as AccountOrderStatus,
     };
     use crate::{OrderSide, OrderType};
-    use kairos_primitives::{OrderStatus, UnixNanos};
 
     #[test]
     fn parses_all_matching_execution_rows_into_stable_envelopes() {

@@ -4,7 +4,6 @@ mod error;
 mod result;
 mod service;
 
-pub use crate::domain::{AccountEvent, AccountObservedFill};
 pub use command::{MarkToMarket, ReconcileAccount, RefreshAccount};
 pub use error::AccountError;
 pub use result::{
@@ -14,3 +13,5 @@ pub use result::{
     AccountSegmentView,
 };
 pub use service::{AccountApplication, AccountRuntimeMode};
+
+pub use crate::domain::{AccountEvent, AccountObservedFill};

@@ -2,8 +2,8 @@
 
 use std::future::Future;
 
-use crate::domain::reference::{ExternalInstrumentCatalog, ExternalInstrumentCatalogPage};
 use crate::IntegrationError;
+use crate::domain::reference::{ExternalInstrumentCatalog, ExternalInstrumentCatalogPage};
 
 pub trait InstrumentCatalogQuery: Send {
     fn fetch_instruments(

@@ -1,7 +1,10 @@
-use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
-use kairos_primitives::{ActorId, Generation, Sequence};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{Generation, Sequence};
+use serde::{Deserialize, Serialize};
+
+use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
 
 const ACCOUNT_STATE_SCHEMA_VERSION: u32 = 2;
 

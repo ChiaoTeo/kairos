@@ -8,15 +8,16 @@
 //! one dependency avoids the silent layout mismatch of the old `aeron 0.2`
 //! Rust port.
 
-use rusteron_client::{
-    Aeron, AeronContext, AeronFragmentClosureAssembler, AeronHeader, AeronPublication,
-    AeronSubscription,
-};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use rusteron_client::{
+    Aeron, AeronContext, AeronFragmentClosureAssembler, AeronHeader, AeronPublication,
+    AeronSubscription,
+};
 
 const DEFAULT_PUBLISH_DEADLINE: Duration = Duration::from_millis(100);
 const MEDIA_DRIVER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -221,19 +222,19 @@ impl AeronBytePublisher {
                 // offer().  Treat that race exactly like the preflight case:
                 // the realtime notification is intentionally dropped.
                 Err(rusteron_client::AeronOfferError::NotConnected) => {
-                    return Ok(PublishOutcome::DroppedNoSubscriber)
-                }
+                    return Ok(PublishOutcome::DroppedNoSubscriber);
+                },
                 Err(error) if error.is_retryable() && Instant::now() < deadline => {
                     std::thread::yield_now()
-                }
+                },
                 Err(error) if error.is_retryable() => {
-                    return Err(AeronTransportError::Backpressured)
-                }
+                    return Err(AeronTransportError::Backpressured);
+                },
                 Err(error) => {
                     return Err(AeronTransportError::Operation(format!(
                         "publication offer: {error:?}"
-                    )))
-                }
+                    )));
+                },
             }
         }
     }
@@ -386,8 +387,9 @@ fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, AeronTransportError>
 
 #[cfg(test)]
 mod tests {
-    use super::AeronEndpoint;
     use std::path::Path;
+
+    use super::AeronEndpoint;
 
     #[test]
     fn endpoint_keeps_one_complete_stream_address() {

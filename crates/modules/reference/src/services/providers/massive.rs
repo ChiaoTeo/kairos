@@ -267,7 +267,7 @@ impl MassiveOptionsCoverageSource {
                             .fetch_instruments_page(cursor.as_deref(), 1000),
                     )
                     .await
-                }
+                },
             };
             result
                 .map_err(|error| {
@@ -523,7 +523,7 @@ impl ReferenceSource for MassiveEquitySource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         massive_provider_catalog(facts)
@@ -561,12 +561,12 @@ impl ReferenceSource for MassiveEquitySource {
                             .fetch_instruments_page(cursor.as_deref(), 1000),
                     )
                     .await
-                }
+                },
             };
             let page = match page {
                 Ok(result) => {
                     result.map_err(|error| ReferenceError::Provider(error.to_string()))?
-                }
+                },
                 Err(_) => {
                     tracing::warn!(
                         event = "reference_massive_page_timeout",
@@ -576,7 +576,7 @@ impl ReferenceSource for MassiveEquitySource {
                         "Massive page budget expired; persisted cursor will resume on the next refresh"
                     );
                     break;
-                }
+                },
             };
             page_count += 1;
             cursor = page.next_cursor;
@@ -708,7 +708,7 @@ fn append_massive_instrument(
                 ticker,
                 None,
             )
-        }
+        },
         ExternalInstrumentKind::Option => {
             let underlying = value
                 .underlying
@@ -734,8 +734,8 @@ fn append_massive_instrument(
                 other => {
                     return Err(ReferenceError::Provider(format!(
                         "unsupported Massive option right: {other}"
-                    )))
-                }
+                    )));
+                },
             };
             (
                 "options",
@@ -745,12 +745,12 @@ fn append_massive_instrument(
                     "instrument:equity:US:{underlying}:common"
                 ))?),
             )
-        }
+        },
         other => {
             return Err(ReferenceError::Provider(format!(
                 "unsupported Massive instrument kind: {other:?}"
-            )))
-        }
+            )));
+        },
     };
     let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
     catalog.instruments.push(Instrument {
@@ -772,7 +772,7 @@ fn append_massive_instrument(
         )
         .then_some(value.expiry_unix_nanos)
         .flatten(),
-        strike: value.strike.clone(),
+        strike: super::optional_decimal(value.strike.clone(), "Massive option strike")?,
         option_right: value.option_right.clone(),
         status,
         ..Instrument::default()
@@ -807,14 +807,14 @@ fn ensure_massive_underlying(
     let fiat_asset = kairos_primitives::AssetId::new(format!("asset:fiat:{quote}"))?;
     catalog.assets.push(Asset {
         asset_id: equity_asset.clone(),
-        code: ticker.into(),
+        code: kairos_primitives::Symbol::new(ticker)?,
         asset_class: AssetClass::Equity,
         status: "active".into(),
         ..Asset::default()
     });
     catalog.assets.push(Asset {
         asset_id: fiat_asset.clone(),
-        code: quote.into(),
+        code: kairos_primitives::Symbol::new(quote)?,
         asset_class: AssetClass::Fiat,
         status: "active".into(),
         ..Asset::default()

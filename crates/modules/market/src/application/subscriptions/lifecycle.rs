@@ -1,13 +1,12 @@
 use tracing::info;
 
-use crate::domain::subscription::SubscriptionId;
-
 use super::super::{MarketApplication, MarketError};
+use crate::domain::subscription::SubscriptionId;
 
 impl MarketApplication {
     pub fn unsubscribe(&mut self, id: &SubscriptionId) -> bool {
         let removed = self.actor.unsubscribe(id);
-        info!(event = "market_subscription_removed", component = "market", subscription_id = %id.0, removed, "market subscription removal processed");
+        info!(event = "market_subscription_removed", component = "market", subscription_id = %id, removed, "market subscription removal processed");
         removed
     }
 
@@ -20,7 +19,7 @@ impl MarketApplication {
             .actor
             .unsubscribe_owned(id, owner_id)
             .map_err(MarketError::InvalidSubscription)?;
-        info!(event = "market_subscription_removed", component = "market", subscription_id = %id.0, owner_id, removed, "owned market subscription removal processed");
+        info!(event = "market_subscription_removed", component = "market", subscription_id = %id, owner_id, removed, "owned market subscription removal processed");
         Ok(removed)
     }
 

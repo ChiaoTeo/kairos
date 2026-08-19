@@ -1,9 +1,9 @@
 //! Deterministic replay source composition.
 
 use super::super::config::MarketReplayClock;
-use crate::domain::source::{SourceDescriptor, SourceId};
-use crate::services::source::{spawn_replay, ReplayClock, ReplaySource};
 use crate::MarketApplication;
+use crate::domain::source::{SourceDescriptor, SourceId};
+use crate::services::source::{ReplayClock, ReplaySource, spawn_replay};
 
 /// Attach deterministic replay to the same wake-driven Actor input path used
 /// by live providers.

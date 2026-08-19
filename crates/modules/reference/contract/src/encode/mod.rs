@@ -1,2 +1,2 @@
 mod metadata;
-pub use metadata::{event_metadata, EncodeContext, ReferenceEncoder};
+pub use metadata::{EncodeContext, ReferenceEncoder, event_metadata};

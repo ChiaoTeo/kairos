@@ -10,13 +10,22 @@ mod planning;
 mod projection;
 mod workers;
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use kairos_primitives::{InstrumentId, MarketId, Money, OrderId, Price, StrategyId, UnixNanos};
+use kairos_reference_contract::ReferenceMarket;
+use projection::*;
+use rust_decimal::Decimal;
+use serde_json::Value;
+
 #[cfg(test)]
 use crate::application::core::orders::admission::risk_amount;
 use crate::application::core::orders::admission::{
-    decimal_money, decimal_price, decimal_quantity, decimal_signed_quantity,
+    PlanningQuote, decimal_money, decimal_price, decimal_quantity, decimal_signed_quantity,
     ensure_available_capacity, money_from_decimal, quantity_from_decimal, validate_market_price,
     validate_pair_constraints, validate_quote_freshness, validate_quote_provisioning,
-    validate_reference_rules, PlanningQuote,
+    validate_reference_rules,
 };
 use crate::application::{
     DependencyWatermarks, ExecuteStrategyIntent, QuoteObservation, RiskAuthorizationContext,
@@ -24,14 +33,6 @@ use crate::application::{
 };
 use crate::domain::{CommitmentBasis, CommitmentResource, OrderCommitment, OrderSide, OrderType};
 use crate::services::risk::SocketExecutionRiskReservations;
-use kairos_primitives::{InstrumentId, MarketId, Money, OrderId, Price, StrategyId, UnixNanos};
-use projection::*;
-use rust_decimal::Decimal;
-use serde_json::Value;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-use kairos_reference_contract::ReferenceMarket;
 
 /// Composition-owned projection of the Market quote view. This is an adapter
 /// record, not a public backtest/replay model.
@@ -40,7 +41,6 @@ type MarketQuote = PlanningQuote;
 use access::ExecutionDependencyAccess;
 use order_admission::OrderAdmissionContext;
 use planning::IntentPlanningContext;
-
 pub use workers::{QueuedExecutionIntentPlanner, QueuedExecutionOrderAdmission};
 
 pub(crate) enum ExecutionOrderAdmissionService {
@@ -74,7 +74,7 @@ impl ExecutionOrderAdmissionService {
             Self::Live(admission) => admission.validate_order(request, active_commitments),
             Self::Simulated => {
                 crate::application::core::orders::admission::simulation_commitment(request, now)
-            }
+            },
         }
     }
 
@@ -225,8 +225,9 @@ fn find_position(
 
 #[cfg(test)]
 mod tests {
-    use super::{decimal_price, decimal_quantity, risk_amount};
     use kairos_primitives::{Price, Quantity};
+
+    use super::{decimal_price, decimal_quantity, risk_amount};
 
     #[test]
     fn risk_notional_preserves_quantity_and_price_scales() {

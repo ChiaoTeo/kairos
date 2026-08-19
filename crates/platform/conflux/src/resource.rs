@@ -277,14 +277,14 @@ where
             let result = match operation {
                 ManagedLifecycleOperation::Connect => {
                     kairos_integration::ConnectionLifecycleCommand::connect(&mut connection).await
-                }
+                },
                 ManagedLifecycleOperation::Reconnect => {
                     kairos_integration::ConnectionLifecycleCommand::reconnect(&mut connection).await
-                }
+                },
                 ManagedLifecycleOperation::Disconnect => {
                     kairos_integration::ConnectionLifecycleCommand::disconnect(&mut connection)
                         .await
-                }
+                },
             };
             (connection, result)
         });
@@ -308,7 +308,7 @@ where
                 self.connection = Some(connection);
                 self.lifecycle = None;
                 Poll::Ready((operation, result))
-            }
+            },
         }
     }
 
@@ -446,11 +446,11 @@ where
             Ok(value) => {
                 resource.set_state(ResourceState::Ready);
                 Ok(value)
-            }
+            },
             Err(error) => {
                 resource.set_state(ResourceState::Degraded);
                 Err(ResourceOperationError::Operation(error))
-            }
+            },
         }
     }
 
@@ -554,8 +554,8 @@ fn next_generation(current: Option<u64>) -> Result<u64, ResourceError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 

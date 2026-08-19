@@ -1,4 +1,5 @@
-use std::{fs, path::PathBuf};
+use std::fs;
+use std::path::PathBuf;
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -10,33 +10,29 @@ pub mod error;
 pub mod event;
 pub mod transport;
 
+use std::path::PathBuf;
+
 pub use control::{
-    ReferenceControlClient, ReferenceControlError, ReferenceControlRequest,
-    ReferenceControlResponse, ReferenceHealthResponse, ReferenceMutationResponse,
-    ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse, ReferenceProviderHealth,
-    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRestRequest,
-    ReferenceRestResponse, ReferenceSourceControlRequest, ReferenceSourceStatusResponse,
-    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
+    ReferenceControlClient, ReferenceControlError, ReferenceHealthResponse,
+    ReferenceMutationResponse, ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse,
+    ReferenceProviderHealth, ReferencePublishResponse, ReferenceRefreshResponse,
+    ReferenceRestRequest, ReferenceRestResponse, ReferenceSourceControlRequest,
+    ReferenceSourceStatusResponse, UpsertAssetRequest, UpsertInstrumentRequest,
+    UpsertListingRequest,
 };
-pub use encode::{event_metadata, EncodeContext, ReferenceEncoder};
+pub use encode::{EncodeContext, ReferenceEncoder, event_metadata};
 pub use error::{ContractError, ContractResult};
 pub use event::{
-    decode_event, ReferenceEvent, ReferenceEventFrame, ReferenceEventPublisher,
-    ReferenceEventStream,
+    ReferenceEvent, ReferenceEventFrame, ReferenceEventPublisher, ReferenceEventStream,
+    decode_event,
 };
 pub use kairos_transport::AeronEndpoint;
 pub use transport::{
     Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
-    ReferenceProjectionSnapshot,
-};
-pub use transport::{
-    ReferenceCatalogStats, ReferenceCollection, ReferenceMarketPage, ReferenceProjection,
+    REFERENCE_SQLITE_SCHEMA_VERSION, ReferenceCatalogStats, ReferenceCollection, ReferenceHealth,
+    ReferenceMarket, ReferenceMarketPage, ReferenceProjection, ReferenceProjectionSnapshot,
     ReferenceSqliteReader, ReferenceWatermark, SqliteInstrumentQuery, SqliteMarketQuery,
-    REFERENCE_SQLITE_SCHEMA_VERSION,
 };
-pub use transport::{ReferenceHealth, ReferenceMarket};
-
-use std::path::PathBuf;
 
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
 pub struct ReferenceClient {

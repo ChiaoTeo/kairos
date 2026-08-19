@@ -208,7 +208,7 @@ fn recover_file(path: &Path) -> Result<(u64, Option<u64>, Option<u64>), String> 
         Ok(value) => value,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok((0, None, None));
-        }
+        },
         Err(error) => return Err(format!("read history file {}: {error}", path.display())),
     };
     let mut count = 0_u64;
@@ -301,7 +301,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-            source_id: "binance".into(),
+            source_id: kairos_primitives::SourceId::new("binance").unwrap(),
         })
     }
 

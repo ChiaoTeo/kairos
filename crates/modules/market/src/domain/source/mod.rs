@@ -4,17 +4,18 @@ mod route;
 mod state;
 
 pub use identity::{SourceEpoch, SourceId};
-pub use readiness::{derive_readiness, MarketReadiness};
+pub use readiness::{MarketReadiness, derive_readiness};
 pub use route::{SourceDescriptor, SourceRouteKey};
 pub use state::{SourceFailureKind, SourceState, SourceStatus};
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        derive_readiness, MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind,
-        SourceId, SourceState, SourceStatus,
-    };
     use kairos_primitives::Exchange;
+
+    use super::{
+        MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
+        SourceStatus, derive_readiness,
+    };
 
     fn state() -> SourceState {
         SourceState::starting(

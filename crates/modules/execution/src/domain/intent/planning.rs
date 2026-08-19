@@ -125,7 +125,7 @@ impl ExecutionPlan {
                     if statuses.contains(&ExecutionOrderStatus::Filled) =>
                 {
                     IntentLifecycle::Satisfied
-                }
+                },
                 _ => IntentLifecycle::Failed,
             }
         } else {

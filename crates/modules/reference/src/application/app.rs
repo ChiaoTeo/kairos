@@ -4,21 +4,19 @@
 //! refresh/publish commands or read-only market queries; persistence,
 //! provider connections and publication transports stay behind private services.
 
-use crate::domain::LifecycleEvent;
-use crate::domain::ProviderHealth;
-use crate::domain::ReferenceResult;
-#[cfg(test)]
-use crate::domain::{Market, ReferenceError};
+use kairos_primitives::{Generation, Sequence};
+use tracing::{info, warn};
 
 use crate::application::queries::{LifecycleQuery, ReferenceQuery, ReferenceRecord};
 #[cfg(test)]
 use crate::application::queries::{MarketQuery, ReferenceKind};
 use crate::application::{UpsertAssetCommand, UpsertInstrumentCommand, UpsertListingCommand};
+use crate::domain::{LifecycleEvent, ProviderHealth, ReferenceResult};
+#[cfg(test)]
+use crate::domain::{Market, ReferenceError};
 use crate::services::actor::ReferenceActor;
 use crate::services::providers::ReferenceSourcePlan;
 use crate::services::sqlx_storage::SqlxCatalogStore;
-use kairos_primitives::{Generation, Sequence};
-use tracing::{info, warn};
 
 /// Public application boundary for reference data.
 pub struct ReferenceApplication {
@@ -269,7 +267,7 @@ impl ReferenceApplication {
                 self.actor
                     .refresh_source_with_connections(source_id, connections)
                     .await
-            }
+            },
             None => self.actor.refresh_with_connections(connections).await,
         };
         let result = match result {
@@ -310,7 +308,7 @@ impl ReferenceApplication {
                     );
                 }
                 return Err(error);
-            }
+            },
         };
         info!(
             event = "reference_refresh_completed",
@@ -491,7 +489,7 @@ impl ReferenceApplication {
             ),
             Err(error) => {
                 warn!(event = "reference_events_acknowledge_failed", component = "reference", error = %error, "reference published events acknowledgement failed")
-            }
+            },
         }
         result
     }

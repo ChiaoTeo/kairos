@@ -1,6 +1,5 @@
-use crate::{ContractResult, MarketViewKey};
-
 use super::EncodeContext;
+use crate::{ContractResult, MarketViewKey};
 
 pub trait BarEncoder {
     fn encode_bar_completed(&self, context: &EncodeContext) -> ContractResult<Vec<u8>>;

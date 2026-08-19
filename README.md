@@ -91,7 +91,7 @@ tests/                 Python 测试
 ```bash
 cargo test --workspace
 uv run pytest -q
-cargo fmt --all -- --check
+make rust-fmt-check
 git diff --check
 python3 scripts/check/check_crate_layout.py
 python3 scripts/check/check_workspace_dependencies.py

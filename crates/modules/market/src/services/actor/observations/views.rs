@@ -34,7 +34,7 @@ impl MarketActor {
         self.freshness.insert(
             freshness_key,
             MarketFreshness {
-                source_id: observation.source_id().to_owned(),
+                source_id: observation.source_id().clone(),
                 scope: observation.scope().clone(),
                 data_kind: observation.kind(),
                 last_event_time_unix_nanos: observation.observed_at_unix_nanos(),

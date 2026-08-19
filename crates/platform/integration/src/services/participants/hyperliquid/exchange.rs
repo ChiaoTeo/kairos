@@ -26,8 +26,8 @@ impl ExchangeService {
             _ => {
                 return Err(IntegrationError::InvalidRequest(
                     "Hyperliquid SDK supports mainnet, testnet, or localhost endpoints".into(),
-                ))
-            }
+                ));
+            },
         };
         let wallet = private_key.parse::<LocalWallet>().map_err(|error| {
             IntegrationError::Authentication(format!("invalid Hyperliquid private key: {error}"))
@@ -66,8 +66,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         normalize_response(request, response, OrderEntryStatus::Accepted)
     }
@@ -86,8 +86,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         normalize_batch_response(requests, response, OrderEntryStatus::Accepted)
     }
@@ -106,8 +106,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         normalize_response(request, response, OrderEntryStatus::Accepted)
     }
@@ -131,8 +131,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         let orders = requests
             .iter()
@@ -160,8 +160,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         normalize_cancel_batch(requests, response)
     }
@@ -182,8 +182,8 @@ impl ExchangeService {
             Err(error) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
         };
         match response {
             ExchangeResponseStatus::Err(message) => Ok(rejected(message)),
@@ -202,7 +202,7 @@ impl ExchangeService {
                     occurred_at_unix_nanos: UnixNanos::from(at_unix_nanos),
                     reason: String::new(),
                 }))
-            }
+            },
         }
     }
 
@@ -229,7 +229,7 @@ fn client_order(request: &OrderEntryRequest) -> Result<ClientOrderRequest, Integ
             } else {
                 "Gtc"
             }
-        }
+        },
         TimeInForce::ImmediateOrCancel | TimeInForce::FillOrKill => "Ioc",
         TimeInForce::Day => return Err(IntegrationError::UnsupportedOperation),
     };

@@ -159,7 +159,7 @@ fn normalize_receipt(
                     status: field(row, &["status"]),
                 })
             }
-        }
+        },
         CommandOutcome::Rejected(error) => CommandOutcome::Rejected(error),
         CommandOutcome::Indeterminate(error) => CommandOutcome::Indeterminate(error),
     })

@@ -26,7 +26,7 @@ impl fmt::Display for DomainTypeError {
                     f,
                     "{type_name} cannot contain leading or trailing whitespace"
                 )
-            }
+            },
             Self::Invalid { type_name, reason } => write!(f, "invalid {type_name}: {reason}"),
             Self::NonPositive { type_name } => write!(f, "{type_name} must be positive"),
         }

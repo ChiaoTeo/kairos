@@ -7,8 +7,8 @@ use super::SourceId;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct SourceRouteKey {
-    pub source_id: Option<String>,
-    pub exchange: String,
+    pub source_id: Option<SourceId>,
+    pub exchange: Option<Exchange>,
     pub market_type: ProviderProductCode,
     pub asset_type: Option<AssetClass>,
 }
@@ -16,13 +16,8 @@ pub struct SourceRouteKey {
 impl SourceRouteKey {
     pub fn from_market(market: &crate::domain::market::ResolvedMarket) -> Self {
         Self {
-            source_id: market.source_id.as_ref().map(ToString::to_string),
-            exchange: market
-                .exchange_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "consolidated".into())
-                .to_ascii_lowercase(),
+            source_id: market.source_id.clone(),
+            exchange: market.exchange_id.clone(),
             market_type: market.route.provider_product.clone(),
             asset_type: market.asset_type,
         }

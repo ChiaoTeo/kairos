@@ -1,8 +1,84 @@
-use std::{fmt, str::FromStr};
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
 use crate::DomainTypeError;
+use crate::text::text_type;
+
+text_type!(Symbol);
+text_type!(Exchange);
+text_type!(AssetId);
+text_type!(ListingId);
+text_type!(IssuerId);
+text_type!(MarketSegmentId);
+text_type!(TradingSessionId);
+text_type!(TradingCalendarId);
+text_type!(Currency);
+text_type!(InstrumentId);
+text_type!(MarketId);
+
+macro_rules! legacy_default {
+    ($name:ident, $value:literal) => {
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new($value).expect("legacy unresolved reference identity is valid")
+            }
+        }
+    };
+}
+
+impl Default for Exchange {
+    fn default() -> Self {
+        Self::new("exchange:unknown").expect("canonical default exchange is valid")
+    }
+}
+
+legacy_default!(InstrumentId, "instrument:unresolved");
+legacy_default!(ListingId, "listing:unresolved");
+legacy_default!(MarketId, "market:unresolved");
+legacy_default!(Symbol, "symbol:unresolved");
+legacy_default!(AssetId, "asset:unresolved");
+
+impl InstrumentId {
+    /// Canonical spot identity: the instrument is the base asset, not a quote pair.
+    pub fn spot(base_asset: impl AsRef<str>) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "instrument:spot:{}",
+            base_asset.as_ref().to_ascii_uppercase()
+        ))
+    }
+}
+
+impl ListingId {
+    /// Canonical spot listing identity, including its exchange and quote context.
+    pub fn spot(
+        exchange: &Exchange,
+        base_asset: impl AsRef<str>,
+        quote_asset: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "listing:{}:spot:{}:{}",
+            exchange.as_str().trim_start_matches("exchange:"),
+            base_asset.as_ref().to_ascii_uppercase(),
+            quote_asset.as_ref().to_ascii_uppercase()
+        ))
+    }
+}
+
+impl MarketId {
+    /// Canonical spot market identity retains the provider symbol.
+    pub fn spot(
+        exchange: &Exchange,
+        provider_symbol: impl AsRef<str>,
+    ) -> Result<Self, DomainTypeError> {
+        Self::new(format!(
+            "market:{}:spot:{}",
+            exchange.as_str().trim_start_matches("exchange:"),
+            provider_symbol.as_ref().to_ascii_uppercase()
+        ))
+    }
+}
 
 /// Canonical economic lifecycle of a tradable instrument.
 #[derive(
@@ -142,10 +218,14 @@ impl PartialEq<&str> for AssetClass {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceStatus {
+    Draft,
     Active,
     Trading,
+    Suspended,
     Delisted,
     Inactive,
+    Retired,
+    Expired,
     #[default]
     Unknown,
 }
@@ -162,10 +242,14 @@ impl<'de> Deserialize<'de> for ReferenceStatus {
 impl ReferenceStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Draft => "draft",
             Self::Active => "active",
             Self::Trading => "trading",
+            Self::Suspended => "suspended",
             Self::Delisted => "delisted",
             Self::Inactive => "inactive",
+            Self::Retired => "retired",
+            Self::Expired => "expired",
             Self::Unknown => "unknown",
         }
     }
@@ -174,10 +258,14 @@ impl ReferenceStatus {
 impl From<&str> for ReferenceStatus {
     fn from(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
+            "draft" => Self::Draft,
             "active" => Self::Active,
             "trading" => Self::Trading,
+            "suspended" => Self::Suspended,
             "delisted" => Self::Delisted,
             "inactive" | "break" => Self::Inactive,
+            "retired" => Self::Retired,
+            "expired" => Self::Expired,
             _ => Self::Unknown,
         }
     }

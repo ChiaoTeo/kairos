@@ -1,8 +1,10 @@
-use super::defaults::*;
-use super::sources::MarketSourceBinding;
+use std::collections::BTreeMap;
+
 use kairos_workspace::Workspace;
 use serde::Deserialize;
-use std::collections::BTreeMap;
+
+use super::defaults::*;
+use super::sources::MarketSourceBinding;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct MarketConfig {

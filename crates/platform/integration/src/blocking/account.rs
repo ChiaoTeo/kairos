@@ -1,9 +1,9 @@
 //! Synchronous account capabilities for dedicated blocking workers.
 
 use crate::domain::account::{ExternalAccountSegment, ExternalAccountSnapshot};
-use crate::IntegrationError;
 use crate::{
     ExternalAccountCredentialProfile, ExternalMarketProfile, ExternalMarketProfileRequest,
+    IntegrationError,
 };
 
 pub trait AccountQuery: Send {

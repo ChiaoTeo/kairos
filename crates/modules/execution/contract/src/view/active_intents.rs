@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use kairos_protocol::generated::kairos::execution::v_2 as fb;
+
+use crate::{ContractError, ContractResult};
 pub type ActiveIntentsView<'a> = fb::ActiveIntentsView<'a>;
 pub fn decode(bytes: &[u8]) -> ContractResult<ActiveIntentsView<'_>> {
     if !fb::active_intents_view_buffer_has_identifier(bytes) {

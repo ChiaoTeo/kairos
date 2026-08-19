@@ -92,7 +92,7 @@ impl ReferenceSourcePlan {
                             binance_config(endpoint, None),
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::BinanceUsdM { key, endpoint } => {
                     connections
                         .binance_usdm_rest
@@ -101,7 +101,7 @@ impl ReferenceSourcePlan {
                             binance_config(endpoint, None),
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::BinanceCoinM { key, endpoint } => {
                     connections
                         .binance_coinm_rest
@@ -110,7 +110,7 @@ impl ReferenceSourcePlan {
                             binance_config(endpoint, None),
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::BinanceOptions { key, endpoint } => {
                     connections
                         .binance_options_rest
@@ -119,7 +119,7 @@ impl ReferenceSourcePlan {
                             binance_config(endpoint, None),
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::BinanceEquity {
                     key,
                     endpoint,
@@ -132,7 +132,7 @@ impl ReferenceSourcePlan {
                             binance_config(endpoint, Some(credential.clone())),
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::Okx { key, endpoint, .. } => {
                     connections
                         .okx_public_rest
@@ -144,7 +144,7 @@ impl ReferenceSourcePlan {
                             },
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::Hyperliquid { key, endpoint, .. } => {
                     connections
                         .hyperliquid_info_rest
@@ -156,7 +156,7 @@ impl ReferenceSourcePlan {
                             },
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::MassiveEquity {
                     key,
                     api_key,
@@ -175,7 +175,7 @@ impl ReferenceSourcePlan {
                             },
                         )
                         .map_err(provider_error)?;
-                }
+                },
                 ReferenceProviderPlan::MassiveOptions {
                     api_key,
                     endpoint,
@@ -199,7 +199,7 @@ impl ReferenceSourcePlan {
                             )
                             .map_err(provider_error)?;
                     }
-                }
+                },
             }
         }
         Ok(())
@@ -216,31 +216,31 @@ impl ReferenceSourcePlan {
                     ConfiguredProviderSource::BinanceSpot(BinanceSpotSource::from_key(
                         ConnectionKey::new(key).map_err(provider_error)?,
                     ))
-                }
+                },
                 ReferenceProviderPlan::BinanceUsdM { key, .. } => {
                     ConfiguredProviderSource::BinanceDerivatives(
                         BinanceDerivativesSource::from_usdm_key(
                             ConnectionKey::new(key).map_err(provider_error)?,
                         ),
                     )
-                }
+                },
                 ReferenceProviderPlan::BinanceCoinM { key, .. } => {
                     ConfiguredProviderSource::BinanceDerivatives(
                         BinanceDerivativesSource::from_coinm_key(
                             ConnectionKey::new(key).map_err(provider_error)?,
                         ),
                     )
-                }
+                },
                 ReferenceProviderPlan::BinanceOptions { key, .. } => {
                     ConfiguredProviderSource::BinanceOptions(BinanceOptionsSource::from_key(
                         ConnectionKey::new(key).map_err(provider_error)?,
                     ))
-                }
+                },
                 ReferenceProviderPlan::BinanceEquity { key, .. } => {
                     ConfiguredProviderSource::BinanceEquity(BinanceEquitySource::from_key(
                         ConnectionKey::new(key).map_err(provider_error)?,
                     ))
-                }
+                },
                 ReferenceProviderPlan::Okx {
                     key,
                     source_id,
@@ -256,7 +256,7 @@ impl ReferenceSourcePlan {
                         product,
                         ConnectionKey::new(key).map_err(provider_error)?,
                     ))
-                }
+                },
                 ReferenceProviderPlan::MassiveEquity {
                     key, sync_store, ..
                 } => ConfiguredProviderSource::MassiveEquity(

@@ -343,7 +343,7 @@ impl ExecutionApplication {
                     self.persist_snapshot()?;
                 }
                 return Err(error);
-            }
+            },
         };
         self.actor
             .record_intent_idempotency(idempotency_key, state.intent.intent_id.to_string());

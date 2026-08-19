@@ -94,7 +94,7 @@ mod tests {
             close: "1".parse().unwrap(),
             volume: None,
             observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
-            source_id: "test".into(),
+            source_id: kairos_primitives::SourceId::new("test").unwrap(),
             derivation: "test".into(),
         });
         std::fs::write(&data, serde_json::to_string(&event).unwrap()).unwrap();

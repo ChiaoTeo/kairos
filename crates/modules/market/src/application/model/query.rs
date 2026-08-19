@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
+use kairos_primitives::{
+    InstrumentId, MarketId, Money, Price, PriceDelta, Quantity, Rate, SourceId,
+};
+
 use crate::domain::freshness::DataFreshnessStatus;
-use crate::domain::observation::MarketViewKey;
-use crate::domain::observation::{MarketObservation, ObservationKind};
+use crate::domain::observation::{MarketObservation, MarketViewKey, ObservationKind};
 use crate::domain::source::SourceStatus;
 use crate::domain::view::MarketView;
-use kairos_primitives::{InstrumentId, MarketId, Money, Price, PriceDelta, Quantity, Rate};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrderBookSide {
@@ -52,7 +54,7 @@ pub struct MarketDataAvailabilityQuery {
 pub struct MarketDataAvailability {
     pub market_id: MarketId,
     pub instrument_id: InstrumentId,
-    pub source_id: String,
+    pub source_id: SourceId,
     pub provider_id: String,
     pub provider_product: String,
     pub provider_symbol: String,

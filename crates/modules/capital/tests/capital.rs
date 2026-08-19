@@ -1,8 +1,8 @@
+use kairos_capital::composition::{
+    compose_capital_application, compose_capital_transfer_process,
+    compose_persistent_capital_application,
+};
 use kairos_capital::{
-    composition::{
-        compose_capital_application, compose_capital_transfer_process,
-        compose_persistent_capital_application,
-    },
     AuthorizeCapitalPlan, BeginCapitalOperation, CancelFundingObjective, CapitalApplication,
     CapitalDemand, CapitalDemandId, CapitalDemandReceipt, CapitalDemandStatus, CapitalError,
     CapitalFacts, CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, CapitalOperationStatus,
@@ -21,8 +21,8 @@ use kairos_integration::{
     IntegrationError,
 };
 use kairos_primitives::{
-    AccountId, BrokerId, Currency, Generation, IdempotencyKey, Quantity, SegmentKey, StrategyId,
-    UnixNanos,
+    AccountId, BasisPoints, BrokerId, Currency, Generation, IdempotencyKey, Quantity, SegmentKey,
+    StrategyDecisionId, StrategyId, UnixNanos,
 };
 
 fn objective(version: u64) -> FundingObjective {
@@ -40,8 +40,8 @@ fn objective(version: u64) -> FundingObjective {
         required_by: UnixNanos::new(200),
         expires_at: UnixNanos::new(500),
         priority: FundingPriority::High,
-        confidence_bps: 8_000,
-        strategy_decision_id: "decision-7".into(),
+        confidence_bps: BasisPoints::new(8_000),
+        strategy_decision_id: StrategyDecisionId::new("decision-7").unwrap(),
     }
 }
 
@@ -89,7 +89,7 @@ fn demand(id: &str, shortfall: i64, expires_at: u64) -> CapitalDemand {
         required_by: UnixNanos::new(120),
         expires_at: UnixNanos::new(expires_at),
         priority: FundingPriority::High,
-        confidence_bps: 9_000,
+        confidence_bps: BasisPoints::new(9_000),
         account_watermark: kairos_primitives::Sequence::new(11),
         risk_watermark: kairos_primitives::Sequence::new(17),
         launch_id: "basis-live".into(),

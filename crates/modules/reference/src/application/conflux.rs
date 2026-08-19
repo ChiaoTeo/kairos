@@ -72,7 +72,7 @@ impl ConfluxActor for ReferenceApplication {
                 }
                 let _ = self.publish_pending(context).await;
                 None
-            }
+            },
             ConfluxEvent::Local(value) => match value {},
             _ => None,
         };
@@ -89,17 +89,17 @@ impl ReferenceApplication {
         match request {
             ReferenceRestRequest::Health => {
                 ReferenceRestResponse::Health(Ok(self.contract_health().await))
-            }
+            },
             ReferenceRestRequest::Refresh { source_id } => {
                 let result = match source_id.as_deref() {
                     Some(source_id) => {
                         self.refresh_source_with_connections(source_id, &mut context.connections())
                             .await
-                    }
+                    },
                     None => {
                         self.refresh_with_connections(&mut context.connections())
                             .await
-                    }
+                    },
                 };
                 let response = match result {
                     Ok(result) => {
@@ -111,11 +111,11 @@ impl ReferenceApplication {
                             change_count: result.change_count,
                             publication_pending,
                         })
-                    }
+                    },
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::Refresh(response)
-            }
+            },
             ReferenceRestRequest::Publish => {
                 let response =
                     self.publish_pending(context)
@@ -125,7 +125,7 @@ impl ReferenceApplication {
                             events,
                         });
                 ReferenceRestResponse::Publish(response)
-            }
+            },
             ReferenceRestRequest::PauseSource(request) => {
                 let source_id = request.source_id;
                 let response = self
@@ -137,7 +137,7 @@ impl ReferenceApplication {
                     })
                     .map_err(control_error);
                 ReferenceRestResponse::PauseSource(response)
-            }
+            },
             ReferenceRestRequest::ResumeSource(request) => {
                 let source_id = request.source_id;
                 let response = self
@@ -149,40 +149,40 @@ impl ReferenceApplication {
                     })
                     .map_err(control_error);
                 ReferenceRestResponse::ResumeSource(response)
-            }
+            },
             ReferenceRestRequest::AddOptionCoverage(request) => {
                 ReferenceRestResponse::AddOptionCoverage(
                     self.change_option_coverage(request.underlying, true, context)
                         .await,
                 )
-            }
+            },
             ReferenceRestRequest::RemoveOptionCoverage(request) => {
                 ReferenceRestResponse::RemoveOptionCoverage(
                     self.change_option_coverage(request.underlying, false, context)
                         .await,
                 )
-            }
+            },
             ReferenceRestRequest::UpsertAsset(request) => {
                 let response = match self.upsert_asset(request).await {
                     Ok(generation) => self.mutation_response(generation.get(), context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertAsset(response)
-            }
+            },
             ReferenceRestRequest::UpsertInstrument(request) => {
                 let response = match self.upsert_instrument(request).await {
                     Ok(generation) => self.mutation_response(generation.get(), context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertInstrument(response)
-            }
+            },
             ReferenceRestRequest::UpsertListing(request) => {
                 let response = match self.upsert_listing(request).await {
                     Ok(generation) => self.mutation_response(generation.get(), context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertListing(response)
-            }
+            },
         }
     }
 
@@ -311,7 +311,7 @@ impl ReferenceApplication {
                             control_error(ReferenceError::Publication(match error {
                                 ResourceOperationError::NotFound => {
                                     "reference Aeron publisher disappeared".into()
-                                }
+                                },
                                 ResourceOperationError::Operation(error) => error.to_string(),
                             }))
                         })?;

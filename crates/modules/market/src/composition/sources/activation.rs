@@ -13,7 +13,7 @@ pub fn default_endpoint(provider: &str) -> &'static str {
         "binance-options-websocket" => "wss://fstream.binance.com/ws",
         "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
             "https://www.okx.com"
-        }
+        },
         "okx-public-websocket" => "wss://ws.okx.com:8443/ws/v5/public",
         "massive-equity-websocket" => "http://socket.massiveprivateserver.site/stocks",
         "massive-options-websocket" => "http://socket.massiveprivateserver.site/options",

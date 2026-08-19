@@ -1,8 +1,8 @@
+use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+
 use crate::participants::okx::OkxRestConfig;
-use crate::services::participants::okx::{
-    check_okx_response, market,
-    rest::{map_error, RestService},
-};
+use crate::services::participants::okx::rest::{RestService, map_error};
+use crate::services::participants::okx::{check_okx_response, market};
 use crate::{
     ConnectionDescriptor, ExternalInstrument, ExternalInstrumentCatalog,
     ExternalInstrumentCatalogPage, ExternalInstrumentKind, InstrumentCatalogQuery,
@@ -12,7 +12,6 @@ use crate::{
     MarketOpenInterestQuery, MarketOrderBook, MarketOrderBookQuery, MarketOrderBookRequest,
     MarketQuote, MarketQuoteQuery, MarketTrade, MarketTradeQuery, ParticipantKind, ParticipantRef,
 };
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OkxSystemStatus {
@@ -344,8 +343,8 @@ fn normalize_instrument(
             _ => {
                 return Err(IntegrationError::InvalidPayload(format!(
                     "unsupported OKX instrument type {instrument_type}"
-                )))
-            }
+                )));
+            },
         },
         base_currency: currency(text("baseCcy"))?,
         quote_currency: currency(text("quoteCcy"))?,

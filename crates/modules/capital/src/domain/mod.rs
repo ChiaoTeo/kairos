@@ -1,46 +1,12 @@
-use std::fmt;
-
+pub use kairos_primitives::capital::{
+    CapitalDemandId, CapitalGroupId, CapitalOperationId, CapitalPlanId, CapitalReservationId,
+    CapitalRouteId, FundingObjectiveId,
+};
 use kairos_primitives::{
-    AccountId, BrokerId, Currency, Generation, Quantity, SegmentKey, Sequence, StrategyId,
-    UnixNanos,
+    AccountId, BasisPoints, BrokerId, Currency, Generation, Quantity, SegmentKey, Sequence,
+    StrategyDecisionId, StrategyId, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
-
-macro_rules! capital_id {
-    ($name:ident) => {
-        #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(String);
-
-        impl $name {
-            pub fn new(value: impl Into<String>) -> Result<Self, String> {
-                let value = value.into();
-                if value.is_empty() || value.trim() != value {
-                    return Err(concat!(stringify!($name), " must be non-empty and trimmed").into());
-                }
-                Ok(Self(value))
-            }
-
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(&self.0)
-            }
-        }
-    };
-}
-
-capital_id!(CapitalGroupId);
-capital_id!(FundingObjectiveId);
-capital_id!(CapitalDemandId);
-capital_id!(CapitalRouteId);
-capital_id!(CapitalPlanId);
-capital_id!(CapitalReservationId);
-capital_id!(CapitalOperationId);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct FundingLocation {
@@ -70,8 +36,8 @@ pub struct FundingObjective {
     pub expires_at: UnixNanos,
     pub priority: FundingPriority,
     /// Strategy confidence in basis points, inclusive 0..=10_000.
-    pub confidence_bps: u16,
-    pub strategy_decision_id: String,
+    pub confidence_bps: BasisPoints,
+    pub strategy_decision_id: StrategyDecisionId,
 }
 
 impl FundingObjective {
@@ -82,13 +48,8 @@ impl FundingObjective {
         if self.expires_at < self.required_by {
             return Err("funding objective cannot expire before required_by".into());
         }
-        if self.confidence_bps > 10_000 {
+        if self.confidence_bps.get() > 10_000 {
             return Err("funding objective confidence_bps cannot exceed 10000".into());
-        }
-        if self.strategy_decision_id.is_empty()
-            || self.strategy_decision_id.trim() != self.strategy_decision_id
-        {
-            return Err("funding objective strategy_decision_id is required".into());
         }
         Ok(())
     }
@@ -123,7 +84,7 @@ pub struct CapitalDemand {
     pub required_by: UnixNanos,
     pub expires_at: UnixNanos,
     pub priority: FundingPriority,
-    pub confidence_bps: u16,
+    pub confidence_bps: BasisPoints,
     pub account_watermark: Sequence,
     pub risk_watermark: Sequence,
     pub launch_id: String,
@@ -140,7 +101,7 @@ impl CapitalDemand {
         if self.observed_at > self.required_by || self.required_by > self.expires_at {
             return Err("capital demand requires observed_at <= required_by <= expires_at".into());
         }
-        if self.confidence_bps > 10_000 {
+        if self.confidence_bps.get() > 10_000 {
             return Err("capital demand confidence_bps cannot exceed 10000".into());
         }
         if self.account_watermark.get() == 0 || self.risk_watermark.get() == 0 {

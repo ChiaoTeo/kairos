@@ -2,7 +2,7 @@
 
 use kairos_primitives::{
     AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, IssuerId, ListingId,
-    MarketId, Rate, ReferenceStatus, Symbol, UnixNanos,
+    MarketId, Money, Price, Quantity, ReferenceStatus, Symbol, UnixNanos,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,7 +76,7 @@ pub struct Asset {
     #[serde(default)]
     pub source_id: Option<String>,
     pub asset_id: AssetId,
-    pub code: String,
+    pub code: Symbol,
     pub name: Option<String>,
     pub asset_class: AssetClass,
     pub status: ReferenceStatus,
@@ -98,7 +98,7 @@ pub struct Instrument {
     pub primary_currency_asset_id: Option<AssetId>,
     pub underlying_instrument_id: Option<InstrumentId>,
     pub expiry_unix_nanos: Option<UnixNanos>,
-    pub strike: Option<String>,
+    pub strike: Option<Price>,
     pub option_right: Option<String>,
     pub status: ReferenceStatus,
 }
@@ -131,13 +131,13 @@ pub struct Market {
     pub base_asset_id: Option<AssetId>,
     pub quote_asset_id: Option<AssetId>,
     pub status: ReferenceStatus,
-    pub price_tick: Option<String>,
-    pub quantity_tick: Option<String>,
+    pub price_tick: Option<Price>,
+    pub quantity_tick: Option<Quantity>,
     pub price_precision: i32,
     pub quantity_precision: i32,
-    pub minimum_quantity: Option<String>,
-    pub minimum_notional: Option<String>,
-    pub contract_size: Option<String>,
+    pub minimum_quantity: Option<Quantity>,
+    pub minimum_notional: Option<Money>,
+    pub contract_size: Option<Quantity>,
     pub effective_from_unix_nanos: UnixNanos,
     pub effective_to_unix_nanos: Option<UnixNanos>,
 }
@@ -289,21 +289,6 @@ impl ProviderCatalog {
             Ok(())
         }
 
-        fn non_negative_decimal(value: Option<&str>, label: &str) -> ReferenceResult<()> {
-            if let Some(value) = value {
-                required(value, label)?;
-                let decimal = value.trim().parse::<Rate>().map_err(|_| {
-                    ReferenceError::Invalid(format!("{label} is not a valid decimal"))
-                })?;
-                if decimal < Rate::ZERO {
-                    return Err(ReferenceError::Invalid(format!(
-                        "{label} must not be negative"
-                    )));
-                }
-            }
-            Ok(())
-        }
-
         fn unique<T, F>(values: &[T], label: &str, key: F) -> ReferenceResult<()>
         where
             F: Fn(&T) -> &str,
@@ -372,10 +357,6 @@ impl ProviderCatalog {
             required(
                 instrument.status.as_str(),
                 &format!("instrument {} status", instrument.instrument_id),
-            )?;
-            non_negative_decimal(
-                instrument.strike.as_deref(),
-                &format!("instrument {} strike", instrument.instrument_id),
             )?;
             if instrument.instrument_type == InstrumentKind::Option
                 && (instrument.expiry_unix_nanos.is_none()
@@ -508,26 +489,15 @@ impl ProviderCatalog {
                     market.market_id
                 )));
             }
-            non_negative_decimal(
-                market.price_tick.as_deref(),
-                &format!("market {} price tick", market.market_id),
-            )?;
-            non_negative_decimal(
-                market.quantity_tick.as_deref(),
-                &format!("market {} quantity tick", market.market_id),
-            )?;
-            non_negative_decimal(
-                market.minimum_quantity.as_deref(),
-                &format!("market {} minimum quantity", market.market_id),
-            )?;
-            non_negative_decimal(
-                market.minimum_notional.as_deref(),
-                &format!("market {} minimum notional", market.market_id),
-            )?;
-            non_negative_decimal(
-                market.contract_size.as_deref(),
-                &format!("market {} contract size", market.market_id),
-            )?;
+            if market
+                .minimum_notional
+                .is_some_and(|value| value.mantissa() < 0)
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "market {} minimum notional must not be negative",
+                    market.market_id
+                )));
+            }
             interval(
                 market.effective_from_unix_nanos,
                 market.effective_to_unix_nanos,
@@ -644,8 +614,8 @@ pub(crate) fn merge_instrument(
                 (Some(value), None) => right.$field = Some(value.clone()),
                 (Some(left_value), Some(right_value)) if left_value != right_value => {
                     fields.push(stringify!($field));
-                }
-                _ => {}
+                },
+                _ => {},
             }
         };
     }
@@ -684,7 +654,7 @@ pub(crate) fn merge_asset(previous: &mut Asset, incoming: &Asset) -> Result<(), 
     match (&left.name, &right.name) {
         (None, Some(value)) => left.name = Some(value.clone()),
         (Some(value), None) => right.name = Some(value.clone()),
-        _ => {}
+        _ => {},
     }
     if left != right {
         let mut fields = Vec::new();

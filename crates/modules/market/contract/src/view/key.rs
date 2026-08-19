@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use kairos_primitives::SourceId;
+
 use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -38,7 +40,7 @@ impl MarketViewKind {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MarketViewKey {
     pub scope_key: String,
-    pub source_id: String,
+    pub source_id: SourceId,
     pub kind: MarketViewKind,
     pub qualifier: Option<String>,
 }
@@ -46,14 +48,15 @@ pub struct MarketViewKey {
 impl MarketViewKey {
     pub fn new(
         scope_key: impl Into<String>,
-        source_id: impl Into<String>,
+        source_id: impl AsRef<str>,
         kind: MarketViewKind,
         qualifier: Option<impl Into<String>>,
     ) -> ContractResult<Self> {
         let scope_key = scope_key.into();
-        let source_id = source_id.into();
+        let source_id = SourceId::new(source_id.as_ref())
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
         let qualifier = qualifier.map(Into::into);
-        if scope_key.trim().is_empty() || source_id.trim().is_empty() {
+        if scope_key.trim().is_empty() {
             return Err(ContractError::Invalid("view identity is incomplete".into()));
         }
         Ok(Self {

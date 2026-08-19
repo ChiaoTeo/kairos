@@ -1,11 +1,13 @@
-use kairos_primitives::{FillId, OrderId, SegmentKey, Symbol};
-use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::task::{Context, Poll};
+
+use kairos_primitives::{FillId, OrderId, SegmentKey, Symbol};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::hyperliquid::{HyperliquidUserStreamConfig, HyperliquidWebSocketConfig};
-use crate::services::participants::hyperliquid::{socket::SocketService, stream};
+use crate::services::participants::hyperliquid::socket::SocketService;
+use crate::services::participants::hyperliquid::stream;
 use crate::{
     AccountStream, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
     ConnectionLifecycleCommand, DecimalValue, ExecutionStream, ExternalAccountEvent,
@@ -71,8 +73,8 @@ impl HyperliquidWebSocketConnection {
                     if value.pointer("/data/method").and_then(Value::as_str) == Some(method)
                         && value.pointer("/data/subscription") == Some(&subscription) =>
                 {
-                    return Ok(())
-                }
+                    return Ok(());
+                },
                 Some("error") => {
                     return Err(IntegrationError::InvalidRequest(
                         value
@@ -81,9 +83,9 @@ impl HyperliquidWebSocketConnection {
                             .and_then(Value::as_str)
                             .unwrap_or("Hyperliquid subscription rejected")
                             .into(),
-                    ))
-                }
-                _ => {}
+                    ));
+                },
+                _ => {},
             }
             self.demultiplex(&value)?;
         }
@@ -111,8 +113,8 @@ impl HyperliquidWebSocketConnection {
                 Message::Close(_) => {
                     return Err(IntegrationError::Transport(
                         "Hyperliquid WebSocket closed".into(),
-                    ))
-                }
+                    ));
+                },
                 _ => continue,
             }
         }
@@ -127,13 +129,13 @@ impl HyperliquidWebSocketConnection {
             };
             match message {
                 Message::Text(text) => {
-                    return Poll::Ready(serde_json::from_str(&text).map_err(payload))
-                }
+                    return Poll::Ready(serde_json::from_str(&text).map_err(payload));
+                },
                 Message::Close(_) => {
                     return Poll::Ready(Err(IntegrationError::Transport(
                         "Hyperliquid WebSocket closed".into(),
-                    )))
-                }
+                    )));
+                },
                 _ => continue,
             }
         }
@@ -153,7 +155,7 @@ impl HyperliquidWebSocketConnection {
                             "Hyperliquid l2Book data is missing".into(),
                         )
                     })?)?)
-            }
+            },
             "trades" => {
                 let rows = value.get("data").and_then(Value::as_array).ok_or_else(|| {
                     IntegrationError::InvalidPayload("Hyperliquid trades data is missing".into())
@@ -164,7 +166,7 @@ impl HyperliquidWebSocketConnection {
                         .map(stream::trade)
                         .collect::<Result<Vec<_>, _>>()?,
                 );
-            }
+            },
             "candle" => {
                 self.ensure_capacity(1)?;
                 self.pending_market
@@ -173,7 +175,7 @@ impl HyperliquidWebSocketConnection {
                             "Hyperliquid candle data is missing".into(),
                         )
                     })?)?)
-            }
+            },
             "allMids" => {
                 let mids = value
                     .pointer("/data/mids")
@@ -191,12 +193,12 @@ impl HyperliquidWebSocketConnection {
                     event.price = stream::optional(Some(price))?;
                     self.pending_market.push_back(event);
                 }
-            }
+            },
             "orderUpdates" => self.normalize_orders(value.get("data").unwrap_or(&Value::Null))?,
             "userEvents" | "userFills" => {
                 self.normalize_fills(value.get("data").unwrap_or(&Value::Null))?
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -484,7 +486,7 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
             Ok(_) => {
                 self.subscriptions.insert(id, (request.feeds, values));
                 Ok(MarketSubscriptionOutcome::Confirmed(subscription))
-            }
+            },
             Err((0, IntegrationError::InvalidRequest(message))) => Ok(
                 MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
                     code: None,
@@ -501,7 +503,7 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
                         "Hyperliquid confirmed {confirmed} feeds before subscription became uncertain: {error}"
                     ),
                 })
-            }
+            },
         }
     }
     async fn unsubscribe(
@@ -519,7 +521,7 @@ impl MarketSubscriptionCommand for HyperliquidWebSocketConnection {
             Ok(_) => {
                 self.subscriptions.remove(&subscription);
                 Ok(MarketSubscriptionOutcome::Confirmed(()))
-            }
+            },
             Err((0, IntegrationError::InvalidRequest(message))) => Ok(
                 MarketSubscriptionOutcome::Rejected(crate::ParticipantRejection {
                     code: None,
@@ -544,7 +546,7 @@ impl MarketDataStream for HyperliquidWebSocketConnection {
                 return Poll::Ready(Ok(v));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -566,7 +568,7 @@ impl AccountStream for HyperliquidWebSocketConnection {
                 return Poll::Ready(Ok(v));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -588,7 +590,7 @@ impl ExecutionStream for HyperliquidWebSocketConnection {
                 return Poll::Ready(Ok(v));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -611,7 +613,7 @@ impl ParticipantEventStream for HyperliquidWebSocketConnection {
                 return Poll::Ready(Ok(ExternalParticipantEvent::Market(value)));
             }
             match self.poll_receive(cx) {
-                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Ok(())) => {},
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Pending => return Poll::Pending,
             }
@@ -698,7 +700,7 @@ mod tests {
                     order.remote_order_id.as_ref().map(|value| value.as_str()),
                     Some("42")
                 );
-            }
+            },
             other => panic!("expected account order event, got {other:?}"),
         }
         assert_eq!(execution.payload.order_id.as_str(), "client-42");

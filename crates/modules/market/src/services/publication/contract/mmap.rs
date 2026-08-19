@@ -1,8 +1,8 @@
 use flatbuffers::FlatBufferBuilder;
-use kairos_market_contract::{view_metadata, EncodeContext, MarketViewKey, MarketViewKind};
+use kairos_market_contract::{EncodeContext, MarketViewKey, MarketViewKind, view_metadata};
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 use kairos_protocol::generated::kairos::market::v_2 as market_fb;
-use kairos_protocol::InstanceIdentity;
 
 use crate::domain::events::{MarketChange, MarketViewUpdate};
 use crate::domain::freshness::MarketFreshness;
@@ -33,7 +33,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_quote(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::Rate(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -44,7 +44,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_rate_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::Ticker24h(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -55,7 +55,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_ticker_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::MarkPrice(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -66,7 +66,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_mark_price_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::FundingRate(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -77,7 +77,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_funding_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::OpenInterest(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -88,7 +88,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_open_interest_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::IndexPrice(value)) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -99,7 +99,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_index_price_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Observation(crate::MarketObservation::Bar(value)) => Some(
                 encode_bar(actor_id, identity, sequence, value, "unspecified")?,
             ),
@@ -119,7 +119,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_greeks_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::OrderBook(value) => {
                 let key = MarketViewKey::new(
                     value.market_id.to_string(),
@@ -130,7 +130,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_orderbook_view(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             MarketViewUpdate::Freshness(value) => {
                 let key = MarketViewKey::new(
                     value.scope.key(),
@@ -141,7 +141,7 @@ pub(crate) fn encode_change_view(
                 .map_err(|error| error.to_string())?;
                 let bytes = encode_freshness(actor_id, identity, sequence, &key, value)?;
                 Some(EncodedMarketView { key, bytes })
-            }
+            },
             _ => None,
         };
     Ok(encoded)
@@ -213,7 +213,8 @@ fn encode_quote(
         identity.clone(),
         generation,
         key.resource_id(),
-    );
+    )
+    .expect("market view metadata identity is valid");
     let metadata = view_metadata(
         &mut builder,
         &context,
@@ -294,7 +295,8 @@ fn view_context<'a, A: flatbuffers::Allocator + 'a>(
         identity.clone(),
         generation,
         key.resource_id(),
-    );
+    )
+    .expect("market view context identity is valid");
     view_metadata(builder, &context, key, as_of)
 }
 
@@ -954,7 +956,7 @@ fn encode_freshness(
         identity.clone(),
         generation,
         key.resource_id(),
-    );
+    )?;
     let metadata = view_metadata(
         &mut builder,
         &context,
@@ -977,13 +979,13 @@ fn encode_freshness(
             status: match value.status {
                 crate::domain::freshness::DataFreshnessStatus::Unknown => {
                     market_fb::FreshnessStatus::UNKNOWN
-                }
+                },
                 crate::domain::freshness::DataFreshnessStatus::Current => {
                     market_fb::FreshnessStatus::CURRENT
-                }
+                },
                 crate::domain::freshness::DataFreshnessStatus::Stale => {
                     market_fb::FreshnessStatus::STALE
-                }
+                },
             },
         },
     );

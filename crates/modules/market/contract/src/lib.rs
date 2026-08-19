@@ -7,26 +7,25 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
+use std::path::PathBuf;
+
 pub use control::{
     MarketCommandEnvelope, MarketCommandStatus, MarketControlClient, MarketControlError,
-    MarketControlResponse, MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse,
-    MarketHealthResponse, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketRestRequest,
-    MarketRestResponse, MarketSubscribePayload, MarketSubscriptionResponse,
-    MarketUnsubscribePayload,
+    MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse, MarketHealthResponse,
+    MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
+    MarketSubscribePayload, MarketSubscriptionResponse, MarketUnsubscribePayload,
 };
 pub use encode::{
-    event_metadata, view_metadata, BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder,
-    QuoteEncoder, TradeEncoder,
+    BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder, QuoteEncoder, TradeEncoder,
+    event_metadata, view_metadata,
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{MarketEvent, MarketEventFrame, MarketEventPublisher, MarketEventStream};
 pub use kairos_transport::AeronEndpoint;
 pub use view::{
-    market_view_path, MarketViewKey, MarketViewKind, MarketViewPublisher, MarketViewReader,
-    ViewFrame, ViewMetadata,
+    MarketViewKey, MarketViewKind, MarketViewPublisher, MarketViewReader, ViewFrame, ViewMetadata,
+    market_view_path,
 };
-
-use std::path::PathBuf;
 
 /// Unified public entry point. Control, events, and views remain separate
 /// capabilities underneath this facade.

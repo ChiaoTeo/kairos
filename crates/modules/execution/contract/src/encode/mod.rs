@@ -1,5 +1,5 @@
 mod metadata;
-pub use metadata::{event_metadata, view_metadata, EncodeContext};
+pub use metadata::{EncodeContext, event_metadata, view_metadata};
 
 use crate::{ContractResult, ExecutionViewKey};
 

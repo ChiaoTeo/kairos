@@ -1,8 +1,10 @@
-use super::frame::ExecutionEventFrame;
-use crate::{ContractError, ContractResult};
-use kairos_transport::{AeronByteSubscription, AeronEndpoint};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use kairos_transport::{AeronByteSubscription, AeronEndpoint};
+
+use super::frame::ExecutionEventFrame;
+use crate::{ContractError, ContractResult};
 pub struct ExecutionEventStream {
     subscription: AeronByteSubscription,
 }

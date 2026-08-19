@@ -1,28 +1,32 @@
 use kairos_capital_contract::{
     FundingLocation, FundingObjectivePriority, PublishFundingObjectiveRequest,
 };
+use kairos_primitives::{
+    AccountId, BasisPoints, BrokerId, CapitalGroupId, Currency, FundingObjectiveId, Generation,
+    Quantity, RequestId, SegmentKey, StrategyDecisionId, StrategyId, UnixNanos,
+};
 
 #[test]
 fn funding_objective_control_has_no_route_or_source_authority() {
     let request = PublishFundingObjectiveRequest {
-        request_id: "request-1".into(),
-        capital_group_id: "group-a".into(),
-        objective_id: "buffer-usdt".into(),
-        version: 2,
-        strategy_id: "basis".into(),
+        request_id: RequestId::new("request-1").unwrap(),
+        capital_group_id: CapitalGroupId::new("group-a").unwrap(),
+        objective_id: FundingObjectiveId::new("buffer-usdt").unwrap(),
+        version: Generation::new(2),
+        strategy_id: StrategyId::new("basis").unwrap(),
         destination: FundingLocation {
-            broker: "binance".into(),
-            account_id: "account-a".into(),
-            segment: "usd-m".into(),
-            asset: "USDT".into(),
+            broker: BrokerId::new("binance").unwrap(),
+            account_id: AccountId::new("account-a").unwrap(),
+            segment: SegmentKey::new("usd-m").unwrap(),
+            asset: Currency::new("USDT").unwrap(),
         },
-        desired_available: "80000".into(),
-        required_by_unix_nanos: 200,
-        expires_at_unix_nanos: 500,
+        desired_available: "80000".parse::<Quantity>().unwrap(),
+        required_by_unix_nanos: UnixNanos::new(200),
+        expires_at_unix_nanos: UnixNanos::new(500),
         priority: FundingObjectivePriority::High,
-        confidence_bps: 8_000,
-        strategy_decision_id: "decision-7".into(),
-        observed_at_unix_nanos: 100,
+        confidence_bps: BasisPoints::new(8_000),
+        strategy_decision_id: StrategyDecisionId::new("decision-7").unwrap(),
+        observed_at_unix_nanos: UnixNanos::new(100),
     };
 
     let value = serde_json::to_value(request).unwrap();

@@ -10,7 +10,7 @@ pub(crate) fn encode_business_change(
 ) -> Result<Vec<Vec<u8>>, String> {
     use crate::application::ExecutionBusinessChange;
     let event_id = format!("execution:{sequence}:{index}");
-    let context = EncodeContext::event(actor_id, identity.clone(), sequence, event_id);
+    let context = EncodeContext::event(actor_id, identity.clone(), sequence, event_id)?;
     match change {
         ExecutionBusinessChange::Intent { state, event } => {
             let mut builder = FlatBufferBuilder::new();
@@ -34,7 +34,7 @@ pub(crate) fn encode_business_change(
                         },
                     );
                     fb::finish_intent_rejected_buffer(&mut builder, root);
-                }
+                },
                 crate::application::IntentStatus::Accepted if event.previous_status.is_none() => {
                     let root = fb::IntentAccepted::create(
                         &mut builder,
@@ -46,7 +46,7 @@ pub(crate) fn encode_business_change(
                         },
                     );
                     fb::finish_intent_accepted_buffer(&mut builder, root);
-                }
+                },
                 _ => {
                     let order_ids = event
                         .order_ids
@@ -76,7 +76,7 @@ pub(crate) fn encode_business_change(
                         },
                     );
                     fb::finish_intent_lifecycle_changed_buffer(&mut builder, root);
-                }
+                },
             }
             let mut payloads = vec![builder.finished_data().to_vec()];
             if event.previous_status.is_none() {
@@ -85,10 +85,10 @@ pub(crate) fn encode_business_change(
                 }
             }
             Ok(payloads)
-        }
+        },
         ExecutionBusinessChange::Order { order, .. } => {
             Ok(vec![encode_order_event(&context, occurred_at, order)?])
-        }
+        },
         ExecutionBusinessChange::Fill {
             strategy_id,
             account_id,
@@ -140,7 +140,7 @@ fn encode_order_event(
                 },
             );
             fb::finish_order_submitted_buffer(&mut builder, root);
-        }
+        },
         ExecutionOrderStatus::Accepted
         | ExecutionOrderStatus::PartiallyFilled
         | ExecutionOrderStatus::Filled => {
@@ -152,7 +152,7 @@ fn encode_order_event(
                 },
             );
             fb::finish_order_accepted_buffer(&mut builder, root);
-        }
+        },
         ExecutionOrderStatus::Rejected
         | ExecutionOrderStatus::Unknown
         | ExecutionOrderStatus::Failed => {
@@ -161,17 +161,17 @@ fn encode_order_event(
                 OrderRejectedArgs,
                 finish_order_rejected_buffer
             );
-        }
+        },
         ExecutionOrderStatus::Canceled | ExecutionOrderStatus::CancelRequested => {
             finish_order!(
                 OrderCanceled,
                 OrderCanceledArgs,
                 finish_order_canceled_buffer
             );
-        }
+        },
         ExecutionOrderStatus::Expired => {
             finish_order!(OrderExpired, OrderExpiredArgs, finish_order_expired_buffer);
-        }
+        },
     }
     Ok(builder.finished_data().to_vec())
 }
@@ -183,7 +183,14 @@ fn encode_plan_event(
 ) -> Result<Vec<u8>, String> {
     let mut builder = FlatBufferBuilder::new();
     let mut plan_context = context.clone();
-    plan_context.event_id.push_str(":plan");
+    let event_id = plan_context
+        .event_id
+        .as_ref()
+        .ok_or_else(|| "plan event requires an event id".to_owned())?;
+    plan_context.common.event_id = Some(
+        kairos_primitives::runtime::EventId::new(format!("{event_id}:plan"))
+            .map_err(|error| error.to_string())?,
+    );
     let metadata = event_metadata(&mut builder, &plan_context, occurred_at);
     let plan_offset = encode_plan(&mut builder, plan)?;
     let root = fb::PlanCreated::create(

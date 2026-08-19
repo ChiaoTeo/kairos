@@ -3,6 +3,8 @@
 use kairos_primitives::{Currency, ParticipantSymbol, Price, Quantity};
 use secrecy::ExposeSecret;
 
+use super::rest::map_exchange_error;
+use super::{MassiveCurrenciesRestConfig, MassiveCurrencyMarket};
 use crate::services::participants::massive::currencies::{
     CurrenciesRestService, CurrencyBarRow, CurrencyMarket, CurrencyQuoteRow, CurrencyTickerRow,
     CurrencyTradeRow,
@@ -14,8 +16,6 @@ use crate::{
     InstrumentCatalogQuery, IntegrationError, MarketBar, MarketQuote, MarketTrade, ParticipantKind,
     ParticipantRef,
 };
-
-use super::{rest::map_exchange_error, MassiveCurrenciesRestConfig, MassiveCurrencyMarket};
 
 pub struct MassiveCurrenciesRestConnection {
     descriptor: ConnectionDescriptor,

@@ -1,5 +1,5 @@
 use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::participants::hyperliquid::HyperliquidRestConfig;
 use crate::services::participants::hyperliquid::rest::RestService;

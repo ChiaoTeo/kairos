@@ -1,4 +1,4 @@
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 
 use crate::domain::events::MarketEvent;
 

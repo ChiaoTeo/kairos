@@ -2,12 +2,11 @@
 //!
 //! Current state is `RXV2`; durable facts use one typed root per fact.
 
-use crate::control::{ReservationStatus, RiskCurrentView, RiskDecision, RiskEvent};
 use flatbuffers::FlatBufferBuilder;
-use kairos_protocol::generated::kairos::{
-    common::v_2::{self as common_fb, Decimal64},
-    risk::v_2 as fb,
-};
+use kairos_protocol::generated::kairos::common::v_2::{self as common_fb, Decimal64};
+use kairos_protocol::generated::kairos::risk::v_2 as fb;
+
+use crate::control::{ReservationStatus, RiskCurrentView, RiskDecision, RiskEvent};
 
 pub struct FlatbuffersRiskSnapshotWriter {
     pub actor_id: String,
@@ -44,8 +43,8 @@ impl MmapRiskSnapshotPublisher {
             kairos_transport::SnapshotEnvelopeMetadata {
                 resource_epoch: 1,
                 producer_incarnation: self.producer_incarnation,
-                generation: snapshot.generation,
-                applied_event_sequence: snapshot.event_sequence,
+                generation: snapshot.generation.get(),
+                applied_event_sequence: snapshot.event_sequence.get(),
                 published_at_unix_nanos: now_unix_nanos(),
             },
             self.encoder.last_payload.as_deref().unwrap_or_default(),
@@ -91,7 +90,7 @@ impl FlatbuffersRiskSnapshotWriter {
         let state = fb::RiskLatestState::create(
             &mut b,
             &fb::RiskLatestStateArgs {
-                policy_version: snapshot.policy_version,
+                policy_version: snapshot.policy_version.get(),
                 limits: Some(limits),
                 active_reservations: Some(reservations),
                 circuits: Some(circuits),
@@ -112,11 +111,11 @@ impl FlatbuffersRiskSnapshotWriter {
                 workspace_id: Some(workspace),
                 launch_id: None,
                 instance_id: None,
-                generation: snapshot.generation,
+                generation: snapshot.generation.get(),
                 as_of_unix_nanos: as_of(snapshot),
                 published_at_unix_nanos: now(),
                 completeness: common_fb::ViewCompleteness::COMPLETE,
-                applied_revision: Some(snapshot.event_sequence),
+                applied_revision: Some(snapshot.event_sequence.get()),
             },
         );
         let root = fb::RiskLatestView::create(
@@ -134,7 +133,7 @@ impl FlatbuffersRiskSnapshotWriter {
 
 pub struct FlatbuffersRiskEventWriter {
     pub actor_id: String,
-    identity: kairos_protocol::InstanceIdentity,
+    identity: kairos_primitives::runtime::InstanceIdentity,
     pub last_payload: Option<Vec<u8>>,
 }
 pub struct RiskAeronEventPublisher {
@@ -146,7 +145,7 @@ impl RiskAeronEventPublisher {
     pub fn connect(
         endpoint: &kairos_transport::AeronEndpoint,
         actor_id: impl Into<String>,
-        identity: kairos_protocol::InstanceIdentity,
+        identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> crate::ContractResult<Self> {
         if endpoint.stream_id() != kairos_transport::stream_ids::RISK_EVENTS {
             return Err(crate::ContractError::Invalid(format!(
@@ -180,7 +179,7 @@ impl FlatbuffersRiskEventWriter {
     }
     pub fn new_with_identity(
         actor_id: impl Into<String>,
-        identity: kairos_protocol::InstanceIdentity,
+        identity: kairos_primitives::runtime::InstanceIdentity,
     ) -> Self {
         Self {
             actor_id: actor_id.into(),
@@ -203,7 +202,7 @@ impl FlatbuffersRiskEventWriter {
                     &mut b,
                     &self.actor_id,
                     &self.identity,
-                    *event_sequence,
+                    event_sequence.get(),
                     decision_request_time(event),
                 );
                 let root = fb::RiskDecisionMade::create(
@@ -214,7 +213,7 @@ impl FlatbuffersRiskEventWriter {
                     },
                 );
                 fb::finish_risk_decision_made_buffer(&mut b, root);
-            }
+            },
             RiskEvent::ReservationChanged {
                 reservation,
                 event_sequence,
@@ -224,8 +223,8 @@ impl FlatbuffersRiskEventWriter {
                     &mut b,
                     &self.actor_id,
                     &self.identity,
-                    *event_sequence,
-                    reservation.updated_at_unix_nanos,
+                    event_sequence.get(),
+                    reservation.updated_at_unix_nanos.get(),
                 );
                 match reservation.status {
                     ReservationStatus::Reserved => {
@@ -237,7 +236,7 @@ impl FlatbuffersRiskEventWriter {
                             },
                         );
                         fb::finish_reservation_reserved_buffer(&mut b, root);
-                    }
+                    },
                     ReservationStatus::Consumed => {
                         let root = fb::ReservationConsumed::create(
                             &mut b,
@@ -247,7 +246,7 @@ impl FlatbuffersRiskEventWriter {
                             },
                         );
                         fb::finish_reservation_consumed_buffer(&mut b, root);
-                    }
+                    },
                     ReservationStatus::Released => {
                         let root = fb::ReservationReleased::create(
                             &mut b,
@@ -258,7 +257,7 @@ impl FlatbuffersRiskEventWriter {
                             },
                         );
                         fb::finish_reservation_released_buffer(&mut b, root);
-                    }
+                    },
                     ReservationStatus::Expired => {
                         let root = fb::ReservationExpired::create(
                             &mut b,
@@ -268,9 +267,9 @@ impl FlatbuffersRiskEventWriter {
                             },
                         );
                         fb::finish_reservation_expired_buffer(&mut b, root);
-                    }
+                    },
                 }
-            }
+            },
             RiskEvent::CircuitChanged {
                 circuit,
                 event_sequence,
@@ -280,8 +279,13 @@ impl FlatbuffersRiskEventWriter {
                     .opened_at_unix_nanos
                     .or(circuit.reset_at_unix_nanos)
                     .unwrap_or_default();
-                let metadata =
-                    metadata(&mut b, &self.actor_id, &self.identity, *event_sequence, at);
+                let metadata = metadata(
+                    &mut b,
+                    &self.actor_id,
+                    &self.identity,
+                    event_sequence.get(),
+                    at.get(),
+                );
                 if circuit.open {
                     let root = fb::CircuitOpened::create(
                         &mut b,
@@ -301,7 +305,7 @@ impl FlatbuffersRiskEventWriter {
                     );
                     fb::finish_circuit_closed_buffer(&mut b, root);
                 }
-            }
+            },
         };
         self.last_payload = Some(b.finished_data().to_vec());
         Ok(())
@@ -311,21 +315,20 @@ impl FlatbuffersRiskEventWriter {
 fn metadata<'a>(
     b: &mut FlatBufferBuilder<'a>,
     actor: &str,
-    identity: &kairos_protocol::InstanceIdentity,
+    identity: &kairos_primitives::runtime::InstanceIdentity,
     sequence: u64,
     at: u64,
 ) -> flatbuffers::WIPOffset<common_fb::EventMetadata<'a>> {
     let event_id = b.create_string(&format!("risk:{sequence}"));
     let stream = b.create_string("risk.events");
     let producer = b.create_string(actor);
-    let workspace = b.create_string(if identity.workspace_id.is_empty() {
-        actor
-    } else {
-        &identity.workspace_id
-    });
-    let launch = (!identity.launch_id.is_empty()).then(|| b.create_string(&identity.launch_id));
-    let instance =
-        (!identity.instance_id.is_empty()).then(|| b.create_string(&identity.instance_id));
+    let workspace = b.create_string(identity.workspace_id.as_str());
+    let launch = identity
+        .launch_id()
+        .map(|value| b.create_string(value.as_str()));
+    let instance = identity
+        .instance_id()
+        .map(|value| b.create_string(value.as_str()));
     common_fb::EventMetadata::create(
         b,
         &common_fb::EventMetadataArgs {
@@ -361,10 +364,11 @@ fn as_of(value: &RiskCurrentView) -> u64 {
         .map(|x| x.updated_at_unix_nanos)
         .max()
         .unwrap_or_default()
+        .get()
 }
 fn decision_request_time(event: &RiskEvent) -> u64 {
     match event {
-        RiskEvent::DecisionEvaluated { decision, .. } => decision.evaluated_at_unix_nanos,
+        RiskEvent::DecisionEvaluated { decision, .. } => decision.evaluated_at_unix_nanos.get(),
         _ => 0,
     }
 }
@@ -421,14 +425,14 @@ fn policy<'a>(
         b,
         &fb::RiskPolicyArgs {
             policy_id: Some(id),
-            version: value.version,
+            version: value.version.get(),
             scope: Some(sc),
             metric: metric(value.metric),
             limit: Some(&lim),
             enforcement: fb::EnforcementMode::REJECT,
-            valid_from_unix_nanos: value.valid_from_unix_nanos,
-            valid_until_unix_nanos: value.valid_until_unix_nanos,
-            window_nanos: value.window_nanos,
+            valid_from_unix_nanos: value.valid_from_unix_nanos.get(),
+            valid_until_unix_nanos: value.valid_until_unix_nanos.map(|item| item.get()),
+            window_nanos: value.window_nanos.map(|item| item.get()),
         },
     )
 }
@@ -476,10 +480,10 @@ fn reservation_fb<'a>(
             requested_usages: Some(usages),
             allocations: Some(alloc),
             status: status(value.status),
-            created_at_unix_nanos: value.created_at_unix_nanos,
-            updated_at_unix_nanos: value.updated_at_unix_nanos,
-            expires_at_unix_nanos: value.expires_at_unix_nanos,
-            policy_version: value.policy_version,
+            created_at_unix_nanos: value.created_at_unix_nanos.get(),
+            updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
+            expires_at_unix_nanos: value.expires_at_unix_nanos.get(),
+            policy_version: value.policy_version.get(),
         },
     ))
 }
@@ -540,8 +544,8 @@ fn circuit_fb<'a>(
             } else {
                 fb::CircuitStatus::CLOSED
             },
-            opened_at_unix_nanos: value.opened_at_unix_nanos,
-            reset_at_unix_nanos: value.reset_at_unix_nanos,
+            opened_at_unix_nanos: value.opened_at_unix_nanos.map(|item| item.get()),
+            reset_at_unix_nanos: value.reset_at_unix_nanos.map(|item| item.get()),
             reason: Some(reason),
         },
     ))
@@ -571,8 +575,8 @@ fn context_fb<'a>(
             } else {
                 fb::DependencyFreshness::STALE
             },
-            leverage_bps: value.leverage_bps,
-            price_deviation_bps: value.price_deviation_bps,
+            leverage_bps: value.leverage_bps.get(),
+            price_deviation_bps: value.price_deviation_bps.get(),
             stress_loss: Some(&stress_loss),
         },
     ))
@@ -585,7 +589,10 @@ fn decision_fb<'a>(
     let req = b.create_string(&value.request_id);
     let account = b.create_string(&value.account_id);
     let strategy = b.create_string(&value.strategy_id);
-    let instrument = b.create_string(&value.instrument_id);
+    let instrument = value
+        .instrument_id
+        .as_ref()
+        .map(|item| b.create_string(item.as_str()));
     let reasons = b.create_vector(&[] as &[flatbuffers::WIPOffset<fb::DecisionReason>]);
     let allocs = value
         .allocations
@@ -600,17 +607,17 @@ fn decision_fb<'a>(
         .transpose()?;
     let zero = crate::Amount::default();
     let fallback = crate::RiskContext {
-        account_snapshot_watermark: 0,
-        market_freshness_watermark: 0,
-        portfolio_version: 0,
+        account_snapshot_watermark: 0.into(),
+        market_freshness_watermark: 0.into(),
+        portfolio_version: 0.into(),
         current_exposure: zero,
         current_margin: zero,
         available_margin: zero,
         current_pnl: zero,
         current_drawdown: zero,
         market_is_fresh: true,
-        leverage_bps: 0,
-        price_deviation_bps: 0,
+        leverage_bps: 0.into(),
+        price_deviation_bps: 0.into(),
         stress_loss: zero,
     };
     let context = context_fb(b, value.context.as_ref().unwrap_or(&fallback))?;
@@ -640,7 +647,7 @@ fn decision_fb<'a>(
             request_id: Some(req),
             account_id: Some(account),
             strategy_id: Some(strategy),
-            instrument_id: Some(instrument),
+            instrument_id: instrument,
             outcome: if value.allowed {
                 if value.degraded {
                     fb::DecisionOutcome::DEGRADED_ALLOWED
@@ -653,10 +660,10 @@ fn decision_fb<'a>(
             reasons: Some(reasons),
             allocations: Some(allocs),
             reservation,
-            policy_version: value.policy_version,
+            policy_version: value.policy_version.get(),
             context: Some(context),
             funding_requirement,
-            evaluated_at_unix_nanos: value.evaluated_at_unix_nanos,
+            evaluated_at_unix_nanos: value.evaluated_at_unix_nanos.get(),
         },
     ))
 }

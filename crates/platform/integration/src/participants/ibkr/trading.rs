@@ -1,7 +1,7 @@
-use crate::participants::ibkr::{descriptor, IbkrExecutionStreamConfig, IbkrOrderConfig};
-use crate::services::participants::ibkr::{
-    execution::{ExecutionStreamService, OrderCommandService, OrderQueryService, SessionService},
-    IbkrOptions,
+use crate::participants::ibkr::{IbkrExecutionStreamConfig, IbkrOrderConfig, descriptor};
+use crate::services::participants::ibkr::IbkrOptions;
+use crate::services::participants::ibkr::execution::{
+    ExecutionStreamService, OrderCommandService, OrderQueryService, SessionService,
 };
 use crate::{
     CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,

@@ -1,13 +1,15 @@
 pub mod encode;
 mod key;
 mod metadata;
-use crate::{ContractError, ContractResult};
+use std::path::{Path, PathBuf};
+
 use kairos_transport::{
     ReplacementSnapshotStorage, SharedSnapshotReader, SnapshotEnvelopeMetadata,
 };
 pub use key::{RiskViewKey, RiskViewKind};
 pub use metadata::ViewMetadata;
-use std::path::{Path, PathBuf};
+
+use crate::{ContractError, ContractResult};
 
 pub fn risk_view_path(root: impl AsRef<Path>, key: &RiskViewKey) -> ContractResult<PathBuf> {
     key.resource_path(root)

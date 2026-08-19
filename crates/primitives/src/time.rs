@@ -80,3 +80,24 @@ unit_u64_type!(UnixNanos);
 unit_u64_type!(Generation);
 unit_u64_type!(DurationNanos);
 unit_u64_type!(BasisPoints);
+
+/// Shared business-time context for cross-module commands and events.
+///
+/// `event_time` is provider/replay time. Processing and wall-clock timestamps
+/// belong to observability or transport layers.
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize,
+)]
+pub struct EventContext {
+    pub event_time: UnixNanos,
+    pub sequence: Sequence,
+}
+
+impl EventContext {
+    pub const fn new(event_time: UnixNanos, sequence: Sequence) -> Self {
+        Self {
+            event_time,
+            sequence,
+        }
+    }
+}

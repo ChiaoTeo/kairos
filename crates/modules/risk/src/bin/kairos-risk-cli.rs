@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use kairos_risk::composition::compose_risk_application;
 use kairos_risk::RiskSnapshot;
+use kairos_risk::composition::compose_risk_application;
 use kairos_workspace::Workspace;
 
 /// One-shot Risk inspection commands.

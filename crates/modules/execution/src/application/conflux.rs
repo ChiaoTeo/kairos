@@ -1,18 +1,17 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use kairos_conflux::ExternalParticipantEvent;
 use kairos_conflux::{
-    CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, IntegrationError,
-    IntegrationEvent, OrderCommand, OrderEntryEvent, OrderEntryRequest, ResourceOperationError,
-    RestContract, SystemEvent,
+    CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract,
+    ExternalParticipantEvent, IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent,
+    OrderEntryRequest, ResourceOperationError, RestContract, SystemEvent,
 };
 use kairos_execution_contract::{
     ExecutionCommandStatus, ExecutionControlError, ExecutionHealthResponse,
     ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
     ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesResponse,
 };
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -142,7 +141,7 @@ impl ExecutionApplication {
                 Ok(_) => self.complete_writer_reconciliation(),
                 Err(error) => {
                     tracing::warn!(component = "execution", error = %error, "Execution reconciliation failed")
-                }
+                },
             }
         }
         self.refresh_maker_quotes_managed(context).await?;
@@ -171,7 +170,7 @@ impl ExecutionApplication {
                 Ok(order) => {
                     self.complete_due_intent_order(&due, &order, now_unix_nanos)?;
                     submitted += 1;
-                }
+                },
                 Err(error) => {
                     let cancellations = self.fail_due_intent_order(&due, &error, now_unix_nanos)?;
                     for cancellation in cancellations {
@@ -182,7 +181,7 @@ impl ExecutionApplication {
                         }
                     }
                     return Err(error);
-                }
+                },
             }
         }
         if submitted > 0 {
@@ -222,7 +221,7 @@ impl ExecutionApplication {
                 Err(error) => {
                     tracing::warn!(component = "execution", error = %error, "maker quote refresh was rejected by execution guardrails");
                     continue;
-                }
+                },
             };
             for cancellation in prepared.cancellations.clone() {
                 if let Err(error) = self.cancel_managed_order(cancellation, context).await {
@@ -239,7 +238,7 @@ impl ExecutionApplication {
                         self.fail_prepared_quote_refresh(&prepared, &error)?;
                         tracing::warn!(component = "execution", error = %error, "maker quote refresh submission failed");
                         continue 'refresh;
-                    }
+                    },
                 }
             }
             self.complete_prepared_quote_refresh(prepared, orders)?;
@@ -518,27 +517,27 @@ impl ConfluxActor for ExecutionApplication {
                                 self.submit_compensating_hedge_managed(intent_id, context)
                                     .await?;
                             }
-                        }
+                        },
                         Err(error) => {
                             tracing::warn!(component = "execution", error = %error, "Execution rejected provider event")
-                        }
+                        },
                     }
                 }
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 self.update_route_status(&source, "ready");
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 self.update_route_status(&source, "degraded");
                 tracing::warn!(component = "execution", %source, %error, "Execution source failed");
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "maintenance" => {
                 self.maintain(context).await?;
                 None
-            }
+            },
             _ => None,
         };
         self.publish(context)?;
@@ -559,28 +558,28 @@ impl ExecutionApplication {
         match request {
             ExecutionRestRequest::Health => {
                 ExecutionRestResponse::Health(Ok(self.contract_health()))
-            }
+            },
             ExecutionRestRequest::Routes(query) => {
                 let participant = query.participant_id.clone();
                 let parsed = parse_route_query(&query);
                 ExecutionRestResponse::Routes(
                     parsed
-                        .map(|query| {
+                        .and_then(|query| {
                             let routes = self
                                 .available_execution_routes(&query)
                                 .into_iter()
                                 .filter(|route| {
-                                    participant.as_deref().is_none_or(|value| {
-                                        route.participant_id.eq_ignore_ascii_case(value)
+                                    participant.as_ref().is_none_or(|value| {
+                                        route.participant_id.eq_ignore_ascii_case(value.as_str())
                                     })
                                 })
                                 .map(route_response)
-                                .collect();
-                            ExecutionRoutesResponse { routes }
+                                .collect::<Result<Vec<_>, _>>()?;
+                            Ok(ExecutionRoutesResponse { routes })
                         })
                         .map_err(control_error),
                 )
-            }
+            },
             ExecutionRestRequest::SubmitIntent(request) => {
                 let command_id = request.envelope.command_id;
                 let idempotency_key = request
@@ -639,10 +638,10 @@ impl ExecutionApplication {
                                         order_id: None,
                                     })
                                 }
-                            }
+                            },
                             Err(error) => Err(error),
                         }
-                    }
+                    },
                     (Err(error), _) | (_, Err(error)) => Err(error),
                 };
                 if let Some((evidence, idempotency_key, intent_id)) = admission {
@@ -658,7 +657,7 @@ impl ExecutionApplication {
                         });
                 }
                 ExecutionRestResponse::SubmitIntent(result.map_err(control_error))
-            }
+            },
             ExecutionRestRequest::CancelOrder { order_id, request } => {
                 let result = match kairos_primitives::OrderId::new(order_id) {
                     Ok(order_id) => {
@@ -670,18 +669,18 @@ impl ExecutionApplication {
                             context,
                         )
                         .await
-                    }
+                    },
                     Err(error) => Err(ExecutionError::Invalid(error.to_string())),
                 }
                 .map(|order| command_status("accepted", Some(order.order_id.to_string())));
                 ExecutionRestResponse::CancelOrder(result.map_err(control_error))
-            }
+            },
             ExecutionRestRequest::ReplaceOrder { order_id, request } => {
                 let result = self
                     .replace_contract_order(order_id, request, context)
                     .await;
                 ExecutionRestResponse::ReplaceOrder(result.map_err(control_error))
-            }
+            },
             ExecutionRestRequest::Reconcile(request) => {
                 let query = request
                     .order_id
@@ -706,7 +705,7 @@ impl ExecutionApplication {
                     }
                     .map_err(control_error),
                 )
-            }
+            },
         }
     }
 
@@ -846,7 +845,7 @@ impl ExecutionApplication {
                             ),
                             ResourceOperationError::Operation(error) => {
                                 ExecutionError::Gateway(error.to_string())
-                            }
+                            },
                         })?;
                 }
             }
@@ -877,7 +876,7 @@ impl ExecutionApplication {
                         }
                     }
                     orders.push(event.clone());
-                }
+                },
                 ExecutionOutboxEvent::Intent(event) => intents.push(event.clone()),
             }
             acknowledged.push(entry.id);
@@ -922,13 +921,7 @@ impl ExecutionApplication {
             ExecutionViewKind::CurrentExecution,
             ExecutionViewKind::ActiveIntents,
         ] {
-            let key = ExecutionViewKey::new(
-                self.conflux.identity.workspace_id.clone(),
-                kind.clone(),
-                Some(self.conflux.identity.launch_id.clone()),
-                Some(self.conflux.identity.instance_id.clone()),
-            )
-            .map_err(|e| ExecutionError::Gateway(e.to_string()))?;
+            let key = ExecutionViewKey::from_identity(&self.conflux.identity, kind.clone());
             let bytes = match kind {
                 ExecutionViewKind::ActiveOrders => {
                     crate::services::publication::encode_active_orders(
@@ -938,7 +931,7 @@ impl ExecutionApplication {
                         &key,
                         &snapshot,
                     )
-                }
+                },
                 ExecutionViewKind::CurrentExecution => {
                     crate::services::publication::encode_current_execution(
                         actor_id,
@@ -947,7 +940,7 @@ impl ExecutionApplication {
                         &key,
                         &snapshot,
                     )
-                }
+                },
                 ExecutionViewKind::ActiveIntents => {
                     crate::services::publication::encode_active_intents(
                         actor_id,
@@ -956,7 +949,7 @@ impl ExecutionApplication {
                         &key,
                         &snapshot,
                     )
-                }
+                },
             }
             .map_err(ExecutionError::Gateway)?;
             let resource_key = key.canonical_key();
@@ -987,10 +980,10 @@ impl ExecutionApplication {
                 .map_err(|error| match error {
                     ResourceOperationError::NotFound => {
                         ExecutionError::Gateway("Execution view publisher disappeared".into())
-                    }
+                    },
                     ResourceOperationError::Operation(error) => {
                         ExecutionError::Gateway(error.to_string())
-                    }
+                    },
                 })?;
         }
         Ok(())
@@ -1065,63 +1058,43 @@ fn decimal(value: kairos_conflux::DecimalValue) -> String {
         let split = digits.len() - scale;
         format!("{}.{}", &digits[..split], &digits[split..])
     };
-    if negative {
-        format!("-{body}")
-    } else {
-        body
-    }
+    if negative { format!("-{body}") } else { body }
 }
 
 fn parse_route_query(
     query: &kairos_execution_contract::ExecutionRoutesQuery,
 ) -> Result<ExecutionRouteQuery, ExecutionError> {
     Ok(ExecutionRouteQuery {
-        account_id: query
-            .account_id
-            .as_deref()
-            .map(kairos_primitives::AccountId::new)
-            .transpose()
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
-        segment_key: query
-            .segment_key
-            .as_deref()
-            .map(kairos_primitives::SegmentKey::new)
-            .transpose()
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
-        instrument_id: query
-            .instrument_id
-            .as_deref()
-            .map(kairos_primitives::InstrumentId::new)
-            .transpose()
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
-        market_id: query
-            .market_id
-            .as_deref()
-            .map(kairos_primitives::MarketId::new)
-            .transpose()
-            .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
+        account_id: query.account_id.clone(),
+        segment_key: query.segment_key.clone(),
+        instrument_id: query.instrument_id.clone(),
+        market_id: query.market_id.clone(),
         ..Default::default()
     })
 }
 
-fn route_response(route: super::ExecutionRouteCandidate) -> ExecutionRouteCandidateResponse {
-    ExecutionRouteCandidateResponse {
-        route_id: route.route_id.to_string(),
-        account_id: route.account_id.map(|v| v.to_string()),
-        segment_key: route.segment_key.map(|v| v.to_string()),
-        instrument_id: route.instrument_id.map(|v| v.to_string()),
-        market_id: route.market_id.map(|v| v.to_string()),
-        participant_id: route.participant_id,
-        provider_product: route.provider_product.to_string(),
-        provider_symbol: route.provider_symbol.to_string(),
-        supported_order_types: route
-            .supported_order_types
+fn route_response(
+    route: super::ExecutionRouteCandidate,
+) -> Result<ExecutionRouteCandidateResponse, ExecutionError> {
+    Ok(ExecutionRouteCandidateResponse {
+        route_id: route.route_id,
+        account_id: route.account_id,
+        segment_key: route.segment_key,
+        instrument_id: route.instrument_id,
+        market_id: route.market_id,
+        participant_id: kairos_primitives::ParticipantId::new(route.participant_id)
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+        provider_product: route.provider_product,
+        provider_symbol: route.provider_symbol,
+        supported_order_types: route.supported_order_types,
+        supported_options: route
+            .supported_options
             .into_iter()
-            .map(|v| format!("{v:?}").to_ascii_lowercase())
-            .collect(),
-        supported_options: route.supported_options,
+            .map(kairos_primitives::OrderOptionCode::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         ready: route.ready,
-    }
+    })
 }
 
 #[derive(Deserialize)]
@@ -1194,13 +1167,13 @@ fn decode_intent_admission_evidence(
             return Err(ExecutionError::Invalid(
                 "approved Intent admission evidence contains a revision".into(),
             ));
-        }
+        },
         "revised" if original == effective => {
             return Err(ExecutionError::Invalid(
                 "revised Intent admission evidence contains no revision".into(),
             ));
-        }
-        _ => {}
+        },
+        _ => {},
     }
     Ok(Some(IntentAdmissionEvidence {
         source: wire.source,

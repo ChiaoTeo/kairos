@@ -1,4 +1,4 @@
-use kairos_primitives::{InstrumentId, Price, Quantity, UnixNanos};
+use kairos_primitives::{InstrumentId, Price, Quantity, SourceId, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -13,5 +13,5 @@ pub struct Quote {
     pub ask_venue_code: Option<String>,
     pub tape: Option<u32>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: String,
+    pub source_id: SourceId,
 }

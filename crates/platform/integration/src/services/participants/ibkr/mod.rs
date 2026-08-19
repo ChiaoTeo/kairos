@@ -20,10 +20,10 @@ pub(crate) fn normalize_ibkr_order_status(
         | OrderStatusKind::PreSubmitted => kairos_primitives::OrderStatus::Acknowledged,
         OrderStatusKind::PendingCancel | OrderStatusKind::Submitted => {
             kairos_primitives::OrderStatus::Accepted
-        }
+        },
         OrderStatusKind::ApiCancelled | OrderStatusKind::Cancelled => {
             kairos_primitives::OrderStatus::Canceled
-        }
+        },
         OrderStatusKind::Filled => kairos_primitives::OrderStatus::Filled,
         OrderStatusKind::Inactive => kairos_primitives::OrderStatus::Unknown,
     }

@@ -1,16 +1,17 @@
 //! Single-owner Reference actor.
 
+use tracing::info;
+
 use super::providers::ReferenceSourcePlan;
-use super::publication::{encode_publications, StoredPublication};
+use super::publication::{StoredPublication, encode_publications};
 #[cfg(not(test))]
 use super::source::ConfiguredReferenceSource;
 use super::source::ReferenceSource;
 use super::sqlx_storage::SqlxCatalogStore;
 use crate::domain::{
-    unix_nanos, Asset, Instrument, LifecycleEvent, Listing, ProviderCatalog, ProviderHealth,
-    ReferenceCatalog, ReferenceResult,
+    Asset, Instrument, LifecycleEvent, Listing, ProviderCatalog, ProviderHealth, ReferenceCatalog,
+    ReferenceResult, unix_nanos,
 };
-use tracing::info;
 
 #[cfg(not(test))]
 type ActorReferenceSource = ConfiguredReferenceSource;

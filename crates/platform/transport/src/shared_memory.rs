@@ -1,12 +1,11 @@
 //! Versioned, process-safe double-slot mmap snapshot envelope.
 
-use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fmt, io};
 
 use fs2::FileExt;
 use memmap2::{Mmap, MmapMut, MmapOptions};
@@ -117,11 +116,11 @@ impl fmt::Display for SnapshotError {
                     "snapshot writer lease is already held: {}",
                     path.display()
                 )
-            }
+            },
             Self::NotInitialized => formatter.write_str("snapshot is not initialized"),
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "unsupported snapshot envelope version {version}")
-            }
+            },
             Self::ChecksumMismatch { expected, actual } => write!(
                 formatter,
                 "snapshot checksum mismatch: expected {expected:#010x}, got {actual:#010x}"
@@ -131,7 +130,7 @@ impl fmt::Display for SnapshotError {
                     formatter,
                     "snapshot payload size {actual} exceeds capacity {limit}"
                 )
-            }
+            },
             Self::ConcurrentChange => formatter.write_str("snapshot changed during read"),
             Self::ResourceChanged => formatter.write_str("snapshot resource changed"),
             Self::CommitOverflow => formatter.write_str("snapshot commit counter overflowed"),
@@ -465,7 +464,7 @@ fn open_reader_state(path: &Path) -> Result<ReaderState, SnapshotError> {
                 return Err(SnapshotError::Corrupt("v1 snapshot layout is invalid"));
             }
             Layout::V1 { slot_capacity }
-        }
+        },
         SNAPSHOT_ENVELOPE_VERSION => Layout::V2 {
             slot_capacity: validate_v2(&mmap)?,
         },
@@ -597,8 +596,9 @@ fn file_identity(metadata: &std::fs::Metadata) -> Result<FileIdentity, SnapshotE
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::process::Command;
+
+    use super::*;
 
     fn metadata(generation: u64, incarnation: u64) -> SnapshotEnvelopeMetadata {
         SnapshotEnvelopeMetadata {

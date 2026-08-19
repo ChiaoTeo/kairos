@@ -30,9 +30,9 @@ fn is_global_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(value) => {
             !value.is_loopback() && !value.is_link_local() && !is_private_ipv4(*value)
-        }
+        },
         IpAddr::V6(value) => {
             !value.is_loopback() && !value.is_unspecified() && !value.is_unique_local()
-        }
+        },
     }
 }

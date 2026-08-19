@@ -3,6 +3,8 @@
 //! Every invocation constructs the application, performs one use case, writes
 //! one JSON value to stdout, and exits. It never starts or discovers a server.
 
+use std::str::FromStr;
+
 use clap::{Args, Parser, Subcommand};
 use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
 use kairos_reference::application::{
@@ -10,16 +12,15 @@ use kairos_reference::application::{
     UpsertListingCommand,
 };
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ComposedReferenceApplication,
-    ReferenceCompositionConfig, ReferenceEventWriter,
+    ComposedReferenceApplication, ReferenceCompositionConfig, ReferenceEventWriter,
+    build_application, ensure_database_parent,
 };
 use kairos_reference_contract::{
     ReferenceCollection, ReferenceProjectionSnapshot, ReferenceSqliteReader,
 };
-use kairos_workspace::cli::{render, OutputFormat};
+use kairos_workspace::cli::{OutputFormat, render};
 use kairos_workspace::workspace::Workspace;
-use serde_json::{json, Value};
-use std::str::FromStr;
+use serde_json::{Value, json};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -85,7 +86,7 @@ fn execute_read(
                 });
                 values.truncate(args.limit);
                 json!(values)
-            }
+            },
             AssetCommand::Show { asset_id } => find_record(&snapshot, &asset_id)?
                 .ok_or_else(|| format!("unknown asset identifier: {asset_id}"))?,
             AssetCommand::Add(_) => unreachable!("write command routed to the application"),
@@ -101,7 +102,7 @@ fn execute_read(
                 value.get("entity_type").and_then(Value::as_str) == Some(entity_type)
             });
             json!(values)
-        }
+        },
         Command::Markets { command } => {
             let (args, resolve) = match command {
                 MarketCommand::List(args) | MarketCommand::Browse(args) => (args, false),
@@ -148,7 +149,7 @@ fn execute_read(
             } else {
                 json!(values)
             }
-        }
+        },
         Command::Events(args) => {
             debug_assert!(args.action.is_none());
             let query = args.query;
@@ -167,7 +168,7 @@ fn execute_read(
             });
             events.truncate(query.limit.unwrap_or(256));
             json!(events)
-        }
+        },
         Command::Query(args) => read_query(&snapshot, args.kind(), args.into_query())?,
         Command::Search(args) => {
             let query = ReferenceQuery {
@@ -176,7 +177,7 @@ fn execute_read(
                 ..ReferenceQuery::default()
             };
             read_query(&snapshot, ReferenceKind::All, query)?
-        }
+        },
         Command::Show { identifier } => find_record(&snapshot, &identifier)?
             .ok_or_else(|| format!("unknown reference identifier: {identifier}"))?,
         Command::Refresh
@@ -185,7 +186,7 @@ fn execute_read(
         | Command::Instruments { .. }
         | Command::Listings { .. } => {
             unreachable!("write or acquisition command routed to its application")
-        }
+        },
     };
     Ok(value)
 }
@@ -338,11 +339,11 @@ async fn execute(
                 "event_sequence": result.event_sequence,
                 "events": result.change_count,
             })
-        }
+        },
         Command::Publish => {
             publish_pending(writer, application).await?;
             json!({ "generation": application.generation() })
-        }
+        },
         Command::Assets { command } => {
             let publishes = matches!(&command, AssetCommand::Add(_));
             let value = assets(application, command).await?;
@@ -350,7 +351,7 @@ async fn execute(
                 publish_pending(writer, application).await?;
             }
             value
-        }
+        },
         Command::Instruments { command } => match command {
             InstrumentCommand::Add(args) => {
                 let generation = application
@@ -364,7 +365,7 @@ async fn execute(
                             .map(InstrumentId::try_from)
                             .transpose()?,
                         expiry_unix_nanos: args.expiry_unix_nanos.map(UnixNanos::from),
-                        strike: args.strike,
+                        strike: args.strike.map(|value| value.parse()).transpose()?,
                         option_right: args.option_right,
                         status: args.status.into(),
                         issuer_id: None,
@@ -374,7 +375,7 @@ async fn execute(
                     .await?;
                 publish_pending(writer, application).await?;
                 json!({"generation": generation})
-            }
+            },
         },
         Command::Listings { command } => match command {
             ListingCommand::Add(args) => {
@@ -391,11 +392,11 @@ async fn execute(
                     .await?;
                 publish_pending(writer, application).await?;
                 json!({"generation": generation})
-            }
+            },
         },
         Command::Participants { .. } | Command::Markets { .. } => {
             unreachable!("read command routed to SQLite")
-        }
+        },
         Command::Events(args) => match args.action {
             Some(EventAction::Sync(sync)) => {
                 let result = application
@@ -432,12 +433,12 @@ async fn execute(
                     "event_sequence": result.event_sequence,
                     "events": events,
                 })
-            }
+            },
             None => unreachable!("read command routed to SQLite"),
         },
         Command::Query(_) | Command::Search(_) | Command::Show { .. } => {
             unreachable!("read command routed to SQLite")
-        }
+        },
     };
     Ok(value)
 }
@@ -481,17 +482,17 @@ async fn assets(
             let generation = application
                 .upsert_asset(UpsertAssetCommand {
                     asset_id: AssetId::try_from(args.asset_id)?,
-                    code: args.code,
+                    code: Symbol::try_from(args.code)?,
                     name: args.name,
                     asset_class: args.asset_class.parse()?,
                     status: args.status.into(),
                 })
                 .await?;
             Ok(json!({ "generation": generation }))
-        }
+        },
         AssetCommand::List(_) | AssetCommand::Show { .. } => {
             unreachable!("read command routed to SQLite")
-        }
+        },
     }
 }
 

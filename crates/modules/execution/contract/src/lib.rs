@@ -7,6 +7,8 @@ pub mod event;
 pub mod transport;
 pub mod view;
 
+use std::path::PathBuf;
+
 pub use control::{
     CancelOrderRequest, CommandEnvelope, ExecutionCommandStatus, ExecutionControlClient,
     ExecutionControlError, ExecutionControlResponse, ExecutionHealthResponse,
@@ -14,18 +16,16 @@ pub use control::{
     ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesQuery,
     ExecutionRoutesResponse, ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
 };
-pub use encode::{event_metadata, view_metadata, EncodeContext};
+pub use encode::{EncodeContext, event_metadata, view_metadata};
 pub use error::{ContractError, ContractResult};
 pub use event::{
     ExecutionEvent, ExecutionEventFrame, ExecutionEventPublisher, ExecutionEventStream,
 };
 pub use kairos_transport::AeronEndpoint;
 pub use view::{
-    execution_view_path, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
-    ExecutionViewReader, ViewFrame, ViewMetadata,
+    ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher, ExecutionViewReader, ViewFrame,
+    ViewMetadata, execution_view_path,
 };
-
-use std::path::PathBuf;
 
 pub struct ExecutionClient {
     control: ExecutionControlClient,

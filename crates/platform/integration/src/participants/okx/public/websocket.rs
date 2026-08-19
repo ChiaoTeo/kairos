@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::task::{Context, Poll};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::participants::okx::OkxWebSocketConfig;
-use crate::services::participants::okx::{market, socket::SocketService};
+use crate::services::participants::okx::market;
+use crate::services::participants::okx::socket::SocketService;
 use crate::transport::websocket::InboundDispatcher;
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionLifecycleCommand,
@@ -51,8 +52,8 @@ impl OkxPublicWebSocketConnection {
             match self.order_book_sequences.validate_okx(&event)? {
                 crate::services::sequence::SequenceDisposition::Accept => {
                     self.pending.buffer(event)?;
-                }
-                crate::services::sequence::SequenceDisposition::Duplicate => {}
+                },
+                crate::services::sequence::SequenceDisposition::Duplicate => {},
             }
         }
         Ok(())
@@ -107,13 +108,13 @@ impl OkxPublicWebSocketConnection {
                 Message::Text(text) if text.as_str() == "pong" => continue,
                 Message::Text(text) => {
                     return serde_json::from_str(&text)
-                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))
-                }
+                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()));
+                },
                 Message::Close(_) => {
                     return Err(IntegrationError::Transport(
                         "OKX public WebSocket closed".into(),
-                    ))
-                }
+                    ));
+                },
                 _ => continue,
             }
         }
@@ -132,13 +133,13 @@ impl OkxPublicWebSocketConnection {
                     return Poll::Ready(
                         serde_json::from_str(&text)
                             .map_err(|error| IntegrationError::InvalidPayload(error.to_string())),
-                    )
-                }
+                    );
+                },
                 Message::Close(_) => {
                     return Poll::Ready(Err(IntegrationError::Transport(
                         "OKX public WebSocket closed".into(),
-                    )))
-                }
+                    )));
+                },
                 _ => continue,
             }
         }
@@ -208,10 +209,10 @@ impl MarketSubscriptionCommand for OkxPublicWebSocketConnection {
             Ok(rejections) if rejections.is_empty() => {
                 self.subscriptions.insert(id, (request.feeds, arguments));
                 Ok(MarketSubscriptionOutcome::Confirmed(subscription))
-            }
+            },
             Ok(mut rejections) if rejections.len() == arguments.len() => {
                 Ok(MarketSubscriptionOutcome::Rejected(rejections.remove(0)))
-            }
+            },
             Ok(rejections) => {
                 self.subscriptions.insert(id, (request.feeds, arguments));
                 Ok(MarketSubscriptionOutcome::Indeterminate {
@@ -221,7 +222,7 @@ impl MarketSubscriptionCommand for OkxPublicWebSocketConnection {
                         rejections.len()
                     ),
                 })
-            }
+            },
             Err(IntegrationError::NotReady) => Err(IntegrationError::NotReady),
             Err(error) => Ok(MarketSubscriptionOutcome::Indeterminate {
                 provisional: {
@@ -251,10 +252,10 @@ impl MarketSubscriptionCommand for OkxPublicWebSocketConnection {
             Ok(rejections) if rejections.is_empty() => {
                 self.subscriptions.remove(&subscription);
                 Ok(MarketSubscriptionOutcome::Confirmed(()))
-            }
+            },
             Ok(mut rejections) if rejections.len() == arguments.len() => {
                 Ok(MarketSubscriptionOutcome::Rejected(rejections.remove(0)))
-            }
+            },
             Ok(rejections) => Ok(MarketSubscriptionOutcome::Indeterminate {
                 provisional: Some(()),
                 reason: format!(

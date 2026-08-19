@@ -1,4 +1,4 @@
-use kairos_primitives::{InstrumentId, Price, Quantity, UnixNanos};
+use kairos_primitives::{InstrumentId, Price, Quantity, SourceId, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -12,6 +12,6 @@ pub struct Bar {
     pub close: Price,
     pub volume: Option<Quantity>,
     pub observed_at_unix_nanos: UnixNanos,
-    pub source_id: String,
+    pub source_id: SourceId,
     pub derivation: String,
 }

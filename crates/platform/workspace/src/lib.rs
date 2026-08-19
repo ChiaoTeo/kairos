@@ -9,8 +9,8 @@ pub mod workspace;
 pub use control::{ControlApi, ControlServer, RestControlClient};
 pub use incarnation::ProducerIncarnation;
 pub use runtime::{
-    DEGRADED_STATUS, HEALTH_PATH, READY_STATUS, RUNTIME_PROTOCOL_VERSION, STOPPING_STATUS,
-    STOP_PATH,
+    DEGRADED_STATUS, HEALTH_PATH, READY_STATUS, RUNTIME_PROTOCOL_VERSION, STOP_PATH,
+    STOPPING_STATUS,
 };
 pub use workspace::{
     InstanceWorkspace, ResourceScope, Workspace, WorkspaceFencedLease, WorkspaceManifest,

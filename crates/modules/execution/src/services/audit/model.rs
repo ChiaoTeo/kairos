@@ -1,8 +1,8 @@
-use crate::domain::ExecutionOrderStatus;
 use kairos_primitives::{OrderId, RemoteOrderId, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::application::IntentAdmissionEvidence;
+use crate::domain::ExecutionOrderStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct IntentAdmissionAuditRecord {

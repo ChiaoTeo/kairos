@@ -6,26 +6,22 @@ use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::{Stream, StreamExt};
+use ibapi::Client;
 use ibapi::contracts::Contract;
 use ibapi::orders::{OrderData, OrderUpdate, Orders};
 use ibapi::subscriptions::{Subscription, SubscriptionItemStreamExt};
-use ibapi::Client;
 use kairos_primitives::{
     ClientOrderId, Currency, FillId, OrderId, RemoteOrderId, Symbol, UnixNanos,
 };
 use tokio::sync::Mutex;
 
+use super::{IbkrOptions, normalize_ibkr_order_status};
 use crate::domain::ConnectionLifecycle;
 use crate::{
-    CommandOutcome, CommandResult, ConnectionDescriptor, ExternalEventEnvelope,
+    CommandOutcome, CommandResult, ConnectionDescriptor, DecimalValue, ExternalEventEnvelope,
     ExternalExecutionEvent, ExternalOrder, ExternalOrderQuery, IndeterminateCommand,
-    IntegrationError,
+    IntegrationError, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
 };
-use crate::{
-    DecimalValue, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
-};
-
-use super::{normalize_ibkr_order_status, IbkrOptions};
 
 const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -169,7 +165,7 @@ impl OrderCommandService {
                 builder.limit(decimal_f64(request.limit_price.ok_or_else(|| {
                     IntegrationError::InvalidRequest("IBKR limit price is required".into())
                 })?))
-            }
+            },
             _ => unreachable!("validated order type"),
         };
         let mut order = builder
@@ -187,17 +183,17 @@ impl OrderCommandService {
         )
         .await
         {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {},
             Ok(Err(error)) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
             Err(_) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent("IBKR submit timed out"),
-                ))
-            }
+                ));
+            },
         }
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
@@ -221,17 +217,17 @@ impl OrderCommandService {
         let order_id = parse_remote_order_id(remote_order_id)?;
         let client = self.session.client().await?;
         match tokio::time::timeout(COMMAND_TIMEOUT, client.cancel_order(order_id, "")).await {
-            Ok(Ok(_subscription)) => {}
+            Ok(Ok(_subscription)) => {},
             Ok(Err(error)) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent(error.to_string()),
-                ))
-            }
+                ));
+            },
             Err(_) => {
                 return Ok(CommandOutcome::Indeterminate(
                     IndeterminateCommand::may_have_been_sent("IBKR cancel timed out"),
-                ))
-            }
+                ));
+            },
         }
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
@@ -342,20 +338,20 @@ impl ExecutionStreamService {
                 self.lifecycle = ConnectionLifecycle::Degraded;
                 self.last_error = Some(error.to_string());
                 Err(error)
-            }
+            },
             Ok(Ok(subscription)) => {
                 self.subscription = Some(subscription);
                 self.channel_epoch = self.channel_epoch.saturating_add(1);
                 self.lifecycle = ConnectionLifecycle::Ready;
                 self.last_error = None;
                 Ok(())
-            }
+            },
             Ok(Err(error)) => {
                 let error = IntegrationError::Transport(error.to_string());
                 self.lifecycle = ConnectionLifecycle::Degraded;
                 self.last_error = Some(error.to_string());
                 Err(error)
-            }
+            },
         }
     }
 
@@ -380,8 +376,8 @@ impl ExecutionStreamService {
                 Poll::Ready(None) => {
                     return Poll::Ready(Err(IntegrationError::ResyncRequired(
                         "IBKR order stream ended".into(),
-                    )))
-                }
+                    )));
+                },
                 Poll::Pending => return Poll::Pending,
             };
             let ibapi::subscriptions::SubscriptionItem::Data(update) = update else {
@@ -447,7 +443,7 @@ impl ExecutionStreamService {
                     Some(decimal_f64_value(status.filled)),
                     Some(decimal_f64_value(status.remaining)),
                 )?
-            }
+            },
             OrderUpdate::OpenOrder(data) => {
                 if !matches_filter(&data, &self.account_id, self.symbol.as_deref()) {
                     return Ok(None);
@@ -466,7 +462,7 @@ impl ExecutionStreamService {
                     None,
                     None,
                 )?
-            }
+            },
             OrderUpdate::ExecutionData(data) => {
                 let execution = data.execution;
                 let symbol = data.contract.symbol.to_string();
@@ -507,7 +503,7 @@ impl ExecutionStreamService {
                     occurred_at_unix_nanos: now_nanos().into(),
                     reason: String::new(),
                 }
-            }
+            },
             OrderUpdate::CommissionReport(report) => {
                 let Some(order_id) = self.execution_orders.get(&report.execution_id).copied()
                 else {
@@ -536,7 +532,7 @@ impl ExecutionStreamService {
                     occurred_at_unix_nanos: now_nanos().into(),
                     reason: String::new(),
                 }
-            }
+            },
         };
         Ok(Some(event))
     }

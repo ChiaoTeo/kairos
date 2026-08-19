@@ -1,20 +1,23 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
+use kairos_primitives::Sequence;
+use kairos_primitives::runtime::{ActorId, InstanceIdentity};
+use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{
     EventMetadata, EventMetadataArgs, ViewCompleteness, ViewMetadata, ViewMetadataArgs,
 };
-use kairos_protocol::InstanceIdentity;
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
-    pub producer_id: String,
-    pub owner_id: String,
-    pub account_runtime_id: String,
-    pub identity: InstanceIdentity,
-    pub sequence: u64,
-    pub event_id: String,
-    pub generation: u64,
-    pub applied_revision: Option<u64>,
-    pub resource_id: String,
+    pub common: ProtocolContext,
+    pub account_runtime_id: ActorId,
+    pub applied_revision: Option<Sequence>,
+}
+
+impl std::ops::Deref for EncodeContext {
+    type Target = ProtocolContext;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
 }
 
 impl EncodeContext {
@@ -24,18 +27,12 @@ impl EncodeContext {
         identity: InstanceIdentity,
         sequence: u64,
         event_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            producer_id: producer_id.into(),
-            owner_id: String::new(),
-            account_runtime_id: account_runtime_id.into(),
-            identity,
-            sequence,
-            event_id: event_id.into(),
-            generation: 0,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            common: ProtocolContext::event(producer_id, identity, sequence, event_id)?,
+            account_runtime_id: ActorId::new(account_runtime_id)?,
             applied_revision: None,
-            resource_id: String::new(),
-        }
+        })
     }
 
     pub fn view(
@@ -45,22 +42,22 @@ impl EncodeContext {
         identity: InstanceIdentity,
         generation: u64,
         resource_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            producer_id: producer_id.into(),
-            owner_id: owner_id.into(),
-            account_runtime_id: account_runtime_id.into(),
-            identity,
-            sequence: 0,
-            event_id: String::new(),
-            generation,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            common: ProtocolContext::view(
+                producer_id,
+                owner_id,
+                identity,
+                generation,
+                resource_id,
+            )?,
+            account_runtime_id: ActorId::new(account_runtime_id)?,
             applied_revision: None,
-            resource_id: resource_id.into(),
-        }
+        })
     }
 
     pub fn with_applied_revision(mut self, applied_revision: u64) -> Self {
-        self.applied_revision = Some(applied_revision);
+        self.applied_revision = Some(applied_revision.into());
         self
     }
 }
@@ -70,19 +67,31 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    let event_id = builder.create_string(&context.event_id);
+    let event_id = builder.create_string(
+        context
+            .event_id
+            .as_ref()
+            .expect("event context carries event identity")
+            .as_str(),
+    );
     let stream_id =
         builder.create_string(&format!("account.events/{}", context.account_runtime_id));
     let producer_id = builder.create_string(&context.producer_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = non_empty(builder, &context.identity.launch_id);
-    let instance_id = non_empty(builder, &context.identity.instance_id);
+    let launch_id = context
+        .identity
+        .launch_id()
+        .map(|value| builder.create_string(value.as_str()));
+    let instance_id = context
+        .identity
+        .instance_id()
+        .map(|value| builder.create_string(value.as_str()));
     EventMetadata::create(
         builder,
         &EventMetadataArgs {
             event_id: Some(event_id),
             stream_id: Some(stream_id),
-            sequence: context.sequence,
+            sequence: context.sequence.get(),
             producer_id: Some(producer_id),
             workspace_id: Some(workspace_id),
             launch_id,
@@ -106,8 +115,14 @@ pub fn view_metadata<'a, A: Allocator + 'a>(
     let view_key = builder.create_string(&key.canonical_key());
     let owner_id = builder.create_string(&context.owner_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = non_empty(builder, &context.identity.launch_id);
-    let instance_id = non_empty(builder, &context.identity.instance_id);
+    let launch_id = context
+        .identity
+        .launch_id()
+        .map(|value| builder.create_string(value.as_str()));
+    let instance_id = context
+        .identity
+        .instance_id()
+        .map(|value| builder.create_string(value.as_str()));
     ViewMetadata::create(
         builder,
         &ViewMetadataArgs {
@@ -119,20 +134,13 @@ pub fn view_metadata<'a, A: Allocator + 'a>(
             workspace_id: Some(workspace_id),
             launch_id,
             instance_id,
-            generation: context.generation,
+            generation: context.generation.get(),
             as_of_unix_nanos,
             published_at_unix_nanos: now_unix_nanos(),
             completeness: ViewCompleteness::COMPLETE,
-            applied_revision: context.applied_revision,
+            applied_revision: context.applied_revision.map(Sequence::get),
         },
     )
-}
-
-fn non_empty<'a, A: Allocator + 'a>(
-    builder: &mut FlatBufferBuilder<'a, A>,
-    value: &str,
-) -> Option<WIPOffset<&'a str>> {
-    (!value.is_empty()).then(|| builder.create_string(value))
 }
 
 fn now_unix_nanos() -> u64 {

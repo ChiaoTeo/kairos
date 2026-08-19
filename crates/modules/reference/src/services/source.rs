@@ -137,17 +137,17 @@ impl ReferenceSource for ConfiguredProviderSource {
             Self::BinanceSpot(source) => source.fetch_catalog_with_connections(connections).await,
             Self::BinanceDerivatives(source) => {
                 source.fetch_catalog_with_connections(connections).await
-            }
+            },
             Self::BinanceOptions(source) => {
                 source.fetch_catalog_with_connections(connections).await
-            }
+            },
             Self::BinanceEquity(source) => source.fetch_catalog_with_connections(connections).await,
             Self::Okx(source) => source.fetch_catalog_with_connections(connections).await,
             Self::Hyperliquid(source) => source.fetch_catalog_with_connections(connections).await,
             Self::MassiveEquity(source) => source.fetch_catalog_with_connections(connections).await,
             Self::MassiveOptions(source) => {
                 source.fetch_catalog_with_connections(connections).await
-            }
+            },
         }
     }
 
@@ -173,42 +173,42 @@ impl ReferenceSource for ConfiguredProviderSource {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::BinanceDerivatives(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::BinanceOptions(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::BinanceEquity(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::Okx(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::Hyperliquid(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::MassiveEquity(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
             Self::MassiveOptions(source) => {
                 source
                     .fetch_catalog_step_with_connections(connections)
                     .await
-            }
+            },
         }
     }
 
@@ -264,7 +264,7 @@ impl ConfiguredProviderSource {
                 source
                     .set_option_underlying_with_key(underlying, enabled, connection_key)
                     .await
-            }
+            },
             _ => Err(ReferenceError::Invalid(format!(
                 "{} does not support option coverage",
                 self.source_id()

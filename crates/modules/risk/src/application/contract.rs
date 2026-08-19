@@ -14,8 +14,9 @@ fn money(value: kairos_primitives::Money) -> kairos_risk_contract::Amount {
 }
 
 fn metric(value: crate::Metric) -> kairos_risk_contract::Metric {
-    use crate::Metric as Domain;
     use kairos_risk_contract::Metric as Wire;
+
+    use crate::Metric as Domain;
     match value {
         Domain::Notional => Wire::Notional,
         Domain::Margin => Wire::Margin,
@@ -33,13 +34,13 @@ fn metric(value: crate::Metric) -> kairos_risk_contract::Metric {
 
 fn policy(value: &crate::RiskPolicy) -> kairos_risk_contract::RiskPolicy {
     kairos_risk_contract::RiskPolicy {
-        policy_id: value.policy_id.to_string(),
-        version: value.version.get(),
+        policy_id: value.policy_id.clone(),
+        version: value.version,
         scope: kairos_risk_contract::PolicyScope {
-            account_id: value.scope.account_id.as_ref().map(ToString::to_string),
-            strategy_id: value.scope.strategy_id.as_ref().map(ToString::to_string),
-            instrument_id: value.scope.instrument_id.as_ref().map(ToString::to_string),
-            exchange_id: value.scope.exchange_id.as_ref().map(ToString::to_string),
+            account_id: value.scope.account_id.clone(),
+            strategy_id: value.scope.strategy_id.clone(),
+            instrument_id: value.scope.instrument_id.clone(),
+            exchange_id: value.scope.exchange_id.clone(),
         },
         metric: metric(value.metric),
         limit: amount(value.limit),
@@ -48,15 +49,15 @@ fn policy(value: &crate::RiskPolicy) -> kairos_risk_contract::RiskPolicy {
             crate::EnforcementMode::Warn => kairos_risk_contract::EnforcementMode::Warn,
             crate::EnforcementMode::Observe => kairos_risk_contract::EnforcementMode::Observe,
         },
-        valid_from_unix_nanos: value.valid_from_unix_nanos.get(),
-        valid_until_unix_nanos: value.valid_until_unix_nanos.map(|value| value.get()),
-        window_nanos: value.window_nanos.map(|value| value.get()),
+        valid_from_unix_nanos: value.valid_from_unix_nanos,
+        valid_until_unix_nanos: value.valid_until_unix_nanos,
+        window_nanos: value.window_nanos,
     }
 }
 
 fn allocation(value: &crate::Allocation) -> kairos_risk_contract::Allocation {
     kairos_risk_contract::Allocation {
-        policy_id: value.policy_id.to_string(),
+        policy_id: value.policy_id.clone(),
         metric: metric(value.metric),
         amount: amount(value.amount),
     }
@@ -64,11 +65,11 @@ fn allocation(value: &crate::Allocation) -> kairos_risk_contract::Allocation {
 
 pub(crate) fn reservation(value: &crate::Reservation) -> kairos_risk_contract::Reservation {
     kairos_risk_contract::Reservation {
-        reservation_id: value.reservation_id.to_string(),
-        request_id: value.request_id.to_string(),
-        account_id: value.account_id.as_ref().map(ToString::to_string),
-        strategy_id: value.strategy_id.as_ref().map(ToString::to_string),
-        idempotency_key: value.idempotency_key.to_string(),
+        reservation_id: value.reservation_id.clone(),
+        request_id: value.request_id.clone(),
+        account_id: value.account_id.clone(),
+        strategy_id: value.strategy_id.clone(),
+        idempotency_key: value.idempotency_key.clone(),
         allocations: value.allocations.iter().map(allocation).collect(),
         status: match value.status {
             crate::ReservationStatus::Reserved => kairos_risk_contract::ReservationStatus::Reserved,
@@ -76,47 +77,48 @@ pub(crate) fn reservation(value: &crate::Reservation) -> kairos_risk_contract::R
             crate::ReservationStatus::Released => kairos_risk_contract::ReservationStatus::Released,
             crate::ReservationStatus::Expired => kairos_risk_contract::ReservationStatus::Expired,
         },
-        created_at_unix_nanos: value.created_at_unix_nanos.get(),
-        updated_at_unix_nanos: value.updated_at_unix_nanos.get(),
-        expires_at_unix_nanos: value.expires_at_unix_nanos.get(),
-        policy_version: value.policy_version.get(),
+        created_at_unix_nanos: value.created_at_unix_nanos,
+        updated_at_unix_nanos: value.updated_at_unix_nanos,
+        expires_at_unix_nanos: value.expires_at_unix_nanos,
+        policy_version: value.policy_version,
     }
 }
 
 pub(crate) fn circuit(value: &crate::CircuitState) -> kairos_risk_contract::CircuitState {
     kairos_risk_contract::CircuitState {
         scope: kairos_risk_contract::CircuitScope {
-            account_id: value.scope.account_id.as_ref().map(ToString::to_string),
-            strategy_id: value.scope.strategy_id.as_ref().map(ToString::to_string),
-            exchange_id: value.scope.exchange_id.as_ref().map(ToString::to_string),
+            account_id: value.scope.account_id.clone(),
+            strategy_id: value.scope.strategy_id.clone(),
+            exchange_id: value.scope.exchange_id.clone(),
         },
         open: value.open,
-        opened_at_unix_nanos: value.opened_at_unix_nanos.map(|value| value.get()),
-        reset_at_unix_nanos: value.reset_at_unix_nanos.map(|value| value.get()),
+        opened_at_unix_nanos: value.opened_at_unix_nanos,
+        reset_at_unix_nanos: value.reset_at_unix_nanos,
         reason: value.reason.clone(),
     }
 }
 
 fn context(value: &crate::RiskContext) -> kairos_risk_contract::RiskContext {
     kairos_risk_contract::RiskContext {
-        account_snapshot_watermark: value.account_snapshot_watermark.get(),
-        market_freshness_watermark: value.market_freshness_watermark.get(),
-        portfolio_version: value.portfolio_version.get(),
+        account_snapshot_watermark: value.account_snapshot_watermark,
+        market_freshness_watermark: value.market_freshness_watermark,
+        portfolio_version: value.portfolio_version,
         current_exposure: amount(value.current_exposure),
         current_margin: amount(value.current_margin),
         available_margin: amount(value.available_margin),
         current_pnl: money(value.current_pnl),
         current_drawdown: amount(value.current_drawdown),
         market_is_fresh: value.market_is_fresh,
-        leverage_bps: u64::from(value.leverage_bps.get()),
-        price_deviation_bps: u64::from(value.price_deviation_bps.get()),
+        leverage_bps: value.leverage_bps,
+        price_deviation_bps: value.price_deviation_bps,
         stress_loss: amount(value.stress_loss),
     }
 }
 
 fn reason(value: &crate::ReasonCode) -> kairos_risk_contract::ReasonCode {
-    use crate::ReasonCode as Domain;
     use kairos_risk_contract::ReasonCode as Wire;
+
+    use crate::ReasonCode as Domain;
     match value {
         Domain::NoMatchingPolicy => Wire::NoMatchingPolicy,
         Domain::LimitExceeded => Wire::LimitExceeded,
@@ -141,21 +143,21 @@ pub(crate) fn decision(
     instrument_id: Option<&kairos_primitives::InstrumentId>,
 ) -> kairos_risk_contract::RiskDecision {
     kairos_risk_contract::RiskDecision {
-        decision_id: value.decision_id.to_string(),
-        request_id: value.request_id.to_string(),
-        account_id: account_id.to_string(),
-        strategy_id: strategy_id.to_string(),
-        instrument_id: instrument_id.map(ToString::to_string).unwrap_or_default(),
+        decision_id: value.decision_id.clone(),
+        request_id: value.request_id.clone(),
+        account_id: account_id.clone(),
+        strategy_id: strategy_id.clone(),
+        instrument_id: instrument_id.cloned(),
         allowed: value.allowed,
         degraded: value.degraded,
         reason_codes: value.reason_codes.iter().map(reason).collect(),
         violations: value.violations.clone(),
         allocations: value.allocations.iter().map(allocation).collect(),
         reservation: value.reservation.as_ref().map(reservation),
-        policy_version: value.policy_version.get(),
+        policy_version: value.policy_version,
         dependency_watermarks: kairos_risk_contract::DependencyWatermarks {
-            generation: value.dependency_watermarks.generation.get(),
-            event_sequence: value.dependency_watermarks.event_sequence.get(),
+            generation: value.dependency_watermarks.generation,
+            event_sequence: value.dependency_watermarks.event_sequence,
         },
         context: value.context.as_ref().map(context),
         funding_requirement: value.funding_requirement.as_ref().map(|requirement| {
@@ -166,7 +168,7 @@ pub(crate) fn decision(
                 margin_rule_id: requirement.margin_rule_id.clone(),
             }
         }),
-        evaluated_at_unix_nanos: value.evaluated_at_unix_nanos.get(),
+        evaluated_at_unix_nanos: value.evaluated_at_unix_nanos,
     }
 }
 
@@ -175,29 +177,13 @@ pub(crate) fn policy_from(
 ) -> Result<crate::RiskPolicy, String> {
     let scope = value.scope;
     Ok(crate::RiskPolicy {
-        policy_id: kairos_primitives::PolicyId::new(value.policy_id).map_err(|e| e.to_string())?,
-        version: value.version.into(),
+        policy_id: value.policy_id,
+        version: value.version,
         scope: crate::PolicyScope {
-            account_id: scope
-                .account_id
-                .map(kairos_primitives::AccountId::new)
-                .transpose()
-                .map_err(|e| e.to_string())?,
-            strategy_id: scope
-                .strategy_id
-                .map(kairos_primitives::StrategyId::new)
-                .transpose()
-                .map_err(|e| e.to_string())?,
-            instrument_id: scope
-                .instrument_id
-                .map(kairos_primitives::InstrumentId::new)
-                .transpose()
-                .map_err(|e| e.to_string())?,
-            exchange_id: scope
-                .exchange_id
-                .map(kairos_primitives::Exchange::new)
-                .transpose()
-                .map_err(|e| e.to_string())?,
+            account_id: scope.account_id,
+            strategy_id: scope.strategy_id,
+            instrument_id: scope.instrument_id,
+            exchange_id: scope.exchange_id,
         },
         metric: metric_from(value.metric),
         limit: amount_from(value.limit)?,
@@ -206,9 +192,9 @@ pub(crate) fn policy_from(
             kairos_risk_contract::EnforcementMode::Warn => crate::EnforcementMode::Warn,
             kairos_risk_contract::EnforcementMode::Observe => crate::EnforcementMode::Observe,
         },
-        valid_from_unix_nanos: value.valid_from_unix_nanos.into(),
-        valid_until_unix_nanos: value.valid_until_unix_nanos.map(Into::into),
-        window_nanos: value.window_nanos.map(Into::into),
+        valid_from_unix_nanos: value.valid_from_unix_nanos,
+        valid_until_unix_nanos: value.valid_until_unix_nanos,
+        window_nanos: value.window_nanos,
     })
 }
 
@@ -216,34 +202,23 @@ pub(crate) fn authorize_from(
     value: kairos_risk_contract::AuthorizeRequest,
 ) -> Result<crate::domain::AuthorizeRequest, String> {
     Ok(crate::domain::AuthorizeRequest {
-        request_id: kairos_primitives::RequestId::new(value.request_id)
-            .map_err(|e| e.to_string())?,
-        idempotency_key: kairos_primitives::IdempotencyKey::new(value.idempotency_key)
-            .map_err(|e| e.to_string())?,
-        reservation_id: kairos_primitives::ReservationId::new(value.reservation_id)
-            .map_err(|e| e.to_string())?,
-        account_id: kairos_primitives::AccountId::new(value.account_id)
-            .map_err(|e| e.to_string())?,
-        strategy_id: kairos_primitives::StrategyId::new(value.strategy_id)
-            .map_err(|e| e.to_string())?,
-        instrument_id: kairos_primitives::InstrumentId::new(value.instrument_id)
-            .map_err(|e| e.to_string())?,
-        exchange_id: kairos_primitives::Exchange::new(value.exchange_id)
-            .map_err(|e| e.to_string())?,
+        request_id: value.request_id,
+        idempotency_key: value.idempotency_key,
+        reservation_id: value.reservation_id,
+        account_id: value.account_id,
+        strategy_id: value.strategy_id,
+        instrument_id: value.instrument_id,
+        exchange_id: value.exchange_id,
         proposal: crate::TradeRiskProposal {
             notional: amount_from(value.proposal.notional)?,
-            initial_margin_rate_bps: value
-                .proposal
-                .initial_margin_rate_bps
-                .try_into()
-                .map_err(|_| "initial margin rate exceeds basis-point range".to_string())?,
+            initial_margin_rate_bps: value.proposal.initial_margin_rate_bps,
             reduce_only: value.proposal.reduce_only,
             margin_rule_id: value.proposal.margin_rule_id,
         },
-        at_unix_nanos: value.at_unix_nanos.into(),
-        reservation_ttl_nanos: value.reservation_ttl_nanos.into(),
-        dependency_generation: value.dependency_generation.into(),
-        dependency_event_sequence: value.dependency_event_sequence.into(),
+        at_unix_nanos: value.at_unix_nanos,
+        reservation_ttl_nanos: value.reservation_ttl_nanos,
+        dependency_generation: value.dependency_generation,
+        dependency_event_sequence: value.dependency_event_sequence,
         context: value.context.map(context_from).transpose()?,
     })
 }
@@ -252,21 +227,9 @@ pub(crate) fn circuit_scope_from(
     value: kairos_risk_contract::CircuitScope,
 ) -> Result<crate::CircuitScope, String> {
     Ok(crate::CircuitScope {
-        account_id: value
-            .account_id
-            .map(kairos_primitives::AccountId::new)
-            .transpose()
-            .map_err(|e| e.to_string())?,
-        strategy_id: value
-            .strategy_id
-            .map(kairos_primitives::StrategyId::new)
-            .transpose()
-            .map_err(|e| e.to_string())?,
-        exchange_id: value
-            .exchange_id
-            .map(kairos_primitives::Exchange::new)
-            .transpose()
-            .map_err(|e| e.to_string())?,
+        account_id: value.account_id,
+        strategy_id: value.strategy_id,
+        exchange_id: value.exchange_id,
     })
 }
 
@@ -292,9 +255,9 @@ fn metric_from(value: kairos_risk_contract::Metric) -> crate::Metric {
 
 fn context_from(value: kairos_risk_contract::RiskContext) -> Result<crate::RiskContext, String> {
     Ok(crate::RiskContext {
-        account_snapshot_watermark: value.account_snapshot_watermark.into(),
-        market_freshness_watermark: value.market_freshness_watermark.into(),
-        portfolio_version: value.portfolio_version.into(),
+        account_snapshot_watermark: value.account_snapshot_watermark,
+        market_freshness_watermark: value.market_freshness_watermark,
+        portfolio_version: value.portfolio_version,
         current_exposure: amount_from(value.current_exposure)?,
         current_margin: amount_from(value.current_margin)?,
         available_margin: amount_from(value.available_margin)?,
@@ -305,8 +268,8 @@ fn context_from(value: kairos_risk_contract::RiskContext) -> Result<crate::RiskC
         .map_err(|e| e.to_string())?,
         current_drawdown: amount_from(value.current_drawdown)?,
         market_is_fresh: value.market_is_fresh,
-        leverage_bps: kairos_primitives::BasisPoints::new(value.leverage_bps),
-        price_deviation_bps: kairos_primitives::BasisPoints::new(value.price_deviation_bps),
+        leverage_bps: value.leverage_bps,
+        price_deviation_bps: value.price_deviation_bps,
         stress_loss: amount_from(value.stress_loss)?,
     })
 }
@@ -315,10 +278,10 @@ pub(crate) fn current_view(
     value: &crate::RiskCurrentView,
 ) -> kairos_risk_contract::RiskCurrentView {
     kairos_risk_contract::RiskCurrentView {
-        actor_id: value.actor_id.to_string(),
-        generation: value.generation.get(),
-        event_sequence: value.event_sequence.get(),
-        policy_version: value.policy_version.get(),
+        actor_id: value.actor_id.clone(),
+        generation: value.generation,
+        event_sequence: value.event_sequence,
+        policy_version: value.policy_version,
         limits: value
             .limits
             .iter()
@@ -341,14 +304,14 @@ pub(crate) fn event(value: &crate::RiskEvent) -> kairos_risk_contract::RiskEvent
             event_sequence,
         } => kairos_risk_contract::RiskEvent::PolicyActivated {
             policy: policy(value),
-            event_sequence: event_sequence.get(),
+            event_sequence: *event_sequence,
         },
         crate::RiskEvent::ReservationChanged {
             reservation: value,
             event_sequence,
         } => kairos_risk_contract::RiskEvent::ReservationChanged {
             reservation: reservation(value),
-            event_sequence: event_sequence.get(),
+            event_sequence: *event_sequence,
         },
         crate::RiskEvent::DecisionEvaluated {
             decision: value,
@@ -357,16 +320,16 @@ pub(crate) fn event(value: &crate::RiskEvent) -> kairos_risk_contract::RiskEvent
             event_sequence,
         } => kairos_risk_contract::RiskEvent::DecisionEvaluated {
             decision: decision(value, account_id, strategy_id, None),
-            account_id: account_id.to_string(),
-            strategy_id: strategy_id.to_string(),
-            event_sequence: event_sequence.get(),
+            account_id: account_id.clone(),
+            strategy_id: strategy_id.clone(),
+            event_sequence: *event_sequence,
         },
         crate::RiskEvent::CircuitChanged {
             circuit: value,
             event_sequence,
         } => kairos_risk_contract::RiskEvent::CircuitChanged {
             circuit: circuit(value),
-            event_sequence: event_sequence.get(),
+            event_sequence: *event_sequence,
         },
     }
 }

@@ -1,8 +1,8 @@
-use kairos_primitives::ActorId;
-
-use crate::domain::{source::derive_readiness, view::MarketView};
+use kairos_primitives::runtime::ActorId;
 
 use super::MarketActor;
+use crate::domain::source::derive_readiness;
+use crate::domain::view::MarketView;
 
 impl MarketActor {
     pub fn current_view(&self) -> MarketView {

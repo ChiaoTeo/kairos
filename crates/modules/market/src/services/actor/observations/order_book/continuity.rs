@@ -53,7 +53,7 @@ impl MarketActor {
                 sequence: self.event_sequence,
                 event: Some(MarketEvent::OrderBookResyncRequired(
                     OrderBookResyncRequired {
-                        source_id: source_id.to_string(),
+                        source_id: source_id.clone(),
                         market_id: market_id.clone(),
                         instrument_id,
                         expected_sequence: self

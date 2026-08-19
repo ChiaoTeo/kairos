@@ -9,16 +9,17 @@ pub mod error;
 pub mod event;
 pub mod transport;
 pub mod view;
+use std::path::PathBuf;
+
 pub use control::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Allocation, Amount, AuthorizeRequest,
     CircuitScope, CircuitState, CloseCircuitRequest, ConsumeReservationRequest, DecimalValue,
-    DependencyWatermarks, EnforcementMode, FundingRequirement, LimitView, Metric,
+    DependencyWatermarks, EnforcementMode, FundingRequirement, Health, LimitView, Metric,
     OpenCircuitRequest, PolicyScope, PublishPolicyRequest, ReasonCode, ReleaseReservationRequest,
     Reservation, ReservationStatus, ResizeReservationRequest, RiskCommandStatus, RiskContext,
-    RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskPolicy, RiskRestRequest,
-    RiskRestResponse, TradeRiskProposal,
+    RiskControlClient, RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskPolicy,
+    RiskRestRequest, RiskRestResponse, TradeRiskProposal,
 };
-pub use control::{Health, RiskControlClient};
 pub use encode::{
     FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, MmapRiskSnapshotPublisher,
     RiskAeronEventPublisher,
@@ -27,11 +28,9 @@ pub use error::{ContractError, ContractResult};
 pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
 pub use kairos_transport::AeronEndpoint;
 pub use view::{
-    risk_view_path, RiskViewKey, RiskViewKind, RiskViewPublisher, RiskViewReader, ViewFrame,
-    ViewMetadata,
+    RiskViewKey, RiskViewKind, RiskViewPublisher, RiskViewReader, ViewFrame, ViewMetadata,
+    risk_view_path,
 };
-
-use std::path::PathBuf;
 
 pub struct RiskEndpoint {
     pub control_socket: PathBuf,

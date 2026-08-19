@@ -1,9 +1,7 @@
-use crate::participants::ibkr::{descriptor, IbkrAccountQueryConfig, IbkrAccountStreamConfig};
-use crate::services::participants::ibkr::{
-    account::{AccountQueryService, AccountStreamService},
-    execution::SessionService,
-    IbkrOptions,
-};
+use crate::participants::ibkr::{IbkrAccountQueryConfig, IbkrAccountStreamConfig, descriptor};
+use crate::services::participants::ibkr::IbkrOptions;
+use crate::services::participants::ibkr::account::{AccountQueryService, AccountStreamService};
+use crate::services::participants::ibkr::execution::SessionService;
 use crate::{
     AccountQuery, AccountStream, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery,
     ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, ConnectionState,

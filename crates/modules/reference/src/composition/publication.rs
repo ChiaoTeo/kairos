@@ -1,9 +1,8 @@
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
-use crate::domain::{ReferenceError, ReferenceResult};
-use crate::ReferencePublication;
-
 use super::{ReferenceEventWriter, ReferenceEventWriterConfig};
+use crate::ReferencePublication;
+use crate::domain::{ReferenceError, ReferenceResult};
 
 const EVENT_PUBLISH_QUEUE_CAPACITY: usize = 8;
 

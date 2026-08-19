@@ -198,7 +198,7 @@ impl ExecutionApplication {
                                 reconciled_status = ExecutionOrderStatus::Unknown;
                                 reconciliation_reason =
                                     format!("remote cumulative fill could not be applied: {error}");
-                            }
+                            },
                         }
                     } else {
                         reconciled_status = ExecutionOrderStatus::Unknown;
@@ -206,16 +206,15 @@ impl ExecutionApplication {
                             "remote fill has no average price; manual reconciliation required"
                                 .into();
                     }
-                }
+                },
                 remote_filled if remote_filled < local.filled_quantity => {
                     reconciled_status = ExecutionOrderStatus::Unknown;
                     reconciliation_reason = format!(
                         "remote cumulative fill {} is behind local fill {}; manual reconciliation required",
-                        remote_filled,
-                        local.filled_quantity
+                        remote_filled, local.filled_quantity
                     );
-                }
-                _ => {}
+                },
+                _ => {},
             }
 
             let local = self
@@ -265,11 +264,11 @@ impl ExecutionApplication {
                 match risk_effect {
                     Some(RiskReservationSagaStatus::ConsumePending) => {
                         self.complete_risk_consume(reconciled.order_id.as_str(), occurred_at)?
-                    }
+                    },
                     Some(RiskReservationSagaStatus::ReleasePending) => {
                         self.complete_risk_release(reconciled.order_id.as_str(), occurred_at)?
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
                 changed += 1;
             }
@@ -402,11 +401,11 @@ impl ExecutionApplication {
         match risk_effect {
             Some(RiskReservationSagaStatus::ConsumePending) => {
                 self.complete_risk_consume(next.order_id.as_str(), occurred_at)?
-            }
+            },
             Some(RiskReservationSagaStatus::ReleasePending) => {
                 self.complete_risk_release(next.order_id.as_str(), occurred_at)?
-            }
-            _ => {}
+            },
+            _ => {},
         }
         info!(event = "remote_execution_event_reconciled", component = "execution", order_id = %next.order_id, status = ?next.status, "remote execution event reconciled");
         Ok(next)

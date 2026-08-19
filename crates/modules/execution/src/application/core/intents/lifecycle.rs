@@ -26,14 +26,14 @@ impl ExecutionApplication {
                 Ok(order) => {
                     self.complete_due_intent_order(&due, &order, now_unix_nanos)?;
                     submitted += 1;
-                }
+                },
                 Err(error) => {
                     let cancellations = self.fail_due_intent_order(&due, &error, now_unix_nanos)?;
                     for cancellation in cancellations {
                         let _ = self.cancel(cancellation);
                     }
                     return Err(error);
-                }
+                },
             }
         }
         if submitted > 0 {
@@ -480,7 +480,7 @@ impl ExecutionApplication {
                 crate::domain::IntentLifecycle::PartiallyFilled => IntentStatus::PartiallyFilled,
                 crate::domain::IntentLifecycle::ReconciliationRequired => {
                     IntentStatus::ReconciliationRequired
-                }
+                },
                 crate::domain::IntentLifecycle::Failed => IntentStatus::Failed,
                 crate::domain::IntentLifecycle::Canceled => IntentStatus::Canceled,
                 _ if has_active => {
@@ -489,7 +489,7 @@ impl ExecutionApplication {
                     } else {
                         IntentStatus::Executing
                     }
-                }
+                },
                 _ => IntentStatus::Executing,
             }
         } else if has_active {
@@ -531,7 +531,7 @@ impl ExecutionApplication {
                 IntentStatus::Failed => "all child orders failed".into(),
                 IntentStatus::ReconciliationRequired => {
                     "child order reconciliation required".into()
-                }
+                },
                 _ => "child execution progressing".into(),
             },
             dependency_watermarks: state.dependency_watermarks,

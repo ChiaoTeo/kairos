@@ -3,17 +3,16 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use secrecy::ExposeSecret;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::services::participants::massive::market::data::{normalize, SocketService};
+use super::MassiveWebSocketConfig;
+use crate::services::participants::massive::market::data::{SocketService, normalize};
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionLifecycleCommand,
     IntegrationError, MarketDataKind, MarketDataStream, MarketDelivery, MarketEvent, MarketFeed,
     MarketSubscription, MarketSubscriptionCommand, MarketSubscriptionId, MarketSubscriptionOutcome,
     MarketSubscriptionRequest, ParticipantKind, ParticipantRef, ParticipantRejection,
 };
-
-use super::MassiveWebSocketConfig;
 
 #[derive(Clone, Copy)]
 enum SocketProduct {
@@ -336,8 +335,8 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
             Some(interval) => {
                 return Err(IntegrationError::InvalidRequest(format!(
                     "Massive live index aggregate interval is unsupported: {interval}"
-                )))
-            }
+                )));
+            },
         },
         (SocketProduct::Forex, MarketDataKind::Quote) => "C",
         (SocketProduct::Forex, MarketDataKind::Bar) => match feed.interval.as_deref() {
@@ -346,8 +345,8 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
             Some(interval) => {
                 return Err(IntegrationError::InvalidRequest(format!(
                     "Massive live forex aggregate interval is unsupported: {interval}"
-                )))
-            }
+                )));
+            },
         },
         (SocketProduct::Crypto, MarketDataKind::Quote) => "XQ",
         (SocketProduct::Crypto, MarketDataKind::Trade) => "XT",
@@ -357,8 +356,8 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
             Some(interval) => {
                 return Err(IntegrationError::InvalidRequest(format!(
                     "Massive live crypto aggregate interval is unsupported: {interval}"
-                )))
-            }
+                )));
+            },
         },
         (SocketProduct::Standard, MarketDataKind::Quote) => "Q",
         (SocketProduct::Standard, MarketDataKind::Trade) => "T",
@@ -371,14 +370,14 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
             Some(interval) => {
                 return Err(IntegrationError::InvalidRequest(format!(
                     "Massive live aggregate interval is unsupported: {interval}"
-                )))
-            }
+                )));
+            },
         },
         (_, unsupported) => {
             return Err(IntegrationError::InvalidRequest(format!(
                 "Massive WebSocket does not support {unsupported:?}"
-            )))
-        }
+            )));
+        },
     };
     Ok(format!(
         "{channel}.{}",
@@ -390,7 +389,7 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
 mod tests {
     use kairos_primitives::ParticipantSymbol;
 
-    use super::{feed_parameter, SocketProduct};
+    use super::{SocketProduct, feed_parameter};
     use crate::{MarketDataKind, MarketFeed};
 
     fn feed(kind: MarketDataKind, interval: Option<&str>) -> MarketFeed {

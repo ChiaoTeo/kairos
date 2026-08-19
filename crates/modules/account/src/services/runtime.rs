@@ -1,5 +1,13 @@
-use crate::application::MarkToMarket;
-use crate::application::{AccountCurrentView, AccountRefreshIssue, AccountRefreshReport};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+
+use kairos_primitives::runtime::ActorId;
+use tracing::info;
+
+use crate::application::{
+    AccountCurrentView, AccountRefreshIssue, AccountRefreshReport, MarkToMarket,
+};
 use crate::domain::{
     AccountEvent, AccountFill, AccountSegment, AccountSnapshot, ApplyOutcome, Money, Position,
     SegmentKey, SignedQuantity, SnapshotKind,
@@ -7,12 +15,7 @@ use crate::domain::{
 use crate::services::actor::AccountActor;
 use crate::services::persistence::{AccountJournalRecord, JsonAccountStore};
 use crate::services::persistence_worker::AccountPersistenceWorker;
-use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
-use kairos_primitives::ActorId;
-use std::collections::VecDeque;
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
-use tracing::info;
+use crate::services::refresh::{AccountRefreshWorker, RefreshFetch, try_receive};
 
 /// Drives the state-only actor through concrete IO selected by composition.
 /// It owns no account facts; all business mutation remains inside `AccountActor`.
@@ -64,7 +67,7 @@ impl AccountRuntime {
                             actor.apply_events(event)?;
                         }
                         pending_business_events.extend(business_events);
-                    }
+                    },
                     AccountJournalRecord::PublicationAcknowledged {
                         sequence,
                         account_id,
@@ -128,7 +131,7 @@ impl AccountRuntime {
             Err(error) => {
                 self.actor.restore_undo(undo);
                 return Err(error);
-            }
+            },
         };
         if settlement_outcome != ApplyOutcome::Applied {
             self.actor.restore_undo(undo);
@@ -219,7 +222,7 @@ impl AccountRuntime {
                 Err(error) => {
                     self.actor.restore_undo(undo);
                     return Err(error);
-                }
+                },
             }
         }
         if applied == 0 {
@@ -335,7 +338,7 @@ impl AccountRuntime {
                     Ok((ApplyOutcome::Applied, observed_differences)) => {
                         refreshed.push(key);
                         differences.extend(observed_differences);
-                    }
+                    },
                     Ok((_, observed_differences)) => differences.extend(observed_differences),
                     Err(error) => issues.push(refresh_issue(&key, error, fetch.elapsed_ms)),
                 },

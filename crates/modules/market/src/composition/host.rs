@@ -1,12 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
 };
@@ -130,17 +128,17 @@ fn decode_request(
         ("POST", "/v1/stop") => Ok(None),
         ("GET", "/v1/health") => Ok(Some(MarketRestRequest::Health)),
         ("GET", "/v1/data-sources") => Ok(Some(MarketRestRequest::DataSources(
-            data_sources_query(query),
+            data_sources_query(query)?,
         ))),
         ("POST", "/v1/subscribe") | ("POST", "/v1/subscriptions") => {
             Ok(Some(MarketRestRequest::Subscribe(decode(body)?)))
-        }
+        },
         ("POST", "/v1/unsubscribe") | ("DELETE", _) if path.starts_with("/v1/subscriptions/") => {
             Ok(Some(MarketRestRequest::Unsubscribe(decode(body)?)))
-        }
+        },
         ("POST", "/v1/subscriptions/release-owner") => {
             Ok(Some(MarketRestRequest::ReleaseOwner(decode(body)?)))
-        }
+        },
         ("POST", "/v1/recover") | ("POST", "/v1/recovery") => Ok(Some(MarketRestRequest::Recover)),
         ("POST", "/v1/replay/pause") => Ok(Some(MarketRestRequest::PauseReplay)),
         ("POST", "/v1/replay/resume") => Ok(Some(MarketRestRequest::ResumeReplay)),
@@ -148,7 +146,7 @@ fn decode_request(
     }
 }
 
-fn data_sources_query(query: &str) -> MarketDataSourcesQuery {
+fn data_sources_query(query: &str) -> Result<MarketDataSourcesQuery, Response> {
     let value = |key: &str| {
         query.split('&').find_map(|part| {
             part.split_once('=')
@@ -156,13 +154,31 @@ fn data_sources_query(query: &str) -> MarketDataSourcesQuery {
                 .map(|(_, value)| value.to_owned())
         })
     };
-    MarketDataSourcesQuery {
-        market_id: value("market_id"),
-        instrument_id: value("instrument_id"),
-        exchange: value("exchange"),
-        market_type: value("market_type"),
-        asset_type: value("asset_type"),
-    }
+    let invalid = |domain_error: kairos_primitives::DomainTypeError| {
+        error(StatusCode::BAD_REQUEST, &domain_error.to_string())
+    };
+    Ok(MarketDataSourcesQuery {
+        market_id: value("market_id")
+            .map(kairos_primitives::MarketId::new)
+            .transpose()
+            .map_err(invalid)?,
+        instrument_id: value("instrument_id")
+            .map(kairos_primitives::InstrumentId::new)
+            .transpose()
+            .map_err(invalid)?,
+        exchange: value("exchange")
+            .map(kairos_primitives::Exchange::new)
+            .transpose()
+            .map_err(invalid)?,
+        market_type: value("market_type")
+            .map(|item| item.parse())
+            .transpose()
+            .map_err(invalid)?,
+        asset_type: value("asset_type")
+            .map(|item| item.parse())
+            .transpose()
+            .map_err(invalid)?,
+    })
 }
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, Response> {
@@ -173,22 +189,22 @@ fn encode_response(response: MarketRestResponse) -> Response {
     match response {
         MarketRestResponse::Health(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         MarketRestResponse::DataSources(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         MarketRestResponse::Subscribe(Ok(value)) => {
             (StatusCode::CREATED, Json(json!(value))).into_response()
-        }
+        },
         MarketRestResponse::Unsubscribe(Ok(value))
         | MarketRestResponse::Recover(Ok(value))
         | MarketRestResponse::PauseReplay(Ok(value))
         | MarketRestResponse::ResumeReplay(Ok(value)) => {
             (StatusCode::ACCEPTED, Json(json!(value))).into_response()
-        }
+        },
         MarketRestResponse::ReleaseOwner(Ok(value)) => {
             (StatusCode::OK, Json(json!(value))).into_response()
-        }
+        },
         MarketRestResponse::Health(Err(value))
         | MarketRestResponse::DataSources(Err(value))
         | MarketRestResponse::Subscribe(Err(value))

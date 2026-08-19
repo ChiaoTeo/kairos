@@ -10,14 +10,14 @@ mod domain;
 mod services;
 
 pub use application::{
-    load_replay_events, load_replay_events_many, Bar, DataFreshnessStatus, ExecutionEstimate,
-    FeedStatus, FundingRate, IndexPrice, MarkPrice, MarketApplication, MarketChange,
-    MarketDataRoute, MarketError, MarketEvent, MarketFreshness, MarketObservation, MarketReadiness,
-    MarketSelectionQuery, MarketView, MarketViewFreshness, MarketViewKey, MarketViewUpdate,
-    ObservationKind, ObservationScope, ObservationSelector, OpenInterest, OptionGreeks, OrderBook,
-    OrderBookDelta, OrderBookResyncRequired, OrderBookSide, PriceLevel, Quote, QuoteBar, Rate,
-    ReconcileMarketUniverse, ReconcileResult, ResolvedMarket, SourceDescriptor, SourceEpoch,
-    SourceFailureKind, SourceId, SourceRouteKey, SourceState, SourceStatus, SubscriptionId,
-    SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode, SubscriptionState,
-    SubscriptionStatus, Ticker24h, Trade, TradeBar,
+    Bar, DataFreshnessStatus, ExecutionEstimate, FeedStatus, FundingRate, IndexPrice, MarkPrice,
+    MarketApplication, MarketChange, MarketDataRoute, MarketError, MarketEvent, MarketFreshness,
+    MarketObservation, MarketReadiness, MarketSelectionQuery, MarketView, MarketViewFreshness,
+    MarketViewKey, MarketViewUpdate, ObservationKind, ObservationScope, ObservationSelector,
+    OpenInterest, OptionGreeks, OrderBook, OrderBookDelta, OrderBookResyncRequired, OrderBookSide,
+    PriceLevel, Quote, QuoteBar, Rate, ReconcileMarketUniverse, ReconcileResult, ResolvedMarket,
+    SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceState,
+    SourceStatus, SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus,
+    SubscriptionMode, SubscriptionState, SubscriptionStatus, Ticker24h, Trade, TradeBar,
+    load_replay_events, load_replay_events_many,
 };

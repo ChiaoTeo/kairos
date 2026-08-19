@@ -1,22 +1,20 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 use clap::Parser;
 use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
 };
+use kairos_reference::ReferenceApplication;
 use kairos_reference::application::control;
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ReferenceCompositionConfig,
+    ReferenceCompositionConfig, build_application, ensure_database_parent,
 };
-use kairos_reference::ReferenceApplication;
 use kairos_reference_contract::{
     AeronEndpoint, ReferenceControlError, ReferenceEventPublisher, ReferenceOptionCoverageRequest,
     ReferenceRestRequest, ReferenceRestResponse, ReferenceSourceControlRequest,
@@ -224,7 +222,7 @@ async fn reference_http_handler_inner(host: ReferenceHost, request: Request) -> 
         HostRequest::Stop => {
             host.handle.shutdown(ShutdownMode::Drain);
             (StatusCode::ACCEPTED, Json(json!({"status":"stopping"}))).into_response()
-        }
+        },
         HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
             Ok(Some(response)) => encode_response(response),
             Ok(None) => json_error(
@@ -284,17 +282,17 @@ fn decode_request(method: &str, target: &str, body: &[u8]) -> Result<HostRequest
             ReferenceRestRequest::ResumeSource(ReferenceSourceControlRequest {
                 source_id: required_query(target, "source")?,
             })
-        }
+        },
         control::OPTIONS_COVERAGE_ADD => {
             ReferenceRestRequest::AddOptionCoverage(ReferenceOptionCoverageRequest {
                 underlying: required_query(target, "underlying")?,
             })
-        }
+        },
         control::OPTIONS_COVERAGE_REMOVE => {
             ReferenceRestRequest::RemoveOptionCoverage(ReferenceOptionCoverageRequest {
                 underlying: required_query(target, "underlying")?,
             })
-        }
+        },
         control::ASSETS => ReferenceRestRequest::UpsertAsset(decode(body)?),
         control::INSTRUMENTS => ReferenceRestRequest::UpsertInstrument(decode(body)?),
         control::LISTINGS => ReferenceRestRequest::UpsertListing(decode(body)?),
@@ -302,8 +300,8 @@ fn decode_request(method: &str, target: &str, body: &[u8]) -> Result<HostRequest
             return Err(json_error(
                 StatusCode::NOT_FOUND,
                 "unknown Reference control path",
-            ))
-        }
+            ));
+        },
     };
     Ok(HostRequest::Rest(request))
 }
@@ -343,7 +341,7 @@ fn result_response<T: Serialize>(result: Result<T, ReferenceControlError>) -> Re
                 StatusCode::BAD_REQUEST
             };
             (status, Json(json!({"error": error}))).into_response()
-        }
+        },
     }
 }
 
@@ -454,9 +452,11 @@ struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_refresh_interval, Args};
-    use clap::Parser;
     use std::time::Duration;
+
+    use clap::Parser;
+
+    use super::{Args, parse_refresh_interval};
 
     #[test]
     fn refresh_interval_accepts_human_units_and_legacy_seconds() {
@@ -492,13 +492,15 @@ mod tests {
             canonical.reference_changes_stream,
             kairos_transport::stream_ids::REFERENCE_CHANGES
         );
-        assert!(Args::try_parse_from([
-            "kairos-reference",
-            "--workspace",
-            "/tmp/workspace",
-            "--channel",
-            "aeron:ipc",
-        ])
-        .is_err());
+        assert!(
+            Args::try_parse_from([
+                "kairos-reference",
+                "--workspace",
+                "/tmp/workspace",
+                "--channel",
+                "aeron:ipc",
+            ])
+            .is_err()
+        );
     }
 }

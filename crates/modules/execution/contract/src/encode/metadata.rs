@@ -1,17 +1,19 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
+use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{
     EventMetadata, EventMetadataArgs, ViewCompleteness, ViewMetadata, ViewMetadataArgs,
 };
-use kairos_protocol::InstanceIdentity;
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
-    pub producer_id: String,
-    pub owner_id: String,
-    pub identity: InstanceIdentity,
-    pub sequence: u64,
-    pub event_id: String,
-    pub generation: u64,
-    pub resource_id: String,
+    pub common: ProtocolContext,
+}
+
+impl std::ops::Deref for EncodeContext {
+    type Target = ProtocolContext;
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
 }
 impl EncodeContext {
     pub fn event(
@@ -19,16 +21,10 @@ impl EncodeContext {
         identity: InstanceIdentity,
         sequence: u64,
         event_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            producer_id: producer_id.into(),
-            owner_id: String::new(),
-            identity,
-            sequence,
-            event_id: event_id.into(),
-            generation: 0,
-            resource_id: String::new(),
-        }
+    ) -> Result<Self, String> {
+        Ok(Self {
+            common: ProtocolContext::event(producer_id, identity, sequence, event_id)?,
+        })
     }
     pub fn view(
         producer_id: impl Into<String>,
@@ -36,16 +32,16 @@ impl EncodeContext {
         identity: InstanceIdentity,
         generation: u64,
         resource_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            producer_id: producer_id.into(),
-            owner_id: owner_id.into(),
-            identity,
-            sequence: 0,
-            event_id: String::new(),
-            generation,
-            resource_id: resource_id.into(),
-        }
+    ) -> Result<Self, String> {
+        Ok(Self {
+            common: ProtocolContext::view(
+                producer_id,
+                owner_id,
+                identity,
+                generation,
+                resource_id,
+            )?,
+        })
     }
 }
 pub fn event_metadata<'a, A: Allocator + 'a>(
@@ -53,18 +49,30 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    let event_id = builder.create_string(&context.event_id);
+    let event_id = builder.create_string(
+        context
+            .event_id
+            .as_ref()
+            .expect("event context carries event identity")
+            .as_str(),
+    );
     let stream_id = builder.create_string("execution.events");
     let producer_id = builder.create_string(&context.producer_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = non_empty(builder, &context.identity.launch_id);
-    let instance_id = non_empty(builder, &context.identity.instance_id);
+    let launch_id = context
+        .identity
+        .launch_id()
+        .map(|value| builder.create_string(value.as_str()));
+    let instance_id = context
+        .identity
+        .instance_id()
+        .map(|value| builder.create_string(value.as_str()));
     EventMetadata::create(
         builder,
         &EventMetadataArgs {
             event_id: Some(event_id),
             stream_id: Some(stream_id),
-            sequence: context.sequence,
+            sequence: context.sequence.get(),
             producer_id: Some(producer_id),
             workspace_id: Some(workspace_id),
             launch_id,
@@ -88,8 +96,14 @@ pub fn view_metadata<'a, A: Allocator + 'a>(
     let view_key = builder.create_string(&key.canonical_key());
     let owner_id = builder.create_string(&context.owner_id);
     let workspace_id = builder.create_string(&context.identity.workspace_id);
-    let launch_id = non_empty(builder, &context.identity.launch_id);
-    let instance_id = non_empty(builder, &context.identity.instance_id);
+    let launch_id = context
+        .identity
+        .launch_id()
+        .map(|value| builder.create_string(value.as_str()));
+    let instance_id = context
+        .identity
+        .instance_id()
+        .map(|value| builder.create_string(value.as_str()));
     ViewMetadata::create(
         builder,
         &ViewMetadataArgs {
@@ -101,19 +115,13 @@ pub fn view_metadata<'a, A: Allocator + 'a>(
             workspace_id: Some(workspace_id),
             launch_id,
             instance_id,
-            generation: context.generation,
+            generation: context.generation.get(),
             as_of_unix_nanos,
             published_at_unix_nanos: now_unix_nanos(),
             completeness: ViewCompleteness::COMPLETE,
             applied_revision: Some(applied_revision),
         },
     )
-}
-fn non_empty<'a, A: Allocator + 'a>(
-    builder: &mut FlatBufferBuilder<'a, A>,
-    value: &str,
-) -> Option<WIPOffset<&'a str>> {
-    (!value.is_empty()).then(|| builder.create_string(value))
 }
 fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()

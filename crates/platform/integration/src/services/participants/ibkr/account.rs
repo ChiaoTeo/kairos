@@ -5,20 +5,19 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures_util::{Stream, StreamExt};
-use ibapi::accounts::types::AccountId;
 use ibapi::accounts::AccountUpdate;
+use ibapi::accounts::types::AccountId;
 use ibapi::subscriptions::{Subscription, SubscriptionItem, SubscriptionItemStreamExt};
 
+use super::execution::{SessionService, collect_orders};
+use super::normalize_ibkr_order_status;
 use crate::domain::account::{
-    external_instrument_ref, ExternalAccountEvent, ExternalAccountEventEnvelope,
-    ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
-    ExternalDecimal, ExternalOpenOrder, ExternalPosition,
+    ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalAccountSegment,
+    ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance, ExternalDecimal,
+    ExternalOpenOrder, ExternalPosition, external_instrument_ref,
 };
 use crate::domain::{ConnectionLifecycle, ParticipantKind, ParticipantRef};
 use crate::{ExternalEventEnvelope, IntegrationError};
-
-use super::execution::{collect_orders, SessionService};
-use super::normalize_ibkr_order_status;
 
 const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -89,16 +88,16 @@ impl AccountQueryService {
                             "TotalCashValue" => {
                                 balances.entry(value.currency).or_insert((None, None)).0 =
                                     Some(number)
-                            }
+                            },
                             "AvailableFunds" => {
                                 balances.entry(value.currency).or_insert((None, None)).1 =
                                     Some(number)
-                            }
+                            },
                             "NetLiquidation" => equity = Some(number),
                             "RealizedPnL" | "RealizedPnL-S" => net_profit = Some(number),
-                            _ => {}
+                            _ => {},
                         }
-                    }
+                    },
                     AccountUpdate::PortfolioValue(value) => {
                         if value.account.as_deref().is_some_and(|id| id != account.0) {
                             continue;
@@ -106,9 +105,9 @@ impl AccountQueryService {
                         if value.position != 0.0 {
                             positions.push(position(value)?);
                         }
-                    }
+                    },
                     AccountUpdate::End => break,
-                    AccountUpdate::UpdateTime(_) => {}
+                    AccountUpdate::UpdateTime(_) => {},
                 }
             }
             let open_orders = collect_orders(client.open_orders().await.map_err(transport)?)
@@ -190,8 +189,8 @@ impl AccountStreamService {
                 Poll::Ready(None) => {
                     return Poll::Ready(Err(IntegrationError::ResyncRequired(
                         "IBKR account stream ended".into(),
-                    )))
-                }
+                    )));
+                },
                 Poll::Pending => return Poll::Pending,
             };
             let SubscriptionItem::Data(update) = item else {
@@ -273,18 +272,18 @@ fn partial_event(
                         borrowed: None,
                         interest: None,
                     });
-                }
+                },
                 "NetLiquidation" => snapshot.equity = Some(number),
                 "RealizedPnL" | "RealizedPnL-S" => snapshot.net_profit = Some(number),
                 _ => return Ok(None),
             }
-        }
+        },
         AccountUpdate::PortfolioValue(value) if value.position != 0.0 => {
             snapshot.positions.push(position(value)?);
-        }
+        },
         AccountUpdate::PortfolioValue(_) | AccountUpdate::UpdateTime(_) | AccountUpdate::End => {
-            return Ok(None)
-        }
+            return Ok(None);
+        },
     }
     Ok(Some(ExternalAccountEvent::Snapshot(snapshot)))
 }
@@ -375,8 +374,9 @@ fn transport(error: impl ToString) -> IntegrationError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ibapi::accounts::AccountValue;
+
+    use super::*;
 
     #[test]
     fn available_funds_waits_for_total_and_preserves_total_cash_value() {

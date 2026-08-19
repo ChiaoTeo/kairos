@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
-use crate::domain::{ParticipantInstrumentRef, ParticipantKind, ParticipantRef};
 use kairos_primitives::{
     AccountId, AssetId, Currency, MarketId, OrderId, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
 };
+use serde::{Deserialize, Serialize};
+
+use crate::domain::{ParticipantInstrumentRef, ParticipantKind, ParticipantRef};
 
 /// Preserve the provider-owned identity exactly as observed. Canonical
 /// instrument and market identity is resolved by Reference in business

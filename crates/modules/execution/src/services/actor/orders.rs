@@ -156,12 +156,12 @@ impl ExecutionActor {
             CommitmentBasis::ContractNotional { .. } => {
                 return Err(
                     "contract commitment resizing requires product-specific semantics".into(),
-                )
-            }
+                );
+            },
             CommitmentBasis::BaseQuantity | CommitmentBasis::SimulationQuantity => {
                 Money::new(remaining.mantissa(), remaining.scale())
                     .map_err(|error| error.to_string())?
-            }
+            },
         };
         commitment.remaining_quantity = remaining;
         commitment.amount = amount;

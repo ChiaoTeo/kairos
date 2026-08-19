@@ -41,7 +41,7 @@ pub(crate) fn normalize(
     market: &ResolvedMarket,
     event: MarketEvent,
 ) -> Result<Option<Normalized>, String> {
-    let source_id = source_id.to_string();
+    let source_id = source_id.clone();
     let venue = event.venue.clone();
     let aggregate_scope = || {
         if market.route.provider_id.eq_ignore_ascii_case("massive") {
@@ -50,7 +50,7 @@ pub(crate) fn normalize(
                 crate::ObservationScope::Market { .. } => {
                     crate::ObservationScope::consolidated(market.instrument_id.to_string(), None)
                         .expect("resolved market has a valid instrument identity")
-                }
+                },
             }
         } else {
             market.scope.clone()
@@ -106,7 +106,7 @@ pub(crate) fn normalize(
                 MarketEventKind::QuoteBar => MarketObservation::QuoteBar(QuoteBar { bar }),
                 _ => MarketObservation::Bar(bar),
             }
-        }
+        },
         MarketEventKind::Greeks => {
             let value = event.greeks.ok_or("greeks event has no greeks payload")?;
             MarketObservation::OptionGreeks(OptionGreeks {
@@ -123,7 +123,7 @@ pub(crate) fn normalize(
                 source_id,
                 derivation: value.derivation,
             })
-        }
+        },
         MarketEventKind::Rate => MarketObservation::Rate(Rate {
             rate_id: format!("funding:{}", market.scope.key()),
             scope: aggregate_scope(),
@@ -202,7 +202,7 @@ pub(crate) fn normalize(
         }),
         MarketEventKind::InstrumentStatus => {
             return Err("InstrumentStatus is not part of Market v2".into());
-        }
+        },
         MarketEventKind::BookSnapshot | MarketEventKind::BookDelta => {
             let market_id = market
                 .market_id()
@@ -234,7 +234,7 @@ pub(crate) fn normalize(
                 snapshot: event.kind == MarketEventKind::BookSnapshot,
             };
             return Ok(Some(Normalized::OrderBook(update)));
-        }
+        },
         MarketEventKind::Heartbeat => return Ok(None),
     };
     Ok(Some(Normalized::Observation(observation)))
@@ -257,12 +257,12 @@ fn trade_scope(
             return Err(format!(
                 "Massive trade venue {code} is a reporting facility; observation quarantined"
             ));
-        }
+        },
         _ => {
             return Err(format!(
                 "Massive trade venue code {code} is unresolved; observation quarantined"
             ));
-        }
+        },
     };
     let Some(market_id) = market.market_id() else {
         return Err(format!(
@@ -284,11 +284,12 @@ fn trade_scope(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, Normalized};
-    use crate::{MarketDataRoute, ObservationScope, ResolvedMarket, SourceId};
     use kairos_conflux::{
         Bar as IntegrationBar, MarketEvent, MarketEventKind, MarketVenueEvidence,
     };
+
+    use super::{Normalized, normalize};
+    use crate::{MarketDataRoute, ObservationScope, ResolvedMarket, SourceId};
 
     fn massive_market() -> ResolvedMarket {
         ResolvedMarket::new(

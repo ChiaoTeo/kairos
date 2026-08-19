@@ -126,14 +126,14 @@ impl PyAeronSubscription {
         })?;
         let ready = py.detach(move || ready_receiver.recv());
         match ready {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {},
             Ok(Err(message)) => {
                 return Err(errors::with_code(
                     py,
                     PyErr::new::<errors::DriverUnavailableError, _>(message),
                     "driver_unavailable",
                 ));
-            }
+            },
             Err(_) => {
                 return Err(errors::with_code(
                     py,
@@ -142,7 +142,7 @@ impl PyAeronSubscription {
                     ),
                     "worker_exited",
                 ));
-            }
+            },
         }
         Ok(Self {
             inner: AeronSubscription {
@@ -341,20 +341,20 @@ fn spawn_worker(
                         Ok(subscription) => {
                             let _ = ready.send(Ok(()));
                             subscription
-                        }
+                        },
                         Err(message) => {
                             let _ = ready.send(Err(message.to_string()));
                             return;
-                        }
+                        },
                     };
                 while !stop.load(Ordering::Acquire) {
                     match subscription.next_frame() {
                         Ok(Some(frame)) => match sender.try_send(frame) {
-                            Ok(()) => {}
+                            Ok(()) => {},
                             Err(TrySendError::Full(_)) => {
                                 overflow.store(true, Ordering::Release);
                                 break;
-                            }
+                            },
                             Err(TrySendError::Disconnected(_)) => break,
                         },
                         Ok(None) => std::thread::sleep(Duration::from_millis(1)),
@@ -363,7 +363,7 @@ fn spawn_worker(
                                 *value = Some(message.to_string());
                             }
                             break;
-                        }
+                        },
                     }
                 }
             }));
@@ -395,7 +395,7 @@ fn drain(
                 Ok(frame) => {
                     frames.push(frame);
                     continue;
-                }
+                },
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Ok(frames),
             }

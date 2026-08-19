@@ -3,5 +3,7 @@
 
 mod risk;
 
-pub use risk::{FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter};
-pub use risk::{MmapRiskSnapshotPublisher, RiskAeronEventPublisher};
+pub use risk::{
+    FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, MmapRiskSnapshotPublisher,
+    RiskAeronEventPublisher,
+};

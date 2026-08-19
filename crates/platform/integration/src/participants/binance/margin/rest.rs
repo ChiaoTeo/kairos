@@ -1,4 +1,4 @@
-use super::super::{history, BinanceCancelAllScope, BinanceHistoryQuery, BinanceTradeRecord};
+use super::super::{BinanceCancelAllScope, BinanceHistoryQuery, BinanceTradeRecord, history};
 use crate::services::participants::binance::{account, execution};
 use crate::{
     AccountQuery, CommandResult, ExternalAccountSegment, ExternalAccountSnapshot, ExternalOrder,
@@ -36,11 +36,11 @@ impl BinanceMarginRestConnection {
         {
             crate::CommandOutcome::Confirmed(_) => {
                 Ok(crate::CommandOutcome::Confirmed(scope.clone()))
-            }
+            },
             crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
             crate::CommandOutcome::Indeterminate(error) => {
                 Ok(crate::CommandOutcome::Indeterminate(error))
-            }
+            },
         }
     }
 

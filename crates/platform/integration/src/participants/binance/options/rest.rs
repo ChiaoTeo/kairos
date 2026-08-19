@@ -2,8 +2,8 @@ use kairos_primitives::{ParticipantSymbol, Rate, UnixNanos};
 use serde_json::Value;
 
 use super::super::{
-    history, BinanceCancelAllScope, BinanceCancelOrderRequest, BinanceHistoryQuery,
-    BinanceTradeRecord,
+    BinanceCancelAllScope, BinanceCancelOrderRequest, BinanceHistoryQuery, BinanceTradeRecord,
+    history,
 };
 use crate::services::participants::binance::{execution, market};
 use crate::{
@@ -72,11 +72,11 @@ impl BinanceOptionsRestConnection {
         {
             crate::CommandOutcome::Confirmed(_) => {
                 Ok(crate::CommandOutcome::Confirmed(scope.clone()))
-            }
+            },
             crate::CommandOutcome::Rejected(error) => Ok(crate::CommandOutcome::Rejected(error)),
             crate::CommandOutcome::Indeterminate(error) => {
                 Ok(crate::CommandOutcome::Indeterminate(error))
-            }
+            },
         }
     }
 

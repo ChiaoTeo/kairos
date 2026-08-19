@@ -1,7 +1,8 @@
 //! Pure fallback planning for simulated execution.
 
-use super::super::*;
 use kairos_primitives::OrderId;
+
+use super::super::*;
 
 pub(super) fn plan_simulated_intent(
     intent: &ExecuteStrategyIntent,

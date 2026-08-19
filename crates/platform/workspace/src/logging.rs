@@ -4,7 +4,9 @@
 //! stream to the component log file, while direct invocations remain visible
 //! in a terminal. `RUST_LOG` controls the level/filter (default: `info`).
 
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFAULT_OTLP_BASE_ENDPOINT: &str = "http://127.0.0.1:4318";
 
@@ -213,11 +215,9 @@ where
     use opentelemetry::global;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::{SpanExporter, WithExportConfig};
-    use opentelemetry_sdk::{
-        propagation::TraceContextPropagator,
-        trace::{Sampler, SdkTracerProvider},
-        Resource,
-    };
+    use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 
     let endpoint = trace_endpoint_from_environment()?;
     let exporter = SpanExporter::builder()
@@ -229,7 +229,7 @@ where
         Err(error) => {
             eprintln!("OpenTelemetry exporter disabled: {error}");
             return None;
-        }
+        },
     };
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
@@ -265,7 +265,8 @@ fn trace_sample_ratio() -> f64 {
 fn build_meter_provider(component: &'static str) -> Option<()> {
     use opentelemetry::global;
     use opentelemetry_otlp::{MetricExporter, WithExportConfig};
-    use opentelemetry_sdk::{metrics::SdkMeterProvider, Resource};
+    use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::metrics::SdkMeterProvider;
 
     let endpoint = metrics_endpoint_from_environment()?;
     let exporter = MetricExporter::builder()

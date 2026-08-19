@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use std::path::{Path, PathBuf};
+
+use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum AccountViewKind {

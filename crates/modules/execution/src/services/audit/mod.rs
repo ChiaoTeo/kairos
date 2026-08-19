@@ -7,12 +7,12 @@ mod memory;
 mod model;
 mod sqlx;
 
-use crate::application::{ExecutionEvent, IntentEvent};
-
 pub use memory::MemoryExecutionAudit;
 pub(crate) use model::IntentAdmissionAuditRecord;
 pub use model::{ExecutionAuditEvent, ExecutionAuditQuery};
 pub use sqlx::SqlxExecutionAudit;
+
+use crate::application::{ExecutionEvent, IntentEvent};
 
 pub enum ExecutionAudit {
     Memory(MemoryExecutionAudit),

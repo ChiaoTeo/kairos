@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use super::view::DecodedRiskEvent;
 use crate::ContractResult;
-use std::sync::Arc;
 pub struct RiskEventFrame {
     bytes: Arc<[u8]>,
 }

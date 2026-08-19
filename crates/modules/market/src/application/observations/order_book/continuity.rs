@@ -1,7 +1,6 @@
+use super::super::super::{MarketApplication, MarketError};
 use crate::domain::observation::order_book::OrderBookDelta;
 use crate::services::source::messages::SourceOrderBookUpdate;
-
-use super::super::super::{MarketApplication, MarketError};
 
 impl MarketApplication {
     pub fn ingest_orderbook_delta(&mut self, delta: OrderBookDelta) -> Result<u64, MarketError> {

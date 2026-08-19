@@ -1,8 +1,7 @@
 use tracing::{debug, warn};
 
-use crate::domain::observation::MarketObservation;
-
 use super::super::{MarketApplication, MarketError};
+use crate::domain::observation::MarketObservation;
 
 impl MarketApplication {
     pub fn ingest(&mut self, observation: MarketObservation) -> Result<u64, MarketError> {

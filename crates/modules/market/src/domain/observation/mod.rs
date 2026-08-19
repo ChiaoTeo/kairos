@@ -54,13 +54,13 @@ impl MarketObservation {
         match self {
             Self::Bar(value) if value.timeframe.trim().is_empty() => {
                 return Err("bar timeframe is required".into());
-            }
+            },
             Self::TradeBar(value) if value.bar.timeframe.trim().is_empty() => {
                 return Err("trade bar timeframe is required".into());
-            }
+            },
             Self::QuoteBar(value) if value.bar.timeframe.trim().is_empty() => {
                 return Err("quote bar timeframe is required".into());
-            }
+            },
             Self::Rate(value) => {
                 if value.rate_id.trim().is_empty() {
                     return Err("rate_id is required".into());
@@ -68,8 +68,8 @@ impl MarketObservation {
                 if value.basis.trim().is_empty() {
                     return Err("rate basis is required".into());
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         Ok(())
     }
@@ -168,7 +168,7 @@ impl MarketObservation {
         }
     }
 
-    pub fn source_id(&self) -> &str {
+    pub fn source_id(&self) -> &kairos_primitives::SourceId {
         match self {
             Self::Quote(value) => &value.source_id,
             Self::Trade(value) => &value.source_id,

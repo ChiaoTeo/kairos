@@ -1,18 +1,19 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kairos_primitives::runtime::ActorId;
 use kairos_primitives::{
-    ActorId, Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, LegId, Money, OrderId,
-    Price, Quantity, RemoteOrderId, StrategyId, UnixNanos,
+    Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, LegId, Money, OrderId, Price,
+    Quantity, RemoteOrderId, StrategyId, UnixNanos,
 };
 
-use super::model::*;
 use super::RemoteOrderUpdate;
+use super::model::*;
 use crate::domain::{
-    split_quantity, CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy,
-    ExecutionFill, ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan,
-    FailurePolicy, HedgePolicy, IntentType, MakerExecutionPolicy, OrderCommitment, OrderSide,
-    OrderType, RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy,
+    CommitmentBasis, CommitmentResource, CommitmentStatus, CompletionPolicy, ExecutionFill,
+    ExecutionLeg, ExecutionOrder, ExecutionOrderStatus, ExecutionPlan, FailurePolicy, HedgePolicy,
+    IntentType, MakerExecutionPolicy, OrderCommitment, OrderSide, OrderType,
+    RiskReservationEvidence, RiskReservationSagaStatus, SplitOrderPolicy, split_quantity,
 };
 use crate::services::audit::{ExecutionAuditEvent, ExecutionAuditQuery};
 use crate::services::dependencies::{ExecutionOrderAdmissionService, QueuedExecutionIntentPlanner};
@@ -64,15 +65,23 @@ fn simulation_risk_reservation(
 ) -> Result<RiskReservationEvidence, ExecutionError> {
     Ok(RiskReservationEvidence {
         order_id: request.order_id.clone(),
-        reservation_id: format!("execution:{}", request.order_id),
-        idempotency_key: format!("execution:{}", request.order_id),
+        reservation_id: kairos_primitives::ReservationId::new(format!(
+            "execution:{}",
+            request.order_id
+        ))
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
+        idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+            "execution:{}",
+            request.order_id
+        ))
+        .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         account_id: request.account_id.clone(),
         amount: Money::new(request.quantity.mantissa(), request.quantity.scale())
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         status: RiskReservationSagaStatus::Active,
-        risk_generation: 0,
-        risk_event_sequence: 0,
-        policy_version: 0,
+        risk_generation: 0.into(),
+        risk_event_sequence: 0.into(),
+        policy_version: 0.into(),
         expires_at_unix_nanos: u64::MAX.into(),
         updated_at_unix_nanos: now.into(),
         funding_requirement: None,
@@ -88,30 +97,36 @@ fn planned_risk_reservation(
     let risk = watermarks.risk.clone().unwrap_or_default();
     RiskReservationEvidence {
         order_id: request.order_id.clone(),
-        reservation_id: format!("execution:{}", request.order_id),
-        idempotency_key: format!("execution:{}", request.order_id),
+        reservation_id: kairos_primitives::ReservationId::new(format!(
+            "execution:{}",
+            request.order_id
+        ))
+        .expect("order identity creates a valid reservation identity"),
+        idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+            "execution:{}",
+            request.order_id
+        ))
+        .expect("order identity creates a valid idempotency key"),
         account_id: request.account_id.clone(),
         amount: commitment.amount,
         status: RiskReservationSagaStatus::AuthorizePending,
-        risk_generation: risk.generation.get(),
-        risk_event_sequence: risk.event_sequence.get(),
-        policy_version: 0,
+        risk_generation: risk.generation,
+        risk_event_sequence: risk.event_sequence,
+        policy_version: 0.into(),
         expires_at_unix_nanos: UnixNanos::new(0),
         updated_at_unix_nanos: now.into(),
         funding_requirement: None,
     }
 }
-use crate::services::persistence::{ExecutionOutboxEntry, ExecutionStateStore};
-use kairos_conflux::{BlockingOrderCommand, BlockingOrderQuery, ExternalOrderQuery};
 use kairos_conflux::{
-    CommandOutcome, DecimalValue as ConnectionDecimalValue, IntegrationError, OrderEntryEvent,
-    OrderEntryRequest, OrderEntryStatus,
-};
-use kairos_conflux::{
-    OrderEntryOptions as ConnectionOrderEntryOptions, OrderSide as ConnectionOrderSide,
-    OrderType as ConnectionOrderType, TimeInForce,
+    BlockingOrderCommand, BlockingOrderQuery, CommandOutcome,
+    DecimalValue as ConnectionDecimalValue, ExternalOrderQuery, IntegrationError, OrderEntryEvent,
+    OrderEntryOptions as ConnectionOrderEntryOptions, OrderEntryRequest, OrderEntryStatus,
+    OrderSide as ConnectionOrderSide, OrderType as ConnectionOrderType, TimeInForce,
 };
 use tracing::{debug, info, warn};
+
+use crate::services::persistence::{ExecutionOutboxEntry, ExecutionStateStore};
 
 mod intents;
 pub(crate) mod orders;

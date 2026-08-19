@@ -1,5 +1,6 @@
-use crate::{ContractResult, ReferenceEvent};
 use std::sync::Arc;
+
+use crate::{ContractResult, ReferenceEvent};
 
 pub struct ReferenceEventFrame {
     bytes: Arc<[u8]>,

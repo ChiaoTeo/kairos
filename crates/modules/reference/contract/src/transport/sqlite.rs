@@ -8,8 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kairos_primitives::{
+    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, ListingId, MarketId,
+    ReferenceStatus, Sequence, Symbol, UnixNanos,
+};
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 
 use crate::transport::{Asset, Entity, Instrument, Listing, ReferenceProjectionSnapshot};
 use crate::{ContractError, ContractResult, ReferenceMarket};
@@ -19,9 +23,9 @@ const MAX_PAGE_SIZE: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReferenceWatermark {
-    pub generation: u64,
-    pub event_sequence: u64,
-    pub committed_at_unix_nanos: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub committed_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -47,31 +51,31 @@ pub enum ReferenceCollection {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqliteMarketQuery {
-    pub market_id: Option<String>,
-    pub venue_symbol: Option<String>,
-    pub instrument_id: Option<String>,
-    pub listing_id: Option<String>,
-    pub underlying_instrument_id: Option<String>,
-    pub exchange_id: Option<String>,
-    pub instrument_kind: Option<String>,
-    pub asset_type: Option<String>,
-    pub statuses: Vec<String>,
-    pub after_market_id: Option<String>,
-    pub limit: usize,
+    pub market_id: Option<MarketId>,
+    pub venue_symbol: Option<Symbol>,
+    pub instrument_id: Option<InstrumentId>,
+    pub listing_id: Option<ListingId>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub exchange_id: Option<Exchange>,
+    pub instrument_kind: Option<InstrumentKind>,
+    pub asset_type: Option<AssetClass>,
+    pub statuses: Vec<ReferenceStatus>,
+    pub after_market_id: Option<MarketId>,
+    pub limit: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SqliteInstrumentQuery {
-    pub symbol: Option<String>,
-    pub instrument_type: Option<String>,
-    pub underlying_instrument_id: Option<String>,
-    pub statuses: Vec<String>,
-    pub after_instrument_id: Option<String>,
-    pub limit: usize,
+    pub symbol: Option<Symbol>,
+    pub instrument_type: Option<InstrumentKind>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub statuses: Vec<ReferenceStatus>,
+    pub after_instrument_id: Option<InstrumentId>,
+    pub limit: u64,
 }
 
 impl SqliteMarketQuery {
-    pub fn page_size(mut self, limit: usize) -> Self {
+    pub fn page_size(mut self, limit: u64) -> Self {
         self.limit = limit;
         self
     }
@@ -81,7 +85,7 @@ impl SqliteMarketQuery {
 pub struct ReferenceProjection {
     pub watermark: ReferenceWatermark,
     pub markets: Vec<ReferenceMarket>,
-    pub instruments: BTreeMap<String, Instrument>,
+    pub instruments: BTreeMap<InstrumentId, Instrument>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -205,7 +209,7 @@ impl ReferenceSqliteReader {
     pub fn records(
         &self,
         collection: ReferenceCollection,
-        limit: usize,
+        limit: u64,
     ) -> ContractResult<Vec<serde_json::Value>> {
         let connection = self.connection()?;
         let (table, key) = collection_table(collection);
@@ -247,30 +251,30 @@ impl ReferenceSqliteReader {
         Ok(matched)
     }
 
-    pub fn market(&self, market_id: &str) -> ContractResult<Option<ReferenceMarket>> {
+    pub fn market(&self, market_id: &MarketId) -> ContractResult<Option<ReferenceMarket>> {
         let connection = self.connection()?;
         read_payload_optional(
             &connection,
             "SELECT payload FROM reference_markets_current WHERE market_id = ?",
-            market_id,
+            market_id.as_str(),
         )
     }
 
-    pub fn instrument(&self, instrument_id: &str) -> ContractResult<Option<Instrument>> {
+    pub fn instrument(&self, instrument_id: &InstrumentId) -> ContractResult<Option<Instrument>> {
         let connection = self.connection()?;
         read_payload_optional(
             &connection,
             "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
-            instrument_id,
+            instrument_id.as_str(),
         )
     }
 
-    pub fn asset(&self, asset_id: &str) -> ContractResult<Option<Asset>> {
+    pub fn asset(&self, asset_id: &AssetId) -> ContractResult<Option<Asset>> {
         let connection = self.connection()?;
         read_payload_optional(
             &connection,
             "SELECT payload FROM reference_assets_current WHERE asset_id = ?",
-            asset_id,
+            asset_id.as_str(),
         )
     }
 
@@ -283,12 +287,12 @@ impl ReferenceSqliteReader {
         )
     }
 
-    pub fn listing(&self, listing_id: &str) -> ContractResult<Option<Listing>> {
+    pub fn listing(&self, listing_id: &ListingId) -> ContractResult<Option<Listing>> {
         let connection = self.connection()?;
         read_payload_optional(
             &connection,
             "SELECT payload FROM reference_listings_current WHERE listing_id = ?",
-            listing_id,
+            listing_id.as_str(),
         )
     }
 
@@ -330,7 +334,7 @@ impl ReferenceSqliteReader {
                     sql.push_str(", ");
                 }
                 sql.push('?');
-                values.push(Value::Text(status.clone()));
+                values.push(Value::Text(status.to_string()));
             }
             sql.push(')');
         }
@@ -357,16 +361,14 @@ impl ReferenceSqliteReader {
         let transaction = connection.transaction().map_err(transport)?;
         let watermark = read_watermark(&transaction)?;
         let markets = read_markets(&transaction, query)?;
-        let instrument_ids: BTreeSet<&str> = markets
-            .iter()
-            .map(|market| market.instrument_id.as_str())
-            .collect();
+        let instrument_ids: BTreeSet<&InstrumentId> =
+            markets.iter().map(|market| &market.instrument_id).collect();
         let mut instruments = BTreeMap::new();
         for instrument_id in instrument_ids {
             let instrument: Option<Instrument> = read_payload_optional(
                 &transaction,
                 "SELECT payload FROM reference_instruments_current WHERE instrument_id = ?",
-                instrument_id,
+                instrument_id.as_str(),
             )?;
             let Some(instrument) = instrument else {
                 return Err(ContractError::Invalid(format!(
@@ -385,11 +387,12 @@ impl ReferenceSqliteReader {
 
     pub fn changes_after(
         &self,
-        sequence: u64,
-        limit: usize,
+        sequence: Sequence,
+        limit: u64,
     ) -> ContractResult<Vec<serde_json::Value>> {
         let connection = self.connection()?;
         let from = sequence
+            .get()
             .checked_add(1)
             .and_then(|value| i64::try_from(value).ok())
             .ok_or_else(|| ContractError::Invalid("Reference sequence is out of range".into()))?;
@@ -470,9 +473,12 @@ fn read_watermark(connection: &Connection) -> ContractResult<ReferenceWatermark>
         )
         .map_err(transport)?;
     Ok(ReferenceWatermark {
-        generation: non_negative(generation, "generation")?,
-        event_sequence: non_negative(event_sequence, "event_sequence")?,
-        committed_at_unix_nanos: non_negative(committed_at, "committed_at_unix_nanos")?,
+        generation: Generation::new(non_negative(generation, "generation")?),
+        event_sequence: Sequence::new(non_negative(event_sequence, "event_sequence")?),
+        committed_at_unix_nanos: UnixNanos::new(non_negative(
+            committed_at,
+            "committed_at_unix_nanos",
+        )?),
     })
 }
 
@@ -532,7 +538,7 @@ fn read_markets(
                 sql.push_str(", ");
             }
             sql.push('?');
-            values.push(Value::Text(status.clone()));
+            values.push(Value::Text(status.to_string()));
         }
         sql.push(')');
     }
@@ -553,7 +559,12 @@ fn read_markets(
         .collect()
 }
 
-fn push_filter(sql: &mut String, values: &mut Vec<Value>, column: &str, value: Option<&String>) {
+fn push_filter<T: ToString>(
+    sql: &mut String,
+    values: &mut Vec<Value>,
+    column: &str,
+    value: Option<&T>,
+) {
     if let Some(value) = value {
         sql.push_str(" AND ");
         sql.push_str(column);
@@ -561,7 +572,7 @@ fn push_filter(sql: &mut String, values: &mut Vec<Value>, column: &str, value: O
             sql.push_str(" =");
         }
         sql.push_str(" ?");
-        values.push(Value::Text(value.clone()));
+        values.push(Value::Text(value.to_string()));
     }
 }
 
@@ -596,8 +607,8 @@ fn decode_payload<T: serde::de::DeserializeOwned>(payload: &str) -> ContractResu
         .map_err(|error| ContractError::Invalid(format!("decode Reference SQLite row: {error}")))
 }
 
-fn bounded_limit(limit: usize) -> usize {
-    limit.clamp(1, MAX_PAGE_SIZE)
+fn bounded_limit(limit: u64) -> usize {
+    usize::try_from(limit.clamp(1, MAX_PAGE_SIZE as u64)).expect("bounded page size fits usize")
 }
 
 fn non_negative(value: i64, label: &str) -> ContractResult<u64> {
@@ -685,17 +696,20 @@ mod tests {
         let reader = ReferenceSqliteReader::open(&path).unwrap();
         let projection = reader
             .projection(&SqliteMarketQuery {
-                venue_symbol: Some("BTCUSDT".into()),
+                venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
                 limit: 100,
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(projection.watermark.generation, 7);
+        assert_eq!(projection.watermark.generation, 7.into());
         assert_eq!(projection.markets.len(), 1);
         assert_eq!(projection.instruments.len(), 1);
 
         let scoped = reader.market_snapshot("reference-actor").unwrap();
-        assert_eq!((scoped.generation, scoped.event_sequence), (7, 11));
+        assert_eq!(
+            (scoped.generation, scoped.event_sequence),
+            (7.into(), 11.into())
+        );
         assert_eq!(scoped.markets.len(), 1);
         assert_eq!(scoped.instruments.len(), 1);
     }

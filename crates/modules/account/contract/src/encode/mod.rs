@@ -6,7 +6,7 @@ mod status;
 mod valuation;
 
 pub use balance::BalanceEncoder;
-pub use metadata::{event_metadata, view_metadata, EncodeContext};
+pub use metadata::{EncodeContext, event_metadata, view_metadata};
 pub use observed_order::ObservedOrderEncoder;
 pub use position::PositionEncoder;
 pub use status::StatusEncoder;

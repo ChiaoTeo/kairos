@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use kairos_market::composition::{build_market_host, MarketHostRequest};
+use kairos_market::composition::{MarketHostRequest, build_market_host};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {

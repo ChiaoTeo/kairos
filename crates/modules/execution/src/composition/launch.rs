@@ -3,12 +3,12 @@
 use std::path::PathBuf;
 
 use super::{
-    compose_order_entry, configure_execution_dependencies,
-    load_execution_routes_from_reference_markets, ExecutionConnectionOptions, ExecutionHost,
-    ExecutionWriterFence, SimulatedAccountSettlement, SqlxExecutionAudit, SqlxExecutionStore,
+    ExecutionConnectionOptions, ExecutionHost, ExecutionWriterFence, SimulatedAccountSettlement,
+    SqlxExecutionAudit, SqlxExecutionStore, compose_order_entry, configure_execution_dependencies,
+    load_execution_routes_from_reference_markets,
 };
-use crate::application::core::ExecutionApplicationWiring;
 use crate::application::ExecutionApplication;
+use crate::application::core::ExecutionApplicationWiring;
 use crate::services::audit::ExecutionAudit;
 
 pub struct ExecutionHostConfig {
@@ -21,7 +21,7 @@ pub struct ExecutionHostConfig {
     pub manifest_path: PathBuf,
     pub socket_path: PathBuf,
     pub view_root: PathBuf,
-    pub transport_identity: kairos_protocol::InstanceIdentity,
+    pub transport_identity: kairos_primitives::runtime::InstanceIdentity,
     pub source_id: String,
     pub simulated: bool,
     pub backtest: bool,

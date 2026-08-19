@@ -82,30 +82,34 @@ mod tests {
 
     #[test]
     fn canonical_market_kinds_expose_different_observation_capabilities() {
-        assert!(validate_observation_selectors(
-            InstrumentKind::Spot,
-            &selectors(&["quote", "orderbook"])
-        )
-        .is_ok());
-        assert!(validate_observation_selectors(
-            InstrumentKind::Spot,
-            &selectors(&["funding_rate"])
-        )
-        .is_err());
-        assert!(validate_observation_selectors(
-            InstrumentKind::Perpetual,
-            &selectors(&["funding_rate", "mark_price"])
-        )
-        .is_ok());
-        assert!(validate_observation_selectors(
-            InstrumentKind::Future,
-            &selectors(&["funding_rate"])
-        )
-        .is_err());
-        assert!(validate_observation_selectors(
-            InstrumentKind::Option,
-            &selectors(&["greeks", "open_interest"])
-        )
-        .is_ok());
+        assert!(
+            validate_observation_selectors(
+                InstrumentKind::Spot,
+                &selectors(&["quote", "orderbook"])
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_observation_selectors(InstrumentKind::Spot, &selectors(&["funding_rate"]))
+                .is_err()
+        );
+        assert!(
+            validate_observation_selectors(
+                InstrumentKind::Perpetual,
+                &selectors(&["funding_rate", "mark_price"])
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_observation_selectors(InstrumentKind::Future, &selectors(&["funding_rate"]))
+                .is_err()
+        );
+        assert!(
+            validate_observation_selectors(
+                InstrumentKind::Option,
+                &selectors(&["greeks", "open_interest"])
+            )
+            .is_ok()
+        );
     }
 }

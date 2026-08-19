@@ -1,9 +1,8 @@
 use tracing::{info, warn};
 
+use super::super::{MarketApplication, MarketError};
 use crate::domain::market::{MarketSelectionQuery, ResolvedMarket};
 use crate::domain::subscription::{ObservationSelector, ReconcileResult, SubscriptionId};
-
-use super::super::{MarketApplication, MarketError};
 
 impl MarketApplication {
     pub fn subscribe_dynamic(
@@ -24,7 +23,7 @@ impl MarketApplication {
         markets: Vec<ResolvedMarket>,
         selectors: Vec<ObservationSelector>,
     ) -> Result<ReconcileResult, MarketError> {
-        let subscription_id = id.0.clone();
+        let subscription_id = id.to_string();
         let market_count = markets.len();
         info!(event = "market_dynamic_subscription_started", component = "market", subscription_id = %subscription_id, market_count, "dynamic market subscription started");
         let result = if selectors.is_empty() {
@@ -39,10 +38,10 @@ impl MarketApplication {
         match &result {
             Ok(reconcile) => {
                 info!(event = "market_dynamic_subscription_accepted", component = "market", subscription_id = %subscription_id, added = reconcile.added.len(), removed = reconcile.removed.len(), "dynamic market subscription accepted")
-            }
+            },
             Err(error) => {
                 warn!(event = "market_dynamic_subscription_rejected", component = "market", subscription_id = %subscription_id, error = %error, "dynamic market subscription rejected")
-            }
+            },
         }
         result
     }

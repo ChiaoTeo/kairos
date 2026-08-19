@@ -1,4 +1,12 @@
-.PHONY: docs docs-check
+RUSTFMT_TOOLCHAIN ?= nightly-2025-08-26
+
+.PHONY: docs docs-check rust-fmt rust-fmt-check
+
+rust-fmt:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all
+
+rust-fmt-check:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all -- --check
 
 docs:
 	python3 scripts/generate/validate_v2_schemas.py

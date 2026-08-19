@@ -1,13 +1,18 @@
 use std::collections::BTreeMap;
 
+use kairos_primitives::{
+    AccountId, BasisPoints, BrokerId, CapitalDemandId, CapitalGroupId, Currency,
+    FundingObjectiveId, Generation, IdempotencyKey, Quantity, RequestId, SegmentKey, Sequence,
+    StrategyDecisionId, StrategyId, UnixNanos,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FundingLocation {
-    pub broker: String,
-    pub account_id: String,
-    pub segment: String,
-    pub asset: String,
+    pub broker: BrokerId,
+    pub account_id: AccountId,
+    pub segment: SegmentKey,
+    pub asset: Currency,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -22,48 +27,47 @@ pub enum FundingObjectivePriority {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublishFundingObjectiveRequest {
-    pub request_id: String,
-    pub capital_group_id: String,
-    pub objective_id: String,
-    pub version: u64,
-    pub strategy_id: String,
+    pub request_id: RequestId,
+    pub capital_group_id: CapitalGroupId,
+    pub objective_id: FundingObjectiveId,
+    pub version: Generation,
+    pub strategy_id: StrategyId,
     pub destination: FundingLocation,
-    /// Exact non-negative decimal string; decoded into a domain Quantity.
-    pub desired_available: String,
-    pub required_by_unix_nanos: u64,
-    pub expires_at_unix_nanos: u64,
+    pub desired_available: Quantity,
+    pub required_by_unix_nanos: UnixNanos,
+    pub expires_at_unix_nanos: UnixNanos,
     pub priority: FundingObjectivePriority,
-    pub confidence_bps: u16,
-    pub strategy_decision_id: String,
-    pub observed_at_unix_nanos: u64,
+    pub confidence_bps: BasisPoints,
+    pub strategy_decision_id: StrategyDecisionId,
+    pub observed_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CancelFundingObjectiveRequest {
-    pub request_id: String,
-    pub capital_group_id: String,
-    pub objective_id: String,
-    pub expected_version: u64,
-    pub strategy_id: String,
-    pub observed_at_unix_nanos: u64,
+    pub request_id: RequestId,
+    pub capital_group_id: CapitalGroupId,
+    pub objective_id: FundingObjectiveId,
+    pub expected_version: Generation,
+    pub strategy_id: StrategyId,
+    pub observed_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ObserveCapitalDemandRequest {
-    pub request_id: String,
-    pub demand_id: String,
-    pub idempotency_key: String,
-    pub capital_group_id: String,
-    pub strategy_id: String,
+    pub request_id: RequestId,
+    pub demand_id: CapitalDemandId,
+    pub idempotency_key: IdempotencyKey,
+    pub capital_group_id: CapitalGroupId,
+    pub strategy_id: StrategyId,
     pub destination: FundingLocation,
-    pub observed_shortfall: String,
-    pub observed_at_unix_nanos: u64,
-    pub required_by_unix_nanos: u64,
-    pub expires_at_unix_nanos: u64,
+    pub observed_shortfall: Quantity,
+    pub observed_at_unix_nanos: UnixNanos,
+    pub required_by_unix_nanos: UnixNanos,
+    pub expires_at_unix_nanos: UnixNanos,
     pub priority: FundingObjectivePriority,
-    pub confidence_bps: u16,
-    pub account_watermark: u64,
-    pub risk_watermark: u64,
+    pub confidence_bps: BasisPoints,
+    pub account_watermark: Sequence,
+    pub risk_watermark: Sequence,
     pub launch_id: String,
     pub instance_id: String,
     pub destination_lease_fence: String,
@@ -81,8 +85,8 @@ pub enum CapitalDemandStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalDemandResponse {
-    pub request_id: String,
-    pub demand_id: String,
+    pub request_id: RequestId,
+    pub demand_id: CapitalDemandId,
     pub status: CapitalDemandStatus,
     pub error: Option<CapitalControlError>,
 }
@@ -98,9 +102,9 @@ pub enum FundingObjectiveStatus {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalControlResponse {
-    pub request_id: String,
-    pub objective_id: String,
-    pub version: u64,
+    pub request_id: RequestId,
+    pub objective_id: FundingObjectiveId,
+    pub version: Generation,
     pub status: FundingObjectiveStatus,
     pub error: Option<CapitalControlError>,
 }

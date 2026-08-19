@@ -1,4 +1,4 @@
-use kairos_transport::{stream_ids, AeronBytePublisher, AeronEndpoint};
+use kairos_transport::{AeronBytePublisher, AeronEndpoint, stream_ids};
 
 use crate::{ContractError, ContractResult};
 

@@ -10,6 +10,6 @@ name = "kairos_capital_contract"
 path = "src/lib.rs"
 
 [dependencies]
+kairos-primitives.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-

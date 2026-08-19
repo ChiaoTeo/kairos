@@ -9,26 +9,23 @@ use kairos_conflux::{
     TypedConnectionCollection,
 };
 use kairos_primitives::SegmentKey;
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{
     AccountApplication, AccountError, AccountFactProvenance, AccountSegmentCompleteness,
-    AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode, MarkToMarket,
-    RefreshAccount,
+    AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode, RefreshAccount,
 };
-use crate::domain::{
-    AccountEvent, AccountFill, FillId, InstrumentId, OrderSide, Price, Quantity, SignedQuantity,
-};
+use crate::domain::{AccountEvent, AccountFill};
 use crate::services::integration::{
-    external_segment, map_earn_positions, map_event, map_snapshot, AccountInstrumentResolver,
+    AccountInstrumentResolver, external_segment, map_earn_positions, map_event, map_snapshot,
 };
 use crate::services::publication::{
     encode_account_current_view, encode_business_change, encode_observed_orders_current_view,
     now_unix_nanos,
 };
 use crate::services::refresh::RefreshFetch;
-use crate::services::synchronization::{SegmentSyncState, RETAINED_EVENT_IDS};
+use crate::services::synchronization::{RETAINED_EVENT_IDS, SegmentSyncState};
 
 pub struct AccountRest;
 
@@ -120,12 +117,12 @@ impl ConfluxActor for AccountApplication {
                     )?;
                 }
                 Ok(None)
-            }
+            },
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
                 self.evaluate_freshness();
                 self.refresh_from_system(context, Vec::new()).await?;
                 Ok(None)
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 if let Some(binding) = source.strip_prefix("integration:") {
                     if let Ok(segment) = SegmentKey::new(binding) {
@@ -135,7 +132,7 @@ impl ConfluxActor for AccountApplication {
                     }
                 }
                 Ok(None)
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 if let Some(binding) = source.strip_prefix("integration:") {
                     if let Ok(segment) = SegmentKey::new(binding) {
@@ -145,7 +142,7 @@ impl ConfluxActor for AccountApplication {
                     }
                 }
                 Ok(None)
-            }
+            },
             ConfluxEvent::Local(value) => match value {},
             _ => Ok(None),
         }?;
@@ -309,7 +306,7 @@ impl AccountApplication {
             match result {
                 Ok(snapshot) => {
                     self.apply_event(AccountEvent::EarnHoldings(snapshot))?;
-                }
+                },
                 Err(error) => {
                     if let Some(state) = self.conflux.segments.get_mut(&segment) {
                         state.snapshot_failed(
@@ -317,7 +314,7 @@ impl AccountApplication {
                             elapsed_ms,
                         );
                     }
-                }
+                },
             }
         }
         let keys = by_key.keys().cloned().collect::<Vec<_>>();
@@ -354,43 +351,37 @@ impl AccountApplication {
                         })
                         .map_err(control_error),
                 )
-            }
+            },
             AccountRestRequest::MarkToMarket(value) => AccountRestResponse::MarkToMarket(
-                MarkToMarket::try_from(value)
-                    .map_err(AccountError::Invalid)
-                    .and_then(|request| self.mark_to_market(request))
+                self.mark_to_market(value.into())
                     .map(|()| AccountCommandStatus {
                         status: "applied".into(),
                     })
                     .map_err(control_error),
             ),
             AccountRestRequest::AdvanceTime(value) => AccountRestResponse::AdvanceTime(
-                self.advance_business_time(value.event_time_unix_nanos)
+                self.advance_business_time(value.event_time_unix_nanos.get())
                     .map(|()| kairos_account_contract::AdvanceAccountTimeResponse {
                         event_time_unix_nanos: value.event_time_unix_nanos,
                     })
                     .map_err(control_error),
             ),
             AccountRestRequest::Refresh(value) => {
-                let result = match parse_segments(value.segments) {
-                    Ok(segments) => self
-                        .refresh_from_system(context, segments.clone())
-                        .await
-                        .map(|()| self.refresh_response(segments)),
-                    Err(error) => Err(error),
-                };
+                let segments = value.segments;
+                let result = self
+                    .refresh_from_system(context, segments.clone())
+                    .await
+                    .map(|()| self.refresh_response(segments));
                 AccountRestResponse::Refresh(result.map_err(control_error))
-            }
+            },
             AccountRestRequest::Reconcile(value) => {
-                let result = match parse_segments(value.segments) {
-                    Ok(segments) => self
-                        .refresh_from_system(context, segments.clone())
-                        .await
-                        .map(|()| self.refresh_response(segments)),
-                    Err(error) => Err(error),
-                };
+                let segments = value.segments;
+                let result = self
+                    .refresh_from_system(context, segments.clone())
+                    .await
+                    .map(|()| self.refresh_response(segments));
                 AccountRestResponse::Reconcile(result.map_err(control_error))
-            }
+            },
         })
     }
 
@@ -402,15 +393,11 @@ impl AccountApplication {
             .current_view_shared()
             .segments
             .first()
-            .map(|value| value.account_id.to_string())
-            .unwrap_or_default();
+            .map(|value| value.account_id.clone());
         kairos_account_contract::AccountRefreshResponse {
             status: "completed".into(),
             account_id,
-            segments: segments
-                .into_iter()
-                .map(|value| value.to_string())
-                .collect(),
+            segments,
         }
     }
 
@@ -420,8 +407,8 @@ impl AccountApplication {
         kairos_account_contract::Health {
             status: if ready { "ready" } else { "degraded" }.into(),
             lease_valid: None,
-            generation: self.generation(),
-            event_sequence: self.event_sequence(),
+            generation: self.generation().into(),
+            event_sequence: self.event_sequence().into(),
         }
     }
 
@@ -460,7 +447,7 @@ impl AccountApplication {
                     )));
                 }
                 Ok(())
-            }
+            },
         }
     }
 
@@ -599,11 +586,11 @@ impl AccountApplication {
                     .account_event_publishers
                     .try_with(&event_key, |publisher| publisher.publish(&bytes))
                 {
-                    Ok(()) => {}
+                    Ok(()) => {},
                     Err(ResourceOperationError::NotFound) => return Ok(()),
                     Err(ResourceOperationError::Operation(error)) => {
-                        return Err(AccountError::Publication(error.to_string()))
-                    }
+                        return Err(AccountError::Publication(error.to_string()));
+                    },
                 }
             }
             self.acknowledge_business_event()?;
@@ -630,10 +617,10 @@ impl AccountApplication {
             .try_with(&current_key, |publisher| {
                 publisher.publish(metadata, &bytes)
             }) {
-            Ok(()) | Err(ResourceOperationError::NotFound) => {}
+            Ok(()) | Err(ResourceOperationError::NotFound) => {},
             Err(ResourceOperationError::Operation(error)) => {
-                return Err(AccountError::Publication(error.to_string()))
-            }
+                return Err(AccountError::Publication(error.to_string()));
+            },
         }
         let orders_key = OBSERVED_ORDERS.to_owned();
         let bytes =
@@ -644,10 +631,10 @@ impl AccountApplication {
             .account_view_publishers
             .try_with(&orders_key, |publisher| publisher.publish(metadata, &bytes))
         {
-            Ok(()) | Err(ResourceOperationError::NotFound) => {}
+            Ok(()) | Err(ResourceOperationError::NotFound) => {},
             Err(ResourceOperationError::Operation(error)) => {
-                return Err(AccountError::Publication(error.to_string()))
-            }
+                return Err(AccountError::Publication(error.to_string()));
+            },
         }
         self.conflux.published_generation = Some(view.generation.get());
         Ok(())
@@ -670,7 +657,7 @@ impl AccountApplication {
                 SegmentSyncLifecycle::Live => AccountSegmentSyncLifecycle::Live,
                 SegmentSyncLifecycle::SnapshotCurrent => {
                     AccountSegmentSyncLifecycle::SnapshotCurrent
-                }
+                },
                 SegmentSyncLifecycle::Degraded => AccountSegmentSyncLifecycle::Degraded,
                 SegmentSyncLifecycle::Resyncing => AccountSegmentSyncLifecycle::Resyncing,
                 SegmentSyncLifecycle::Unavailable => AccountSegmentSyncLifecycle::Unavailable,
@@ -679,15 +666,15 @@ impl AccountApplication {
             segment.freshness = match state.lifecycle {
                 SegmentSyncLifecycle::Live | SegmentSyncLifecycle::SnapshotCurrent => {
                     segment.freshness
-                }
+                },
                 SegmentSyncLifecycle::Degraded | SegmentSyncLifecycle::Stopped => {
                     AccountSegmentFreshness::Stale
-                }
+                },
                 SegmentSyncLifecycle::Resyncing => AccountSegmentFreshness::Resyncing,
                 SegmentSyncLifecycle::Unavailable => AccountSegmentFreshness::Unavailable,
                 SegmentSyncLifecycle::Configured | SegmentSyncLifecycle::Bootstrapping => {
                     AccountSegmentFreshness::Unknown
-                }
+                },
             };
             segment.completeness = if state.initial_snapshot_complete {
                 AccountSegmentCompleteness::Complete
@@ -791,15 +778,6 @@ async fn fetch_earn_positions<C: EarnProductQuery, P>(
     fetches
 }
 
-fn parse_segments(values: Vec<String>) -> Result<Vec<SegmentKey>, AccountError> {
-    values
-        .into_iter()
-        .map(|value| {
-            SegmentKey::new(value).map_err(|error| AccountError::Invalid(error.to_string()))
-        })
-        .collect()
-}
-
 fn control_error(error: AccountError) -> kairos_account_contract::AccountControlError {
     kairos_account_contract::AccountControlError {
         code: "account.request_failed".into(),
@@ -816,51 +794,18 @@ fn simulated_fill(
     value: kairos_account_contract::SimulatedSettlement,
 ) -> Result<AccountFill, AccountError> {
     Ok(AccountFill {
-        fill_id: FillId::new(value.fill_id)
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        order_id: value
-            .order_id
-            .map(kairos_primitives::OrderId::new)
-            .transpose()
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        segment_key: SegmentKey::new(value.segment_key)
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        instrument_id: InstrumentId::new(value.instrument_id)
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        quantity: Quantity::try_from(value.quantity)
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        price: Price::try_from(value.price)
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        side: match value.side.trim().to_ascii_lowercase().as_str() {
-            "buy" => OrderSide::Buy,
-            "sell" => OrderSide::Sell,
-            _ => {
-                return Err(AccountError::Invalid(
-                    "simulated settlement side must be buy or sell".into(),
-                ))
-            }
-        },
-        settlement_asset: value
-            .settlement_asset
-            .map(kairos_primitives::Currency::new)
-            .transpose()
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        settlement_delta: value
-            .settlement_delta
-            .map(SignedQuantity::try_from)
-            .transpose()
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        fee_asset: value
-            .fee_asset
-            .map(kairos_primitives::Currency::new)
-            .transpose()
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        fee_amount: value
-            .fee_amount
-            .map(SignedQuantity::try_from)
-            .transpose()
-            .map_err(|error| AccountError::Invalid(error.to_string()))?,
-        occurred_at_unix_nanos: value.occurred_at_unix_nanos.into(),
+        fill_id: value.fill_id,
+        order_id: value.order_id,
+        segment_key: value.segment_key,
+        instrument_id: value.instrument_id,
+        quantity: value.quantity,
+        price: value.price,
+        side: value.side,
+        settlement_asset: value.settlement_asset,
+        settlement_delta: value.settlement_delta,
+        fee_asset: value.fee_asset,
+        fee_amount: value.fee_amount,
+        occurred_at_unix_nanos: value.occurred_at_unix_nanos,
     })
 }
 
@@ -871,7 +816,7 @@ fn validate_segment(expected: &SegmentKey, event: &ExternalAccountEvent) -> Resu
                 "Account stream segment mismatch: expected {expected}, received {}",
                 snapshot.segment_key
             ))
-        }
+        },
         ExternalAccountEvent::Fill(fill) if &fill.segment_key != expected => Err(format!(
             "Account stream segment mismatch: expected {expected}, received {}",
             fill.segment_key
@@ -881,7 +826,7 @@ fn validate_segment(expected: &SegmentKey, event: &ExternalAccountEvent) -> Resu
                 validate_segment(expected, event)?;
             }
             Ok(())
-        }
+        },
         _ => Ok(()),
     }
 }

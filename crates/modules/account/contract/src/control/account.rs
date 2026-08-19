@@ -3,10 +3,16 @@
 //! This is the JSON control plane only. Account views and events use the v2
 //! FlatBuffers data plane exposed by [`crate::view`] and [`crate::event`].
 
-use reqwest::blocking::Client;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
+
+use kairos_primitives::{
+    Currency, FillId, Generation, InstrumentId, OrderId, OrderSide, Price, Quantity, SegmentKey,
+    Sequence, SignedQuantity, UnixNanos,
+};
+use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::{ContractError, ContractResult};
 
@@ -15,45 +21,45 @@ pub struct Health {
     pub status: String,
     #[serde(default)]
     pub lease_valid: Option<bool>,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
 }
 
 pub type DecimalValue = kairos_primitives::DecimalParts;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SimulatedSettlement {
-    pub fill_id: String,
+    pub fill_id: FillId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub order_id: Option<String>,
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub quantity: DecimalValue,
-    pub price: DecimalValue,
-    pub side: String,
+    pub order_id: Option<OrderId>,
+    pub segment_key: SegmentKey,
+    pub instrument_id: InstrumentId,
+    pub quantity: Quantity,
+    pub price: Price,
+    pub side: OrderSide,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub settlement_asset: Option<String>,
+    pub settlement_asset: Option<Currency>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub settlement_delta: Option<DecimalValue>,
+    pub settlement_delta: Option<SignedQuantity>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_asset: Option<String>,
+    pub fee_asset: Option<Currency>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_amount: Option<DecimalValue>,
-    pub occurred_at_unix_nanos: u64,
+    pub fee_amount: Option<SignedQuantity>,
+    pub occurred_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarkToMarketRequest {
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub quote_asset: String,
-    pub mark_price: DecimalValue,
-    pub observed_at_unix_nanos: u64,
+    pub segment_key: SegmentKey,
+    pub instrument_id: InstrumentId,
+    pub quote_asset: Currency,
+    pub mark_price: Price,
+    pub observed_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceAccountTimeRequest {
-    pub event_time_unix_nanos: u64,
+    pub event_time_unix_nanos: UnixNanos,
 }
 
 pub struct AccountContractClient {
@@ -85,7 +91,7 @@ impl AccountContractClient {
         self.post("/v1/mark-to-market", request)
     }
 
-    pub fn advance_time(&self, event_time_unix_nanos: u64) -> ContractResult<()> {
+    pub fn advance_time(&self, event_time_unix_nanos: UnixNanos) -> ContractResult<()> {
         self.post(
             "/v1/time/advance",
             &AdvanceAccountTimeRequest {
@@ -138,11 +144,11 @@ mod tests {
     #[test]
     fn simulation_controls_have_typed_contract_shapes() {
         let mark = MarkToMarketRequest {
-            segment_key: "spot".into(),
-            instrument_id: "instrument:btc".into(),
-            quote_asset: "USDT".into(),
-            mark_price: DecimalValue::new(6_400_025, 2).unwrap(),
-            observed_at_unix_nanos: 10,
+            segment_key: kairos_primitives::SegmentKey::new("spot").unwrap(),
+            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            quote_asset: kairos_primitives::Currency::new("USDT").unwrap(),
+            mark_price: kairos_primitives::Price::new(6_400_025, 2).unwrap(),
+            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(10),
         };
         assert_eq!(
             serde_json::to_value(mark).unwrap(),
@@ -156,7 +162,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(AdvanceAccountTimeRequest {
-                event_time_unix_nanos: 11
+                event_time_unix_nanos: kairos_primitives::UnixNanos::new(11)
             })
             .unwrap(),
             serde_json::json!({"event_time_unix_nanos": 11})

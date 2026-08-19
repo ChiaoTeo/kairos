@@ -11,18 +11,17 @@ use kairos_market_contract::{
     MarketHealthResponse, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
     MarketSubscriptionResponse,
 };
-use kairos_protocol::InstanceIdentity;
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 
-use super::{resolve_market, resolve_option_markets, MarketApplication, MarketError};
+use super::{MarketApplication, MarketError, resolve_market, resolve_option_markets};
 use crate::domain::source::{
     SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceStatus,
 };
 use crate::services::actor::BusinessSubscriptionKey;
-use crate::services::publication::contract::{encode_change_view, encode_event};
 use crate::services::publication::HistoryQueue;
-use crate::services::source::messages::ProviderSubscriptionId;
-use crate::services::source::messages::SourceInput;
+use crate::services::publication::contract::{encode_change_view, encode_event};
+use crate::services::source::messages::{ProviderSubscriptionId, SourceInput};
 use crate::services::source::{
     confirmed_subscription, confirmed_unsubscription, normalize, quote_event, subscription_request,
     with_epoch,
@@ -304,12 +303,12 @@ impl ConfluxActor for MarketApplication {
         let response = match event {
             ConfluxEvent::Rest(request) => {
                 Some(self.handle_rest_idempotent(request, context).await)
-            }
+            },
             ConfluxEvent::Local(MarketConfluxEvent(MarketConfluxEventKind::Source(input))) => {
                 self.apply_source_input(input).await?;
                 self.sync_all_source_subscriptions(context).await?;
                 None
-            }
+            },
             ConfluxEvent::Reference(reference) => {
                 if self
                     .conflux
@@ -326,7 +325,7 @@ impl ConfluxActor for MarketApplication {
                     self.refresh_reference_universe(context).await?;
                 }
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::Timer {
                 name,
                 fired_at_unix_nanos,
@@ -338,27 +337,27 @@ impl ConfluxActor for MarketApplication {
                     .min(u128::from(u64::MAX)) as u64;
                 self.evaluate_freshness(fired_at_unix_nanos, max_age);
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::Timer { name, .. })
                 if name.starts_with("market-snapshot:") =>
             {
                 self.poll_managed_snapshot(&name["market-snapshot:".len()..], context)
                     .await?;
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::Timer { name, .. })
                 if name == "reference-universe" =>
             {
                 self.refresh_reference_universe(context).await?;
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 if let Some(source_id) = managed_source_id_from_system_event(&source) {
                     self.mark_managed_source_ready(source_id)?;
                     self.sync_all_source_subscriptions(context).await?;
                 }
                 None
-            }
+            },
             ConfluxEvent::Integration(integration) => {
                 if let ExternalParticipantEvent::Market(event) = integration.event {
                     self.apply_managed_market_event(
@@ -369,11 +368,11 @@ impl ConfluxActor for MarketApplication {
                     .await?;
                 }
                 None
-            }
+            },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 tracing::warn!(component = "market", %source, %error, "Market Conflux source stopped");
                 None
-            }
+            },
             _ => None,
         };
         self.publish(context).await?;
@@ -441,14 +440,14 @@ impl MarketApplication {
                         .sources
                         .values()
                         .map(|source| MarketDataSource {
-                            source_id: source.descriptor.id.to_string(),
+                            source_id: source.descriptor.id.clone(),
                             status: format!("{:?}", source.status).to_ascii_lowercase(),
                             ready: source.status == crate::SourceStatus::Ready,
                             stale: source.status == crate::SourceStatus::Degraded,
                         })
                         .collect(),
                 }))
-            }
+            },
             MarketRestRequest::Subscribe(command) => {
                 let result = self
                     .subscribe_contract(command)
@@ -463,16 +462,15 @@ impl MarketApplication {
                     self.spawn_source_inputs(context);
                 }
                 MarketRestResponse::Subscribe(result.map_err(control_error))
-            }
+            },
             MarketRestRequest::Unsubscribe(command) => {
                 let owner = strategy_subscription_owner(
                     command.launch_id.as_deref(),
                     &command.instance_id,
                     &command.strategy_id,
                 );
-                let result = SubscriptionId::new(command.payload.subscription_id)
-                    .map_err(MarketError::InvalidSubscription)
-                    .and_then(|id| self.unsubscribe_owned(&id, &owner))
+                let result = self
+                    .unsubscribe_owned(&command.payload.subscription_id, &owner)
                     .and_then(|removed| {
                         removed
                             .then_some(MarketCommandStatus {
@@ -486,7 +484,7 @@ impl MarketApplication {
                     }
                 }
                 MarketRestResponse::Unsubscribe(result.map_err(control_error))
-            }
+            },
             MarketRestRequest::ReleaseOwner(command) => {
                 let owner = strategy_subscription_owner(
                     command.launch_id.as_deref(),
@@ -496,11 +494,11 @@ impl MarketApplication {
                 let removed = self.release_subscription_owner(&owner);
                 let result = self.sync_all_source_subscriptions(context).await.map(|()| {
                     MarketReleaseOwnerResponse {
-                        released_subscriptions: removed.into_iter().map(|value| value.0).collect(),
+                        released_subscriptions: removed,
                     }
                 });
                 MarketRestResponse::ReleaseOwner(result.map_err(control_error))
-            }
+            },
             MarketRestRequest::Recover => MarketRestResponse::Recover(
                 self.recover_sources()
                     .await
@@ -554,14 +552,24 @@ impl MarketApplication {
             .collect::<Result<Vec<_>, _>>()
             .map_err(MarketError::InvalidSubscription)?;
         let subscription_id = SubscriptionId::new(command.command_id.clone())
-            .map_err(MarketError::InvalidSubscription)?;
+            .map_err(|error| MarketError::InvalidSubscription(error.to_string()))?;
         let owner = strategy_subscription_owner(
             command.launch_id.as_deref(),
             &command.instance_id,
             &command.strategy_id,
         );
-        let exchange = command.payload.exchange.as_deref().unwrap_or("binance");
-        let market_type = command.payload.market_type.as_deref().unwrap_or("spot");
+        let exchange = command
+            .payload
+            .exchange
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or("binance");
+        let market_type = command
+            .payload
+            .market_type
+            .map(|value| value.as_str())
+            .unwrap_or("spot");
+        let asset_type = command.payload.asset_type.map(|value| value.as_str());
         let subject = command
             .payload
             .subject
@@ -587,13 +595,9 @@ impl MarketApplication {
                 .ok_or_else(|| {
                     MarketError::Invalid("chain subscription requires underlying".into())
                 })?;
-            let markets = resolve_option_markets(
-                &self.market_universe(),
-                exchange,
-                command.payload.asset_type.as_deref(),
-                underlying,
-            )
-            .map_err(MarketError::InvalidSubscription)?;
+            let markets =
+                resolve_option_markets(&self.market_universe(), exchange, asset_type, underlying)
+                    .map_err(MarketError::InvalidSubscription)?;
             if markets.is_empty() {
                 return Err(MarketError::NotFound(format!(
                     "no option markets for {underlying}"
@@ -608,13 +612,7 @@ impl MarketApplication {
                     kairos_primitives::ProviderProductCode::new(market_type)
                         .map_err(|error| MarketError::Invalid(error.to_string()))?,
                 ),
-                source_id: command
-                    .payload
-                    .source_id
-                    .as_deref()
-                    .map(crate::SourceId::new)
-                    .transpose()
-                    .map_err(MarketError::Invalid)?,
+                source_id: command.payload.source_id.clone(),
                 active_only: true,
                 ..Default::default()
             };
@@ -630,13 +628,13 @@ impl MarketApplication {
                 &self.market_universe(),
                 exchange,
                 market_type,
-                command.payload.asset_type.as_deref(),
+                asset_type,
                 subject,
             )
             .map_err(MarketError::InvalidSubscription)?;
-            if let Some(source) = command.payload.source_id.as_deref() {
+            if let Some(source) = command.payload.source_id.as_ref() {
                 market = market
-                    .with_source(source)
+                    .with_source(source.as_str())
                     .map_err(MarketError::InvalidSubscription)?;
             }
             self.subscribe_static_with_selectors(
@@ -647,7 +645,7 @@ impl MarketApplication {
             )?;
         }
         Ok(MarketSubscriptionResponse {
-            subscription_id: subscription_id.0.clone(),
+            subscription_id: subscription_id.clone(),
             owner_id: owner,
             status: self
                 .subscription_status(&subscription_id)
@@ -699,10 +697,10 @@ impl MarketApplication {
                 .market_event_publishers
                 .try_with(&event_key, |publisher| publisher.publish(&bytes))
             {
-                Ok(()) | Err(ResourceOperationError::NotFound) => {}
+                Ok(()) | Err(ResourceOperationError::NotFound) => {},
                 Err(ResourceOperationError::Operation(error)) => {
-                    return Err(MarketError::Recovery(error.to_string()))
-                }
+                    return Err(MarketError::Recovery(error.to_string()));
+                },
             }
         }
         for change in &changes {
@@ -748,10 +746,10 @@ impl MarketApplication {
                 .map_err(|error| match error {
                     ResourceOperationError::NotFound => {
                         MarketError::Recovery("Market view publisher disappeared".into())
-                    }
+                    },
                     ResourceOperationError::Operation(error) => {
                         MarketError::Recovery(error.to_string())
-                    }
+                    },
                 })?;
         }
         Ok(())
@@ -808,7 +806,7 @@ fn managed_connection_exists(
                 || contains(connections.okx_public_rest.keys())
                 || contains(connections.hyperliquid_info_rest.keys())
                 || contains(connections.ibkr_market_data.keys())
-        }
+        },
         MarketSourceMode::Stream | MarketSourceMode::MarketScopedStream => {
             contains(connections.binance_spot_websocket.keys())
                 || contains(connections.binance_usdm_websocket.keys())
@@ -819,7 +817,7 @@ fn managed_connection_exists(
                 || contains(connections.hyperliquid_websocket.keys())
                 || contains(connections.massive_stocks_websocket.keys())
                 || contains(connections.massive_options_websocket.keys())
-        }
+        },
     }
 }
 
@@ -920,8 +918,8 @@ impl MarketApplication {
                         Ok(id) => id,
                         Err(IntegrationError::NotReady) => continue,
                         Err(error) => {
-                            return Err(MarketError::SourceUnavailable(error.to_string()))
-                        }
+                            return Err(MarketError::SourceUnavailable(error.to_string()));
+                        },
                     };
                     ProviderSubscriptionId::new(id.0.to_string()).map_err(MarketError::Invalid)?
                 };
@@ -959,7 +957,8 @@ impl MarketApplication {
         generation: u64,
         event: kairos_conflux::MarketEvent,
     ) -> Result<(), MarketError> {
-        let source_id = SourceId::new(connection_key).map_err(MarketError::Invalid)?;
+        let source_id = SourceId::new(connection_key)
+            .map_err(|error| MarketError::Invalid(error.to_string()))?;
         if !self.actor.attached_sources.contains_key(&source_id) {
             return Ok(());
         }
@@ -992,7 +991,8 @@ impl MarketApplication {
         value: &str,
         context: &mut Context<'_, Self>,
     ) -> Result<(), MarketError> {
-        let source_id = SourceId::new(value).map_err(MarketError::Invalid)?;
+        let source_id =
+            SourceId::new(value).map_err(|error| MarketError::Invalid(error.to_string()))?;
         let markets = self
             .desired_managed_markets(&source_id)
             .into_values()
@@ -1020,7 +1020,7 @@ impl MarketApplication {
                     self.apply_managed_market_event(source_id.as_str(), 1, quote_event(quote))
                         .await?;
                 }
-            }
+            },
             Err(error) => {
                 self.actor
                     .apply_source_failure(
@@ -1030,7 +1030,7 @@ impl MarketApplication {
                         error.to_string(),
                     )
                     .map_err(MarketError::Invalid)?;
-            }
+            },
         }
         Ok(())
     }

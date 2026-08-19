@@ -5,12 +5,15 @@
 //! exchange Account stream to produce the corresponding balance/position
 //! mutation.
 
-use crate::domain::{ExecutionFill, ExecutionOrder, OrderCommitment, OrderSide};
-use kairos_account_contract::{AccountContractClient, DecimalValue, SimulatedSettlement};
-use rust_decimal::Decimal;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use kairos_account_contract::{AccountContractClient, SimulatedSettlement};
+use kairos_primitives::SignedQuantity;
+use rust_decimal::Decimal;
+use serde_json::Value;
+
+use crate::domain::{ExecutionFill, ExecutionOrder, OrderCommitment, OrderSide};
 
 pub struct SimulatedAccountSettlement {
     accounts: BTreeMap<String, PathBuf>,
@@ -84,17 +87,13 @@ impl SimulatedAccountSettlement {
         let account_id = order.account_id.to_string();
         self.client(&account_id)?
             .apply_simulated_settlement(&SimulatedSettlement {
-                fill_id: fill.fill_id.to_string(),
-                order_id: Some(fill.order_id.to_string()),
-                segment_key: order.segment_key.to_string(),
-                instrument_id: fill.instrument_id.to_string(),
-                quantity: decimal_value(fill.quantity.mantissa(), fill.quantity.scale()),
-                price: decimal_value(fill.price.mantissa(), fill.price.scale()),
-                side: match fill.side {
-                    OrderSide::Buy => "buy",
-                    OrderSide::Sell => "sell",
-                }
-                .into(),
+                fill_id: fill.fill_id.clone(),
+                order_id: Some(fill.order_id.clone()),
+                segment_key: order.segment_key.clone(),
+                instrument_id: fill.instrument_id.clone(),
+                quantity: fill.quantity,
+                price: fill.price,
+                side: fill.side,
                 settlement_asset: Some(
                     commitment
                         .settlement_asset
@@ -102,25 +101,23 @@ impl SimulatedAccountSettlement {
                         .ok_or_else(|| {
                             "simulated fill has no Reference-confirmed settlement asset".to_string()
                         })?
-                        .to_string(),
+                        .clone(),
                 ),
                 settlement_delta: Some(
-                    DecimalValue::new(
+                    SignedQuantity::new(
                         i64::try_from(settlement_delta.mantissa())
                             .map_err(|_| "settlement delta exceeds Decimal64 range")?,
                         settlement_delta.scale() as u8,
                     )
                     .map_err(|error| error.to_string())?,
                 ),
-                fee_asset: fill.fee_currency.as_ref().map(ToString::to_string),
-                fee_amount: (fill.fee.mantissa() != 0)
-                    .then_some(decimal_value(fill.fee.mantissa(), fill.fee.scale())),
-                occurred_at_unix_nanos: fill.occurred_at_unix_nanos.get(),
+                fee_asset: fill.fee_currency.clone(),
+                fee_amount: (fill.fee.mantissa() != 0).then_some(
+                    SignedQuantity::new(fill.fee.mantissa(), fill.fee.scale())
+                        .map_err(|error| error.to_string())?,
+                ),
+                occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
             })
             .map_err(|error| error.to_string())
     }
-}
-
-fn decimal_value(mantissa: i64, scale: u8) -> DecimalValue {
-    DecimalValue::new(mantissa, scale).expect("semantic decimal satisfies contract bounds")
 }

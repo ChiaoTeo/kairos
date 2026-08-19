@@ -2782,6 +2782,7 @@ dependencies = [
 name = "kairos-capital-contract"
 version = "0.2.0"
 dependencies = [
+ "kairos-primitives",
  "serde",
  "serde_json",
 ]
@@ -2842,6 +2843,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",
@@ -2914,6 +2916,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
  "kairos-workspace",
@@ -2946,6 +2949,8 @@ name = "kairos-protocol"
 version = "0.2.0"
 dependencies = [
  "flatbuffers",
+ "kairos-primitives",
+ "serde",
  "serde_json",
 ]
 

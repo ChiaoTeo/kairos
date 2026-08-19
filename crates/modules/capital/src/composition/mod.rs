@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use crate::domain::CapitalGroupConfig;
-use crate::services::{actor::CapitalActor, persistence::JournalCapitalStore};
+use crate::services::actor::CapitalActor;
+use crate::services::persistence::JournalCapitalStore;
 use crate::{CapitalApplication, CapitalTransferProcess};
 
 pub fn compose_capital_application(config: CapitalGroupConfig) -> CapitalApplication {

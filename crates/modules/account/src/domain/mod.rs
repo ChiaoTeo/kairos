@@ -27,7 +27,7 @@ impl ExternalAccountIdentity {
         let broker = BrokerId::new(broker.into()).map_err(|error| match error {
             kairos_primitives::DomainTypeError::Empty { .. } => {
                 AccountDomainError::Required { field: "broker" }
-            }
+            },
             _ => AccountDomainError::Invalid {
                 field: "broker",
                 reason: "broker identity must be non-empty without surrounding whitespace",
@@ -603,7 +603,7 @@ impl Account {
             Err(error) => {
                 self.state = state_before;
                 Err(error)
-            }
+            },
         }
     }
 

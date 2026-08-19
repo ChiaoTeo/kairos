@@ -3,10 +3,8 @@
 use std::future::Future;
 use std::path::Path;
 
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Row, Sqlite, SqlitePool,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Row, Sqlite, SqlitePool};
 
 use super::publication::StoredPublication;
 use crate::domain::{
@@ -171,11 +169,12 @@ impl SqlxCatalogStore {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
+    use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+
     use super::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::domain::{
         Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
     };
-    use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
     #[derive(Debug)]
     struct TestRefresh {
@@ -335,7 +334,7 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let asset = |status| crate::domain::Asset {
             asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
-            code: "BTC".into(),
+            code: kairos_primitives::Symbol::new("BTC").unwrap(),
             asset_class: kairos_primitives::AssetClass::Crypto,
             status,
             ..Default::default()
@@ -375,13 +374,13 @@ mod tests {
         match kairos_reference_contract::decode_event(&pending[0].payload).unwrap() {
             kairos_reference_contract::ReferenceEvent::AssetUpserted(event) => {
                 assert_eq!(event.asset().status().variant_name(), Some("ACTIVE"));
-            }
+            },
             _ => panic!("unexpected first event kind"),
         }
         match kairos_reference_contract::decode_event(&pending[1].payload).unwrap() {
             kairos_reference_contract::ReferenceEvent::AssetUpdated(event) => {
                 assert_eq!(event.asset().status().variant_name(), Some("INACTIVE"));
-            }
+            },
             _ => panic!("unexpected second event kind"),
         }
     }
@@ -450,13 +449,13 @@ mod tests {
         assert!(reader.record("market:binance:btc-usdt").unwrap().is_some());
         let projection = reader
             .projection(&kairos_reference_contract::SqliteMarketQuery {
-                venue_symbol: Some("BTCUSDT".into()),
+                venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
                 limit: 100,
                 ..Default::default()
             })
             .unwrap();
-        assert_eq!(projection.watermark.generation, 3);
-        assert_eq!(projection.watermark.event_sequence, 5);
+        assert_eq!(projection.watermark.generation, 3.into());
+        assert_eq!(projection.watermark.event_sequence, 5.into());
         assert_eq!(projection.markets.len(), 1);
         assert_eq!(projection.instruments.len(), 1);
     }
@@ -528,11 +527,13 @@ mod tests {
         );
 
         store.clear_staged_pages("massive-options").await.unwrap();
-        assert!(store
-            .staged_pages("massive-options")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .staged_pages("massive-options")
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let (cursor, accumulated) = store.load_state("massive-options").await.unwrap().unwrap();
         assert!(cursor.is_none());
         assert!(accumulated.is_none());
@@ -562,11 +563,13 @@ mod tests {
             .unwrap();
 
         assert!(store.prepare_projection("massive-equity").await.unwrap());
-        assert!(store
-            .staged_pages("massive-equity")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .staged_pages("massive-equity")
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let (cursor, _) = store.load_state("massive-equity").await.unwrap().unwrap();
         assert!(cursor.is_none());
         assert_eq!(
@@ -588,7 +591,7 @@ mod tests {
         let catalog = ProviderCatalog {
             assets: vec![crate::domain::Asset {
                 asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
-                code: "BTC".into(),
+                code: kairos_primitives::Symbol::new("BTC").unwrap(),
                 asset_class: kairos_primitives::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
@@ -785,11 +788,13 @@ mod tests {
         let state = catalog_store.load_state().await.unwrap();
         assert_eq!(state.generation.get(), 1);
         assert_eq!(state.event_sequence.get(), 1);
-        assert!(provider_store
-            .load_last_good("provider-b")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            provider_store
+                .load_last_good("provider-b")
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM reference_provider_pending_promotion WHERE provider='provider-b'",
@@ -1681,7 +1686,7 @@ async fn replace_current_state(
         track!("asset", asset.asset_id.as_str());
         sqlx::query("INSERT INTO reference_assets_current(asset_id,code,asset_class,status,payload) VALUES (?,?,?,?,?) ON CONFLICT(asset_id) DO UPDATE SET code=excluded.code,asset_class=excluded.asset_class,status=excluded.status,payload=excluded.payload WHERE reference_assets_current.payload<>excluded.payload")
             .bind(asset.asset_id.as_str())
-            .bind(&asset.code)
+            .bind(asset.code.as_str())
             .bind(asset.asset_class.as_str())
             .bind(asset.status.as_str())
             .bind(serde_json::to_string(asset).map_err(|error| sqlx::Error::Protocol(error.to_string()))?)

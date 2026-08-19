@@ -102,7 +102,7 @@ pub(crate) fn trades(payload: &Value) -> Result<Vec<BinanceTradeRecord>, Integra
                     == Some(false) =>
                 {
                     OrderSide::Sell
-                }
+                },
                 _ => OrderSide::Buy,
             };
             Ok(BinanceTradeRecord {

@@ -1,13 +1,14 @@
-use crate::participants::ibkr::{descriptor, IbkrMarketDataConfig};
-use crate::services::participants::ibkr::{
-    execution::SessionService, market::MarketQueryService, IbkrOptions,
-};
+use kairos_primitives::ParticipantSymbol;
+
+use crate::participants::ibkr::{IbkrMarketDataConfig, descriptor};
+use crate::services::participants::ibkr::IbkrOptions;
+use crate::services::participants::ibkr::execution::SessionService;
+use crate::services::participants::ibkr::market::MarketQueryService;
 use crate::{
     ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionLifecycle,
     ConnectionLifecycleCommand, ConnectionMaintenance, ConnectionState, IntegrationError,
     MaintenanceOutcome, MarketQuote, MarketQuoteQuery,
 };
-use kairos_primitives::ParticipantSymbol;
 
 pub struct IbkrMarketDataConnection {
     state: ConnectionState,

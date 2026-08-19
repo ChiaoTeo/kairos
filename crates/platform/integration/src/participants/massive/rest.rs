@@ -1,22 +1,21 @@
-use secrecy::ExposeSecret;
 use std::str::FromStr;
 
-use crate::services::participants::massive::market::data::{
-    normalize_historical, normalize_historical_quotes, normalize_historical_trades, parse_interval,
-    MarketType as ServiceMarketType,
+use secrecy::ExposeSecret;
+
+use super::{
+    InstrumentQuery, InstrumentType, MassiveCashDividend, MassiveOptionSnapshot, MassiveRestConfig,
 };
-use crate::services::participants::massive::reference as normalization;
-use crate::services::participants::massive::RestService;
+use crate::services::participants::massive::market::data::{
+    MarketType as ServiceMarketType, normalize_historical, normalize_historical_quotes,
+    normalize_historical_trades, parse_interval,
+};
+use crate::services::participants::massive::{RestService, reference as normalization};
 use crate::transport::http::ExchangeError;
 use crate::{
     ConnectionDescriptor, ExternalInstrumentCatalog, ExternalInstrumentCatalogPage,
     HistoricalBarQuery, HistoricalBarRequest, HistoricalQuoteQuery, HistoricalTradeQuery,
     HistoricalWindow, InstrumentCatalogQuery, IntegrationError, MarketBar, MarketGreeks,
     MarketGreeksQuery, MarketQuote, MarketTrade, ParticipantKind, ParticipantRef,
-};
-
-use super::{
-    InstrumentQuery, InstrumentType, MassiveCashDividend, MassiveOptionSnapshot, MassiveRestConfig,
 };
 
 pub struct MassiveRestConnection {
@@ -333,7 +332,7 @@ pub(crate) fn map_exchange_error(error: ExchangeError) -> IntegrationError {
             } else {
                 IntegrationError::Authorization(body)
             }
-        }
+        },
         ExchangeError::Http {
             status: 429, body, ..
         } => IntegrationError::RateLimited(body),
@@ -343,9 +342,10 @@ pub(crate) fn map_exchange_error(error: ExchangeError) -> IntegrationError {
 
 #[cfg(test)]
 mod error_tests {
-    use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    use super::*;
 
     #[test]
     fn plan_denial_is_entitlement_not_transport() {
@@ -378,14 +378,18 @@ mod error_tests {
             let mut buffer = [0_u8; 8192];
             let size = stream.read(&mut buffer).unwrap();
             let request = String::from_utf8_lossy(&buffer[..size]);
-            assert!(request
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .contains("/v3/snapshot/options/SPY/O:SPY260821C00500000"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("authorization: bearer test-secret\r\n"));
+            assert!(
+                request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .contains("/v3/snapshot/options/SPY/O:SPY260821C00500000")
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-secret\r\n")
+            );
             let body = r#"{"results":{"details":{"ticker":"O:SPY260821C00500000","expiration_date":"2026-08-21","strike_price":500},"break_even_price":503.25,"open_interest":42,"greeks":{"delta":0.55,"gamma":0.007,"theta":-0.018},"implied_volatility":0.304,"market_status":"open","last_quote":{"last_updated":1787270400000000000}}}"#;
             write!(
                 stream,

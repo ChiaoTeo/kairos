@@ -6,7 +6,7 @@ mod quote;
 
 pub use bar::BarEncoder;
 pub use greeks::GreeksEncoder;
-pub use metadata::{event_metadata, view_metadata, EncodeContext};
+pub use metadata::{EncodeContext, event_metadata, view_metadata};
 pub use order_book::OrderBookEncoder;
 pub use quote::QuoteEncoder;
 

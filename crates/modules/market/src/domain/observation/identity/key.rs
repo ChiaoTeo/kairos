@@ -1,3 +1,4 @@
+use kairos_primitives::SourceId;
 use serde::{Deserialize, Serialize};
 
 use super::qualifier::validate_path_component;
@@ -6,7 +7,7 @@ use super::{ObservationKind, ObservationQualifier};
 /// Stable identity for one current market-data projection.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct MarketViewKey {
-    pub source_id: String,
+    pub source_id: SourceId,
     pub scope_key: String,
     pub kind: ObservationKind,
     pub qualifier: Option<ObservationQualifier>,
@@ -14,11 +15,11 @@ pub struct MarketViewKey {
 
 impl MarketViewKey {
     pub fn new(
-        source_id: impl Into<String>,
+        source_id: impl AsRef<str>,
         scope_key: impl Into<String>,
         kind: ObservationKind,
     ) -> Result<Self, String> {
-        let source_id = source_id.into();
+        let source_id = SourceId::new(source_id.as_ref()).map_err(|error| error.to_string())?;
         let scope_key = scope_key.into();
         validate_path_component("source_id", &source_id)?;
         validate_path_component("scope_key", &scope_key)?;
@@ -32,7 +33,7 @@ impl MarketViewKey {
     }
 
     pub fn with_qualifier(
-        source_id: impl Into<String>,
+        source_id: impl AsRef<str>,
         scope_key: impl Into<String>,
         kind: ObservationKind,
         qualifier: impl Into<String>,

@@ -1,6 +1,9 @@
 //! Public Reference models used by SQLite payloads and change events.
 
-use kairos_primitives::{AssetClass, InstrumentKind};
+use kairos_primitives::{
+    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, IssuerId, ListingId,
+    MarketId, Money, Price, ProviderId, Quantity, ReferenceStatus, Sequence, Symbol, UnixNanos,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -8,86 +11,86 @@ pub struct Entity {
     pub entity_id: String,
     pub entity_type: String,
     pub name: String,
-    pub status: String,
+    pub status: ReferenceStatus,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Asset {
-    pub asset_id: String,
-    pub code: String,
+    pub asset_id: AssetId,
+    pub code: Symbol,
     pub name: Option<String>,
     pub asset_class: AssetClass,
-    pub status: String,
+    pub status: ReferenceStatus,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
-    pub instrument_id: String,
-    pub symbol: String,
+    pub instrument_id: InstrumentId,
+    pub symbol: Symbol,
     pub name: Option<String>,
     pub instrument_type: InstrumentKind,
     /// Legacy wire/persistence slot retained while v2 readers migrate. New
     /// Reference records never populate a second canonical classification.
     #[serde(default)]
     pub product_family: Option<String>,
-    pub issuer_id: Option<String>,
+    pub issuer_id: Option<IssuerId>,
     pub share_class: Option<String>,
-    pub primary_currency_asset_id: Option<String>,
-    pub underlying_instrument_id: Option<String>,
-    pub expiry_unix_nanos: Option<u64>,
-    pub strike: Option<String>,
+    pub primary_currency_asset_id: Option<AssetId>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub expiry_unix_nanos: Option<UnixNanos>,
+    pub strike: Option<Price>,
     pub option_right: Option<String>,
-    pub status: String,
+    pub status: ReferenceStatus,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Listing {
-    pub listing_id: String,
-    pub instrument_id: String,
-    pub exchange_id: String,
-    pub exchange_symbol: String,
-    pub status: String,
-    pub effective_from_unix_nanos: u64,
-    pub effective_to_unix_nanos: Option<u64>,
+    pub listing_id: ListingId,
+    pub instrument_id: InstrumentId,
+    pub exchange_id: Exchange,
+    pub exchange_symbol: Symbol,
+    pub status: ReferenceStatus,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Market {
-    pub market_id: String,
-    pub instrument_id: String,
-    pub listing_id: Option<String>,
-    pub exchange_id: String,
+    pub market_id: MarketId,
+    pub instrument_id: InstrumentId,
+    pub listing_id: Option<ListingId>,
+    pub exchange_id: Exchange,
     pub instrument_kind: InstrumentKind,
     pub asset_type: Option<AssetClass>,
-    pub underlying_instrument_id: Option<String>,
-    pub venue_symbol: Option<String>,
-    pub base_asset_id: Option<String>,
-    pub quote_asset_id: Option<String>,
-    pub status: String,
-    pub price_tick: Option<String>,
-    pub quantity_tick: Option<String>,
+    pub underlying_instrument_id: Option<InstrumentId>,
+    pub venue_symbol: Option<Symbol>,
+    pub base_asset_id: Option<AssetId>,
+    pub quote_asset_id: Option<AssetId>,
+    pub status: ReferenceStatus,
+    pub price_tick: Option<Price>,
+    pub quantity_tick: Option<Quantity>,
     pub price_precision: i32,
     pub quantity_precision: i32,
-    pub minimum_quantity: Option<String>,
-    pub minimum_notional: Option<String>,
-    pub contract_size: Option<String>,
-    pub effective_from_unix_nanos: u64,
-    pub effective_to_unix_nanos: Option<u64>,
+    pub minimum_quantity: Option<Quantity>,
+    pub minimum_notional: Option<Money>,
+    pub contract_size: Option<Quantity>,
+    pub effective_from_unix_nanos: UnixNanos,
+    pub effective_to_unix_nanos: Option<UnixNanos>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderHealthState {
-    pub provider_id: String,
+    pub provider_id: ProviderId,
     pub status: String,
     pub message: Option<String>,
-    pub updated_at_unix_nanos: u64,
+    pub updated_at_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LifecycleEntry {
     pub event_id: String,
     pub event_type: String,
-    pub event_time_unix_nanos: u64,
+    pub event_time_unix_nanos: UnixNanos,
     pub record_kind: Option<String>,
     pub record_id: Option<String>,
 }
@@ -98,8 +101,8 @@ pub struct ReferenceProjectionSnapshot {
     pub workspace_id: String,
     pub launch_id: Option<String>,
     pub instance_id: Option<String>,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub entities: Vec<Entity>,
     pub assets: Vec<Asset>,
     pub instruments: Vec<Instrument>,
@@ -117,7 +120,7 @@ impl ReferenceProjectionSnapshot {
         let markets = self
             .markets
             .iter()
-            .filter(|value| active(&value.status))
+            .filter(|value| active(value.status))
             .cloned()
             .collect::<Vec<_>>();
         let instrument_ids = markets
@@ -140,13 +143,13 @@ impl ReferenceProjectionSnapshot {
         let markets = self
             .markets
             .iter()
-            .filter(|value| active(&value.status))
+            .filter(|value| active(value.status))
             .cloned()
             .collect::<Vec<_>>();
         let instruments = self
             .instruments
             .iter()
-            .filter(|value| active(&value.status))
+            .filter(|value| active(value.status))
             .cloned()
             .collect();
         self.projection_base(instruments, markets)
@@ -158,7 +161,7 @@ impl ReferenceProjectionSnapshot {
         let markets = self
             .markets
             .iter()
-            .filter(|value| active(&value.status))
+            .filter(|value| active(value.status))
             .cloned()
             .collect::<Vec<_>>();
         let instrument_ids = markets
@@ -190,6 +193,6 @@ impl ReferenceProjectionSnapshot {
     }
 }
 
-fn active(status: &str) -> bool {
-    matches!(status, "active" | "trading")
+fn active(status: ReferenceStatus) -> bool {
+    matches!(status, ReferenceStatus::Active | ReferenceStatus::Trading)
 }

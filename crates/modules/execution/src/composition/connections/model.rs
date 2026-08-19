@@ -157,14 +157,8 @@ pub fn load_execution_routes_from_reference_markets(
                         kairos_primitives::SegmentKey::new(&configured.segment_key)
                             .map_err(|error| error.to_string())?,
                     ),
-                    instrument_id: Some(
-                        kairos_primitives::InstrumentId::new(&market.instrument_id)
-                            .map_err(|error| error.to_string())?,
-                    ),
-                    market_id: Some(
-                        kairos_primitives::MarketId::new(&market.market_id)
-                            .map_err(|error| error.to_string())?,
-                    ),
+                    instrument_id: Some(market.instrument_id.clone()),
+                    market_id: Some(market.market_id.clone()),
                     participant_id: configured.participant_id.clone(),
                     provider_product: kairos_primitives::ProviderProductCode::new(
                         &configured.product,
@@ -260,7 +254,7 @@ fn margin_rule(configured: &ExecutionConnectionOptions) -> Option<(u32, String)>
     ) {
         (Some(rate), Some(id)) if rate > 0 && rate <= 10_000 && !id.trim().is_empty() => {
             Some((rate, id.clone()))
-        }
+        },
         (None, None) if configured.product.eq_ignore_ascii_case("spot") => Some((
             10_000,
             format!("route:{}:fully-funded", configured.route_id),
@@ -284,7 +278,7 @@ fn route_product_supports_instrument_kind(
         "spot" | "margin" => kind == Spot,
         "swap" | "perpetual" | "usd-m-futures" | "coin-m-futures" => {
             matches!(kind, Perpetual | Future)
-        }
+        },
         "future" | "futures" => kind == Future,
         "option" | "options" => kind == Option,
         _ => false,
@@ -295,7 +289,7 @@ fn supported_order_options(participant_id: &str, product: &str) -> Vec<String> {
     let values: &[&str] = match participant_id.trim().to_ascii_lowercase().as_str() {
         "binance" if product.eq_ignore_ascii_case("spot") => {
             &["time_in_force", "post_only", "quote_asset"]
-        }
+        },
         "binance" => &["time_in_force", "reduce_only", "post_only", "position_side"],
         "okx" | "okex" => &["time_in_force", "reduce_only", "post_only", "position_side"],
         "ibkr" => &["time_in_force", "trading_session"],
@@ -326,8 +320,8 @@ pub(super) fn participant_instrument_for_route(
         (provider, _) => {
             return Err(format!(
                 "unsupported execution route participant: {provider}"
-            ))
-        }
+            ));
+        },
     };
     ParticipantInstrumentRef::new(
         ParticipantRef::new(participant_kind, provider_id).map_err(|error| error.to_string())?,

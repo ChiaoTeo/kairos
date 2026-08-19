@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{ActorId, Generation, Sequence};
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{Generation, Sequence};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{
-    freshness::MarketFreshness,
-    observation::{order_book::OrderBook, MarketObservation},
-    subscription::SubscriptionState,
-};
+use crate::domain::freshness::MarketFreshness;
+use crate::domain::observation::MarketObservation;
+use crate::domain::observation::order_book::OrderBook;
+use crate::domain::subscription::SubscriptionState;
 
 /// Replay-only recovery state for the single Market Actor.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

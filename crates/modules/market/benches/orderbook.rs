@@ -1,7 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use kairos_market::PriceLevel;
 use kairos_primitives::{Price, Quantity};
-use std::hint::black_box;
 
 fn canonical_checksum_benchmark(c: &mut Criterion) {
     let price = Price::new(100, 0).unwrap();

@@ -1,5 +1,6 @@
-use crate::{AccountEvent, ContractError, ContractResult};
 use kairos_protocol::generated::kairos::account::v_2 as fb;
+
+use crate::{AccountEvent, ContractError, ContractResult};
 
 pub fn decode_event(bytes: &[u8]) -> ContractResult<AccountEvent<'_>> {
     macro_rules! decode {

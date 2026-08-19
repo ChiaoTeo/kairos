@@ -1,6 +1,7 @@
-use crate::control::RiskControlClient;
-use crate::ContractResult;
 use std::path::PathBuf;
+
+use crate::ContractResult;
+use crate::control::RiskControlClient;
 pub struct RiskUdsTransport {
     pub control: RiskControlClient,
 }

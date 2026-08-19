@@ -1,5 +1,6 @@
-use crate::{ContractError, ContractResult};
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
+
+use crate::{ContractError, ContractResult};
 
 pub enum ReferenceEvent<'a> {
     EntityUpserted(fb::EntityUpserted<'a>),

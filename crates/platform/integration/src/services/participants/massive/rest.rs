@@ -2,9 +2,8 @@
 
 use serde_json::Value;
 
-use crate::transport::http::{ExchangeError, HttpClient};
-
 use super::reference::MassiveMarketRow;
+use crate::transport::http::{ExchangeError, HttpClient};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MassiveMarketPage {
@@ -797,12 +796,13 @@ fn date_to_unix_nanos(value: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        equity_rows_from_payload, massive_historical_trade, private_next_url, rows_from_payload,
-        RestService,
-    };
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    use super::{
+        RestService, equity_rows_from_payload, massive_historical_trade, private_next_url,
+        rows_from_payload,
+    };
 
     #[test]
     fn pagination_stays_on_private_massive_proxy() {
@@ -825,11 +825,13 @@ mod tests {
             let size = stream.read(&mut buffer).unwrap();
             let request = String::from_utf8_lossy(&buffer[..size]);
             let request_lower = request.to_ascii_lowercase();
-            assert!(!request
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .contains("apiKey"));
+            assert!(
+                !request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .contains("apiKey")
+            );
             assert!(request_lower.contains("authorization: bearer test-secret\r\n"));
             let body = r#"{"results":[]}"#;
             write!(
@@ -906,9 +908,11 @@ mod tests {
             assert!(request_line.contains("ticker=SPY"));
             assert!(request_line.contains("ex_dividend_date.gte=2024-01-01"));
             assert!(request_line.contains("ex_dividend_date.lte=2024-12-31"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("authorization: bearer test-secret\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-secret\r\n")
+            );
             let body = r#"{"results":[{"id":"div-1","ticker":"SPY","ex_dividend_date":"2024-03-15","declaration_date":"2024-02-29","cash_amount":1.59,"split_adjusted_cash_amount":1.59,"currency":"USD","frequency":4}]}"#;
             write!(
                 stream,
@@ -944,9 +948,11 @@ mod tests {
             assert!(request_line.contains("timestamp.gte=100"));
             assert!(request_line.contains("timestamp.lte=200"));
             assert!(request_line.contains("order=asc"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("authorization: bearer test-secret\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-secret\r\n")
+            );
             let body = r#"{"results":[{"bid_price":1.1,"bid_size":2,"bid_exchange":301,"ask_price":1.2,"ask_size":3,"ask_exchange":302,"participant_timestamp":140,"sequence_number":7,"sip_timestamp":150,"tape":3}]}"#;
             write!(
                 stream,

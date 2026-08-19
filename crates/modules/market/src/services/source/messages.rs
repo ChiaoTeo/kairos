@@ -1,12 +1,12 @@
 //! Private messages between the single Market Actor and Integration I/O
 //! drivers. These are Market runtime mechanics, not application API types.
 
-use kairos_primitives::{InstrumentId, MarketId, Sequence, UnixNanos};
+use kairos_primitives::{InstrumentId, MarketId, Sequence, SourceId, UnixNanos};
 
 use crate::domain::market::ResolvedMarket;
-use crate::domain::observation::order_book::PriceLevel;
 use crate::domain::observation::MarketObservation;
-use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceId, SourceStatus};
+use crate::domain::observation::order_book::PriceLevel;
+use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceStatus};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct SourceRequestId(u64);
@@ -112,7 +112,7 @@ pub(crate) enum SourceInput {
 #[derive(Debug)]
 pub(crate) struct SourceOrderBookUpdate {
     pub(crate) market: Box<ResolvedMarket>,
-    pub(crate) source_id: String,
+    pub(crate) source_id: SourceId,
     pub(crate) market_id: MarketId,
     pub(crate) instrument_id: InstrumentId,
     pub(crate) first_sequence: Sequence,

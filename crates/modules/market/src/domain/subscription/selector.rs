@@ -83,7 +83,7 @@ pub fn selector_matches_orderbook(selectors: &[ObservationSelector]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{selector_matches_observation, ObservationSelector};
+    use super::{ObservationSelector, selector_matches_observation};
     use crate::domain::observation::ObservationKind;
 
     #[test]

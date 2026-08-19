@@ -5,7 +5,7 @@ mod frame;
 mod publisher;
 mod stream;
 
-pub use decode::{decode_event, ReferenceEvent};
+pub use decode::{ReferenceEvent, decode_event};
 pub use frame::ReferenceEventFrame;
 pub use publisher::ReferenceEventPublisher;
 pub use stream::ReferenceEventStream;

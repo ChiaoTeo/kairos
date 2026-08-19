@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use kairos_account::composition::account::{
-    compose_in_memory_account_application, compose_local_account_application_for_segments,
-    AccountOptions, AccountSegmentBinding,
+    AccountOptions, AccountSegmentBinding, compose_in_memory_account_application,
+    compose_local_account_application_for_segments,
 };
 use kairos_account::composition::empty_snapshot;
 use kairos_account::domain::{
@@ -187,10 +187,12 @@ fn credential_store_persists_toml_records() {
     store.save(&path).unwrap();
     let loaded = CredentialStore::load(&path).unwrap();
     assert_eq!(loaded.credentials, store.credentials);
-    assert!(directory
-        .path()
-        .join("credentials/binance-live.toml")
-        .is_file());
+    assert!(
+        directory
+            .path()
+            .join("credentials/binance-live.toml")
+            .is_file()
+    );
 }
 
 #[test]
@@ -418,10 +420,12 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
             segments: vec![],
         })
         .unwrap();
-    assert!(reconciliation
-        .differences
-        .iter()
-        .any(|value| value.field == "position.quantity" && value.key == "instrument:btc:net"));
+    assert!(
+        reconciliation
+            .differences
+            .iter()
+            .any(|value| value.field == "position.quantity" && value.key == "instrument:btc:net")
+    );
     let projection = account_projection(&app);
     assert_eq!(projection.balances[0].asset_code, "USDT");
     assert_eq!(projection.positions.len(), 1);

@@ -19,13 +19,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set up pinned nightly Rustfmt
+        run: rustup toolchain install nightly-2025-08-26 --profile minimal --component rustfmt
+
       - name: Set up Node for OpenAPI validation
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: make rust-fmt-check
 
       - name: Install FlatBuffers compiler
         run: sudo apt-get update && sudo apt-get install -y flatbuffers-compiler

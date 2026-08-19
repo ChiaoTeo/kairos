@@ -3,6 +3,8 @@
 use kairos_primitives::{ParticipantSymbol, UnixNanos};
 use secrecy::ExposeSecret;
 
+use super::MassiveFuturesRestConfig;
+use super::rest::map_exchange_error;
 use crate::services::participants::massive::futures::{
     FuturesBarRow, FuturesContractRow, FuturesQuoteRow, FuturesRestService, FuturesTradeRow,
 };
@@ -13,8 +15,6 @@ use crate::{
     InstrumentCatalogQuery, IntegrationError, MarketBar, MarketQuote, MarketTrade, ParticipantKind,
     ParticipantRef,
 };
-
-use super::{rest::map_exchange_error, MassiveFuturesRestConfig};
 
 pub struct MassiveFuturesRestConnection {
     descriptor: ConnectionDescriptor,
@@ -292,8 +292,8 @@ fn futures_resolution(interval: &str) -> Result<String, IntegrationError> {
         other => {
             return Err(IntegrationError::InvalidRequest(format!(
                 "unsupported Massive Futures interval unit: {other}"
-            )))
-        }
+            )));
+        },
     };
     Ok(format!("{multiplier}{unit}"))
 }

@@ -1,11 +1,11 @@
 //! Source input handling, recovery and bounded lifecycle use cases.
 
-use crate::domain::source::{SourceEpoch, SourceId, SourceStatus};
-use crate::services::actor::PendingSourceRequest;
-use crate::services::source::messages::{SourceCommand, SourceInput, SourceRequestId};
 use std::collections::BTreeSet;
 
 use super::super::{MarketApplication, MarketError};
+use crate::domain::source::{SourceEpoch, SourceId, SourceStatus};
+use crate::services::actor::PendingSourceRequest;
+use crate::services::source::messages::{SourceCommand, SourceInput, SourceRequestId};
 
 impl MarketApplication {
     /// Drive one wake-up for small embedded callers such as the one-shot CLI.
@@ -99,7 +99,7 @@ impl MarketApplication {
                 self.actor
                     .apply_source_status(&source_id, epoch, status, error)
                     .map_err(MarketError::Invalid)?;
-            }
+            },
             SourceInput::SubscriptionConfirmed {
                 source_id,
                 epoch,
@@ -121,7 +121,7 @@ impl MarketApplication {
                         source.confirmed.insert(key, handle);
                     }
                 }
-            }
+            },
             SourceInput::Unsubscribed {
                 source_id,
                 epoch,
@@ -142,7 +142,7 @@ impl MarketApplication {
                         source.confirmed.remove(&key);
                     }
                 }
-            }
+            },
             SourceInput::Observation {
                 source_id,
                 epoch,
@@ -152,7 +152,7 @@ impl MarketApplication {
                     self.ingest(observation)?;
                     return Ok(1);
                 }
-            }
+            },
             SourceInput::ReplayObservation {
                 source_id,
                 epoch,
@@ -167,13 +167,13 @@ impl MarketApplication {
                     Ok(_) => {
                         let _ = accepted.send(Ok(self.checkpoint()));
                         return Ok(1);
-                    }
+                    },
                     Err(error) => {
                         let _ = accepted.send(Err(error.to_string()));
                         return Err(error);
-                    }
+                    },
                 }
-            }
+            },
             SourceInput::OrderBook {
                 source_id,
                 epoch,
@@ -186,11 +186,11 @@ impl MarketApplication {
                         Err(MarketError::Invalid(reason)) => {
                             self.request_orderbook_resync(source_id, epoch, market, reason)
                                 .await?;
-                        }
+                        },
                         Err(error) => return Err(error),
                     }
                 }
-            }
+            },
             SourceInput::ResyncRejected {
                 source_id,
                 epoch,
@@ -210,7 +210,7 @@ impl MarketApplication {
                 self.actor
                     .apply_source_status(&source_id, epoch, SourceStatus::Degraded, Some(error))
                     .map_err(MarketError::Invalid)?;
-            }
+            },
             SourceInput::Failed {
                 source_id,
                 epoch,
@@ -220,12 +220,12 @@ impl MarketApplication {
                 self.actor
                     .apply_source_failure(&source_id, epoch, kind, reason)
                     .map_err(MarketError::Invalid)?;
-            }
+            },
             SourceInput::Completed { source_id, epoch } => {
                 self.actor
                     .apply_source_status(&source_id, epoch, SourceStatus::Stopped, None)
                     .map_err(MarketError::Invalid)?;
-            }
+            },
         }
         Ok(0)
     }
@@ -352,8 +352,8 @@ mod tests {
     use crate::domain::subscription::{
         SubscriptionId, SubscriptionMemberRequirement, SubscriptionStatus,
     };
-    use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
     use crate::services::source::SourceHandle;
+    use crate::services::source::messages::{ProviderSubscriptionId, SourceCommand, SourceInput};
 
     fn resolved_market_with_asset_type(
         market_id: &str,
@@ -561,7 +561,7 @@ mod tests {
         application
             .ingest_orderbook_snapshot(
                 crate::domain::observation::order_book::OrderBook::snapshot_with_source(
-                    "binance-spot",
+                    SourceId::new("binance-spot").unwrap(),
                     "btc-usdt",
                     "btc",
                     10,
@@ -578,7 +578,7 @@ mod tests {
                 epoch: SourceEpoch::new(1),
                 update: crate::services::source::messages::SourceOrderBookUpdate {
                     market: Box::new(market.clone()),
-                    source_id: "binance-spot".into(),
+                    source_id: SourceId::new("binance-spot").unwrap(),
                     market_id: market.market_id().unwrap().clone(),
                     instrument_id: market.instrument_id.clone(),
                     first_sequence: 12.into(),
@@ -716,7 +716,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: UnixNanos::new(1),
-            source_id: source_id.to_string(),
+            source_id: source_id.clone(),
         });
         application
             .apply_source_input(SourceInput::Observation {

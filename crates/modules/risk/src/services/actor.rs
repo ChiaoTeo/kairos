@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{
+    DecisionId, Generation, IdempotencyKey, PolicyId, RequestId, ReservationId, Sequence, UnixNanos,
+};
+
 use crate::application::{
     CloseCircuit, FundingRequirement, LimitView, OpenCircuit, ResizeReservation, RiskDecision,
     RiskEvent, RiskSnapshot,
@@ -9,10 +14,6 @@ use crate::domain::{
     ReasonCode, Reservation, ReservationStatus, RiskPolicy,
 };
 use crate::services::persistence::{PersistedEvent, RiskStateStore};
-use kairos_primitives::{
-    ActorId, DecisionId, Generation, IdempotencyKey, PolicyId, RequestId, ReservationId, Sequence,
-    UnixNanos,
-};
 
 #[derive(Debug)]
 pub enum ActorError {
@@ -399,8 +400,8 @@ impl RiskActor {
                         EnforcementMode::Reject => {
                             reason_codes.push(ReasonCode::LimitExceeded);
                             violations.push(format!("policy {} limit exceeded", policy_id));
-                        }
-                        EnforcementMode::Warn | EnforcementMode::Observe => {}
+                        },
+                        EnforcementMode::Warn | EnforcementMode::Observe => {},
                     }
                 }
                 planned.insert(
@@ -781,7 +782,7 @@ impl RiskActor {
             PersistedEvent::PolicyActivated { policy, .. } => {
                 self.policy_version = self.policy_version.max(policy.version);
                 self.insert_policy(policy)?;
-            }
+            },
             PersistedEvent::ReservationChanged { reservation, .. } => {
                 match self.reservations.get(&reservation.reservation_id).cloned() {
                     None if reservation.status == ReservationStatus::Reserved => {
@@ -792,21 +793,21 @@ impl RiskActor {
                         );
                         self.reservations
                             .insert(reservation.reservation_id.clone(), reservation);
-                    }
+                    },
                     Some(current) if current.status == ReservationStatus::Reserved => {
                         self.apply_reservation(&reservation, false)?;
                         self.reservations
                             .insert(reservation.reservation_id.clone(), reservation);
-                    }
-                    Some(_) => {}
+                    },
+                    Some(_) => {},
                     None => return Err("journal starts with a terminal reservation".into()),
                 }
-            }
+            },
             PersistedEvent::CircuitChanged { circuit, .. } => {
                 self.circuits.retain(|value| value.scope != circuit.scope);
                 self.circuits.push(circuit);
-            }
-            PersistedEvent::DecisionEvaluated { .. } => {}
+            },
+            PersistedEvent::DecisionEvaluated { .. } => {},
         }
         self.event_sequence = sequence.into();
         self.generation = self.generation.max(sequence.into());

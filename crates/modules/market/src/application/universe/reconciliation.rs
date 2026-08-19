@@ -1,5 +1,6 @@
-use crate::domain::market::ResolvedMarket;
 use kairos_primitives::{Generation, Sequence};
+
+use crate::domain::market::ResolvedMarket;
 
 /// A complete, watermarked replacement of the markets and data routes that
 /// Market may use. Composition maps the external Reference contract into this

@@ -27,7 +27,7 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
                 ask_venue_code: None,
                 tape: None,
                 observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-                source_id: "recorded".into(),
+                source_id: kairos_primitives::SourceId::new("recorded").unwrap(),
             })
         })
         .collect();

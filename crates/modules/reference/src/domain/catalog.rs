@@ -152,8 +152,8 @@ impl ReferenceCatalog {
                         current_symbol: next.venue_symbol.as_ref().map(ToString::to_string),
                         ..LifecycleEvent::default()
                     });
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         let mut delisted_records = Vec::new();
@@ -227,8 +227,9 @@ impl ReferenceCatalog {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog};
     use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+
+    use super::{Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog};
 
     fn instrument_id(value: &str) -> InstrumentId {
         InstrumentId::new(value).unwrap()
@@ -295,9 +296,11 @@ mod tests {
             catalog.apply(ProviderCatalog::default(), 20.into()).len(),
             4
         );
-        assert!(catalog
-            .apply(ProviderCatalog::default(), 30.into())
-            .is_empty());
+        assert!(
+            catalog
+                .apply(ProviderCatalog::default(), 30.into())
+                .is_empty()
+        );
         assert_eq!(catalog.lifecycle_events.len(), 8);
         assert_eq!(
             catalog
@@ -316,9 +319,11 @@ mod tests {
         catalog.apply(ProviderCatalog::default(), 20.into());
         let events = catalog.apply(catalog_with_market("active"), 30.into());
         assert_eq!(events.len(), 4);
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == "status_changed"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == "status_changed")
+        );
         assert_eq!(catalog.markets["market:test"].status, "active".into());
     }
 

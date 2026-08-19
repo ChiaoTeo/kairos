@@ -1,11 +1,13 @@
-use kairos_risk_contract::{risk_view_path, DecodedRiskEvent, RiskViewKey};
+use kairos_risk_contract::{DecodedRiskEvent, RiskViewKey, risk_view_path};
 
 #[test]
 fn risk_latest_view_is_partitioned_by_actor() {
     let key = RiskViewKey::latest("risk:instance-1");
-    assert!(risk_view_path("/runtime", &key)
-        .unwrap()
-        .ends_with("risk/risk%3Ainstance-1/latest/current.snapshot"));
+    assert!(
+        risk_view_path("/runtime", &key)
+            .unwrap()
+            .ends_with("risk/risk%3Ainstance-1/latest/current.snapshot")
+    );
 }
 
 #[test]
@@ -14,9 +16,11 @@ fn unknown_risk_event_identifier_is_rejected() {
         Ok(_) => panic!("unknown root must be rejected"),
         Err(error) => error,
     };
-    assert!(error
-        .to_string()
-        .contains("unknown Risk v2 event identifier"));
+    assert!(
+        error
+            .to_string()
+            .contains("unknown Risk v2 event identifier")
+    );
 }
 
 #[test]

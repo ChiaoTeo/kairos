@@ -5,8 +5,8 @@ use kairos_market::{
 };
 use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, EventMetadataArgs};
 use kairos_protocol::generated::kairos::reference::v_2::{
-    finish_market_upserted_buffer, Market as MarketMessage, MarketArgs,
-    MarketUpserted as MarketUpsertedMessage, MarketUpsertedArgs,
+    Market as MarketMessage, MarketArgs, MarketUpserted as MarketUpsertedMessage,
+    MarketUpsertedArgs, finish_market_upserted_buffer,
 };
 
 fn market(id: &str, symbol: &str) -> ResolvedMarket {
@@ -32,7 +32,7 @@ fn rate_observation_has_a_qualified_view_and_freshness_watermark() {
             value: "0.0001".parse().unwrap(),
             mark_price: Some("100.5".parse().unwrap()),
             observed_at_unix_nanos: kairos_primitives::UnixNanos::new(7),
-            source_id: "binance".into(),
+            source_id: kairos_primitives::SourceId::new("binance").unwrap(),
         }))
         .unwrap();
 
@@ -69,7 +69,7 @@ fn actor_owns_sequence_and_latest_observation() {
         ask_venue_code: None,
         tape: None,
         observed_at_unix_nanos: kairos_primitives::UnixNanos::new(7),
-        source_id: "test".into(),
+        source_id: kairos_primitives::SourceId::new("test").unwrap(),
     });
     assert_eq!(actor.ingest(value).unwrap(), 1);
     assert_eq!(actor.event_sequence(), 1);
@@ -98,7 +98,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         ask_venue_code: None,
         tape: None,
         observed_at_unix_nanos: kairos_primitives::UnixNanos::new(2),
-        source_id: "binance".into(),
+        source_id: kairos_primitives::SourceId::new("binance").unwrap(),
     });
     assert_eq!(actor.ingest(quote).unwrap(), 1);
     assert!(actor.query().latest_quote("market:btc").is_some());
@@ -112,7 +112,7 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         close: "1".parse().unwrap(),
         volume: None,
         observed_at_unix_nanos: kairos_primitives::UnixNanos::new(3),
-        source_id: "binance".into(),
+        source_id: kairos_primitives::SourceId::new("binance").unwrap(),
         derivation: "direct".into(),
     });
     assert_eq!(actor.ingest(bar).unwrap(), 1);
@@ -134,7 +134,7 @@ fn out_of_order_observation_does_not_regress_current_projection() {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-            source_id: "test".into(),
+            source_id: kairos_primitives::SourceId::new("test").unwrap(),
         })
     };
     actor.ingest(quote(10, "100")).unwrap();
@@ -167,7 +167,7 @@ fn source_agnostic_typed_query_rejects_ambiguous_views() {
                 ask_venue_code: None,
                 tape: None,
                 observed_at_unix_nanos: kairos_primitives::UnixNanos::new(10),
-                source_id: source_id.into(),
+                source_id: kairos_primitives::SourceId::new(source_id).unwrap(),
             }))
             .unwrap();
     }
@@ -276,12 +276,14 @@ fn dynamic_budget_rejection_keeps_previous_members() {
             markets: vec![first, second, third],
         })
         .unwrap();
-    assert!(result
-        .get(&id)
-        .unwrap()
-        .rejected
-        .as_deref()
-        .is_some_and(|value| value.contains("member limit")));
+    assert!(
+        result
+            .get(&id)
+            .unwrap()
+            .rejected
+            .as_deref()
+            .is_some_and(|value| value.contains("member limit"))
+    );
     let state = actor.current_view().subscriptions.remove(0);
     assert_eq!(state.members.len(), 2);
 }
@@ -316,9 +318,11 @@ fn stale_reference_changes_are_ignored_by_watermark() {
         .unwrap();
     assert!(ignored.is_empty());
     let state = actor.current_view().subscriptions.remove(0);
-    assert!(state
-        .members
-        .contains_key(second.market_id().unwrap().as_str()));
+    assert!(
+        state
+            .members
+            .contains_key(second.market_id().unwrap().as_str())
+    );
 }
 
 #[test]
@@ -373,7 +377,7 @@ fn reference_v2_wire_event_decodes_with_watermarks() {
             assert_eq!(value.catalog_revision(), 2);
             assert_eq!(value.metadata().sequence(), 9);
             assert_eq!(value.market().market_id(), "market:two");
-        }
+        },
         _ => panic!("unexpected Reference event"),
     }
 }

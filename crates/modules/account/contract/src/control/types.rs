@@ -1,23 +1,5 @@
+use kairos_primitives::{AccountId, SegmentKey, UnixNanos};
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize)]
-pub struct AccountControlRequest {
-    pub command_id: String,
-    pub idempotency_key: String,
-    pub caller_id: String,
-    pub workspace_id: String,
-    pub payload: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct AccountControlResponse {
-    pub status: Option<String>,
-    pub operation: Option<String>,
-    pub resource_id: Option<String>,
-    pub error: Option<AccountControlError>,
-    #[serde(flatten)]
-    pub details: std::collections::BTreeMap<String, serde_json::Value>,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AccountControlError {
@@ -55,7 +37,7 @@ pub enum AccountRestResponse {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountSegmentsRequest {
     #[serde(default)]
-    pub segments: Vec<String>,
+    pub segments: Vec<SegmentKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -65,12 +47,12 @@ pub struct AccountCommandStatus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceAccountTimeResponse {
-    pub event_time_unix_nanos: u64,
+    pub event_time_unix_nanos: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountRefreshResponse {
     pub status: String,
-    pub account_id: String,
-    pub segments: Vec<String>,
+    pub account_id: Option<AccountId>,
+    pub segments: Vec<SegmentKey>,
 }

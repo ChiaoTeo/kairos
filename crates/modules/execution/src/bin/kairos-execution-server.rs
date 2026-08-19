@@ -1,7 +1,7 @@
 use clap::Parser;
 use kairos_conflux::load_workspace_credential;
 use kairos_execution::composition::{
-    build_execution_host, ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence,
+    ExecutionConnectionOptions, ExecutionHostConfig, ExecutionWriterFence, build_execution_host,
 };
 use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use secrecy::ExposeSecret;
@@ -47,11 +47,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let state = instance.state(&["execution", "execution-state.sqlite"])?;
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
     let view_root = instance.snapshot(&[])?;
-    let transport_identity = kairos_protocol::InstanceIdentity::new(
+    let transport_identity = kairos_primitives::runtime::InstanceIdentity::new(
         workspace.id(),
         instance.launch_id(),
         instance.instance_id(),
-    );
+    )?;
     let reference_database = workspace.child(&["state", "reference", "reference.sqlite"])?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;
@@ -393,10 +393,10 @@ fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static 
         ),
         ("binance", "cross-margin" | "isolated-margin") => {
             ("https://api.binance.com", "wss://stream.binance.com:9443")
-        }
+        },
         ("okx" | "okex", "spot" | "margin" | "swap" | "futures" | "option" | "options") => {
             ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private")
-        }
+        },
         ("simulated" | "paper", _) | ("ibkr", "spot" | "equity") => ("", ""),
         _ => ("", ""),
     }
@@ -404,13 +404,14 @@ fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        acquire_exclusive_provider_process_locks, acquire_execution_writer_leases,
-        provider_endpoints, Args, ExecutionRouteConfig,
-    };
     use kairos_execution::composition::ExecutionConnectionOptions;
     use kairos_workspace::workspace::Workspace;
     use secrecy::SecretString;
+
+    use super::{
+        Args, ExecutionRouteConfig, acquire_exclusive_provider_process_locks,
+        acquire_execution_writer_leases, provider_endpoints,
+    };
 
     #[test]
     fn route_config_accepts_credential_references_and_rejects_inline_secrets() {
@@ -519,9 +520,11 @@ mod tests {
     #[test]
     fn participant_defaults_select_native_private_endpoints() {
         assert_eq!(provider_endpoints("okx", "spot").0, "https://www.okx.com");
-        assert!(provider_endpoints("okx", "spot")
-            .1
-            .contains("/ws/v5/private"));
+        assert!(
+            provider_endpoints("okx", "spot")
+                .1
+                .contains("/ws/v5/private")
+        );
         assert_eq!(
             provider_endpoints("binance", "options"),
             (

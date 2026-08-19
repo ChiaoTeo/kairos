@@ -254,8 +254,7 @@ pub mod kairos {
     }
 
     pub mod execution {
-        pub use super::common;
-        pub use super::intent;
+        pub use super::{common, intent};
         pub mod v_2 {
             mod active_intents_view_generated;
             pub use active_intents_view_generated::*;

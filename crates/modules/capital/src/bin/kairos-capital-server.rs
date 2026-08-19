@@ -1,33 +1,27 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{get, post},
-    Json, Router,
-};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use clap::Parser;
+use kairos_capital::composition::compose_persistent_capital_application;
 use kairos_capital::{
-    composition::compose_persistent_capital_application, CancelFundingObjective,
-    CapitalApplication, CapitalDemand, CapitalDemandId, CapitalDemandReceipt, CapitalGroupConfig,
-    CapitalGroupId, CapitalGroupMember, FundingLocation as DomainLocation, FundingObjective,
-    FundingObjectiveId, FundingObjectiveReceipt, FundingPriority, ObserveCapitalDemand,
+    CancelFundingObjective, CapitalApplication, CapitalDemand, CapitalDemandReceipt,
+    CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, FundingLocation as DomainLocation,
+    FundingObjective, FundingObjectiveReceipt, FundingPriority, ObserveCapitalDemand,
     PublishFundingObjective,
 };
 use kairos_capital_contract::{
     CancelFundingObjectiveRequest, ObserveCapitalDemandRequest, PublishFundingObjectiveRequest,
 };
-use kairos_primitives::{
-    AccountId, BrokerId, Currency, Generation, IdempotencyKey, Quantity, SegmentKey, StrategyId,
-    UnixNanos,
-};
+use kairos_primitives::{AccountId, BrokerId, Generation, SegmentKey, StrategyId};
 use kairos_workspace::workspace::Workspace;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
 
@@ -206,18 +200,18 @@ async fn publish_objective(
     State(state): State<Arc<CapitalState>>,
     Json(request): Json<PublishFundingObjectiveRequest>,
 ) -> Response {
-    let response_request_id = request.request_id.clone();
-    let response_objective_id = request.objective_id.clone();
-    let response_version = request.version;
+    let response_request_id = request.request_id.to_string();
+    let response_objective_id = request.objective_id.to_string();
+    let response_version = request.version.get();
     let result = (|| {
         let objective = FundingObjective {
-            objective_id: FundingObjectiveId::new(&request.objective_id)?,
-            version: Generation::new(request.version),
-            strategy_id: StrategyId::new(&request.strategy_id)?,
-            destination: location(request.destination)?,
-            desired_available: quantity(&request.desired_available)?,
-            required_by: UnixNanos::new(request.required_by_unix_nanos),
-            expires_at: UnixNanos::new(request.expires_at_unix_nanos),
+            objective_id: request.objective_id,
+            version: request.version,
+            strategy_id: request.strategy_id,
+            destination: location(request.destination),
+            desired_available: request.desired_available,
+            required_by: request.required_by_unix_nanos,
+            expires_at: request.expires_at_unix_nanos,
             priority: priority(request.priority),
             confidence_bps: request.confidence_bps,
             strategy_decision_id: request.strategy_decision_id,
@@ -227,9 +221,9 @@ async fn publish_objective(
             .lock()
             .map_err(|_| "Capital application mutex is poisoned".to_string())?
             .publish_funding_objective(PublishFundingObjective {
-                capital_group_id: CapitalGroupId::new(request.capital_group_id)?,
+                capital_group_id: request.capital_group_id,
                 objective,
-                observed_at: UnixNanos::new(request.observed_at_unix_nanos),
+                observed_at: request.observed_at_unix_nanos,
             })
             .map_err(|error| error.to_string())
     })();
@@ -248,19 +242,19 @@ async fn cancel_objective(
     State(state): State<Arc<CapitalState>>,
     Json(request): Json<CancelFundingObjectiveRequest>,
 ) -> Response {
-    let response_request_id = request.request_id.clone();
-    let response_objective_id = request.objective_id.clone();
-    let response_version = request.expected_version;
+    let response_request_id = request.request_id.to_string();
+    let response_objective_id = request.objective_id.to_string();
+    let response_version = request.expected_version.get();
     let result = (|| {
         state
             .application
             .lock()
             .map_err(|_| "Capital application mutex is poisoned".to_string())?
             .cancel_funding_objective(CancelFundingObjective {
-                capital_group_id: CapitalGroupId::new(request.capital_group_id)?,
-                objective_id: FundingObjectiveId::new(&request.objective_id)?,
-                expected_version: Generation::new(request.expected_version),
-                observed_at: UnixNanos::new(request.observed_at_unix_nanos),
+                capital_group_id: request.capital_group_id,
+                objective_id: request.objective_id,
+                expected_version: request.expected_version,
+                observed_at: request.observed_at_unix_nanos,
             })
             .map_err(|error| error.to_string())
     })();
@@ -279,28 +273,27 @@ async fn observe_demand(
     State(state): State<Arc<CapitalState>>,
     Json(request): Json<ObserveCapitalDemandRequest>,
 ) -> Response {
-    let response_request_id = request.request_id.clone();
-    let response_demand_id = request.demand_id.clone();
+    let response_request_id = request.request_id.to_string();
+    let response_demand_id = request.demand_id.to_string();
     let result = (|| {
         validate_lease_fence(
             &state.account_lease_fences,
-            &request.destination.account_id,
+            request.destination.account_id.as_str(),
             &request.destination_lease_fence,
         )?;
         let demand = CapitalDemand {
-            demand_id: CapitalDemandId::new(&request.demand_id)?,
-            idempotency_key: IdempotencyKey::new(request.idempotency_key)
-                .map_err(|error| error.to_string())?,
-            strategy_id: StrategyId::new(request.strategy_id)?,
-            destination: location(request.destination)?,
-            observed_shortfall: quantity(&request.observed_shortfall)?,
-            observed_at: UnixNanos::new(request.observed_at_unix_nanos),
-            required_by: UnixNanos::new(request.required_by_unix_nanos),
-            expires_at: UnixNanos::new(request.expires_at_unix_nanos),
+            demand_id: request.demand_id,
+            idempotency_key: request.idempotency_key,
+            strategy_id: request.strategy_id,
+            destination: location(request.destination),
+            observed_shortfall: request.observed_shortfall,
+            observed_at: request.observed_at_unix_nanos,
+            required_by: request.required_by_unix_nanos,
+            expires_at: request.expires_at_unix_nanos,
             priority: priority(request.priority),
             confidence_bps: request.confidence_bps,
-            account_watermark: request.account_watermark.into(),
-            risk_watermark: request.risk_watermark.into(),
+            account_watermark: request.account_watermark,
+            risk_watermark: request.risk_watermark,
             launch_id: request.launch_id,
             instance_id: request.instance_id,
             destination_lease_fence: request.destination_lease_fence,
@@ -311,7 +304,7 @@ async fn observe_demand(
             .lock()
             .map_err(|_| "Capital application mutex is poisoned".to_string())?
             .observe_demand(ObserveCapitalDemand {
-                capital_group_id: CapitalGroupId::new(request.capital_group_id)?,
+                capital_group_id: request.capital_group_id,
                 demand,
             })
             .map_err(|error| error.to_string())
@@ -331,7 +324,7 @@ async fn observe_demand(
                 })),
             )
                 .into_response()
-        }
+        },
         Err(error) => (
             StatusCode::OK,
             Json(json!({
@@ -379,17 +372,13 @@ fn objective_response(request_id: String, receipt: FundingObjectiveReceipt) -> R
         .into_response()
 }
 
-fn location(value: kairos_capital_contract::FundingLocation) -> Result<DomainLocation, String> {
-    Ok(DomainLocation {
-        broker: BrokerId::new(value.broker).map_err(|error| error.to_string())?,
-        account_id: AccountId::new(value.account_id).map_err(|error| error.to_string())?,
-        segment: SegmentKey::new(value.segment).map_err(|error| error.to_string())?,
-        asset: Currency::new(value.asset).map_err(|error| error.to_string())?,
-    })
-}
-
-fn quantity(value: &str) -> Result<Quantity, String> {
-    Quantity::from_str(value).map_err(|error| error.to_string())
+fn location(value: kairos_capital_contract::FundingLocation) -> DomainLocation {
+    DomainLocation {
+        broker: value.broker,
+        account_id: value.account_id,
+        segment: value.segment,
+        asset: value.asset,
+    }
 }
 
 fn priority(value: kairos_capital_contract::FundingObjectivePriority) -> FundingPriority {

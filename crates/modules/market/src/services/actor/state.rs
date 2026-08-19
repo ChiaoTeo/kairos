@@ -1,15 +1,17 @@
 use std::collections::BTreeMap;
 
+use kairos_primitives::runtime::ActorId;
+use kairos_primitives::{Generation, Sequence};
+
 use super::ReplayCheckpoint;
 use crate::domain::events::MarketChange;
 use crate::domain::freshness::{FeedStatus, MarketFreshness};
 use crate::domain::market::ResolvedMarket;
-use crate::domain::observation::order_book::OrderBook;
 use crate::domain::observation::MarketObservation;
+use crate::domain::observation::order_book::OrderBook;
 use crate::domain::source::{SourceId, SourceState};
 use crate::domain::subscription::{SubscriptionId, SubscriptionMode, SubscriptionState};
 use crate::services::source::messages::SourceRequestId;
-use kairos_primitives::{ActorId, Generation, Sequence};
 #[path = "freshness.rs"]
 mod freshness_evaluation;
 #[path = "observations/mod.rs"]

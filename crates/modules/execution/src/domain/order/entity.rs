@@ -3,12 +3,6 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum OrderType {
-    Market,
-    Limit,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionOrderStatus {
     Pending,
     Submitting,
@@ -41,7 +35,7 @@ impl From<ExecutionOrderStatus> for kairos_primitives::OrderStatus {
             ExecutionOrderStatus::Filled => Self::Filled,
             ExecutionOrderStatus::CancelRequested | ExecutionOrderStatus::Canceled => {
                 Self::Canceled
-            }
+            },
             ExecutionOrderStatus::Rejected | ExecutionOrderStatus::Failed => Self::Rejected,
             ExecutionOrderStatus::Expired => Self::Expired,
             ExecutionOrderStatus::Unknown => Self::Unknown,

@@ -42,7 +42,7 @@ impl ReferenceSource for HyperliquidSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_perpetual_instruments()
                     .await
-            }
+            },
             (ConnectionRef(key), HyperliquidProduct::Spot) => {
                 connections
                     .hyperliquid_info_rest
@@ -50,7 +50,7 @@ impl ReferenceSource for HyperliquidSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_spot_instruments()
                     .await
-            }
+            },
         };
         let facts = facts.map_err(|error| ReferenceError::Provider(error.to_string()))?;
         hyperliquid_provider_catalog(facts, self.product)
@@ -86,7 +86,7 @@ pub(super) fn hyperliquid_provider_catalog(
             ),
             HyperliquidProduct::Spot => {
                 (ExternalInstrumentKind::Spot, InstrumentKind::Spot, "spot")
-            }
+            },
         };
         if value.kind != expected_kind {
             return Err(ReferenceError::Provider(format!(
@@ -110,7 +110,7 @@ pub(super) fn hyperliquid_provider_catalog(
         for code in [&base, &quote] {
             catalog.assets.push(Asset {
                 asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-                code: code.clone(),
+                code: kairos_primitives::Symbol::new(code.clone())?,
                 asset_class: AssetClass::Crypto,
                 status: "active".into(),
                 ..Asset::default()
@@ -122,7 +122,7 @@ pub(super) fn hyperliquid_provider_catalog(
             ))?,
             HyperliquidProduct::Spot => {
                 kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?
-            }
+            },
         };
         let listing_id = kairos_primitives::ListingId::new(format!(
             "listing:hyperliquid:{family}:{base}:{quote}"
@@ -166,13 +166,25 @@ pub(super) fn hyperliquid_provider_catalog(
                 "asset:crypto:{quote}"
             ))?),
             status,
-            price_tick: value.price_tick,
-            quantity_tick: value.quantity_tick,
+            price_tick: super::optional_decimal(value.price_tick, "Hyperliquid price tick")?,
+            quantity_tick: super::optional_decimal(
+                value.quantity_tick,
+                "Hyperliquid quantity tick",
+            )?,
             price_precision: value.price_precision.unwrap_or_default() as i32,
             quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
-            minimum_quantity: value.minimum_quantity,
-            minimum_notional: value.minimum_notional,
-            contract_size: value.contract_value,
+            minimum_quantity: super::optional_decimal(
+                value.minimum_quantity,
+                "Hyperliquid minimum quantity",
+            )?,
+            minimum_notional: super::optional_decimal(
+                value.minimum_notional,
+                "Hyperliquid minimum notional",
+            )?,
+            contract_size: super::optional_decimal(
+                value.contract_value,
+                "Hyperliquid contract size",
+            )?,
             effective_from_unix_nanos: 0.into(),
             ..Market::default()
         });

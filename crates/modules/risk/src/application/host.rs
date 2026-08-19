@@ -2,21 +2,20 @@
 //! the Conflux ingress; this module owns HTTP-over-UDS framing and process
 //! lifecycle adaptation.
 
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json, Router,
-};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, Router};
 use kairos_conflux::{
     Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
 };
 use kairos_risk_contract::{AuthorizeRequest, RiskControlError, RiskRestRequest, RiskRestResponse};
 use kairos_workspace::runtime::{HEALTH_PATH, STOP_PATH};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use tokio::net::UnixListener;
 use tracing::Instrument;
 
@@ -176,7 +175,7 @@ async fn risk_http_handler_inner(host: RiskHttpState, request: Request) -> Respo
                 Json(serde_json::json!({"status":"stopping"})),
             )
                 .into_response()
-        }
+        },
         HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
             Ok(Some(response)) => encode_response(response),
             Ok(None) => json(
@@ -220,7 +219,7 @@ fn decode_request(method: &str, path: &str, body: &[u8]) -> Result<HostRequest, 
         "/v1/publish_policy" => RiskRestRequest::PublishPolicy(decode(body)?),
         "/v1/authorizations" | "/v1/authorize_and_reserve" => {
             RiskRestRequest::AuthorizeAndReserve(decode::<AuthorizeRequest>(body)?)
-        }
+        },
         "/v1/pre_trade_check" => RiskRestRequest::PreTradeCheck(decode(body)?),
         "/v1/post_trade_check" => RiskRestRequest::PostTradeCheck(decode(body)?),
         "/v1/open_circuit" => RiskRestRequest::OpenCircuit(decode(body)?),
@@ -230,12 +229,12 @@ fn decode_request(method: &str, path: &str, body: &[u8]) -> Result<HostRequest, 
             || (path.starts_with("/v1/reservations/") && path.ends_with("/release")) =>
         {
             RiskRestRequest::ReleaseReservation(decode(body)?)
-        }
+        },
         path if path == "/v1/consume"
             || (path.starts_with("/v1/reservations/") && path.ends_with("/consume")) =>
         {
             RiskRestRequest::ConsumeReservation(decode(body)?)
-        }
+        },
         "/v1/time/advance" => RiskRestRequest::AdvanceTime(decode(body)?),
         _ => return Err(json(StatusCode::NOT_FOUND, "unknown Risk control path")),
     };
@@ -321,10 +320,12 @@ fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::RiskHost;
+    use std::time::Duration;
+
     use kairos_conflux::ConfluxSystem;
     use kairos_workspace::RestControlClient;
-    use std::time::Duration;
+
+    use super::RiskHost;
 
     #[tokio::test(flavor = "current_thread")]
     async fn control_socket_exposes_typed_conflux_contract_and_stop() {

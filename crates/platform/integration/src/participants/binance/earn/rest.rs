@@ -256,7 +256,7 @@ fn map_submission(
                     .and_then(Value::as_str)
                     .unwrap_or("Binance Earn command rejected"),
             )))
-        }
+        },
         CommandOutcome::Confirmed(value) => Ok(CommandOutcome::Confirmed(EarnSubmission {
             participant_action_id: scalar_string(value.get(id_field)),
             acknowledged_at_unix_nanos: Some(now()),
@@ -272,13 +272,13 @@ fn parse_product(row: &Value) -> Result<EarnProduct, IntegrationError> {
             if row.get("canPurchase").and_then(Value::as_bool) != Some(false) =>
         {
             EarnProductState::Available
-        }
+        },
         Some("SUSPENDED") => EarnProductState::Suspended,
         Some("END") | Some("CLOSED") => EarnProductState::Closed,
         Some(value) => EarnProductState::Unknown(value.into()),
         None if row.get("canPurchase").and_then(Value::as_bool) == Some(true) => {
             EarnProductState::Available
-        }
+        },
         None => EarnProductState::Unknown("missing".into()),
     };
     let rate_components = row

@@ -89,7 +89,7 @@ impl ReferenceSource for BinanceSpotSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Spot)
@@ -114,7 +114,7 @@ impl ReferenceSource for BinanceOptionsSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceProduct::Option)
@@ -139,7 +139,7 @@ impl ReferenceSource for BinanceDerivativesSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
             BinanceDerivativesFamily::CoinM(ConnectionRef(key)) => {
                 connections
                     .binance_coinm_rest
@@ -147,7 +147,7 @@ impl ReferenceSource for BinanceDerivativesSource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, self.product)
@@ -172,7 +172,7 @@ impl ReferenceSource for BinanceEquitySource {
                     .map_err(|error| ReferenceError::Provider(error.to_string()))?
                     .fetch_instruments()
                     .await
-            }
+            },
         }
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_equity_provider_catalog(facts)
@@ -205,7 +205,7 @@ pub(super) fn binance_equity_provider_catalog(
             kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{symbol}:common"))?;
         catalog.assets.push(Asset {
             asset_id: equity_asset,
-            code: symbol.clone(),
+            code: kairos_primitives::Symbol::new(symbol.clone())?,
             asset_class: AssetClass::Equity,
             status,
             ..Asset::default()
@@ -289,7 +289,7 @@ fn append_binance_instrument(
     ] {
         catalog.assets.push(Asset {
             asset_id: kairos_primitives::AssetId::new(format!("asset:{asset_class}:{code}"))?,
-            code: code.clone(),
+            code: kairos_primitives::Symbol::new(code.clone())?,
             asset_class: AssetClass::parse_known(asset_class)?,
             status: "active".into(),
             ..Asset::default()
@@ -326,7 +326,7 @@ fn append_binance_instrument(
                 format!("{base}-{quote}"),
                 None,
             )
-        }
+        },
         ExternalInstrumentKind::EquityPerpetual
             if instrument_type == BinanceProduct::UsdMFutures =>
         {
@@ -357,7 +357,7 @@ fn append_binance_instrument(
                 format!("{base}-{quote}"),
                 Some(underlying),
             )
-        }
+        },
         ExternalInstrumentKind::Future
             if matches!(
                 instrument_type,
@@ -376,7 +376,7 @@ fn append_binance_instrument(
                 format!("{base}-{quote}-{expiry}"),
                 None,
             )
-        }
+        },
         ExternalInstrumentKind::Option if instrument_type == BinanceProduct::Option => {
             let expiry = canonical_expiry(value.expiry_unix_nanos)?;
             let strike = value.strike.as_deref().ok_or_else(|| {
@@ -415,7 +415,7 @@ fn append_binance_instrument(
                             return Err(ReferenceError::Provider(format!(
                                 "unsupported Binance option right: {right}"
                             )));
-                        }
+                        },
                     }
                 ),
                 format!(
@@ -428,12 +428,12 @@ fn append_binance_instrument(
                 ),
                 Some(underlying),
             )
-        }
+        },
         other => {
             return Err(ReferenceError::Provider(format!(
-            "Binance {instrument_type:?} catalog contained incompatible instrument kind: {other:?}"
-        )))
-        }
+                "Binance {instrument_type:?} catalog contained incompatible instrument kind: {other:?}"
+            )));
+        },
     };
     let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
     let listing_id = kairos_primitives::ListingId::new(if canonical_family == "spot" {
@@ -467,7 +467,7 @@ fn append_binance_instrument(
         )
         .then_some(value.expiry_unix_nanos)
         .flatten(),
-        strike: value.strike.clone(),
+        strike: super::optional_decimal(value.strike.clone(), "Binance option strike")?,
         option_right: value.option_right.clone(),
         status,
         ..Instrument::default()
@@ -506,13 +506,19 @@ fn append_binance_instrument(
             "asset:crypto:{quote}"
         ))?),
         status,
-        price_tick: value.price_tick,
-        quantity_tick: value.quantity_tick,
+        price_tick: super::optional_decimal(value.price_tick, "Binance price tick")?,
+        quantity_tick: super::optional_decimal(value.quantity_tick, "Binance quantity tick")?,
         price_precision: value.price_precision.unwrap_or_default() as i32,
         quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
-        minimum_quantity: value.minimum_quantity,
-        minimum_notional: value.minimum_notional,
-        contract_size: value.contract_value,
+        minimum_quantity: super::optional_decimal(
+            value.minimum_quantity,
+            "Binance minimum quantity",
+        )?,
+        minimum_notional: super::optional_decimal(
+            value.minimum_notional,
+            "Binance minimum notional",
+        )?,
+        contract_size: super::optional_decimal(value.contract_value, "Binance contract size")?,
         underlying_instrument_id,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,

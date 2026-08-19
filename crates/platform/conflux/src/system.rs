@@ -1,3 +1,8 @@
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::marker::PhantomData;
+use std::task::{Context, Poll};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use kairos_account_contract::view::AccountViewReader;
 use kairos_account_contract::{
     AccountClient, AccountEventPublisher, AccountEventStream, AccountViewPublisher,
@@ -6,55 +11,53 @@ use kairos_execution_contract::{
     ExecutionClient, ExecutionEventPublisher, ExecutionEventStream, ExecutionViewPublisher,
     ExecutionViewReader,
 };
-use kairos_integration::participants::{
-    binance::{
-        advanced::stocks::{
-            BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
-            BinanceStocksWebSocketConnection,
-        },
-        coinm::{
-            BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
-            BinanceCoinMWebSocketConnection,
-        },
-        earn::BinanceSimpleEarnRestConnection,
-        funding::BinanceFundingRestConnection,
-        margin::{
-            BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection,
-            BinanceMarginWebSocketConnection,
-        },
-        options::{
-            BinanceOptionsRestConnection, BinanceOptionsUserWebSocketConnection,
-            BinanceOptionsWebSocketConnection,
-        },
-        spot::{
-            BinanceSpotRestConnection, BinanceSpotUserWebSocketConnection,
-            BinanceSpotWebSocketConnection,
-        },
-        usdm::{
-            BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection,
-            BinanceUsdMWebSocketConnection,
-        },
-        BinanceRestConfig, BinanceUserWebSocketConfig, BinanceWebSocketConfig,
-    },
-    hyperliquid::{
-        info::HyperliquidInfoRestConnection, HyperliquidRestConfig, HyperliquidWebSocketConfig,
-        HyperliquidWebSocketConnection,
-    },
-    ibkr::{
-        IbkrAccountQueryConfig, IbkrAccountQueryConnection, IbkrAccountStreamConfig,
-        IbkrAccountStreamConnection, IbkrExecutionStreamConfig, IbkrExecutionStreamConnection,
-        IbkrMarketDataConfig, IbkrMarketDataConnection, IbkrOrderConfig, IbkrOrderConnection,
-    },
-    massive::{
-        MassiveOptionsWebSocketConnection, MassiveRestConfig, MassiveRestConnection,
-        MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
-    },
-    okx::{
-        private::{OkxPrivateRestConnection, OkxPrivateWebSocketConnection},
-        public::{OkxPublicRestConnection, OkxPublicWebSocketConnection},
-    },
-};
 use kairos_integration::ConnectionKey;
+use kairos_integration::participants::binance::advanced::stocks::{
+    BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
+    BinanceStocksWebSocketConnection,
+};
+use kairos_integration::participants::binance::coinm::{
+    BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
+    BinanceCoinMWebSocketConnection,
+};
+use kairos_integration::participants::binance::earn::BinanceSimpleEarnRestConnection;
+use kairos_integration::participants::binance::funding::BinanceFundingRestConnection;
+use kairos_integration::participants::binance::margin::{
+    BinanceMarginRestConnection, BinanceMarginUserWebSocketConnection,
+    BinanceMarginWebSocketConnection,
+};
+use kairos_integration::participants::binance::options::{
+    BinanceOptionsRestConnection, BinanceOptionsUserWebSocketConnection,
+    BinanceOptionsWebSocketConnection,
+};
+use kairos_integration::participants::binance::spot::{
+    BinanceSpotRestConnection, BinanceSpotUserWebSocketConnection, BinanceSpotWebSocketConnection,
+};
+use kairos_integration::participants::binance::usdm::{
+    BinanceUsdMRestConnection, BinanceUsdMUserWebSocketConnection, BinanceUsdMWebSocketConnection,
+};
+use kairos_integration::participants::binance::{
+    BinanceRestConfig, BinanceUserWebSocketConfig, BinanceWebSocketConfig,
+};
+use kairos_integration::participants::hyperliquid::info::HyperliquidInfoRestConnection;
+use kairos_integration::participants::hyperliquid::{
+    HyperliquidRestConfig, HyperliquidWebSocketConfig, HyperliquidWebSocketConnection,
+};
+use kairos_integration::participants::ibkr::{
+    IbkrAccountQueryConfig, IbkrAccountQueryConnection, IbkrAccountStreamConfig,
+    IbkrAccountStreamConnection, IbkrExecutionStreamConfig, IbkrExecutionStreamConnection,
+    IbkrMarketDataConfig, IbkrMarketDataConnection, IbkrOrderConfig, IbkrOrderConnection,
+};
+use kairos_integration::participants::massive::{
+    MassiveOptionsWebSocketConnection, MassiveRestConfig, MassiveRestConnection,
+    MassiveStocksWebSocketConnection, MassiveWebSocketConfig,
+};
+use kairos_integration::participants::okx::private::{
+    OkxPrivateRestConnection, OkxPrivateWebSocketConnection,
+};
+use kairos_integration::participants::okx::public::{
+    OkxPublicRestConnection, OkxPublicWebSocketConnection,
+};
 use kairos_market_contract::{
     MarketClient, MarketEventPublisher, MarketEventStream, MarketViewPublisher, MarketViewReader,
 };
@@ -63,15 +66,11 @@ use kairos_risk_contract::{
     MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskClient, RiskEventStream, RiskViewReader,
 };
 use kairos_transport::{AeronBytePublisher, SharedSnapshotReader, SharedSnapshotWriter};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::marker::PhantomData;
-use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::time::Instant;
 
+use crate::resource::{ManagedConnections, ManagedLifecycleOperation};
 use crate::{
-    resource::{ManagedConnections, ManagedLifecycleOperation},
     IntegrationEvent, ManagedClients, ManagedConnectionIdentity, NamedResources, ResourceState,
     SystemEvent,
 };
@@ -280,10 +279,10 @@ fn participant_event_identity(
     match event {
         kairos_integration::ExternalParticipantEvent::Account(event) => {
             Some((&event.participant, &event.connection_key))
-        }
+        },
         kairos_integration::ExternalParticipantEvent::Execution(event) => {
             Some((&event.participant, &event.connection_key))
-        }
+        },
         kairos_integration::ExternalParticipantEvent::Market(_) => None,
     }
 }
@@ -1143,7 +1142,7 @@ impl ConfluxSystem {
                                     event,
                                 }),
                             );
-                        }
+                        },
                         Poll::Ready(Err(error)) => {
                             let recoverable = is_recoverable_connection_error(&error);
                             let retry_scheduled = recoverable
@@ -1152,13 +1151,15 @@ impl ConfluxSystem {
                                     Instant::now(),
                                     managed.policy().recovery,
                                 );
-                            managed.set_state(if is_permanent_connection_error(&error)
-                                || (recoverable && !retry_scheduled)
-                            {
-                                ResourceState::Failed
-                            } else {
-                                ResourceState::Degraded
-                            });
+                            managed.set_state(
+                                if is_permanent_connection_error(&error)
+                                    || (recoverable && !retry_scheduled)
+                                {
+                                    ResourceState::Failed
+                                } else {
+                                    ResourceState::Degraded
+                                },
+                            );
                             state.push(
                                 format!("connection-state:{}:{key}", $family),
                                 ConnectionDriverOutput::System(
@@ -1179,8 +1180,8 @@ impl ConfluxSystem {
                                     error: error.to_string(),
                                 }),
                             );
-                        }
-                        Poll::Pending => {}
+                        },
+                        Poll::Pending => {},
                     }
                 }
             }};
@@ -1342,7 +1343,7 @@ impl ConfluxSystem {
                                 if state.retry_due(&lifecycle_source, now) =>
                             {
                                 Some(ManagedLifecycleOperation::Reconnect)
-                            }
+                            },
                             _ => None,
                         };
                         if let Some(operation) = operation {
@@ -1406,7 +1407,7 @@ impl ConfluxSystem {
                                     }),
                                 );
                             }
-                        }
+                        },
                         Err(error) => {
                             if matches!(
                                 managed.state(),
@@ -1477,7 +1478,7 @@ impl ConfluxSystem {
                                     error: error.to_string(),
                                 }),
                             );
-                        }
+                        },
                     }
                 }
             }};
@@ -1548,9 +1549,9 @@ impl ConfluxSystem {
                                     error: error.to_string(),
                                 }),
                             );
-                        }
+                        },
                         Poll::Ready(None) => managed.set_state(ResourceState::Stopped),
-                        Poll::Pending => {}
+                        Poll::Pending => {},
                     }
                 }
             }};
@@ -1615,11 +1616,11 @@ impl ConfluxSystem {
                     ) {
                         Poll::Pending => {
                             state.maintenance_in_progress.insert(source);
-                        }
+                        },
                         Poll::Ready(Ok(kairos_integration::MaintenanceOutcome::Healthy))
                         | Poll::Ready(Ok(kairos_integration::MaintenanceOutcome::Progressed)) => {
                             state.maintenance_in_progress.remove(&source);
-                        }
+                        },
                         Poll::Ready(Ok(
                             kairos_integration::MaintenanceOutcome::ReconnectRequired { reason },
                         )) => {
@@ -1651,7 +1652,7 @@ impl ConfluxSystem {
                                     error: reason,
                                 }),
                             );
-                        }
+                        },
                         Poll::Ready(Err(error)) => {
                             state.maintenance_in_progress.remove(&source);
                             let recoverable = is_recoverable_connection_error(&error);
@@ -1687,7 +1688,7 @@ impl ConfluxSystem {
                                     error: error.to_string(),
                                 }),
                             );
-                        }
+                        },
                     }
                 }
             }};

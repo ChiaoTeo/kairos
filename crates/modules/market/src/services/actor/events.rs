@@ -1,7 +1,7 @@
-use crate::domain::events::{MarketChange, MarketEvent};
 use kairos_primitives::Sequence;
 
 use super::MarketActor;
+use crate::domain::events::{MarketChange, MarketEvent};
 
 impl MarketActor {
     pub(crate) fn drain_events(&mut self) -> Vec<(Sequence, MarketEvent)> {
