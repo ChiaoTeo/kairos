@@ -64,6 +64,16 @@ impl ExecutionOrderAdmissionService {
         }
     }
 
+    pub(crate) fn commitment_observation(
+        &mut self,
+        account_id: &str,
+    ) -> Result<Option<AccountCommitmentObservation>, String> {
+        match self {
+            Self::Live(admission) => admission.commitment_observation(account_id).map(Some),
+            Self::Simulated => Ok(None),
+        }
+    }
+
     pub(crate) fn validate_order(
         &mut self,
         request: &SubmitOrder,
@@ -175,6 +185,13 @@ impl SocketExecutionOrderAdmission {
 impl SocketExecutionOrderAdmission {
     pub(crate) fn dependency_watermarks(&self) -> DependencyWatermarks {
         self.context.dependency_watermarks()
+    }
+
+    pub(crate) fn commitment_observation(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountCommitmentObservation, String> {
+        self.context.commitment_observation(account_id)
     }
 
     pub(crate) fn validate_order(

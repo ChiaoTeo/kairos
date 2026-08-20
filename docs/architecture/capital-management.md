@@ -114,6 +114,45 @@ Integration clients or vendor payloads. Cross-process snapshots and events
 use contract-owned FlatBuffers types; JSON is limited to an explicitly
 declared control/configuration boundary.
 
+The current projection contains the policy envelope, active and terminal
+objectives/demands, source facts and watermarks, availability, routes, plans,
+reservations, and participant operations. Capital publishes each durable
+transition as one typed event root on its own stream. The Actor outbox is
+acknowledged only after publication succeeds, so a crash recovers the same
+event sequence instead of manufacturing a new business transition.
+
+Availability also retains deterministic `required_by` funding horizons. Each
+horizon records its contributing objective and demand identities and their
+net total-liquidity target. Overlapping observations in one horizon are
+combined by maximum rather than summed, so duplicate or replacement trading
+signals cannot manufacture capital demand.
+
+Capital depends on Conflux, never on `kairos-integration`. Conflux owns the
+participant-neutral transfer and liquid-yield rail types as well as the
+construction of concrete Binance or future provider connections. Its adapter
+maps those Conflux-owned requests, outcomes, status facts, and errors to
+Integration types internally; Integration re-exports must not leak through the
+rail signature consumed by Capital. Capital composition supplies only
+non-secret account metadata and receives a Conflux-owned dispatcher; no Capital
+source file constructs or imports a provider connection or provider DTO.
+
+Cross-Account connectivity is explicit account metadata, not a Capital-owned
+global registry. `capital_controller_account_id` names the Account whose
+credential controls a participant-side capital group, while
+`participant_account_ref` identifies a non-controller member within that
+group. For Binance the latter is the subaccount email; Capital never imports
+or interprets that provider meaning. Two Accounts are automatically
+transferable only when Conflux can prove they share the same configured
+controller and provider environment. Unrelated independent Accounts remain
+unsupported until a withdrawal/deposit rail with its own settlement policy is
+implemented.
+
+Launch includes the controller Account in the Strategy instance lease even
+when a route only names two subaccounts. Immediately before a cross-Account
+write, Capital revalidates both the source Account fence and the controller
+Account fence. The source fence protects ownership of the funds; the
+controller fence protects the credential that actually authorizes the write.
+
 When Capital is disabled, Strategy composition constructs the disabled Python
 facade without starting a Capital process. This preserves one Strategy API in
 single-account and multi-account deployments while ensuring pre-funded order
@@ -500,11 +539,12 @@ The ownership boundary determines the operation owner:
 
 ## Integration primitives
 
-Capital does not depend on `kairos-integration` directly. Its composition uses
-the typed connection and capability surface exported by Conflux; Conflux alone
-selects and owns the concrete Integration connection. This keeps participant
-construction, connection lifecycle, and provider credentials outside the
-Capital business package.
+Capital does not depend on `kairos-integration` directly or through re-exported
+Integration DTOs. Its composition uses Conflux-owned typed rail requests,
+outcomes, status facts, and errors; Conflux alone maps them to a concrete
+Integration connection. This keeps participant construction, connection
+lifecycle, provider credentials, and provider capability vocabulary outside
+the Capital business package.
 
 Behind that boundary, Integration exposes two separate axes:
 
@@ -562,6 +602,23 @@ apply a liquidity classification and, when appropriate, a haircut based on:
 An Earn position can contribute to total capital while contributing zero to
 immediately available trading margin. Only Account-observed available balance
 can close a redemption-and-transfer plan.
+
+Idle-cash deployment is a separate, deterministic placement decision. An
+`EarnSubscription` route remains at one `Account + Segment + Asset` location
+and names one explicitly permitted product. Capital computes deployable cash
+as `observed available - active Capital reservations - effective liquidity
+target`; the effective target already includes the configured stress buffer.
+The amount is then capped by the route's per-operation and daily limits.
+
+Before authorizing the subscription, Capital obtains a principal-specific
+product preview through Conflux. The product must be eligible, immediately
+redeemable with zero declared delay, and have enough known redemption quota.
+Unknown quota blocks automation unless the route configuration explicitly
+accepts that participant limitation. A funding objective or demand whose
+`required_by` falls inside the route's demand guard also blocks deployment.
+Participant success advances only to Account reconciliation. Completion
+requires a newer complete Account observation showing both the liquid balance
+debit and the selected Earn product's principal increase.
 
 The participant product catalog must be reviewed before extending this common
 surface. Binance-specific findings and the resulting boundary decisions are

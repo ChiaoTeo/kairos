@@ -4,9 +4,11 @@ import pytest
 
 from kairospy.infrastructure.transport import native_event
 from kairospy.infrastructure.transport.account import AeronAccountEventSource
+from kairospy.infrastructure.transport.capital import AeronCapitalEventSource
 from kairospy.infrastructure.transport.execution import AeronExecutionEventSource
 from kairospy.infrastructure.transport.generated_spec import (
     ACCOUNT_EVENTS,
+    CAPITAL_EVENTS,
     EXECUTION_EVENTS,
     MARKET_EVENTS,
     RISK_EVENTS,
@@ -22,6 +24,7 @@ from kairospy.infrastructure.transport.risk import AeronRiskEventSource
         (AeronAccountEventSource, ACCOUNT_EVENTS),
         (AeronExecutionEventSource, EXECUTION_EVENTS),
         (AeronRiskEventSource, RISK_EVENTS),
+        (AeronCapitalEventSource, CAPITAL_EVENTS),
     ),
 )
 def test_aeron_sources_use_the_generated_native_stream_spec(
@@ -39,6 +42,7 @@ def test_aeron_sources_use_the_generated_native_stream_spec(
         AeronMarketEventSource,
         AeronAccountEventSource,
         AeronRiskEventSource,
+        AeronCapitalEventSource,
     ),
 )
 def test_live_aeron_source_readiness_opens_and_closes_native_subscription(

@@ -66,6 +66,14 @@ impl OrderAdmissionContext {
         self.dependency_watermarks.clone()
     }
 
+    pub(super) fn commitment_observation(
+        &self,
+        account_id: &str,
+    ) -> Result<AccountCommitmentObservation, String> {
+        self.account_projection(account_id)
+            .map(|value| value.commitment_observation)
+    }
+
     pub(super) fn validate_order(
         &mut self,
         request: &SubmitOrder,
@@ -159,7 +167,7 @@ impl OrderAdmissionContext {
             let committed = active_commitments
                 .iter()
                 .filter(|commitment| {
-                    commitment.status.consumes_capacity()
+                    commitment.consumes_unreflected_physical_capacity()
                         && commitment.account_id == request.account_id
                         && commitment.segment_key == request.segment_key
                         && commitment.resource == commitment_resource

@@ -1,20 +1,22 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kairos_primitives::{Quantity, Sequence, UnixNanos};
 
 use crate::application::{
-    AuthorizeCapitalPlan, BeginCapitalOperation, CancelFundingObjective, CapitalDemandReceipt,
-    CapitalEvent, CapitalSnapshot, EvaluateCapitalGroup, FundingObjectiveReceipt,
+    AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
+    CancelFundingObjective, CapitalDemandReceipt, CapitalEvent, CapitalSnapshot,
+    CapitalYieldCandidate, EvaluateCapitalGroup, FundingObjectiveReceipt,
     MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
     ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
     RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 use crate::domain::{
     CapitalAvailabilityView, CapitalDemandId, CapitalDemandRecord, CapitalDemandStatus,
-    CapitalFacts, CapitalGroupConfig, CapitalGroupId, CapitalOperation, CapitalOperationId,
-    CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlan, CapitalPlanId,
-    CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalReservation, CapitalReservationId,
-    CapitalReservationStatus, CapitalRouteId, CapitalSubmissionOutcome, CapitalTransferRoute,
+    CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig, CapitalGroupId, CapitalOperation,
+    CapitalOperationId, CapitalOperationKind, CapitalOperationStatus,
+    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPlanStatus, CapitalPolicy,
+    CapitalReadiness, CapitalReservation, CapitalReservationId, CapitalReservationStatus,
+    CapitalRouteId, CapitalRouteKind, CapitalSubmissionOutcome, CapitalTransferRoute,
     FundingLocation, FundingObjectiveId, FundingObjectiveRecord, FundingObjectiveStatus,
 };
 use crate::services::persistence::{CapitalJournalRecord, JournalCapitalStore};
@@ -245,7 +247,7 @@ impl CapitalActor {
                 ));
             }
         }
-        self.persist_and_apply_policy(command.policy)
+        self.persist_and_apply_policy(command.policy, command.updated_at)
     }
 
     pub(crate) fn observe_facts(&mut self, command: ObserveCapitalFacts) -> Result<(), ActorError> {
@@ -330,7 +332,7 @@ impl CapitalActor {
                 ));
             }
         }
-        self.persist_and_apply_route(command.route)
+        self.persist_and_apply_route(command.route, command.updated_at)
     }
 
     pub(crate) fn authorize_plan(
@@ -367,6 +369,11 @@ impl CapitalActor {
             .get(&command.route_id)
             .cloned()
             .ok_or_else(|| ActorError::Rejected("Capital route was not found".into()))?;
+        if route.kind == CapitalRouteKind::EarnSubscription {
+            return Err(ActorError::Rejected(
+                "Earn subscription routes require product preview authorization".into(),
+            ));
+        }
         if !route.enabled {
             return Err(ActorError::Rejected("Capital route is disabled".into()));
         }
@@ -404,14 +411,47 @@ impl CapitalActor {
             ));
         }
         let reserved = self.active_reserved_at(&route.source)?;
-        let source_available = if source.observed_available > reserved {
-            source
-                .observed_available
-                .checked_sub(reserved)
-                .map_err(|error| ActorError::State(error.to_string()))?
-        } else {
-            Quantity::ZERO
-        };
+        let (source_available, selected_earn_product_id) =
+            if route.kind == CapitalRouteKind::EarnRedemptionThenTransfer {
+                let holding = source
+                    .earn_holdings
+                    .iter()
+                    .filter(|holding| {
+                        holding.active
+                            && holding.immediately_redeemable
+                            && holding.redeemable_amount.is_positive()
+                    })
+                    .max_by_key(|holding| holding.redeemable_amount)
+                    .ok_or_else(|| {
+                        ActorError::Rejected(
+                            "Capital Earn route has no immediately redeemable holding".into(),
+                        )
+                    })?;
+                if holding.product_id.trim().is_empty() {
+                    return Err(ActorError::State(
+                        "Capital Earn holding has no product identity".into(),
+                    ));
+                }
+                let available = if holding.redeemable_amount > reserved {
+                    holding
+                        .redeemable_amount
+                        .checked_sub(reserved)
+                        .map_err(|error| ActorError::State(error.to_string()))?
+                } else {
+                    Quantity::ZERO
+                };
+                (available, Some(holding.product_id.clone()))
+            } else {
+                let available = if source.observed_available > reserved {
+                    source
+                        .observed_available
+                        .checked_sub(reserved)
+                        .map_err(|error| ActorError::State(error.to_string()))?
+                } else {
+                    Quantity::ZERO
+                };
+                (available, None)
+            };
         let daily_used = self.daily_used(&route, command.created_at)?;
         let daily_remaining = if route.daily_limit > daily_used {
             route
@@ -441,8 +481,13 @@ impl CapitalActor {
         let reservation_id =
             CapitalReservationId::new(format!("capital-reservation:{}", command.plan_id.as_str()))
                 .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let first_operation_kind = if route.kind == CapitalRouteKind::EarnRedemptionThenTransfer {
+            "earn-redemption"
+        } else {
+            "transfer"
+        };
         let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
-            "{}:0:transfer",
+            "{}:0:{first_operation_kind}",
             command.plan_id.as_str()
         ))
         .map_err(|error| ActorError::Invalid(error.to_string()))?;
@@ -461,6 +506,7 @@ impl CapitalActor {
             rebalance_decision_id: command.rebalance_decision_id,
             route_id: route.route_id,
             route_version: route.version,
+            route_kind: route.kind,
             source: route.source,
             destination: route.destination,
             amount,
@@ -468,10 +514,239 @@ impl CapitalActor {
             demand_ids: view.active_demand_ids,
             reservation_id,
             idempotency_key,
+            selected_earn_product_id,
             source_account_watermark: source.account_watermark,
             destination_account_watermark: view.account_watermark,
             source_observed_available: source.observed_available,
             destination_observed_available: view.observed_available,
+            redemption_account_watermark: None,
+            redemption_observed_available: None,
+            earn_principal_before: Quantity::ZERO,
+            status: CapitalPlanStatus::Authorized,
+            created_at: command.created_at,
+            expires_at: command.expires_at,
+        };
+        self.persist_and_apply_plan(plan.clone(), reservation)?;
+        Ok(plan)
+    }
+
+    pub(crate) fn yield_candidate(
+        &self,
+        route_id: &CapitalRouteId,
+        evaluated_at: UnixNanos,
+    ) -> Result<Option<CapitalYieldCandidate>, ActorError> {
+        let route = self
+            .routes
+            .get(route_id)
+            .ok_or_else(|| ActorError::Rejected("Capital route was not found".into()))?;
+        if !route.enabled || route.kind != CapitalRouteKind::EarnSubscription {
+            return Ok(None);
+        }
+        if self.plans.values().any(|plan| {
+            plan.route_id == *route_id
+                && !matches!(
+                    plan.status,
+                    CapitalPlanStatus::Completed
+                        | CapitalPlanStatus::Rejected
+                        | CapitalPlanStatus::Expired
+                        | CapitalPlanStatus::Failed
+                )
+        }) {
+            return Ok(None);
+        }
+        let view = self
+            .availability
+            .get(&route.source)
+            .ok_or_else(|| ActorError::Rejected("Capital source was not evaluated".into()))?;
+        if view.readiness != CapitalReadiness::Ready || !view.deficit.is_zero() {
+            return Ok(None);
+        }
+        let policy = self
+            .policies
+            .get(&route.source)
+            .ok_or_else(|| ActorError::State("Capital source policy disappeared".into()))?;
+        let facts = self
+            .facts
+            .get(&route.source)
+            .ok_or_else(|| ActorError::Rejected("Capital source facts are unavailable".into()))?;
+        if !facts.account_complete || evaluated_at < facts.account_observed_at {
+            return Ok(None);
+        }
+        if evaluated_at.get() - facts.account_observed_at.get() > policy.max_fact_age_nanos {
+            return Ok(None);
+        }
+        let demand_guard_until = evaluated_at.get().saturating_add(route.demand_guard_nanos);
+        if view
+            .funding_horizons
+            .iter()
+            .any(|horizon| horizon.required_by.get() <= demand_guard_until)
+        {
+            return Ok(None);
+        }
+        let reserved = self.active_reserved_at(&route.source)?;
+        let protected = view
+            .effective_target
+            .checked_add(reserved)
+            .map_err(|error| ActorError::State(error.to_string()))?;
+        let surplus = if facts.observed_available > protected {
+            facts
+                .observed_available
+                .checked_sub(protected)
+                .map_err(|error| ActorError::State(error.to_string()))?
+        } else {
+            Quantity::ZERO
+        };
+        let daily_used = self.daily_used(route, evaluated_at)?;
+        let daily_remaining = if route.daily_limit > daily_used {
+            route
+                .daily_limit
+                .checked_sub(daily_used)
+                .map_err(|error| ActorError::State(error.to_string()))?
+        } else {
+            Quantity::ZERO
+        };
+        let amount = surplus.min(route.per_operation_limit).min(daily_remaining);
+        if amount.is_zero() || amount < policy.minimum_movement {
+            return Ok(None);
+        }
+        Ok(Some(CapitalYieldCandidate {
+            route_id: route.route_id.clone(),
+            product_id: route
+                .earn_product_id
+                .clone()
+                .ok_or_else(|| ActorError::State("Earn route lost its product id".into()))?,
+            amount,
+            account_watermark: facts.account_watermark,
+            risk_watermark: facts.risk_watermark,
+        }))
+    }
+
+    pub(crate) fn authorize_earn_subscription(
+        &mut self,
+        command: AuthorizeEarnSubscriptionPlan,
+    ) -> Result<CapitalPlan, ActorError> {
+        self.validate_group(&command.capital_group_id)?;
+        if command.expires_at <= command.created_at {
+            return Err(ActorError::Invalid(
+                "Capital plan expiry must follow creation".into(),
+            ));
+        }
+        if let Some(existing) = self.plans.get(&command.plan_id) {
+            if existing.rebalance_decision_id == command.rebalance_decision_id
+                && existing.route_id == command.route_id
+                && existing.created_at == command.created_at
+                && existing.expires_at == command.expires_at
+            {
+                return Ok(existing.clone());
+            }
+            return Err(ActorError::Rejected(
+                "Capital plan id already has different state".into(),
+            ));
+        }
+        let route = self
+            .routes
+            .get(&command.route_id)
+            .cloned()
+            .ok_or_else(|| ActorError::Rejected("Capital route was not found".into()))?;
+        if route.required_source_authority != command.source_authority {
+            return Err(ActorError::Rejected(
+                "Capital source authority does not match the route".into(),
+            ));
+        }
+        if !command.eligible || !command.immediately_redeemable {
+            return Err(ActorError::Rejected(
+                "Earn product is not eligible and immediately redeemable".into(),
+            ));
+        }
+        let policy = self
+            .policies
+            .get(&route.source)
+            .ok_or_else(|| ActorError::State("Capital source policy disappeared".into()))?;
+        if command.preview_observed_at > command.created_at
+            || command.created_at.get() - command.preview_observed_at.get()
+                > policy.max_fact_age_nanos
+        {
+            return Err(ActorError::Rejected("Earn product preview is stale".into()));
+        }
+        let candidate = self
+            .yield_candidate(&command.route_id, command.created_at)?
+            .ok_or_else(|| {
+                ActorError::Rejected("Capital location has no deployable surplus".into())
+            })?;
+        if candidate.amount != command.previewed_amount {
+            return Err(ActorError::Rejected(
+                "Earn preview amount no longer matches deployable surplus".into(),
+            ));
+        }
+        match command.redemption_quota_remaining {
+            Some(quota) if quota < candidate.amount => {
+                return Err(ActorError::Rejected(
+                    "Earn redemption quota is below the subscription amount".into(),
+                ));
+            },
+            None if !route.allow_unknown_redemption_quota => {
+                return Err(ActorError::Rejected(
+                    "Earn redemption quota is unknown".into(),
+                ));
+            },
+            _ => {},
+        }
+        let facts = self
+            .facts
+            .get(&route.source)
+            .ok_or_else(|| ActorError::State("Capital source facts disappeared".into()))?;
+        let earn_principal_before = facts
+            .earn_holdings
+            .iter()
+            .filter(|holding| holding.product_id == candidate.product_id && holding.active)
+            .try_fold(Quantity::ZERO, |total, holding| {
+                total
+                    .checked_add(holding.principal)
+                    .map_err(|error| ActorError::State(error.to_string()))
+            })?;
+        let reservation_id =
+            CapitalReservationId::new(format!("capital-reservation:{}", command.plan_id.as_str()))
+                .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
+            "{}:0:earn-subscription",
+            command.plan_id.as_str()
+        ))
+        .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let reservation = CapitalReservation {
+            reservation_id: reservation_id.clone(),
+            plan_id: command.plan_id.clone(),
+            source: route.source.clone(),
+            amount: candidate.amount,
+            source_account_watermark: facts.account_watermark,
+            status: CapitalReservationStatus::Active,
+            created_at: command.created_at,
+            expires_at: command.expires_at,
+        };
+        let view = self
+            .availability
+            .get(&route.source)
+            .ok_or_else(|| ActorError::State("Capital source availability disappeared".into()))?;
+        let plan = CapitalPlan {
+            plan_id: command.plan_id,
+            rebalance_decision_id: command.rebalance_decision_id,
+            route_id: route.route_id,
+            route_version: route.version,
+            route_kind: route.kind,
+            source: route.source.clone(),
+            destination: route.destination,
+            amount: candidate.amount,
+            objective_ids: view.active_objective_ids.clone(),
+            demand_ids: view.active_demand_ids.clone(),
+            reservation_id,
+            idempotency_key,
+            selected_earn_product_id: Some(candidate.product_id),
+            source_account_watermark: facts.account_watermark,
+            destination_account_watermark: facts.account_watermark,
+            source_observed_available: facts.observed_available,
+            destination_observed_available: facts.observed_available,
+            redemption_account_watermark: None,
+            redemption_observed_available: None,
+            earn_principal_before,
             status: CapitalPlanStatus::Authorized,
             created_at: command.created_at,
             expires_at: command.expires_at,
@@ -488,7 +763,11 @@ impl CapitalActor {
                 plan.expires_at <= observed_at
                     && matches!(
                         plan.status,
-                        CapitalPlanStatus::Authorized | CapitalPlanStatus::Transferring
+                        CapitalPlanStatus::Authorized
+                            | CapitalPlanStatus::Redeeming
+                            | CapitalPlanStatus::Subscribing
+                            | CapitalPlanStatus::Available
+                            | CapitalPlanStatus::Transferring
                     )
             })
             .map(|plan| plan.plan_id.clone())
@@ -526,34 +805,75 @@ impl CapitalActor {
         let mut plan = self.plan(&command.plan_id)?;
         let reservation = self.reservation(&plan.reservation_id)?;
         if let Some(operation) = self.operation_for_plan(&plan.plan_id) {
-            return Ok(operation.clone());
+            if operation.status != CapitalOperationStatus::Settled
+                || plan.route_kind != CapitalRouteKind::EarnRedemptionThenTransfer
+                || plan.status != CapitalPlanStatus::Available
+            {
+                return Ok(operation.clone());
+            }
         }
-        if plan.status != CapitalPlanStatus::Authorized {
+        let (operation_index, kind) = match (plan.route_kind, plan.status) {
+            (CapitalRouteKind::EarnRedemptionThenTransfer, CapitalPlanStatus::Authorized) => {
+                (0, CapitalOperationKind::EarnRedemption)
+            },
+            (CapitalRouteKind::EarnRedemptionThenTransfer, CapitalPlanStatus::Available) => {
+                (1, CapitalOperationKind::Transfer)
+            },
+            (CapitalRouteKind::EarnSubscription, CapitalPlanStatus::Authorized) => {
+                (0, CapitalOperationKind::EarnSubscription)
+            },
+            (_, CapitalPlanStatus::Authorized) => (0, CapitalOperationKind::Transfer),
+            _ => {
+                return Err(ActorError::Rejected(
+                    "Capital plan cannot begin its next operation".into(),
+                ));
+            },
+        };
+        if plan.status != CapitalPlanStatus::Authorized
+            && plan.status != CapitalPlanStatus::Available
+        {
             return Err(ActorError::Rejected(
-                "only an Authorized Capital plan can begin".into(),
+                "only an Authorized or redemption-Available Capital plan can begin".into(),
             ));
         }
         if command.at >= plan.expires_at {
             return Err(ActorError::Rejected("Capital plan is expired".into()));
         }
+        let kind_name = match kind {
+            CapitalOperationKind::EarnRedemption => "earn-redemption",
+            CapitalOperationKind::EarnSubscription => "earn-subscription",
+            CapitalOperationKind::Transfer => "transfer",
+        };
         let operation_id = CapitalOperationId::new(format!(
-            "capital-operation:{}:0:transfer",
+            "capital-operation:{}:{operation_index}:{kind_name}",
+            plan.plan_id.as_str()
+        ))
+        .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
+            "{}:{operation_index}:{kind_name}",
             plan.plan_id.as_str()
         ))
         .map_err(|error| ActorError::Invalid(error.to_string()))?;
         let operation = CapitalOperation {
             operation_id,
             plan_id: plan.plan_id.clone(),
-            idempotency_key: plan.idempotency_key.clone(),
+            idempotency_key,
+            operation_index,
+            kind,
             status: CapitalOperationStatus::Prepared,
             participant_operation_id: None,
             participant_state: None,
             dispatch_started_at: None,
             attempt_count: 1,
             failure_reason: None,
+            account_observation_watermark: None,
             updated_at: command.at,
         };
-        plan.status = CapitalPlanStatus::Transferring;
+        plan.status = match kind {
+            CapitalOperationKind::EarnRedemption => CapitalPlanStatus::Redeeming,
+            CapitalOperationKind::EarnSubscription => CapitalPlanStatus::Subscribing,
+            CapitalOperationKind::Transfer => CapitalPlanStatus::Transferring,
+        };
         self.persist_and_apply_plan_state(plan, reservation, operation.clone())?;
         Ok(operation)
     }
@@ -608,7 +928,13 @@ impl CapitalActor {
         operation.updated_at = command.at;
         match command.outcome {
             CapitalSubmissionOutcome::Confirmed => {
-                plan.status = CapitalPlanStatus::AwaitingTransfer;
+                plan.status = match operation.kind {
+                    CapitalOperationKind::EarnRedemption => CapitalPlanStatus::AwaitingRedemption,
+                    CapitalOperationKind::EarnSubscription => {
+                        CapitalPlanStatus::AwaitingSubscription
+                    },
+                    CapitalOperationKind::Transfer => CapitalPlanStatus::AwaitingTransfer,
+                };
                 operation.status = CapitalOperationStatus::AwaitingParticipant;
             },
             CapitalSubmissionOutcome::Rejected => {
@@ -668,7 +994,13 @@ impl CapitalActor {
         operation.updated_at = command.at;
         match command.state {
             CapitalParticipantOperationState::Pending => {
-                plan.status = CapitalPlanStatus::AwaitingTransfer;
+                plan.status = match operation.kind {
+                    CapitalOperationKind::EarnRedemption => CapitalPlanStatus::AwaitingRedemption,
+                    CapitalOperationKind::EarnSubscription => {
+                        CapitalPlanStatus::AwaitingSubscription
+                    },
+                    CapitalOperationKind::Transfer => CapitalPlanStatus::AwaitingTransfer,
+                };
                 operation.status = CapitalOperationStatus::AwaitingParticipant;
             },
             CapitalParticipantOperationState::Succeeded => {
@@ -718,15 +1050,77 @@ impl CapitalActor {
         if !command.source.account_complete || !command.destination.account_complete {
             return Ok(plan);
         }
-        let source_expected = plan
-            .source_observed_available
+        if operation.kind == CapitalOperationKind::EarnRedemption {
+            let source_expected = plan
+                .source_observed_available
+                .checked_add(plan.amount)
+                .map_err(|error| ActorError::State(error.to_string()))?;
+            let redeemed = command.source.account_watermark > plan.source_account_watermark
+                && command.source.observed_available >= source_expected;
+            if !redeemed {
+                return Ok(plan);
+            }
+            plan.status = CapitalPlanStatus::Available;
+            plan.redemption_account_watermark = Some(command.source.account_watermark);
+            plan.redemption_observed_available = Some(command.source.observed_available);
+            operation.status = CapitalOperationStatus::Settled;
+            operation.account_observation_watermark = Some(command.source.account_watermark);
+            operation.updated_at = command.observed_at;
+            self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
+            return Ok(plan);
+        }
+        if operation.kind == CapitalOperationKind::EarnSubscription {
+            let source_expected = plan
+                .source_observed_available
+                .checked_sub(plan.amount)
+                .map_err(|error| ActorError::State(error.to_string()))?;
+            let principal = command
+                .source
+                .earn_holdings
+                .iter()
+                .filter(|holding| {
+                    plan.selected_earn_product_id
+                        .as_deref()
+                        .is_some_and(|product_id| holding.product_id == product_id)
+                        && holding.active
+                })
+                .try_fold(Quantity::ZERO, |total, holding| {
+                    total
+                        .checked_add(holding.principal)
+                        .map_err(|error| ActorError::State(error.to_string()))
+                })?;
+            let principal_expected = plan
+                .earn_principal_before
+                .checked_add(plan.amount)
+                .map_err(|error| ActorError::State(error.to_string()))?;
+            let settled = command.source.account_watermark > plan.source_account_watermark
+                && command.source.observed_available <= source_expected
+                && principal >= principal_expected;
+            if !settled {
+                return Ok(plan);
+            }
+            plan.status = CapitalPlanStatus::Completed;
+            reservation.status = CapitalReservationStatus::Consumed;
+            operation.status = CapitalOperationStatus::Settled;
+            operation.account_observation_watermark = Some(command.source.account_watermark);
+            operation.updated_at = command.observed_at;
+            self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
+            return Ok(plan);
+        }
+        let source_baseline = plan
+            .redemption_observed_available
+            .unwrap_or(plan.source_observed_available);
+        let source_watermark = plan
+            .redemption_account_watermark
+            .unwrap_or(plan.source_account_watermark);
+        let source_expected = source_baseline
             .checked_sub(plan.amount)
             .map_err(|error| ActorError::State(error.to_string()))?;
         let destination_expected = plan
             .destination_observed_available
             .checked_add(plan.amount)
             .map_err(|error| ActorError::State(error.to_string()))?;
-        let settled = command.source.account_watermark > plan.source_account_watermark
+        let settled = command.source.account_watermark > source_watermark
             && command.destination.account_watermark > plan.destination_account_watermark
             && command.source.observed_available <= source_expected
             && command.destination.observed_available >= destination_expected;
@@ -736,6 +1130,7 @@ impl CapitalActor {
         plan.status = CapitalPlanStatus::Completed;
         reservation.status = CapitalReservationStatus::Consumed;
         operation.status = CapitalOperationStatus::Settled;
+        operation.account_observation_watermark = Some(command.destination.account_watermark);
         operation.updated_at = command.observed_at;
         self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
         Ok(plan)
@@ -865,12 +1260,17 @@ impl CapitalActor {
         self.checkpoint()
     }
 
-    fn persist_and_apply_policy(&mut self, policy: CapitalPolicy) -> Result<(), ActorError> {
+    fn persist_and_apply_policy(
+        &mut self,
+        policy: CapitalPolicy,
+        occurred_at: UnixNanos,
+    ) -> Result<(), ActorError> {
         let (journal_sequence, event_sequence) = self.next_sequences()?;
         self.persist(&CapitalJournalRecord::PolicyChanged {
             journal_sequence,
             event_sequence,
             policy: Box::new(policy.clone()),
+            occurred_at,
         })?;
         self.journal_sequence = Sequence::new(journal_sequence);
         self.event_sequence = Sequence::new(event_sequence);
@@ -879,6 +1279,7 @@ impl CapitalActor {
         self.pending_events.push(CapitalEvent::PolicyChanged {
             policy,
             event_sequence: self.event_sequence,
+            occurred_at,
         });
         self.checkpoint()
     }
@@ -924,12 +1325,17 @@ impl CapitalActor {
         self.checkpoint()
     }
 
-    fn persist_and_apply_route(&mut self, route: CapitalTransferRoute) -> Result<(), ActorError> {
+    fn persist_and_apply_route(
+        &mut self,
+        route: CapitalTransferRoute,
+        occurred_at: UnixNanos,
+    ) -> Result<(), ActorError> {
         let (journal_sequence, event_sequence) = self.next_sequences()?;
         self.persist(&CapitalJournalRecord::RouteChanged {
             journal_sequence,
             event_sequence,
             route: Box::new(route.clone()),
+            occurred_at,
         })?;
         self.journal_sequence = Sequence::new(journal_sequence);
         self.event_sequence = Sequence::new(event_sequence);
@@ -937,6 +1343,7 @@ impl CapitalActor {
         self.pending_events.push(CapitalEvent::RouteChanged {
             route,
             event_sequence: self.event_sequence,
+            occurred_at,
         });
         self.checkpoint()
     }
@@ -1048,7 +1455,8 @@ impl CapitalActor {
     fn operation_for_plan(&self, plan_id: &CapitalPlanId) -> Option<&CapitalOperation> {
         self.operations
             .values()
-            .find(|operation| operation.plan_id == *plan_id)
+            .filter(|operation| operation.plan_id == *plan_id)
+            .max_by_key(|operation| operation.operation_index)
     }
 
     fn active_reserved_at(&self, source: &FundingLocation) -> Result<Quantity, ActorError> {
@@ -1155,6 +1563,50 @@ impl CapitalActor {
             .max()
             .unwrap_or(Quantity::ZERO);
         let base_desired = policy.default_target.max(objective_target);
+        let observed_available = self
+            .facts
+            .get(&policy.destination)
+            .map(|facts| facts.observed_available)
+            .unwrap_or(Quantity::ZERO);
+        let mut horizon_rows: BTreeMap<UnixNanos, CapitalFundingHorizon> = BTreeMap::new();
+        for record in &active {
+            let row = horizon_rows
+                .entry(record.objective.required_by)
+                .or_insert_with(|| CapitalFundingHorizon {
+                    required_by: record.objective.required_by,
+                    objective_ids: Vec::new(),
+                    demand_ids: Vec::new(),
+                    desired_available: Quantity::ZERO,
+                });
+            row.objective_ids
+                .push(record.objective.objective_id.clone());
+            row.desired_available = row
+                .desired_available
+                .max(record.objective.desired_available);
+        }
+        for record in &active_demands {
+            let row = horizon_rows
+                .entry(record.demand.required_by)
+                .or_insert_with(|| CapitalFundingHorizon {
+                    required_by: record.demand.required_by,
+                    objective_ids: Vec::new(),
+                    demand_ids: Vec::new(),
+                    desired_available: Quantity::ZERO,
+                });
+            row.demand_ids.push(record.demand.demand_id.clone());
+            let demand_target = observed_available
+                .checked_add(record.demand.observed_shortfall)
+                .map_err(|error| ActorError::Invalid(error.to_string()))?;
+            row.desired_available = row.desired_available.max(demand_target);
+        }
+        let funding_horizons = horizon_rows
+            .into_values()
+            .map(|mut row| {
+                row.objective_ids.sort();
+                row.demand_ids.sort();
+                row
+            })
+            .collect::<Vec<_>>();
 
         let Some(facts) = self.facts.get(&policy.destination) else {
             return Ok(CapitalAvailabilityView {
@@ -1163,6 +1615,7 @@ impl CapitalActor {
                 policy_version: policy.version,
                 active_objective_ids: objective_ids,
                 active_demand_ids: demand_ids,
+                funding_horizons,
                 desired_target: base_desired,
                 effective_target: base_desired
                     .checked_add(policy.stress_buffer)
@@ -1180,10 +1633,14 @@ impl CapitalActor {
                 reason: Some("Account/Risk facts are unavailable".into()),
             });
         };
-        let demand_target = facts
-            .observed_available
-            .checked_add(demand_shortfall)
-            .map_err(|error| ActorError::Invalid(error.to_string()))?;
+        let demand_target = if active_demands.is_empty() {
+            Quantity::ZERO
+        } else {
+            facts
+                .observed_available
+                .checked_add(demand_shortfall)
+                .map_err(|error| ActorError::Invalid(error.to_string()))?
+        };
         let desired = base_desired.max(demand_target);
         let buffered = desired
             .checked_add(policy.stress_buffer)
@@ -1259,6 +1716,7 @@ impl CapitalActor {
             policy_version: policy.version,
             active_objective_ids: objective_ids,
             active_demand_ids: demand_ids,
+            funding_horizons,
             desired_target: desired,
             effective_target: effective,
             observed_available: facts.observed_available,
@@ -1342,24 +1800,23 @@ impl CapitalActor {
                 .iter()
                 .find(|reservation| reservation.reservation_id == plan.reservation_id)
                 .ok_or_else(|| "Capital snapshot plan has no reservation".to_string())?;
-            let operation = snapshot
-                .operations
-                .iter()
-                .find(|operation| operation.plan_id == plan.plan_id);
-            validate_plan_relation(plan, reservation, operation)?;
+            validate_plan_relation(plan, reservation)?;
         }
         let mut operation_ids = HashSet::new();
+        let mut operation_indexes = HashSet::new();
         for operation in &snapshot.operations {
             if !operation_ids.insert(operation.operation_id.clone()) {
                 return Err("Capital snapshot contains duplicate operation IDs".into());
             }
-            if !snapshot
+            let plan = snapshot
                 .plans
                 .iter()
-                .any(|plan| plan.plan_id == operation.plan_id)
-            {
-                return Err("Capital snapshot operation has no plan".into());
+                .find(|plan| plan.plan_id == operation.plan_id)
+                .ok_or_else(|| "Capital snapshot operation has no plan".to_string())?;
+            if !operation_indexes.insert((operation.plan_id.clone(), operation.operation_index)) {
+                return Err("Capital snapshot contains duplicate operation indexes".into());
             }
+            validate_operation_relation(plan, operation)?;
         }
         self.event_sequence = snapshot.event_sequence;
         self.journal_sequence = snapshot.journal_sequence;
@@ -1459,6 +1916,7 @@ impl CapitalActor {
                 journal_sequence,
                 event_sequence,
                 policy,
+                occurred_at,
             } => {
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.policies
@@ -1466,6 +1924,7 @@ impl CapitalActor {
                 self.pending_events.push(CapitalEvent::PolicyChanged {
                     policy: *policy,
                     event_sequence: self.event_sequence,
+                    occurred_at,
                 });
             },
             CapitalJournalRecord::FactsObserved {
@@ -1501,6 +1960,7 @@ impl CapitalActor {
                 journal_sequence,
                 event_sequence,
                 route,
+                occurred_at,
             } => {
                 route.validate()?;
                 if !self.config.contains(&route.source) || !self.config.contains(&route.destination)
@@ -1512,6 +1972,7 @@ impl CapitalActor {
                 self.pending_events.push(CapitalEvent::RouteChanged {
                     route: *route,
                     event_sequence: self.event_sequence,
+                    occurred_at,
                 });
             },
             CapitalJournalRecord::PlanAuthorized {
@@ -1526,7 +1987,7 @@ impl CapitalActor {
                 {
                     return Err("Capital journal plan is outside configured membership".into());
                 }
-                validate_plan_relation(&plan, &reservation, None)?;
+                validate_plan_relation(&plan, &reservation)?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -1552,7 +2013,8 @@ impl CapitalActor {
                         "Capital journal plan state is outside configured membership".into(),
                     );
                 }
-                validate_plan_relation(&plan, &reservation, Some(&operation))?;
+                validate_plan_relation(&plan, &reservation)?;
+                validate_operation_relation(&plan, &operation)?;
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -1581,7 +2043,10 @@ impl CapitalActor {
                         "Capital journal expired plan is outside configured membership".into(),
                     );
                 }
-                validate_plan_relation(&plan, &reservation, operation.as_deref())?;
+                validate_plan_relation(&plan, &reservation)?;
+                if let Some(operation) = operation.as_deref() {
+                    validate_operation_relation(&plan, operation)?;
+                }
                 self.replay_event_sequences(journal_sequence, event_sequence)?;
                 self.plans.insert(plan.plan_id.clone(), (*plan).clone());
                 self.reservations
@@ -1706,7 +2171,6 @@ fn sorted_id_values<K: Clone + Ord, T: Clone>(values: &HashMap<K, T>) -> Vec<T> 
 fn validate_plan_relation(
     plan: &CapitalPlan,
     reservation: &CapitalReservation,
-    operation: Option<&CapitalOperation>,
 ) -> Result<(), String> {
     if reservation.reservation_id != plan.reservation_id
         || reservation.plan_id != plan.plan_id
@@ -1715,10 +2179,50 @@ fn validate_plan_relation(
     {
         return Err("Capital plan and reservation do not match".into());
     }
-    if let Some(operation) = operation {
-        if operation.plan_id != plan.plan_id || operation.idempotency_key != plan.idempotency_key {
-            return Err("Capital plan and operation do not match".into());
-        }
+    if matches!(
+        plan.route_kind,
+        CapitalRouteKind::EarnRedemptionThenTransfer | CapitalRouteKind::EarnSubscription
+    ) && plan.selected_earn_product_id.is_none()
+    {
+        return Err("Capital Earn plan has no selected product".into());
+    }
+    Ok(())
+}
+
+fn validate_operation_relation(
+    plan: &CapitalPlan,
+    operation: &CapitalOperation,
+) -> Result<(), String> {
+    if operation.plan_id != plan.plan_id {
+        return Err("Capital plan and operation do not match".into());
+    }
+    let expected_kind = match (plan.route_kind, operation.operation_index) {
+        (CapitalRouteKind::EarnRedemptionThenTransfer, 0) => CapitalOperationKind::EarnRedemption,
+        (CapitalRouteKind::EarnRedemptionThenTransfer, 1) => CapitalOperationKind::Transfer,
+        (CapitalRouteKind::EarnSubscription, 0) => CapitalOperationKind::EarnSubscription,
+        (CapitalRouteKind::InternalTransfer, 0) | (CapitalRouteKind::AccountTransfer, 0) => {
+            CapitalOperationKind::Transfer
+        },
+        _ => return Err("Capital operation index is invalid for its route".into()),
+    };
+    if operation.kind != expected_kind {
+        return Err("Capital operation kind is invalid for its route".into());
+    }
+    let kind_name = match expected_kind {
+        CapitalOperationKind::EarnRedemption => "earn-redemption",
+        CapitalOperationKind::EarnSubscription => "earn-subscription",
+        CapitalOperationKind::Transfer => "transfer",
+    };
+    let expected_key = format!(
+        "{}:{}:{kind_name}",
+        plan.plan_id.as_str(),
+        operation.operation_index
+    );
+    if operation.idempotency_key.as_str() != expected_key {
+        return Err("Capital operation idempotency key is not stable".into());
+    }
+    if operation.operation_index == 0 && operation.idempotency_key != plan.idempotency_key {
+        return Err("Capital first operation does not match the plan idempotency key".into());
     }
     Ok(())
 }

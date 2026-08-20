@@ -8,3 +8,4 @@ market_events = 1301
 account_events = 1401
 execution_events = 1501
 risk_events = 1601
+capital_events = 1701

@@ -126,6 +126,7 @@ table OrderCommitmentState {
   price_cap:kairos.common.v2.Decimal64;
   contract_size:kairos.common.v2.Decimal64;
   settlement_asset:string;
+  reflected_account_watermark:ulong = null;
   updated_at_unix_nanos:ulong;
 }
 

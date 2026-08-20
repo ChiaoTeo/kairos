@@ -357,7 +357,7 @@ mod tests {
                 let policy = r#"{"policy":{"policy_id":"account-notional","version":1,"scope":{"account_id":"main","strategy_id":null,"instrument_id":null,"exchange_id":null},"metric":"notional","limit":"100","enforcement":"reject","valid_from_unix_nanos":0,"valid_until_unix_nanos":null}}"#;
                 let configured = client.request_json("POST", "/v1/publish_policy", Some(policy.as_bytes())).await.unwrap();
                 assert_eq!(configured["status"], "active");
-                let request = r#"{"request_id":"request-1","idempotency_key":"key-1","reservation_id":"reservation-1","account_id":"main","strategy_id":"strategy","instrument_id":"instrument","exchange_id":"exchange","proposal":{"notional":"40","initial_margin_rate_bps":10000,"reduce_only":false,"margin_rule_id":"test:fully-funded"},"at_unix_nanos":1,"reservation_ttl_nanos":100,"dependency_generation":1,"dependency_event_sequence":1}"#;
+                let request = r#"{"request_id":"request-1","idempotency_key":"key-1","reservation_id":"reservation-1","account_id":"main","strategy_id":"strategy","instrument_id":"instrument","exchange_id":"exchange","proposal":{"notional":"40","initial_margin_rate_bps":10000,"account_segment":"usd_m_futures","collateral_asset":"USDT","reduce_only":false,"margin_rule_id":"test:fully-funded"},"at_unix_nanos":1,"reservation_ttl_nanos":100,"dependency_generation":1,"dependency_event_sequence":1}"#;
                 let decision = client.request_json("POST", "/v1/authorizations", Some(request.as_bytes())).await.unwrap();
                 assert_eq!(decision["allowed"], true);
                 assert_eq!(decision["instrument_id"], "instrument");

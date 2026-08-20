@@ -186,6 +186,7 @@ impl ExecutionApplication {
         let route = self
             .execution_routes
             .get(execution_route_id)
+            .cloned()
             .ok_or_else(|| {
                 ExecutionError::Invalid(format!(
                     "execution route is not configured: {execution_route_id}"
@@ -208,6 +209,24 @@ impl ExecutionApplication {
             .map(parse_time_in_force)
             .transpose()
             .map_err(ExecutionError::Invalid)?;
+        let commitment_observation = self
+            .order_admission
+            .as_mut()
+            .map(|admission| admission.commitment_observation(request.account_id.as_str()))
+            .transpose()
+            .map_err(ExecutionError::Invalid)?
+            .flatten();
+        if let Some(observation) = commitment_observation {
+            let changed = self.actor.reconcile_account_commitment_observation(
+                &observation.account_id,
+                observation.watermark,
+                &observation.observed_order_ids,
+                now,
+            );
+            if changed {
+                self.persist_snapshot()?;
+            }
+        }
         let active_commitments = self.actor.commitments().cloned().collect::<Vec<_>>();
         let (commitment, dependency_watermarks, risk_context) =
             if let Some(admission) = self.order_admission.as_mut() {
@@ -280,7 +299,11 @@ impl ExecutionApplication {
                     if let Some((_, event)) = self.actor.mark_delivery_status(
                         request.order_id.as_str(),
                         if indeterminate {
-                            ExecutionOrderStatus::Unknown
+                            // Risk authorization has not produced an order-side
+                            // response yet. Keep the local order pending so
+                            // reconciliation can resolve the authorization
+                            // without presenting it as a remote-order mystery.
+                            ExecutionOrderStatus::Pending
                         } else {
                             ExecutionOrderStatus::Rejected
                         },

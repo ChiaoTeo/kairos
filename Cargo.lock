@@ -2785,9 +2785,15 @@ dependencies = [
 name = "kairos-capital-contract"
 version = "0.2.0"
 dependencies = [
+ "flatbuffers",
+ "futures-core",
  "kairos-primitives",
+ "kairos-protocol",
+ "kairos-transport",
+ "kairos-workspace",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

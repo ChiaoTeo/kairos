@@ -6,6 +6,7 @@
 //! no open resource catalog and no erased dispatch path.
 
 mod actor;
+mod capital;
 mod context;
 mod contract;
 mod event;
@@ -15,6 +16,18 @@ mod resource;
 mod system;
 
 pub use actor::ConfluxActor;
+pub use capital::{
+    CapitalAccountIdentity, CapitalAccountSegment, CapitalCommandFailure, CapitalCommandOutcome,
+    CapitalConnectionAccount, CapitalConnectionError, CapitalEarnActionKind,
+    CapitalEarnActionQuery, CapitalEarnActionState, CapitalEarnActionStatus, CapitalEarnConnection,
+    CapitalEarnLiquidity, CapitalEarnProductConnection, CapitalEarnRedeemRequest,
+    CapitalEarnRedemptionOption, CapitalEarnSubmission, CapitalEarnSubscribeRequest,
+    CapitalEarnSubscriptionEligibility, CapitalEarnSubscriptionPreview,
+    CapitalEarnSubscriptionPreviewRequest, CapitalTransferConnection, CapitalTransferConnections,
+    CapitalTransferQuery, CapitalTransferRequest, CapitalTransferState, CapitalTransferStatus,
+    CapitalTransferSubmission, compose_capital_transfer_connections,
+    validate_capital_transfer_product,
+};
 pub use context::Context;
 pub use contract::{Contract, RestContract, RestRequestOf, RestResponseOf};
 pub use event::{
@@ -31,7 +44,8 @@ pub use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksWebSocketConnection,
 };
 pub use kairos_integration::participants::binance::capital::{
-    BinanceCapitalRestConfig, BinanceCapitalRestConnection, BinanceTransferAccount,
+    BinanceCapitalRestConfig, BinanceCapitalRestConnection, BinanceSubAccountCapitalRestConfig,
+    BinanceSubAccountCapitalRestConnection, BinanceSubAccountIdentity, BinanceTransferAccount,
 };
 pub use kairos_integration::participants::binance::coinm::{
     BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
@@ -85,8 +99,13 @@ pub use kairos_integration::{
     AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission, Bar, CommandOutcome,
     CommandResult, ConnectionDescriptor, ConnectionHealth, ConnectionHealthQuery, ConnectionKey,
     ConnectionLifecycle, ConnectionLifecycleCommand, ConnectionMaintenance, DecimalValue,
-    EarnLiquidity, EarnPosition, EarnPositionState, EarnPositionsRequest, EarnProductFamily,
-    EarnProductQuery, ExecutionStream, ExternalAccountCredentialProfile, ExternalAccountEvent,
+    EarnActionKind, EarnActionQuery, EarnActionState, EarnActionStatus, EarnActionStatusQuery,
+    EarnCommand, EarnLiquidity, EarnPage, EarnPosition, EarnPositionState, EarnPositionsRequest,
+    EarnProduct, EarnProductFamily, EarnProductQuery, EarnProductsRequest, EarnRateObservation,
+    EarnRatesRequest, EarnRedeemRequest, EarnRedemptionAmount, EarnRedemptionChannel,
+    EarnRedemptionOption, EarnReward, EarnRewardsRequest, EarnSubmission, EarnSubscribeRequest,
+    EarnSubscriptionEligibility, EarnSubscriptionPreview, EarnSubscriptionPreviewRequest,
+    ExecutionStream, ExternalAccountCredentialProfile, ExternalAccountEvent,
     ExternalAccountEventEnvelope, ExternalAccountIdentity, ExternalAccountModel,
     ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
     ExternalDecimal, ExternalEventEnvelope, ExternalExecutionEvent, ExternalInstrument,

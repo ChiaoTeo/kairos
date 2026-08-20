@@ -24,6 +24,7 @@ _EXPORTS = {
     "MarketCommandClient": (".commands", "MarketCommandClient"),
     "UnixJsonCommandClient": (".commands", "UnixJsonCommandClient"),
     "AeronReferenceEventSource": (".reference", "AeronReferenceEventSource"),
+    "AeronCapitalEventSource": (".capital", "AeronCapitalEventSource"),
     "decode_reference_event": (".reference", "decode_reference_event"),
     "SharedSnapshotPayload": (".shared_snapshot", "SharedSnapshotPayload"),
     "SharedSnapshotReader": (".shared_snapshot", "SharedSnapshotReader"),

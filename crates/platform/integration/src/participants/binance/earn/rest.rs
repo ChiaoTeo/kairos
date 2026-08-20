@@ -128,6 +128,7 @@ impl EarnProductQuery for BinanceSimpleEarnRestConnection {
         request
             .validate()
             .map_err(IntegrationError::InvalidRequest)?;
+        validate_account(self.descriptor(), &request.account)?;
         let product_value = self
             .service
             .signed_get(FLEXIBLE_LIST, &[("productId", request.product_id.clone())])
@@ -176,6 +177,7 @@ impl EarnCommand for BinanceSimpleEarnRestConnection {
         request
             .validate()
             .map_err(IntegrationError::InvalidRequest)?;
+        validate_account(self.descriptor(), &request.account)?;
         let params = [
             ("productId", request.product_id.clone()),
             ("amount", request.amount.to_string()),
@@ -193,6 +195,7 @@ impl EarnCommand for BinanceSimpleEarnRestConnection {
         request
             .validate()
             .map_err(IntegrationError::InvalidRequest)?;
+        validate_account(self.descriptor(), &request.account)?;
         if request.destination.is_some() {
             return Err(IntegrationError::UnsupportedOperation);
         }
@@ -213,6 +216,7 @@ impl EarnActionStatusQuery for BinanceSimpleEarnRestConnection {
         &mut self,
         query: &EarnActionQuery,
     ) -> Result<Option<EarnActionStatus>, IntegrationError> {
+        validate_account(self.descriptor(), &query.account)?;
         let Some(action_id) = query.participant_action_id.as_ref() else {
             return Err(IntegrationError::InvalidRequest(
                 "Binance Earn reconciliation requires participant_action_id".into(),
@@ -240,6 +244,20 @@ impl EarnActionStatusQuery for BinanceSimpleEarnRestConnection {
             )),
         }
     }
+}
+
+fn validate_account(
+    descriptor: &ConnectionDescriptor,
+    account: &crate::ExternalAccountIdentity,
+) -> Result<(), IntegrationError> {
+    if !account.broker.eq_ignore_ascii_case("binance")
+        || descriptor.principal_id.as_deref() != Some(account.account_id.as_str())
+    {
+        return Err(IntegrationError::Authorization(
+            "Binance Earn request does not match its credential-bound Account".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn map_submission(
@@ -541,6 +559,7 @@ mod tests {
     #[test]
     fn unknown_action_status_is_not_guessed_as_success() {
         let query = EarnActionQuery {
+            account: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
             idempotency_key: kairos_primitives::IdempotencyKey::new("capital:1:redeem").unwrap(),
             participant_action_id: Some("42".into()),
             action: EarnActionKind::Redeem,

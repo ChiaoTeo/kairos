@@ -705,15 +705,62 @@ class LaunchConfig:
                             "internal_transfer",
                             "account_transfer",
                             "earn_redemption_then_transfer",
+                            "earn_subscription",
                         }:
                             issues.append(f"{prefix}.kind is unsupported: {kind}")
-                        if automatic_execution and kind != "internal_transfer":
-                            issues.append(
-                                f"{prefix}.kind cannot execute automatically until its Conflux rail is available"
-                            )
+                        endpoints: dict[str, Mapping[str, object]] = {}
                         for endpoint in ("source", "destination"):
-                            if not isinstance(route.get(endpoint), Mapping):
+                            value = route.get(endpoint)
+                            if not isinstance(value, Mapping):
                                 issues.append(f"{prefix}.{endpoint} must be a table")
+                            else:
+                                endpoints[endpoint] = value
+                                for field in ("broker", "account_id", "segment", "asset"):
+                                    part = value.get(field)
+                                    if not isinstance(part, str) or not part.strip():
+                                        issues.append(
+                                            f"{prefix}.{endpoint}.{field} is required"
+                                        )
+                        if "source" in endpoints and "destination" in endpoints:
+                            same_endpoint = endpoints["source"] == endpoints["destination"]
+                            if kind == "earn_subscription" and not same_endpoint:
+                                issues.append(
+                                    f"{prefix} Earn subscription must remain at one balance location"
+                                )
+                            elif kind != "earn_subscription" and same_endpoint:
+                                issues.append(
+                                    f"{prefix} transfer endpoints must differ"
+                                )
+                        product_id = route.get("earn_product_id")
+                        if kind == "earn_subscription":
+                            if not isinstance(product_id, str) or not product_id.strip():
+                                issues.append(
+                                    f"{prefix}.earn_product_id is required for Earn subscription"
+                                )
+                        elif product_id is not None:
+                            issues.append(
+                                f"{prefix}.earn_product_id is only valid for Earn subscription"
+                            )
+                        demand_guard = route.get("demand_guard_millis", 0)
+                        if not isinstance(demand_guard, int) or demand_guard < 0:
+                            issues.append(
+                                f"{prefix}.demand_guard_millis must be a non-negative integer"
+                            )
+                        allow_unknown_quota = route.get(
+                            "allow_unknown_redemption_quota", False
+                        )
+                        if not isinstance(allow_unknown_quota, bool):
+                            issues.append(
+                                f"{prefix}.allow_unknown_redemption_quota must be a boolean"
+                            )
+                        for field in ("per_operation_limit", "daily_limit"):
+                            try:
+                                amount = Decimal(str(route.get(field)))
+                            except Exception:
+                                issues.append(f"{prefix}.{field} must be an exact decimal")
+                                continue
+                            if not amount.is_finite() or amount <= 0:
+                                issues.append(f"{prefix}.{field} must be positive")
         execution = self.values.get("execution")
         if mode == "live" and not isinstance(execution, Mapping):
             issues.append(

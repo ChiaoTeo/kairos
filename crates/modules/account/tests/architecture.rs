@@ -572,6 +572,6 @@ fn account_rest_exposes_health_as_its_only_get_query() {
 
     let types = fs::read_to_string(root.join("contract/src/control/account.rs"))
         .expect("read typed Account health contract");
-    assert!(types.contains("pub generation: u64"));
-    assert!(types.contains("pub event_sequence: u64"));
+    assert!(types.contains("pub generation: Generation"));
+    assert!(types.contains("pub event_sequence: Sequence"));
 }

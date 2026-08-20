@@ -2,7 +2,7 @@
 
 use kairos_primitives::{Currency, IdempotencyKey, Quantity, Rate, SignedQuantity, UnixNanos};
 
-use crate::domain::account::ExternalAccountSegment;
+use crate::domain::account::{ExternalAccountIdentity, ExternalAccountSegment};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EarnLiquidity {
@@ -234,12 +234,17 @@ impl EarnRatesRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnSubscriptionPreviewRequest {
+    /// Required because quota and eligibility are credential-principal facts.
+    pub account: ExternalAccountIdentity,
     pub product_id: String,
     pub amount: Quantity,
 }
 
 impl EarnSubscriptionPreviewRequest {
     pub fn validate(&self) -> Result<(), String> {
+        if self.account.broker.is_empty() || self.account.broker.trim() != self.account.broker {
+            return Err("earn preview account broker is required and must be trimmed".into());
+        }
         validate_product_and_amount(&self.product_id, self.amount)
     }
 }
@@ -284,6 +289,7 @@ fn validate_page(cursor: Option<&str>, limit: Option<u16>) -> Result<(), String>
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnSubscribeRequest {
+    pub account: crate::ExternalAccountIdentity,
     pub idempotency_key: IdempotencyKey,
     pub product_id: String,
     pub amount: Quantity,
@@ -298,6 +304,7 @@ impl EarnSubscribeRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnRedeemRequest {
+    pub account: crate::ExternalAccountIdentity,
     pub idempotency_key: IdempotencyKey,
     pub product_id: String,
     pub amount: EarnRedemptionAmount,
@@ -342,6 +349,7 @@ pub struct EarnSubmission {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnActionQuery {
+    pub account: crate::ExternalAccountIdentity,
     pub idempotency_key: IdempotencyKey,
     pub participant_action_id: Option<String>,
     pub action: EarnActionKind,
@@ -379,6 +387,7 @@ mod tests {
     #[test]
     fn rejects_zero_subscription_without_encoding_acceptance_twice() {
         let request = EarnSubscribeRequest {
+            account: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
             idempotency_key: IdempotencyKey::new("capital-plan:1:earn:1").unwrap(),
             product_id: "flexible-usdt".into(),
             amount: Quantity::ZERO,

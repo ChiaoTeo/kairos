@@ -8,7 +8,7 @@ use kairos_primitives::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FundingLocation {
     pub broker: BrokerId,
     pub account_id: AccountId,
@@ -182,6 +182,18 @@ pub struct CapitalFacts {
     pub risk_capacity: Quantity,
     pub risk_policy_version: Generation,
     pub risk_watermark: Sequence,
+    #[serde(default)]
+    pub earn_holdings: Vec<CapitalEarnHoldingFact>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CapitalEarnHoldingFact {
+    pub product_id: String,
+    #[serde(default)]
+    pub principal: Quantity,
+    pub redeemable_amount: Quantity,
+    pub immediately_redeemable: bool,
+    pub active: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -198,6 +210,10 @@ pub struct CapitalAvailabilityView {
     pub policy_version: Generation,
     pub active_objective_ids: Vec<FundingObjectiveId>,
     pub active_demand_ids: Vec<CapitalDemandId>,
+    /// Deadline buckets retain why a total-liquidity target exists. Within a
+    /// bucket overlapping observations are netted by maximum, never summed.
+    #[serde(default)]
+    pub funding_horizons: Vec<CapitalFundingHorizon>,
     pub desired_target: Quantity,
     pub effective_target: Quantity,
     pub observed_available: Quantity,
@@ -211,6 +227,14 @@ pub struct CapitalAvailabilityView {
     pub risk_watermark: Sequence,
     pub evaluated_at: UnixNanos,
     pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CapitalFundingHorizon {
+    pub required_by: UnixNanos,
+    pub objective_ids: Vec<FundingObjectiveId>,
+    pub demand_ids: Vec<CapitalDemandId>,
+    pub desired_available: Quantity,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -244,11 +268,13 @@ pub struct CapitalGroupConfig {
     pub members: Vec<CapitalGroupMember>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CapitalRouteKind {
+    #[default]
     InternalTransfer,
     AccountTransfer,
     EarnRedemptionThenTransfer,
+    EarnSubscription,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -269,6 +295,16 @@ pub struct CapitalTransferRoute {
     pub required_source_authority: String,
     pub settlement_class: CapitalSettlementClass,
     pub enabled: bool,
+    /// Required for an Earn subscription route and absent for transfer routes.
+    #[serde(default)]
+    pub earn_product_id: Option<String>,
+    /// Do not deploy cash when a known funding horizon falls inside this guard.
+    #[serde(default)]
+    pub demand_guard_nanos: u64,
+    /// An unknown redemption quota is unsafe by default. An operator may
+    /// explicitly accept that participant limitation for a configured route.
+    #[serde(default)]
+    pub allow_unknown_redemption_quota: bool,
 }
 
 impl CapitalTransferRoute {
@@ -276,8 +312,23 @@ impl CapitalTransferRoute {
         if self.version.get() == 0 {
             return Err("capital route version must be positive".into());
         }
-        if self.source == self.destination {
-            return Err("capital route source and destination must differ".into());
+        if self.kind == CapitalRouteKind::EarnSubscription {
+            if self.source != self.destination {
+                return Err(
+                    "capital Earn subscription route must remain at one balance location".into(),
+                );
+            }
+            if self
+                .earn_product_id
+                .as_deref()
+                .is_none_or(|value| value.is_empty() || value.trim() != value)
+            {
+                return Err("capital Earn subscription route requires a product id".into());
+            }
+        } else if self.source == self.destination {
+            return Err("capital transfer route source and destination must differ".into());
+        } else if self.earn_product_id.is_some() {
+            return Err("capital transfer route cannot select an Earn product".into());
         }
         if self.source.asset != self.destination.asset {
             return Err("capital transfer route cannot change assets".into());
@@ -300,8 +351,12 @@ impl CapitalTransferRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CapitalPlanStatus {
     Authorized,
+    Redeeming,
+    AwaitingRedemption,
     Transferring,
     AwaitingTransfer,
+    Subscribing,
+    AwaitingSubscription,
     Reconciling,
     Available,
     Completed,
@@ -317,6 +372,8 @@ pub struct CapitalPlan {
     pub rebalance_decision_id: String,
     pub route_id: CapitalRouteId,
     pub route_version: Generation,
+    #[serde(default)]
+    pub route_kind: CapitalRouteKind,
     pub source: FundingLocation,
     pub destination: FundingLocation,
     pub amount: Quantity,
@@ -324,10 +381,19 @@ pub struct CapitalPlan {
     pub demand_ids: Vec<CapitalDemandId>,
     pub reservation_id: CapitalReservationId,
     pub idempotency_key: kairos_primitives::IdempotencyKey,
+    #[serde(default)]
+    pub selected_earn_product_id: Option<String>,
     pub source_account_watermark: Sequence,
     pub destination_account_watermark: Sequence,
     pub source_observed_available: Quantity,
     pub destination_observed_available: Quantity,
+    #[serde(default)]
+    pub redemption_account_watermark: Option<Sequence>,
+    #[serde(default)]
+    pub redemption_observed_available: Option<Quantity>,
+    /// Account-observed product principal before an Earn subscription.
+    #[serde(default)]
+    pub earn_principal_before: Quantity,
     pub status: CapitalPlanStatus,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
@@ -368,17 +434,31 @@ pub enum CapitalOperationStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CapitalOperationKind {
+    EarnRedemption,
+    EarnSubscription,
+    #[default]
+    Transfer,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalOperation {
     pub operation_id: CapitalOperationId,
     pub plan_id: CapitalPlanId,
     pub idempotency_key: kairos_primitives::IdempotencyKey,
+    #[serde(default)]
+    pub operation_index: u32,
+    #[serde(default)]
+    pub kind: CapitalOperationKind,
     pub status: CapitalOperationStatus,
     pub participant_operation_id: Option<String>,
     pub participant_state: Option<String>,
     pub dispatch_started_at: Option<UnixNanos>,
     pub attempt_count: u32,
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub account_observation_watermark: Option<Sequence>,
     pub updated_at: UnixNanos,
 }
 

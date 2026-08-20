@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalDemandChanged { metadata:kairos.common.v2.EventMetadata (required); demand:CapitalDemand (required); }
+root_type CapitalDemandChanged;
+file_identifier "CDV2";

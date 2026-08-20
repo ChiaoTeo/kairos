@@ -79,8 +79,7 @@ mod tests {
         let id = crate::runtime::ProducerId::new("producer:market").unwrap();
         assert_eq!(serde_json::to_string(&id).unwrap(), "\"producer:market\"");
         assert_eq!(
-            serde_json::from_str::<crate::runtime::ProducerId>("\"producer:market\"")
-                .unwrap(),
+            serde_json::from_str::<crate::runtime::ProducerId>("\"producer:market\"").unwrap(),
             id
         );
     }

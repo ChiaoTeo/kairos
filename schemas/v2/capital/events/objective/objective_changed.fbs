@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table FundingObjectiveChanged { metadata:kairos.common.v2.EventMetadata (required); objective:FundingObjective (required); }
+root_type FundingObjectiveChanged;
+file_identifier "COV2";

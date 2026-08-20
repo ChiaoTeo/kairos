@@ -16,6 +16,7 @@ from kairospy.application.capital import (
     FundingObjectiveStatus,
 )
 from kairospy.domain_types import AccountId, SegmentKey
+from kairospy.infrastructure.contracts.capital.view import CapitalViewKey, decode_view
 
 
 def _objective(account: str = "account-a") -> FundingObjective:
@@ -194,3 +195,20 @@ def test_demand_is_advisory_scoped_and_carries_fencing_evidence() -> None:
     ).observe_demand(demand)
     assert stale.status is FundingObjectiveStatus.REJECTED
     assert len(observed) == 1
+
+
+def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
+    key = CapitalViewKey("group/../一")
+
+    path = key.resource_path(tmp_path)
+
+    assert path.parent.name == "current"
+    assert path.name == "current.snapshot"
+    assert path.is_relative_to(tmp_path)
+    assert "/../" not in str(path)
+    assert key.canonical_key().startswith("capital.current/")
+
+
+def test_capital_view_decoder_fails_closed_on_another_root() -> None:
+    with pytest.raises(ValueError, match="CPV2"):
+        decode_view(b"\0\0\0\0NOPE")

@@ -367,6 +367,78 @@ pub mod kairos {
         pub use super::common;
     }
 
+    pub mod capital {
+        pub use super::common;
+        pub mod v_2 {
+            mod capital_availability_generated;
+            pub use capital_availability_generated::*;
+            mod capital_availability_evaluated_generated;
+            pub use capital_availability_evaluated_generated::*;
+            mod capital_current_state_generated;
+            pub use capital_current_state_generated::*;
+            mod capital_current_view_generated;
+            pub use capital_current_view_generated::*;
+            mod capital_demand_changed_generated;
+            pub use capital_demand_changed_generated::*;
+            mod capital_demand_generated;
+            pub use capital_demand_generated::*;
+            mod capital_demand_status_generated;
+            pub use capital_demand_status_generated::*;
+            mod capital_earn_holding_generated;
+            pub use capital_earn_holding_generated::*;
+            mod capital_facts_generated;
+            pub use capital_facts_generated::*;
+            mod capital_facts_observed_generated;
+            pub use capital_facts_observed_generated::*;
+            mod capital_funding_horizon_generated;
+            pub use capital_funding_horizon_generated::*;
+            mod capital_operation_generated;
+            pub use capital_operation_generated::*;
+            mod capital_operation_kind_generated;
+            pub use capital_operation_kind_generated::*;
+            mod capital_operation_status_generated;
+            pub use capital_operation_status_generated::*;
+            mod capital_plan_authorized_generated;
+            pub use capital_plan_authorized_generated::*;
+            mod capital_plan_expired_generated;
+            pub use capital_plan_expired_generated::*;
+            mod capital_plan_generated;
+            pub use capital_plan_generated::*;
+            mod capital_plan_state_changed_generated;
+            pub use capital_plan_state_changed_generated::*;
+            mod capital_plan_status_generated;
+            pub use capital_plan_status_generated::*;
+            mod capital_policy_changed_generated;
+            pub use capital_policy_changed_generated::*;
+            mod capital_policy_generated;
+            pub use capital_policy_generated::*;
+            mod capital_readiness_generated;
+            pub use capital_readiness_generated::*;
+            mod capital_reservation_generated;
+            pub use capital_reservation_generated::*;
+            mod capital_reservation_status_generated;
+            pub use capital_reservation_status_generated::*;
+            mod capital_route_changed_generated;
+            pub use capital_route_changed_generated::*;
+            mod capital_route_generated;
+            pub use capital_route_generated::*;
+            mod capital_route_kind_generated;
+            pub use capital_route_kind_generated::*;
+            mod capital_settlement_class_generated;
+            pub use capital_settlement_class_generated::*;
+            mod funding_location_generated;
+            pub use funding_location_generated::*;
+            mod funding_objective_changed_generated;
+            pub use funding_objective_changed_generated::*;
+            mod funding_objective_generated;
+            pub use funding_objective_generated::*;
+            mod funding_objective_status_generated;
+            pub use funding_objective_status_generated::*;
+            mod funding_priority_generated;
+            pub use funding_priority_generated::*;
+        }
+    }
+
     pub mod risk {
         pub use super::common;
         pub mod v_2 {

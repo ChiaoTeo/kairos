@@ -7,7 +7,7 @@ use kairos_primitives::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FundingLocation {
     pub broker: BrokerId,
     pub account_id: AccountId,

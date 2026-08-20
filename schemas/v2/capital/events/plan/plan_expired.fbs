@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalPlanExpired { metadata:kairos.common.v2.EventMetadata (required); plan:CapitalPlan (required); reservation:CapitalReservation (required); operation:CapitalOperation; }
+root_type CapitalPlanExpired;
+file_identifier "CPEV";

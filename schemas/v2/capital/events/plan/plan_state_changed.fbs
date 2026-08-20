@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalPlanStateChanged { metadata:kairos.common.v2.EventMetadata (required); plan:CapitalPlan (required); reservation:CapitalReservation (required); operation:CapitalOperation (required); }
+root_type CapitalPlanStateChanged;
+file_identifier "CPSV";

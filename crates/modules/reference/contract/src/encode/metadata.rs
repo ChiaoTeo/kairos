@@ -1,8 +1,8 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, EventMetadata};
 use kairos_protocol::generated::kairos::reference::v_2 as fb;
-use kairos_protocol::ProtocolContext;
 
 use crate::ContractResult;
 use crate::transport::{Asset, Entity, Instrument, Listing, Market};
@@ -40,7 +40,12 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    kairos_protocol::metadata::event_metadata(builder, context, "reference.events", occurred_at_unix_nanos)
+    kairos_protocol::metadata::event_metadata(
+        builder,
+        context,
+        "reference.events",
+        occurred_at_unix_nanos,
+    )
 }
 /// Typed v2 Reference event encoder. It accepts contract-owned record models
 /// and never serializes a record through JSON.
@@ -418,12 +423,4 @@ fn status(value: kairos_primitives::ReferenceStatus) -> fb::ReferenceLifecycleSt
 
 fn decimal(mantissa: i64, scale: u8) -> Decimal64 {
     Decimal64::new(mantissa, scale)
-}
-
-fn now_unix_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .min(u128::from(u64::MAX)) as u64
 }

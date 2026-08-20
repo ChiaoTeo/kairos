@@ -1,7 +1,7 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
 use kairos_protocol::ProtocolContext;
+use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
@@ -51,7 +51,12 @@ pub fn event_metadata<'a, A: Allocator + 'a>(
     context: &EncodeContext,
     occurred_at_unix_nanos: u64,
 ) -> WIPOffset<EventMetadata<'a>> {
-    kairos_protocol::metadata::event_metadata(builder, context, "market.events", occurred_at_unix_nanos)
+    kairos_protocol::metadata::event_metadata(
+        builder,
+        context,
+        "market.events",
+        occurred_at_unix_nanos,
+    )
 }
 
 pub fn view_metadata<'a, A: Allocator + 'a>(

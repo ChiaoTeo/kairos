@@ -1,6 +1,6 @@
 //! Typed dependency projections used by Execution planning and admission.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -11,6 +11,7 @@ use kairos_account_contract::{
     AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader,
     DecimalValue as AccountDecimal, Health,
 };
+use kairos_primitives::{OrderId, Sequence};
 use kairos_protocol::generated::kairos::account::v_2::{AccountStatus, FreshnessState};
 use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
@@ -21,7 +22,15 @@ pub(super) struct AccountProjection {
     pub(super) health: Health,
     pub(super) balances: Vec<ProjectedBalance>,
     pub(super) positions: Vec<ProjectedPosition>,
+    pub(super) commitment_observation: AccountCommitmentObservation,
     pub(super) refreshed_at: Instant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AccountCommitmentObservation {
+    pub(crate) account_id: String,
+    pub(crate) watermark: Sequence,
+    pub(crate) observed_order_ids: BTreeSet<OrderId>,
 }
 
 #[derive(Clone)]
@@ -115,11 +124,33 @@ impl DependencyProjectionRuntime {
                         Err(_) => return,
                     }
                 };
+                let observed_orders_reader = loop {
+                    let key = AccountViewKey::new(
+                        format!("account:{account_id}"),
+                        &account_id,
+                        AccountViewKind::ObservedOrders,
+                    );
+                    match key.and_then(|key| AccountViewReader::open(&view_root, key)) {
+                        Ok(reader) => break reader,
+                        Err(_) if !stop.load(Ordering::Acquire) => {
+                            std::thread::sleep(PROJECTION_REFRESH)
+                        },
+                        Err(_) => return,
+                    }
+                };
                 while !stop.load(Ordering::Acquire) {
-                    let result = client
-                        .health()
-                        .map_err(|error| error.to_string())
-                        .and_then(|health| read_account_projection(&reader, &account_id, health));
+                    let result =
+                        client
+                            .health()
+                            .map_err(|error| error.to_string())
+                            .and_then(|health| {
+                                read_account_projection(
+                                    &reader,
+                                    &observed_orders_reader,
+                                    &account_id,
+                                    health,
+                                )
+                            });
                     if let Ok(value) = result {
                         if let Ok(mut projection) = state.write() {
                             projection.accounts.insert(account_id.clone(), value);
@@ -254,7 +285,16 @@ impl DependencyProjectionRuntime {
             .map_err(|error| error.to_string())?;
             let reader =
                 AccountViewReader::open(view_root, key).map_err(|error| error.to_string())?;
-            let value = read_account_projection(&reader, account_id, health)?;
+            let observed_orders_key = AccountViewKey::new(
+                format!("account:{account_id}"),
+                account_id,
+                AccountViewKind::ObservedOrders,
+            )
+            .map_err(|error| error.to_string())?;
+            let observed_orders_reader = AccountViewReader::open(view_root, observed_orders_key)
+                .map_err(|error| error.to_string())?;
+            let value =
+                read_account_projection(&reader, &observed_orders_reader, account_id, health)?;
             self.state
                 .write()
                 .map_err(|_| "account projection lock poisoned".to_string())?
@@ -375,6 +415,7 @@ pub(super) fn read_reference_projection(
 
 pub(super) fn read_account_projection(
     reader: &AccountViewReader,
+    observed_orders_reader: &AccountViewReader,
     account_id: &str,
     health: Health,
 ) -> Result<AccountProjection, String> {
@@ -416,10 +457,41 @@ pub(super) fn read_account_projection(
             }
         }));
     }
+    let observed_frame = observed_orders_reader
+        .read()
+        .map_err(|error| error.to_string())?;
+    let observed_view = observed_frame
+        .observed_orders()
+        .map_err(|error| error.to_string())?;
+    let observed_metadata = observed_view.metadata();
+    if observed_frame.generation() != observed_metadata.generation()
+        || observed_metadata.generation() != health.generation.get()
+        || observed_metadata.applied_revision() != Some(health.event_sequence.get())
+        || observed_metadata.completeness() != ViewCompleteness::COMPLETE
+        || observed_view.account_id() != account_id
+    {
+        return Err(
+            "Account observed-orders watermark, identity, or completeness is invalid".into(),
+        );
+    }
+    let observed_order_ids = observed_view
+        .segments()
+        .iter()
+        .flat_map(|segment| segment.orders().iter())
+        .filter_map(|order| order.execution_order_id())
+        .filter(|value| !value.is_empty())
+        .map(OrderId::new)
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|error| error.to_string())?;
     Ok(AccountProjection {
         health,
         balances,
         positions,
+        commitment_observation: AccountCommitmentObservation {
+            account_id: account_id.to_owned(),
+            watermark: Sequence::new(observed_frame.envelope_metadata().applied_event_sequence),
+            observed_order_ids,
+        },
         refreshed_at: Instant::now(),
     })
 }

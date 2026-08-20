@@ -1269,6 +1269,7 @@ fn canonical_typed_hash<T: serde::Serialize>(value: &T) -> Result<String, Execut
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+#[cfg(test)]
 fn canonical_value_hash(value: &serde_json::Value) -> Result<String, ExecutionError> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| ExecutionError::Invalid(format!("cannot canonicalize Intent: {error}")))?;
@@ -1312,7 +1313,7 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod admission_tests {
-    use super::{canonical_value_hash, decode_intent_admission_evidence};
+    use super::canonical_value_hash;
     use crate::application::ExecuteStrategyIntent;
 
     fn evidence(

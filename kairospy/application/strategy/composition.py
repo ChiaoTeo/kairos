@@ -42,7 +42,6 @@ from kairospy.application.risk.composition import (
     build_strategy_access as build_risk_access,
 )
 from kairospy.application.workspace import Workspace
-from kairospy.infrastructure.contracts.capital.client import CapitalContractClient
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 from .services.decision_journal import StrategyDecisionJournal
 
@@ -132,11 +131,6 @@ def compose_strategy_process(
     capital_enabled = bool(config.capital.get("enabled", False))
     if capital_enabled and endpoints.capital is None:
         raise RuntimeError("Capital is enabled but the instance manifest has no endpoint")
-    capital_client = (
-        CapitalContractClient(endpoints.capital.socket)
-        if capital_enabled and endpoints.capital is not None
-        else None
-    )
     capital = build_capital_access(
         identity=identity,
         capital_group_id=(
@@ -153,8 +147,11 @@ def compose_strategy_process(
             if capital_enabled and endpoints.capital is not None
             else None
         ),
-        commands=capital_client,
-        projection=capital_client,
+        view_root=(
+            endpoints.capital.view_root
+            if capital_enabled and endpoints.capital is not None
+            else None
+        ),
     )
     agent = compose_agent(
         workspace=workspace,

@@ -368,6 +368,24 @@ class LaunchRuntimeApplication:
         strategy = plan.strategy_ref
         instance = instance_id or new_instance_id()
         lease_account_ids = list(dict.fromkeys([*plan.account_refs, *account_ids]))
+        account_admin = AccountAdminApplication(self.workspace)
+        initial_account_records = {
+            account_id: account_admin.show(account_id)
+            for account_id in lease_account_ids
+        }
+        for record in initial_account_records.values():
+            controller_id = str(
+                (record.get("values") or {}).get("capital_controller_account_id")
+                or ""
+            ).strip()
+            if controller_id and controller_id not in lease_account_ids:
+                lease_account_ids.append(controller_id)
+        account_records = {
+            account_id: (
+                initial_account_records.get(account_id) or account_admin.show(account_id)
+            )
+            for account_id in lease_account_ids
+        }
         registry = LaunchRegistryApplication(self.workspace)
         active = self.running_instance(launch_id, mode)
         if active is not None:
@@ -445,10 +463,6 @@ class LaunchRuntimeApplication:
             confirm_live = mode == "live" and bool(
                 plan.live_safety and plan.live_safety.get("trading_enabled")
             )
-            account_records = {
-                account_id: AccountAdminApplication(self.workspace).show(account_id)
-                for account_id in lease_account_ids
-            }
             market_instance_workspace = (
                 instance_workspace if plan.market_scope == "instance" else None
             )
@@ -511,6 +525,12 @@ class LaunchRuntimeApplication:
                     "segment_products": dict(
                         account_records[bound_account_id].get("segment_products") or {}
                     ),
+                    "capital_controller_account_id": (
+                        account_records[bound_account_id].get("values") or {}
+                    ).get("capital_controller_account_id"),
+                    "participant_account_ref": (
+                        account_records[bound_account_id].get("values") or {}
+                    ).get("participant_account_ref"),
                     "lease_fence": account_lease_fences[bound_account_id],
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
@@ -559,6 +579,7 @@ class LaunchRuntimeApplication:
                 component_endpoints["capital"] = {
                     "socket": str(instance_workspace.socket("capital")),
                     "health": str(instance_workspace.health("capital")),
+                    "view_root": str(instance_workspace.snapshot()),
                 }
             if execution_enabled:
                 components.ensure_running(

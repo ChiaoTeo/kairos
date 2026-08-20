@@ -34,7 +34,8 @@ impl<'a> OrderCommitmentState<'a> {
     pub const VT_PRICE_CAP: ::flatbuffers::VOffsetT = 26;
     pub const VT_CONTRACT_SIZE: ::flatbuffers::VOffsetT = 28;
     pub const VT_SETTLEMENT_ASSET: ::flatbuffers::VOffsetT = 30;
-    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 32;
+    pub const VT_REFLECTED_ACCOUNT_WATERMARK: ::flatbuffers::VOffsetT = 32;
+    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 34;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -52,6 +53,9 @@ impl<'a> OrderCommitmentState<'a> {
     ) -> ::flatbuffers::WIPOffset<OrderCommitmentState<'bldr>> {
         let mut builder = OrderCommitmentStateBuilder::new(_fbb);
         builder.add_updated_at_unix_nanos(args.updated_at_unix_nanos);
+        if let Some(x) = args.reflected_account_watermark {
+            builder.add_reflected_account_watermark(x);
+        }
         if let Some(x) = args.settlement_asset {
             builder.add_settlement_asset(x);
         }
@@ -277,6 +281,16 @@ impl<'a> OrderCommitmentState<'a> {
         }
     }
     #[inline]
+    pub fn reflected_account_watermark(&self) -> Option<u64> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(OrderCommitmentState::VT_REFLECTED_ACCOUNT_WATERMARK, None)
+        }
+    }
+    #[inline]
     pub fn updated_at_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -347,6 +361,11 @@ impl ::flatbuffers::Verifiable for OrderCommitmentState<'_> {
                 false,
             )?
             .visit_field::<u64>(
+                "reflected_account_watermark",
+                Self::VT_REFLECTED_ACCOUNT_WATERMARK,
+                false,
+            )?
+            .visit_field::<u64>(
                 "updated_at_unix_nanos",
                 Self::VT_UPDATED_AT_UNIX_NANOS,
                 false,
@@ -370,6 +389,7 @@ pub struct OrderCommitmentStateArgs<'a> {
     pub price_cap: Option<&'a super::super::common::v_2::Decimal64>,
     pub contract_size: Option<&'a super::super::common::v_2::Decimal64>,
     pub settlement_asset: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub reflected_account_watermark: Option<u64>,
     pub updated_at_unix_nanos: u64,
 }
 impl<'a> Default for OrderCommitmentStateArgs<'a> {
@@ -390,6 +410,7 @@ impl<'a> Default for OrderCommitmentStateArgs<'a> {
             price_cap: None,
             contract_size: None,
             settlement_asset: None,
+            reflected_account_watermark: None,
             updated_at_unix_nanos: 0,
         }
     }
@@ -510,6 +531,13 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderCommitmentStateBuilder<'
         );
     }
     #[inline]
+    pub fn add_reflected_account_watermark(&mut self, reflected_account_watermark: u64) {
+        self.fbb_.push_slot_always::<u64>(
+            OrderCommitmentState::VT_REFLECTED_ACCOUNT_WATERMARK,
+            reflected_account_watermark,
+        );
+    }
+    #[inline]
     pub fn add_updated_at_unix_nanos(&mut self, updated_at_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             OrderCommitmentState::VT_UPDATED_AT_UNIX_NANOS,
@@ -568,6 +596,10 @@ impl ::core::fmt::Debug for OrderCommitmentState<'_> {
         ds.field("price_cap", &self.price_cap());
         ds.field("contract_size", &self.contract_size());
         ds.field("settlement_asset", &self.settlement_asset());
+        ds.field(
+            "reflected_account_watermark",
+            &self.reflected_account_watermark(),
+        );
         ds.field("updated_at_unix_nanos", &self.updated_at_unix_nanos());
         ds.finish()
     }

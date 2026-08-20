@@ -51,6 +51,7 @@ pub enum CapitalDemandReceipt {
 pub struct UpdateCapitalPolicy {
     pub capital_group_id: CapitalGroupId,
     pub policy: CapitalPolicy,
+    pub updated_at: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +74,7 @@ pub struct ExpireCapitalPlans {
 pub struct UpdateCapitalRoute {
     pub capital_group_id: CapitalGroupId,
     pub route: CapitalTransferRoute,
+    pub updated_at: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +84,36 @@ pub struct AuthorizeCapitalPlan {
     pub rebalance_decision_id: String,
     pub route_id: CapitalRouteId,
     pub source_authority: String,
+    pub created_at: UnixNanos,
+    pub expires_at: UnixNanos,
+}
+
+/// Deterministic amount that may leave a liquid balance location without
+/// crossing its effective liquidity target or an active Capital reservation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapitalYieldCandidate {
+    pub route_id: CapitalRouteId,
+    pub product_id: String,
+    pub amount: kairos_primitives::Quantity,
+    pub account_watermark: Sequence,
+    pub risk_watermark: Sequence,
+}
+
+/// Participant product evidence used when authorizing an Earn subscription.
+/// The Actor rechecks its own balance, policy, horizon, route, and reservation
+/// state; this evidence never authorizes a movement by itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizeEarnSubscriptionPlan {
+    pub capital_group_id: CapitalGroupId,
+    pub plan_id: CapitalPlanId,
+    pub rebalance_decision_id: String,
+    pub route_id: CapitalRouteId,
+    pub source_authority: String,
+    pub previewed_amount: kairos_primitives::Quantity,
+    pub preview_observed_at: UnixNanos,
+    pub eligible: bool,
+    pub immediately_redeemable: bool,
+    pub redemption_quota_remaining: Option<kairos_primitives::Quantity>,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -150,6 +182,7 @@ pub enum CapitalEvent {
     PolicyChanged {
         policy: CapitalPolicy,
         event_sequence: Sequence,
+        occurred_at: UnixNanos,
     },
     FactsObserved {
         facts: CapitalFacts,
@@ -162,6 +195,7 @@ pub enum CapitalEvent {
     RouteChanged {
         route: CapitalTransferRoute,
         event_sequence: Sequence,
+        occurred_at: UnixNanos,
     },
     PlanAuthorized {
         plan: Box<CapitalPlan>,
@@ -292,6 +326,25 @@ impl CapitalApplication {
         command: AuthorizeCapitalPlan,
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor.authorize_plan(command).map_err(map_actor_error)
+    }
+
+    pub fn yield_candidate(
+        &self,
+        route_id: &CapitalRouteId,
+        evaluated_at: UnixNanos,
+    ) -> Result<Option<CapitalYieldCandidate>, CapitalError> {
+        self.actor
+            .yield_candidate(route_id, evaluated_at)
+            .map_err(map_actor_error)
+    }
+
+    pub fn authorize_earn_subscription(
+        &mut self,
+        command: AuthorizeEarnSubscriptionPlan,
+    ) -> Result<CapitalPlan, CapitalError> {
+        self.actor
+            .authorize_earn_subscription(command)
+            .map_err(map_actor_error)
     }
 
     pub fn expire_plans(&mut self, command: ExpireCapitalPlans) -> Result<usize, CapitalError> {

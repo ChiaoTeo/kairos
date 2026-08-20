@@ -11,21 +11,27 @@ use axum::{Json, Router};
 use clap::Parser;
 use kairos_account_contract::{AccountViewKey, AccountViewKind, AccountViewReader};
 use kairos_capital::composition::{
-    CapitalConnectionAccount, ConfluxCapitalConnections, binance_transfer_account,
-    compose_capital_connections, compose_persistent_capital_transfer_process,
+    capital_current_view, capital_event, compose_persistent_capital_transfer_process,
 };
 use kairos_capital::{
     AuthorizeCapitalPlan, CancelFundingObjective, CapitalDemand, CapitalDemandReceipt,
     CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, CapitalPlanId, CapitalPlanStatus,
     CapitalPolicy, CapitalReadiness, CapitalRouteKind, CapitalSettlementClass,
-    CapitalTransferProcess, CapitalTransferRoute, FundingLocation as DomainLocation,
-    FundingObjective, FundingObjectiveReceipt, FundingPriority, ObserveCapitalDemand,
-    ObserveCapitalSettlement, PublishFundingObjective, UpdateCapitalPolicy, UpdateCapitalRoute,
+    CapitalTransferProcess, CapitalTransferRoute, EvaluateCapitalGroup,
+    FundingLocation as DomainLocation, FundingObjective, FundingObjectiveReceipt, FundingPriority,
+    ObserveCapitalDemand, ObserveCapitalSettlement, PublishFundingObjective, UpdateCapitalPolicy,
+    UpdateCapitalRoute,
 };
 use kairos_capital_contract::{
     CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalReadinessStatus,
-    ObserveCapitalDemandRequest, PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
+    MmapCapitalViewPublisher, ObserveCapitalDemandRequest, PublishFundingObjectiveRequest,
+    QueryCapitalAvailabilityRequest, QueuedCapitalEventPublisher,
 };
+use kairos_conflux::{
+    CapitalConnectionAccount, CapitalTransferConnections, compose_capital_transfer_connections,
+    validate_capital_transfer_product,
+};
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_primitives::{
     AccountId, BrokerId, Generation, Quantity, SegmentKey, Sequence, StrategyId, UnixNanos,
 };
@@ -46,6 +52,18 @@ struct Args {
     launch_id: String,
     #[arg(long, default_value = "default")]
     instance_id: String,
+
+    #[arg(long, env = "AERON_DIR")]
+    aeron_dir: Option<String>,
+
+    #[arg(long, default_value = kairos_capital_contract::DEFAULT_AERON_CHANNEL)]
+    aeron_channel: String,
+
+    #[arg(
+        long,
+        default_value_t = kairos_capital_contract::CAPITAL_EVENTS_STREAM_ID
+    )]
+    capital_events_stream_id: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +117,7 @@ enum CapitalRouteKindConfig {
     InternalTransfer,
     AccountTransfer,
     EarnRedemptionThenTransfer,
+    EarnSubscription,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -121,6 +140,11 @@ struct CapitalRouteConfig {
     settlement_class: CapitalSettlementClassConfig,
     #[serde(default = "enabled")]
     enabled: bool,
+    earn_product_id: Option<String>,
+    #[serde(default)]
+    demand_guard_millis: u64,
+    #[serde(default)]
+    allow_unknown_redemption_quota: bool,
 }
 
 const fn one() -> u64 {
@@ -149,6 +173,10 @@ struct ManifestAccount {
     #[serde(default)]
     environment: String,
     credential_id: Option<String>,
+    #[serde(default)]
+    capital_controller_account_id: Option<String>,
+    #[serde(default)]
+    participant_account_ref: Option<String>,
     lease_fence: String,
     #[serde(default)]
     permitted_segments: Vec<String>,
@@ -165,9 +193,12 @@ struct AccountLeaseRecord {
 }
 
 struct CapitalState {
-    runtime: Mutex<CapitalTransferProcess<ConfluxCapitalConnections>>,
+    runtime: Mutex<CapitalTransferProcess<CapitalTransferConnections>>,
+    view_publisher: StdMutex<MmapCapitalViewPublisher>,
+    event_publisher: QueuedCapitalEventPublisher,
     account_lease_fences: BTreeMap<String, String>,
     account_brokers: BTreeMap<String, String>,
+    account_controllers: BTreeMap<String, String>,
     account_lease_root: PathBuf,
     instance_id: String,
     automatic_execution: bool,
@@ -176,24 +207,39 @@ struct CapitalState {
     stop: StdMutex<Option<oneshot::Sender<()>>>,
 }
 
+fn capital_controller<'a>(
+    account_id: &'a str,
+    account: &'a ManifestAccount,
+    manifest: &'a Manifest,
+) -> Option<&'a str> {
+    account
+        .capital_controller_account_id
+        .as_deref()
+        .or_else(|| {
+            manifest
+                .accounts
+                .values()
+                .any(|candidate| {
+                    candidate.capital_controller_account_id.as_deref() == Some(account_id)
+                })
+                .then_some(account_id)
+        })
+}
+
+fn capital_product<'a>(account: &'a ManifestAccount, segment: &'a str) -> &'a str {
+    account
+        .segment_products
+        .get(segment)
+        .map(String::as_str)
+        .unwrap_or(segment)
+}
+
 fn validate_automatic_routes(capital: &CapitalConfig, manifest: &Manifest) -> Result<(), String> {
     if !capital.automatic_execution {
         return Ok(());
     }
     for route in capital.routes.iter().filter(|route| route.enabled) {
-        if !matches!(route.kind, CapitalRouteKindConfig::InternalTransfer) {
-            return Err(format!(
-                "Capital route '{}' cannot execute automatically until its Conflux rail is available",
-                route.route_id
-            ));
-        }
-        if route.source.account_id != route.destination.account_id {
-            return Err(format!(
-                "Capital internal route '{}' must remain inside one Account",
-                route.route_id
-            ));
-        }
-        let account = manifest
+        let source = manifest
             .accounts
             .get(route.source.account_id.as_str())
             .ok_or_else(|| {
@@ -202,35 +248,106 @@ fn validate_automatic_routes(capital: &CapitalConfig, manifest: &Manifest) -> Re
                     route.route_id
                 )
             })?;
-        let provider = if account.integration_provider.is_empty() {
-            account.broker.as_str()
-        } else {
-            account.integration_provider.as_str()
-        };
-        if !provider.eq_ignore_ascii_case("binance") {
-            return Err(format!(
-                "Capital route '{}' has no automatic Conflux transfer rail for provider '{}'",
-                route.route_id, provider
-            ));
-        }
-        if account.credential_id.is_none() {
-            return Err(format!(
-                "Capital route '{}' requires a credential-bound source Account",
-                route.route_id
-            ));
-        }
-        for endpoint in [&route.source, &route.destination] {
-            let product = account
-                .segment_products
-                .get(endpoint.segment.as_str())
-                .map(String::as_str)
-                .unwrap_or(endpoint.segment.as_str());
-            binance_transfer_account(product).map_err(|error| {
+        let destination = manifest
+            .accounts
+            .get(route.destination.account_id.as_str())
+            .ok_or_else(|| {
                 format!(
-                    "Capital route '{}' is not executable: {error}",
+                    "Capital route '{}' references an unknown destination Account",
                     route.route_id
                 )
             })?;
+        let provider = if source.integration_provider.is_empty() {
+            source.broker.as_str()
+        } else {
+            source.integration_provider.as_str()
+        };
+        validate_capital_transfer_product(
+            provider,
+            capital_product(source, route.source.segment.as_str()),
+        )
+        .and_then(|_| {
+            validate_capital_transfer_product(
+                provider,
+                capital_product(destination, route.destination.segment.as_str()),
+            )
+        })
+        .map_err(|error| {
+            format!(
+                "Capital route '{}' is not executable: {error}",
+                route.route_id
+            )
+        })?;
+        match route.kind {
+            CapitalRouteKindConfig::InternalTransfer => {
+                if route.source.account_id != route.destination.account_id {
+                    return Err(format!(
+                        "Capital internal route '{}' must remain inside one Account",
+                        route.route_id
+                    ));
+                }
+                if source.credential_id.is_none() {
+                    return Err(format!(
+                        "Capital route '{}' requires a credential-bound source Account",
+                        route.route_id
+                    ));
+                }
+            },
+            CapitalRouteKindConfig::AccountTransfer => {
+                if route.source.account_id == route.destination.account_id {
+                    return Err(format!(
+                        "Capital Account route '{}' must cross Account boundaries",
+                        route.route_id
+                    ));
+                }
+                let source_controller =
+                    capital_controller(route.source.account_id.as_str(), source, manifest);
+                let destination_controller = capital_controller(
+                    route.destination.account_id.as_str(),
+                    destination,
+                    manifest,
+                );
+                if source_controller.is_none() || source_controller != destination_controller {
+                    return Err(format!(
+                        "Capital Account route '{}' requires one explicitly shared controller",
+                        route.route_id
+                    ));
+                }
+                let controller_id = source_controller.expect("checked above");
+                let controller = manifest.accounts.get(controller_id).ok_or_else(|| {
+                    format!(
+                        "Capital route '{}' references missing controller Account '{}'",
+                        route.route_id, controller_id
+                    )
+                })?;
+                if controller.credential_id.is_none() {
+                    return Err(format!(
+                        "Capital controller Account '{controller_id}' requires a credential"
+                    ));
+                }
+            },
+            CapitalRouteKindConfig::EarnRedemptionThenTransfer => {
+                if source.credential_id.is_none() {
+                    return Err(format!(
+                        "Capital Earn route '{}' requires a credential-bound source Account",
+                        route.route_id
+                    ));
+                }
+            },
+            CapitalRouteKindConfig::EarnSubscription => {
+                if route.source != route.destination {
+                    return Err(format!(
+                        "Capital Earn subscription route '{}' must remain at one balance location",
+                        route.route_id
+                    ));
+                }
+                if source.credential_id.is_none() || route.earn_product_id.is_none() {
+                    return Err(format!(
+                        "Capital Earn subscription route '{}' requires a credential and product id",
+                        route.route_id
+                    ));
+                }
+            },
         }
     }
     Ok(())
@@ -270,12 +387,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|(account_id, account)| (account_id.clone(), account.broker.clone()))
         .collect();
+    let account_controllers = manifest
+        .accounts
+        .iter()
+        .filter_map(|(account_id, account)| {
+            capital_controller(account_id, account, &manifest)
+                .map(|controller| (account_id.clone(), controller.to_owned()))
+        })
+        .collect();
     let plan_ttl_nanos = millis_to_nanos(normalized.capital.plan_ttl_millis)?;
     if plan_ttl_nanos == 0 {
         return Err("Capital plan_ttl_millis must be positive".into());
     }
     let config = group_config(&normalized.capital, &manifest, args.launch_mode.clone())?;
     let capital_group_id = config.capital_group_id.clone();
+    let snapshot_root = instance.snapshot(&[])?;
     let connection_accounts = manifest
         .accounts
         .iter()
@@ -285,6 +411,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             integration_provider: account.integration_provider.clone(),
             environment: account.environment.clone(),
             credential_id: account.credential_id.clone(),
+            capital_controller_account_id: account.capital_controller_account_id.clone(),
+            participant_account_ref: account.participant_account_ref.clone(),
             permitted_segments: account.permitted_segments.clone(),
             segment_products: account.segment_products.clone(),
         })
@@ -293,27 +421,39 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &["config", "credentials", "credentials.toml"],
         &["credentials", "credentials.toml"],
     )?;
-    let connections =
-        compose_capital_connections(&credential_config, &args.launch_mode, connection_accounts)?;
+    let connections = compose_capital_transfer_connections(
+        &credential_config,
+        &args.launch_mode,
+        connection_accounts,
+    )?;
     let mut runtime = compose_persistent_capital_transfer_process(
         config,
         instance.state(&["capital", "capital-state.json"])?,
         connections,
     )?;
+    let configuration_updated_at = now_unix_nanos()?;
     for policy in &normalized.capital.policies {
         runtime
             .application_mut()
             .update_policy(UpdateCapitalPolicy {
                 capital_group_id: capital_group_id.clone(),
                 policy: policy_from_config(policy)?,
+                updated_at: configuration_updated_at,
             })?;
     }
     for route in &normalized.capital.routes {
         runtime.application_mut().update_route(UpdateCapitalRoute {
             capital_group_id: capital_group_id.clone(),
             route: route_from_config(route, &account_lease_fences)?,
+            updated_at: configuration_updated_at,
         })?;
     }
+    runtime
+        .application_mut()
+        .evaluate(EvaluateCapitalGroup {
+            evaluated_at: configuration_updated_at,
+        })
+        .map_err(|error| error.to_string())?;
     let socket = instance.socket("capital")?;
     let health = instance.health("capital")?;
     remove_socket(&socket)?;
@@ -322,10 +462,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = UnixListener::bind(&socket)?;
     let (stop_tx, stop_rx) = oneshot::channel();
+    let identity = InstanceIdentity::new(workspace.id(), &args.launch_id, &args.instance_id)?;
+    let view_publisher = MmapCapitalViewPublisher::create(
+        &snapshot_root,
+        4 * 1024 * 1024,
+        format!("capital:{}", capital_group_id),
+        identity.clone(),
+        capital_group_id.to_string(),
+    )?;
+    let event_publisher = QueuedCapitalEventPublisher::start(
+        kairos_capital_contract::AeronEndpoint::from_parts(
+            args.aeron_dir.as_deref(),
+            args.aeron_channel,
+            args.capital_events_stream_id,
+        )?,
+        format!("capital:{}", capital_group_id),
+        identity,
+        1024,
+    )?;
     let state = Arc::new(CapitalState {
         runtime: Mutex::new(runtime),
+        view_publisher: StdMutex::new(view_publisher),
+        event_publisher,
         account_lease_fences,
         account_brokers,
+        account_controllers,
         account_lease_root: workspace.state_root().join("account-locks"),
         instance_id: args.instance_id.clone(),
         automatic_execution: normalized.capital.automatic_execution,
@@ -333,9 +494,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         reconcile_after: StdMutex::new(BTreeMap::new()),
         stop: StdMutex::new(Some(stop_tx)),
     });
+    publish_current_view(&state).await?;
     let facts_task = tokio::spawn(run_facts_loop(
         state.clone(),
-        instance.snapshot(&[])?,
+        snapshot_root,
         args.instance_id,
         capital_group_id,
     ));
@@ -441,6 +603,7 @@ fn route_from_config(
             CapitalRouteKindConfig::EarnRedemptionThenTransfer => {
                 CapitalRouteKind::EarnRedemptionThenTransfer
             },
+            CapitalRouteKindConfig::EarnSubscription => CapitalRouteKind::EarnSubscription,
         },
         per_operation_limit: value.per_operation_limit,
         daily_limit: value.daily_limit,
@@ -454,6 +617,9 @@ fn route_from_config(
             },
         },
         enabled: value.enabled,
+        earn_product_id: value.earn_product_id.clone(),
+        demand_guard_nanos: millis_to_nanos(value.demand_guard_millis)?,
+        allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
     })
 }
 
@@ -483,6 +649,20 @@ async fn run_facts_loop(
             refresh_facts(&state, &snapshot_root, &instance_id, &capital_group_id).await
         {
             tracing::warn!(event = "capital_facts_refresh_failed", error = %error);
+            if let Ok(evaluated_at) = now_unix_nanos() {
+                let evaluated = {
+                    let mut runtime = state.runtime.lock().await;
+                    runtime
+                        .application_mut()
+                        .evaluate(EvaluateCapitalGroup { evaluated_at })
+                        .map_err(|error| error.to_string())
+                };
+                if let Err(evaluation_error) = evaluated {
+                    tracing::warn!(event = "capital_degraded_evaluation_failed", error = %evaluation_error);
+                } else if let Err(publication_error) = publish_current_view(&state).await {
+                    tracing::warn!(event = "capital_degraded_view_publish_failed", error = %publication_error);
+                }
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -500,6 +680,7 @@ async fn refresh_facts(
         (snapshot.policies, snapshot.routes, snapshot.strategy_id)
     };
     if policies.is_empty() {
+        publish_current_view(state).await?;
         return Ok(());
     }
 
@@ -595,6 +776,8 @@ async fn refresh_facts(
             .map_err(|error| error.to_string())?;
     }
     if !state.automatic_execution {
+        drop(runtime);
+        publish_current_view(state).await?;
         return Ok(());
     }
 
@@ -606,8 +789,14 @@ async fn refresh_facts(
         .filter(|plan| {
             matches!(
                 plan.status,
-                CapitalPlanStatus::Transferring
+                CapitalPlanStatus::Authorized
+                    | CapitalPlanStatus::Redeeming
+                    | CapitalPlanStatus::AwaitingRedemption
+                    | CapitalPlanStatus::Transferring
                     | CapitalPlanStatus::AwaitingTransfer
+                    | CapitalPlanStatus::Subscribing
+                    | CapitalPlanStatus::AwaitingSubscription
+                    | CapitalPlanStatus::Available
                     | CapitalPlanStatus::Indeterminate
             )
         })
@@ -616,10 +805,14 @@ async fn refresh_facts(
         if !reconciliation_is_due(state, &plan.plan_id, evaluated_at)? {
             continue;
         }
-        validate_current_source_lease(state, plan.source.account_id.as_str())?;
+        validate_current_transfer_leases(
+            state,
+            plan.source.account_id.as_str(),
+            plan.destination.account_id.as_str(),
+        )?;
         let plan_id = plan.plan_id.clone();
         let result = runtime
-            .execute_transfer(plan.plan_id, evaluated_at)
+            .execute_capital_plan(plan.plan_id, evaluated_at)
             .await
             .map_err(|error| error.to_string());
         schedule_reconciliation(state, &plan_id, evaluated_at)?;
@@ -634,12 +827,21 @@ async fn refresh_facts(
     {
         let Some(route) = snapshot.routes.iter().find(|route| {
             route.enabled
-                && route.kind == CapitalRouteKind::InternalTransfer
+                && matches!(
+                    route.kind,
+                    CapitalRouteKind::InternalTransfer
+                        | CapitalRouteKind::AccountTransfer
+                        | CapitalRouteKind::EarnRedemptionThenTransfer
+                )
                 && route.destination == availability.destination
         }) else {
             continue;
         };
-        validate_current_source_lease(state, route.source.account_id.as_str())?;
+        validate_current_transfer_leases(
+            state,
+            route.source.account_id.as_str(),
+            route.destination.account_id.as_str(),
+        )?;
         let plan_id = CapitalPlanId::new(format!(
             "capital-plan:{}:{}:{}",
             route.route_id,
@@ -678,13 +880,106 @@ async fn refresh_facts(
         if plan.status == CapitalPlanStatus::Authorized {
             let plan_id = plan.plan_id.clone();
             runtime
-                .execute_transfer(plan.plan_id, evaluated_at)
+                .execute_capital_plan(plan.plan_id, evaluated_at)
                 .await
                 .map_err(|error| error.to_string())?;
             schedule_reconciliation(state, &plan_id, evaluated_at)?;
         }
     }
+
+    for route in snapshot
+        .routes
+        .iter()
+        .filter(|route| route.enabled && route.kind == CapitalRouteKind::EarnSubscription)
+    {
+        let Some(availability) = snapshot
+            .availability
+            .iter()
+            .find(|view| view.destination == route.source)
+        else {
+            continue;
+        };
+        validate_current_transfer_leases(
+            state,
+            route.source.account_id.as_str(),
+            route.destination.account_id.as_str(),
+        )?;
+        let plan_id = CapitalPlanId::new(format!(
+            "capital-yield-plan:{}:{}:{}",
+            route.route_id,
+            availability.account_watermark.get(),
+            availability.risk_watermark.get()
+        ))
+        .map_err(|error| error.to_string())?;
+        let expires_at = UnixNanos::new(
+            evaluated_at
+                .get()
+                .checked_add(state.plan_ttl_nanos)
+                .ok_or_else(|| "Capital plan expiry overflows UnixNanos".to_string())?,
+        );
+        let command = AuthorizeCapitalPlan {
+            capital_group_id: capital_group_id.clone(),
+            plan_id,
+            rebalance_decision_id: format!(
+                "capital-yield-deployment:{}:{}:{}",
+                route.route_id,
+                availability.account_watermark.get(),
+                availability.risk_watermark.get()
+            ),
+            route_id: route.route_id.clone(),
+            source_authority: route.required_source_authority.clone(),
+            created_at: evaluated_at,
+            expires_at,
+        };
+        let plan = match runtime.authorize_earn_subscription_plan(command).await {
+            Ok(Some(plan)) => plan,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::debug!(event = "capital_yield_plan_not_authorized", route_id = %route.route_id, error = %error);
+                continue;
+            },
+        };
+        let plan_id = plan.plan_id.clone();
+        runtime
+            .execute_capital_plan(plan.plan_id, evaluated_at)
+            .await
+            .map_err(|error| error.to_string())?;
+        schedule_reconciliation(state, &plan_id, evaluated_at)?;
+    }
+    drop(runtime);
+    publish_current_view(state).await?;
     Ok(())
+}
+
+async fn publish_current_view(state: &CapitalState) -> Result<(), String> {
+    loop {
+        let event = {
+            let runtime = state.runtime.lock().await;
+            runtime.application().pending_event().cloned()
+        };
+        let Some(event) = event else {
+            break;
+        };
+        let event = capital_event(&event);
+        state
+            .event_publisher
+            .publish(&event)
+            .map_err(|error| error.to_string())?;
+        state
+            .runtime
+            .lock()
+            .await
+            .application_mut()
+            .acknowledge_event()
+            .map_err(|error| error.to_string())?;
+    }
+    let view = capital_current_view(&state.runtime.lock().await.application().snapshot());
+    state
+        .view_publisher
+        .lock()
+        .map_err(|_| "Capital view publisher mutex is poisoned".to_string())?
+        .publish(&view)
+        .map_err(|error| error.to_string())
 }
 
 fn reconciliation_is_due(
@@ -758,6 +1053,26 @@ fn read_location_facts(
         .map(quantity_from_decimal)
         .transpose()?
         .unwrap_or(Quantity::ZERO);
+    let earn_holdings = segment
+        .earn_holdings()
+        .iter()
+        .filter(|holding| holding.asset() == location.asset.as_str())
+        .filter_map(|holding| {
+            holding.redeemable().map(|redeemable| {
+                quantity_from_decimal(redeemable).and_then(|redeemable_amount| {
+                    Ok(kairos_capital::CapitalEarnHoldingFact {
+                        product_id: holding.product_id().to_owned(),
+                        principal: quantity_from_decimal(holding.principal())?,
+                        redeemable_amount,
+                        immediately_redeemable: holding.liquidity()
+                            == kairos_protocol::generated::kairos::account::v_2::EarnLiquidity::IMMEDIATE,
+                        active: holding.state()
+                            == kairos_protocol::generated::kairos::account::v_2::EarnHoldingState::ACTIVE,
+                    })
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let account_watermark = Sequence::new(
         segment
             .snapshot_watermark()
@@ -792,6 +1107,7 @@ fn read_location_facts(
         risk_capacity,
         risk_policy_version,
         risk_watermark,
+        earn_holdings,
     })
 }
 
@@ -856,6 +1172,11 @@ async fn publish_objective(
             observed_at: request.observed_at_unix_nanos,
         })
         .map_err(|error| error.to_string());
+    if result.is_ok() {
+        if let Err(error) = publish_current_view(&state).await {
+            return internal_error(&error);
+        }
+    }
     match result {
         Ok(receipt) => objective_response(response_request_id, receipt),
         Err(error) => rejected_objective_response(
@@ -886,6 +1207,11 @@ async fn cancel_objective(
             observed_at: request.observed_at_unix_nanos,
         })
         .map_err(|error| error.to_string());
+    if result.is_ok() {
+        if let Err(error) = publish_current_view(&state).await {
+            return internal_error(&error);
+        }
+    }
     match result {
         Ok(receipt) => objective_response(response_request_id, receipt),
         Err(error) => rejected_objective_response(
@@ -939,6 +1265,11 @@ async fn observe_demand(
             .map_err(|error| error.to_string())
     }
     .await;
+    if result.is_ok() {
+        if let Err(error) = publish_current_view(&state).await {
+            return internal_error(&error);
+        }
+    }
     match result {
         Ok(receipt) => {
             let (record, status) = match receipt {
@@ -1102,6 +1433,28 @@ fn validate_current_source_lease(state: &CapitalState, account_id: &str) -> Resu
     Err(format!(
         "source account {account_id} has no current Account lease"
     ))
+}
+
+fn validate_current_transfer_leases(
+    state: &CapitalState,
+    source_account_id: &str,
+    destination_account_id: &str,
+) -> Result<(), String> {
+    validate_current_source_lease(state, source_account_id)?;
+    if source_account_id == destination_account_id {
+        return Ok(());
+    }
+    let source_controller = state.account_controllers.get(source_account_id);
+    let destination_controller = state.account_controllers.get(destination_account_id);
+    if source_controller != destination_controller {
+        return Err("cross-Account transfer no longer has one shared controller".into());
+    }
+    let controller = source_controller
+        .ok_or_else(|| "cross-Account transfer has no controller lease".to_string())?;
+    if controller != source_account_id {
+        validate_current_source_lease(state, controller)?;
+    }
+    Ok(())
 }
 
 fn objective_response(request_id: String, receipt: FundingObjectiveReceipt) -> Response {

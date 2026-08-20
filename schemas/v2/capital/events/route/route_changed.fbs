@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalRouteChanged { metadata:kairos.common.v2.EventMetadata (required); route:CapitalRoute (required); }
+root_type CapitalRouteChanged;
+file_identifier "CRV2";

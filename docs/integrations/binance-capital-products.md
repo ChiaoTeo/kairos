@@ -31,8 +31,10 @@ implements same-Account User Universal Transfer submit/history for explicitly
 bound Spot, Funding, USD-M, COIN-M, and Cross Margin segments. Binance does not
 accept a client idempotency key on this endpoint, so Capital persists a
 delivery fence and reconciles by `tranId` or an unambiguous route/asset/amount/
-time match. Master/subaccount and other cross-Account rails remain separate
-pending implementations.
+time match. The first master/subaccount cross-Account rail is implemented as a
+separate concrete connection using a master credential plus explicit
+controller/subaccount metadata. Unrelated independent Accounts are not
+inferred to be transferable.
 
 These map to `AssetTransferCommand` and `AssetTransferStatusQuery` only when
 both endpoints are locations within Binance. A blockchain withdrawal or a
@@ -54,6 +56,8 @@ The Simple Earn API currently exposes more than a Flexible/Locked enum:
 Consequences for the neutral model:
 
 - product-wide maximum and principal-specific remaining quota are different;
+- subscription previews carry the external Account identity because personal
+  quota and eligibility belong to the credential principal;
 - subscription acknowledgement, product position, rewards, and redemption
   settlement are different facts;
 - auto-subscribe and redeem options are configuration commands, not fields on

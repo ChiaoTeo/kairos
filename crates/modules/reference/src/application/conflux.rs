@@ -274,7 +274,10 @@ impl ReferenceApplication {
         context: &mut Context<'_, Self>,
     ) -> Result<ReferenceMutationResponse, ReferenceControlError> {
         let events = self.publish_pending(context).await?;
-        Ok(ReferenceMutationResponse { generation, events: events as u64 })
+        Ok(ReferenceMutationResponse {
+            generation,
+            events: events as u64,
+        })
     }
 
     async fn publish_pending(

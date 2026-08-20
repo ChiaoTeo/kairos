@@ -153,6 +153,7 @@ pub struct ExecutionApplication {
     pub(crate) conflux: super::conflux::ExecutionConfluxState,
 }
 
+#[derive(Clone)]
 struct ConfiguredExecutionRoute {
     candidate: ExecutionRouteCandidate,
     participant_instrument: kairos_conflux::ParticipantInstrumentRef,

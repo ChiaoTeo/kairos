@@ -4,7 +4,7 @@
 //! requests from callers and have a reply path; exchange events are facts from a
 //! private order stream and are consumed independently by the state owner.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use kairos_conflux::OrderEntryEvent;
 
@@ -17,6 +17,7 @@ use crate::domain::{
     LegLifecycle, Money, OrderCommitment, OrderId, Quantity, RiskReservationEvidence,
     RiskReservationSagaStatus, UnixNanos,
 };
+use kairos_primitives::Sequence;
 
 mod events;
 mod fills;
@@ -146,6 +147,41 @@ impl ExecutionActor {
         self.commitments.get(order_id)
     }
 
+    pub(crate) fn reconcile_account_commitment_observation(
+        &mut self,
+        account_id: &str,
+        watermark: Sequence,
+        observed_order_ids: &BTreeSet<OrderId>,
+        now: u64,
+    ) -> bool {
+        let mut changed = false;
+        for commitment in self.commitments.values_mut().filter(|commitment| {
+            commitment.account_id == account_id && commitment.status.consumes_capacity()
+        }) {
+            if observed_order_ids.contains(&commitment.order_id) {
+                if commitment
+                    .reflected_account_watermark
+                    .is_none_or(|existing| watermark > existing)
+                {
+                    commitment.reflected_account_watermark = Some(watermark);
+                    commitment.updated_at_unix_nanos = now.into();
+                    changed = true;
+                }
+            } else if commitment
+                .reflected_account_watermark
+                .is_some_and(|existing| watermark > existing)
+            {
+                // A newer complete Account view no longer contains the lock.
+                // Until Execution observes a terminal order fact, restore the
+                // local deduction instead of exposing spendable capacity.
+                commitment.reflected_account_watermark = None;
+                commitment.updated_at_unix_nanos = now.into();
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(crate) fn risk_reservations(&self) -> impl Iterator<Item = &RiskReservationEvidence> {
         self.risk_reservations.values()
     }
@@ -196,5 +232,79 @@ fn order_event(order: &ExecutionOrder, occurred_at: u64, reason: String) -> Exec
         fill_id: None,
         filled_quantity: None,
         attempt: order.attempts.last().cloned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{CommitmentBasis, CommitmentResource, OrderSide};
+    use kairos_primitives::{
+        AccountId, Currency, InstrumentId, Money, Price, Quantity, SegmentKey,
+    };
+
+    fn commitment() -> OrderCommitment {
+        OrderCommitment::new(
+            OrderId::new("order-reflection").unwrap(),
+            AccountId::new("account-a").unwrap(),
+            SegmentKey::new("spot").unwrap(),
+            InstrumentId::new("BTC-USDT").unwrap(),
+            OrderSide::Buy,
+            CommitmentResource::Asset(Currency::new("USDT").unwrap()),
+            Money::new(100, 0).unwrap(),
+            Quantity::new(1, 0).unwrap(),
+            CommitmentBasis::QuotePriceCap {
+                price_cap: Price::new(100, 0).unwrap(),
+            },
+            UnixNanos::new(1),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn complete_account_order_observation_hands_off_and_can_restore_capacity_protection() {
+        let mut actor = ExecutionActor::new();
+        actor.restore(
+            1,
+            1,
+            Vec::new(),
+            vec![commitment()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+        let order_id = OrderId::new("order-reflection").unwrap();
+        assert!(actor.reconcile_account_commitment_observation(
+            "account-a",
+            Sequence::new(10),
+            &BTreeSet::from([order_id.clone()]),
+            2,
+        ));
+        let reflected = actor.commitment(order_id.as_str()).unwrap();
+        assert_eq!(
+            reflected.reflected_account_watermark,
+            Some(Sequence::new(10))
+        );
+        assert!(!reflected.consumes_unreflected_physical_capacity());
+
+        // Absence at the same watermark proves nothing. A newer complete
+        // observation restores the local deduction until order terminality is known.
+        assert!(!actor.reconcile_account_commitment_observation(
+            "account-a",
+            Sequence::new(10),
+            &BTreeSet::new(),
+            3,
+        ));
+        assert!(actor.reconcile_account_commitment_observation(
+            "account-a",
+            Sequence::new(11),
+            &BTreeSet::new(),
+            4,
+        ));
+        let unreflected = actor.commitment(order_id.as_str()).unwrap();
+        assert_eq!(unreflected.reflected_account_watermark, None);
+        assert!(unreflected.consumes_unreflected_physical_capacity());
     }
 }

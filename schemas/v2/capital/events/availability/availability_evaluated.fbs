@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalAvailabilityEvaluated { metadata:kairos.common.v2.EventMetadata (required); availability:[CapitalAvailability] (required); }
+root_type CapitalAvailabilityEvaluated;
+file_identifier "CAV2";

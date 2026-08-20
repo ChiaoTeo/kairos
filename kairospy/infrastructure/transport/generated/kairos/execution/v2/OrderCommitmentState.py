@@ -139,14 +139,21 @@ class OrderCommitmentState(object):
         return None
 
     # OrderCommitmentState
-    def UpdatedAtUnixNanos(self):
+    def ReflectedAccountWatermark(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return None
+
+    # OrderCommitmentState
+    def UpdatedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def OrderCommitmentStateStart(builder):
-    builder.StartObject(15)
+    builder.StartObject(16)
 
 def Start(builder):
     OrderCommitmentStateStart(builder)
@@ -235,8 +242,14 @@ def OrderCommitmentStateAddSettlementAsset(builder, settlementAsset):
 def AddSettlementAsset(builder, settlementAsset):
     OrderCommitmentStateAddSettlementAsset(builder, settlementAsset)
 
+def OrderCommitmentStateAddReflectedAccountWatermark(builder, reflectedAccountWatermark):
+    builder.PrependUint64Slot(14, reflectedAccountWatermark, None)
+
+def AddReflectedAccountWatermark(builder, reflectedAccountWatermark):
+    OrderCommitmentStateAddReflectedAccountWatermark(builder, reflectedAccountWatermark)
+
 def OrderCommitmentStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
-    builder.PrependUint64Slot(14, updatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(15, updatedAtUnixNanos, 0)
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     OrderCommitmentStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)

@@ -5,7 +5,9 @@ use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::{SocketExecutionIntentPlanner, SocketExecutionOrderAdmission};
+use super::{
+    AccountCommitmentObservation, SocketExecutionIntentPlanner, SocketExecutionOrderAdmission,
+};
 use crate::application::{
     DependencyWatermarks, ExecuteStrategyIntent, QuoteObservation, RiskAuthorizationContext,
     SubmitOrder,
@@ -29,6 +31,10 @@ enum PlanningRequest {
 }
 
 enum AdmissionRequest {
+    CommitmentObservation {
+        account_id: String,
+        reply: std::sync::mpsc::SyncSender<Result<AccountCommitmentObservation, String>>,
+    },
     Validate {
         request: SubmitOrder,
         active_commitments: Vec<OrderCommitment>,
@@ -274,6 +280,9 @@ impl QueuedExecutionOrderAdmission {
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     };
                     match request {
+                        AdmissionRequest::CommitmentObservation { account_id, reply } => {
+                            let _ = reply.send(admission.commitment_observation(&account_id));
+                        },
                         AdmissionRequest::Validate {
                             request,
                             active_commitments,
@@ -332,6 +341,20 @@ impl QueuedExecutionOrderAdmission {
             .read()
             .map(|value| value.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn commitment_observation(
+        &mut self,
+        account_id: &str,
+    ) -> Result<AccountCommitmentObservation, String> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        self.request(
+            AdmissionRequest::CommitmentObservation {
+                account_id: account_id.to_owned(),
+                reply: tx,
+            },
+            rx,
+        )
     }
 
     pub(crate) fn validate_order(

@@ -145,6 +145,14 @@ class CapitalDemandReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class CapitalFundingHorizon:
+    required_by: datetime
+    objective_ids: tuple[str, ...]
+    demand_ids: tuple[str, ...]
+    desired_available: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class CapitalAvailability:
     capital_group_id: str | None
     readiness: CapitalReadiness
@@ -155,6 +163,7 @@ class CapitalAvailability:
     policy_version: int | None = None
     active_objective_ids: tuple[str, ...] = ()
     active_demand_ids: tuple[str, ...] = ()
+    funding_horizons: tuple[CapitalFundingHorizon, ...] = ()
     desired_target: Decimal | None = None
     observed_available: Decimal | None = None
     effective_target: Decimal | None = None

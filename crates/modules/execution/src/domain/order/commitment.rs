@@ -1,6 +1,7 @@
 //! Capacity commitments held around exchange-facing orders.
 
 use super::*;
+use kairos_primitives::Sequence;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CommitmentResource {
@@ -55,6 +56,10 @@ pub struct OrderCommitment {
     pub basis: CommitmentBasis,
     #[serde(default)]
     pub settlement_asset: Option<Currency>,
+    /// Newer complete Account observed-orders watermark that has taken over
+    /// this commitment's physical balance deduction.
+    #[serde(default)]
+    pub reflected_account_watermark: Option<Sequence>,
     pub updated_at_unix_nanos: UnixNanos,
 }
 
@@ -87,7 +92,12 @@ impl OrderCommitment {
             status: CommitmentStatus::HeldBeforeSend,
             basis,
             settlement_asset: None,
+            reflected_account_watermark: None,
             updated_at_unix_nanos,
         })
+    }
+
+    pub fn consumes_unreflected_physical_capacity(&self) -> bool {
+        self.status.consumes_capacity() && self.reflected_account_watermark.is_none()
     }
 }

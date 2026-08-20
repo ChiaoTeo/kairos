@@ -95,6 +95,16 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Execution | active view | `ActiveIntentsView` | `ECI2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
 | DRAFT | Execution | active view | `ActiveOrdersView` | `ECO2` | Execution Actor | Strategy query/operations | KSS1 mmap / one writer |
 | DRAFT | Execution | current view | `CurrentExecutionView` | `ECV2` | Execution Actor | CLI, Strategy, operations, reconciliation | KSS1 mmap / one writer |
+| DRAFT | Capital | current view | `CapitalCurrentView` | `CPV2` | Capital Actor | Portfolio, Strategy, operations, audit | KSS1 mmap / one writer |
+| DRAFT | Capital | event | `FundingObjectiveChanged` | `COV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalDemandChanged` | `CDV2` | Capital Actor | Strategy, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalPolicyChanged` | `CYV2` | Capital Actor | operations, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalFactsObserved` | `CFV2` | Capital Actor | operations, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalAvailabilityEvaluated` | `CAV2` | Capital Actor | Strategy, Portfolio | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalRouteChanged` | `CRV2` | Capital Actor | operations, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalPlanAuthorized` | `CPAV` | Capital Actor | operations, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalPlanStateChanged` | `CPSV` | Capital Actor | operations, audit | Capital event stream / retained target |
+| DRAFT | Capital | event | `CapitalPlanExpired` | `CPEV` | Capital Actor | operations, audit | Capital event stream / retained target |
 | DRAFT | System | current view | `SystemHealthCurrentView` | `SHV2` | System monitor | operations | KSS1 mmap / one writer |
 | DRAFT | System | current view | `AlertsCurrentView` | `SAV2` | System monitor | operations | KSS1 mmap / one writer |
 

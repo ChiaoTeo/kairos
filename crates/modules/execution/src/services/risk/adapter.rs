@@ -386,7 +386,7 @@ fn read_reservation(
     }
     let Some(reservation) = decoded.state().active_reservations().iter().find(|value| {
         evidence.reservation_id == value.reservation_id()
-            || evidence.idempotency_key == value.idempotency_key()
+            || evidence.idempotency_key.as_str() == value.idempotency_key()
     }) else {
         return Ok(None);
     };
@@ -445,7 +445,7 @@ mod tests {
         let strategy_id = StrategyId::new("strategy-alpha").unwrap();
 
         assert_eq!(
-            risk_strategy_id(Some(&strategy_id)).unwrap(),
+            risk_strategy_id(Some(&strategy_id)).unwrap().as_str(),
             "strategy-alpha"
         );
         assert_eq!(

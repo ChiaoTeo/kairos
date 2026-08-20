@@ -1,0 +1,218 @@
+include "../../common/decimal.fbs";
+
+namespace kairos.capital.v2;
+
+table FundingLocation {
+  broker:string (required);
+  account_id:string (required);
+  segment:string (required);
+  asset:string (required);
+}
+
+enum CapitalReadiness:ubyte {
+  WAITING_FOR_FACTS = 0,
+  DEGRADED = 1,
+  READY = 2
+}
+
+enum CapitalPlanStatus:ubyte {
+  AUTHORIZED = 0,
+  TRANSFERRING = 1,
+  AWAITING_TRANSFER = 2,
+  RECONCILING = 3,
+  AVAILABLE = 4,
+  COMPLETED = 5,
+  INDETERMINATE = 6,
+  REJECTED = 7,
+  EXPIRED = 8,
+  FAILED = 9,
+  REDEEMING = 10,
+  AWAITING_REDEMPTION = 11,
+  SUBSCRIBING = 12,
+  AWAITING_SUBSCRIPTION = 13
+}
+
+enum CapitalOperationStatus:ubyte {
+  PREPARED = 0,
+  DISPATCHING = 1,
+  AWAITING_PARTICIPANT = 2,
+  INDETERMINATE = 3,
+  AWAITING_ACCOUNT_OBSERVATION = 4,
+  SETTLED = 5,
+  EXPIRED = 6,
+  REJECTED = 7,
+  FAILED = 8
+}
+enum CapitalOperationKind:ubyte { TRANSFER = 0, EARN_REDEMPTION = 1, EARN_SUBSCRIPTION = 2 }
+
+enum FundingPriority:ubyte { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 }
+enum FundingObjectiveStatus:ubyte { ACTIVE = 0, CANCELLED = 1, EXPIRED = 2 }
+enum CapitalDemandStatus:ubyte { ACTIVE = 0, EXPIRED = 1 }
+enum CapitalReservationStatus:ubyte { ACTIVE = 0, CONSUMED = 1, RELEASED = 2, EXPIRED = 3 }
+enum CapitalRouteKind:ubyte { INTERNAL_TRANSFER = 0, ACCOUNT_TRANSFER = 1, EARN_REDEMPTION_THEN_TRANSFER = 2, EARN_SUBSCRIPTION = 3 }
+enum CapitalSettlementClass:ubyte { IMMEDIATE_BOOK_TRANSFER = 0, PARTICIPANT_HISTORY_THEN_ACCOUNT_OBSERVATION = 1 }
+
+table FundingObjective {
+  objective_id:string (required);
+  version:ulong;
+  strategy_id:string (required);
+  destination:FundingLocation (required);
+  desired_available:kairos.common.v2.Decimal64 (required);
+  required_by_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+  priority:FundingPriority;
+  confidence_bps:ushort;
+  strategy_decision_id:string (required);
+  status:FundingObjectiveStatus;
+  updated_at_unix_nanos:ulong;
+}
+
+table CapitalDemand {
+  demand_id:string (required);
+  idempotency_key:string (required);
+  strategy_id:string (required);
+  destination:FundingLocation (required);
+  observed_shortfall:kairos.common.v2.Decimal64 (required);
+  observed_at_unix_nanos:ulong;
+  required_by_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+  priority:FundingPriority;
+  confidence_bps:ushort;
+  account_watermark:ulong;
+  risk_watermark:ulong;
+  launch_id:string (required);
+  instance_id:string (required);
+  causal_references:[string] (required);
+  status:CapitalDemandStatus;
+  updated_at_unix_nanos:ulong;
+}
+
+table CapitalPolicy {
+  destination:FundingLocation (required);
+  version:ulong;
+  minimum:kairos.common.v2.Decimal64 (required);
+  default_target:kairos.common.v2.Decimal64 (required);
+  maximum:kairos.common.v2.Decimal64 (required);
+  stress_buffer:kairos.common.v2.Decimal64 (required);
+  minimum_movement:kairos.common.v2.Decimal64 (required);
+  hysteresis:kairos.common.v2.Decimal64 (required);
+  deficit_dwell_nanos:ulong;
+  cooldown_nanos:ulong;
+  max_fact_age_nanos:ulong;
+}
+
+table CapitalFacts {
+  destination:FundingLocation (required);
+  observed_available:kairos.common.v2.Decimal64 (required);
+  account_watermark:ulong;
+  account_observed_at_unix_nanos:ulong;
+  account_complete:bool;
+  risk_capacity:kairos.common.v2.Decimal64 (required);
+  risk_policy_version:ulong;
+  risk_watermark:ulong;
+  earn_holdings:[CapitalEarnHolding] (required);
+}
+
+table CapitalEarnHolding {
+  product_id:string (required);
+  principal:kairos.common.v2.Decimal64 (required);
+  redeemable_amount:kairos.common.v2.Decimal64 (required);
+  immediately_redeemable:bool;
+  active:bool;
+}
+
+table CapitalRoute {
+  route_id:string (required);
+  version:ulong;
+  source:FundingLocation (required);
+  destination:FundingLocation (required);
+  kind:CapitalRouteKind;
+  per_operation_limit:kairos.common.v2.Decimal64 (required);
+  daily_limit:kairos.common.v2.Decimal64 (required);
+  required_source_authority:string (required);
+  settlement_class:CapitalSettlementClass;
+  enabled:bool;
+  earn_product_id:string;
+  demand_guard_nanos:ulong;
+  allow_unknown_redemption_quota:bool;
+}
+
+table CapitalReservation {
+  reservation_id:string (required);
+  plan_id:string (required);
+  source:FundingLocation (required);
+  amount:kairos.common.v2.Decimal64 (required);
+  source_account_watermark:ulong;
+  status:CapitalReservationStatus;
+  created_at_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+}
+
+table CapitalAvailability {
+  destination:FundingLocation (required);
+  readiness:CapitalReadiness;
+  policy_version:ulong;
+  active_objective_ids:[string] (required);
+  active_demand_ids:[string] (required);
+  funding_horizons:[CapitalFundingHorizon] (required);
+  desired_target:kairos.common.v2.Decimal64 (required);
+  effective_target:kairos.common.v2.Decimal64 (required);
+  observed_available:kairos.common.v2.Decimal64 (required);
+  deficit:kairos.common.v2.Decimal64 (required);
+  deficit_observed_since_unix_nanos:ulong = null;
+  cooldown_until_unix_nanos:ulong = null;
+  account_watermark:ulong;
+  risk_policy_version:ulong;
+  risk_watermark:ulong;
+  evaluated_at_unix_nanos:ulong;
+  reason:string;
+}
+
+table CapitalFundingHorizon {
+  required_by_unix_nanos:ulong;
+  objective_ids:[string] (required);
+  demand_ids:[string] (required);
+  desired_available:kairos.common.v2.Decimal64 (required);
+}
+
+table CapitalPlan {
+  plan_id:string (required);
+  rebalance_decision_id:string (required);
+  route_id:string (required);
+  route_version:ulong;
+  route_kind:CapitalRouteKind;
+  source:FundingLocation (required);
+  destination:FundingLocation (required);
+  amount:kairos.common.v2.Decimal64 (required);
+  objective_ids:[string] (required);
+  demand_ids:[string] (required);
+  reservation_id:string (required);
+  idempotency_key:string (required);
+  selected_earn_product_id:string;
+  source_account_watermark:ulong;
+  destination_account_watermark:ulong;
+  source_observed_available:kairos.common.v2.Decimal64 (required);
+  destination_observed_available:kairos.common.v2.Decimal64 (required);
+  redemption_account_watermark:ulong = null;
+  redemption_observed_available:kairos.common.v2.Decimal64;
+  earn_principal_before:kairos.common.v2.Decimal64 (required);
+  status:CapitalPlanStatus;
+  created_at_unix_nanos:ulong;
+  expires_at_unix_nanos:ulong;
+}
+
+table CapitalOperation {
+  operation_id:string (required);
+  plan_id:string (required);
+  idempotency_key:string (required);
+  operation_index:uint;
+  kind:CapitalOperationKind;
+  status:CapitalOperationStatus;
+  participant_operation_id:string;
+  participant_state:string;
+  dispatch_started_at_unix_nanos:ulong = null;
+  attempt_count:uint;
+  failure_reason:string;
+  account_observation_watermark:ulong = null;
+  updated_at_unix_nanos:ulong;
+}

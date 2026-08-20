@@ -515,6 +515,9 @@ pub(super) fn encode_commitment_state<'a>(
             price_cap: price_cap.as_ref(),
             contract_size: contract_size.as_ref(),
             settlement_asset,
+            reflected_account_watermark: commitment
+                .reflected_account_watermark
+                .map(|value| value.get()),
             updated_at_unix_nanos: commitment.updated_at_unix_nanos.get(),
         },
     ))

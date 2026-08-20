@@ -1,7 +1,7 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
 use kairos_protocol::ProtocolContext;
+use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
 
 #[derive(Clone, Debug)]
 pub struct EncodeContext {

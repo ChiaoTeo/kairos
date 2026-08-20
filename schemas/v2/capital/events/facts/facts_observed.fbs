@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalFactsObserved { metadata:kairos.common.v2.EventMetadata (required); facts:CapitalFacts (required); }
+root_type CapitalFactsObserved;
+file_identifier "CFV2";

@@ -5,12 +5,8 @@ use crate::services::actor::CapitalActor;
 use crate::services::persistence::JournalCapitalStore;
 use crate::{CapitalApplication, CapitalTransferProcess};
 
-mod conflux;
-
-pub use conflux::{
-    CapitalConnectionAccount, ConfluxCapitalConnections, binance_transfer_account,
-    compose_capital_connections,
-};
+mod projection;
+pub use projection::{capital_current_view, capital_event};
 
 pub fn compose_capital_application(config: CapitalGroupConfig) -> CapitalApplication {
     CapitalApplication::new(
@@ -31,7 +27,7 @@ pub fn compose_capital_transfer_process<C>(
     connection: C,
 ) -> Result<CapitalTransferProcess<C>, String>
 where
-    C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
+    C: kairos_conflux::CapitalTransferConnection,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();
@@ -46,7 +42,7 @@ pub fn compose_persistent_capital_transfer_process<C>(
     connection: C,
 ) -> Result<CapitalTransferProcess<C>, String>
 where
-    C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
+    C: kairos_conflux::CapitalTransferConnection,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();

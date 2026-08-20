@@ -1,0 +1,7 @@
+include "../../../common/metadata.fbs";
+include "../../types/state.fbs";
+
+namespace kairos.capital.v2;
+table CapitalPolicyChanged { metadata:kairos.common.v2.EventMetadata (required); policy:CapitalPolicy (required); }
+root_type CapitalPolicyChanged;
+file_identifier "CYV2";
