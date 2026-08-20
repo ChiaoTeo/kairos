@@ -1,11 +1,12 @@
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
 pub use kairos_primitives::capital::{
     CapitalDemandId, CapitalGroupId, CapitalOperationId, CapitalPlanId, CapitalReservationId,
     CapitalRouteId, FundingObjectiveId,
 };
-use kairos_primitives::{
-    AccountId, BasisPoints, BrokerId, Currency, Generation, Quantity, SegmentKey, Sequence,
-    StrategyDecisionId, StrategyId, UnixNanos,
-};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::{StrategyDecisionId, StrategyId};
+use kairos_primitives::time::{BasisPoints, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -76,7 +77,7 @@ pub struct FundingObjectiveRecord {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalDemand {
     pub demand_id: CapitalDemandId,
-    pub idempotency_key: kairos_primitives::IdempotencyKey,
+    pub idempotency_key: kairos_primitives::runtime::IdempotencyKey,
     pub strategy_id: StrategyId,
     pub destination: FundingLocation,
     pub observed_shortfall: Quantity,
@@ -196,9 +197,22 @@ pub struct CapitalEarnHoldingFact {
     pub active: bool,
 }
 
+/// Ephemeral liveness evidence for one Account member view. It deliberately
+/// does not survive restart: a recovered Capital Actor must observe the
+/// current Account view again before opening its write barrier.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapitalMemberAccountObservation {
+    pub broker: BrokerId,
+    pub account_id: AccountId,
+    pub account_watermark: Sequence,
+    pub account_observed_at: UnixNanos,
+    pub account_complete: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CapitalReadiness {
     WaitingForFacts,
+    WaitingForAccounts,
     Degraded,
     Ready,
 }
@@ -242,6 +256,17 @@ pub struct CapitalGroupMember {
     pub broker: BrokerId,
     pub account_id: AccountId,
     pub permitted_segments: Vec<SegmentKey>,
+    #[serde(default)]
+    pub readiness_role: CapitalMemberReadinessRole,
+}
+
+/// Whether loss of an Account member closes the whole Capital write barrier
+/// or only degrades the group and freezes routes that touch that member.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CapitalMemberReadinessRole {
+    #[default]
+    Critical,
+    Optional,
 }
 
 impl CapitalGroupMember {
@@ -366,6 +391,18 @@ pub enum CapitalPlanStatus {
     Failed,
 }
 
+/// Durable decision about whether Capital may compensate after an abnormal
+/// operation outcome. The first implementation never guesses that a reverse
+/// movement is safe.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CapitalRecoveryAction {
+    #[default]
+    None,
+    NoCompensationRequired,
+    ReconcileOriginalOperation,
+    HoldAndReview,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalPlan {
     pub plan_id: CapitalPlanId,
@@ -380,7 +417,7 @@ pub struct CapitalPlan {
     pub objective_ids: Vec<FundingObjectiveId>,
     pub demand_ids: Vec<CapitalDemandId>,
     pub reservation_id: CapitalReservationId,
-    pub idempotency_key: kairos_primitives::IdempotencyKey,
+    pub idempotency_key: kairos_primitives::runtime::IdempotencyKey,
     #[serde(default)]
     pub selected_earn_product_id: Option<String>,
     pub source_account_watermark: Sequence,
@@ -395,6 +432,12 @@ pub struct CapitalPlan {
     #[serde(default)]
     pub earn_principal_before: Quantity,
     pub status: CapitalPlanStatus,
+    #[serde(default)]
+    pub recovery_action: CapitalRecoveryAction,
+    #[serde(default)]
+    pub recovery_reason: Option<String>,
+    #[serde(default)]
+    pub recovery_decided_at: Option<UnixNanos>,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -446,7 +489,7 @@ pub enum CapitalOperationKind {
 pub struct CapitalOperation {
     pub operation_id: CapitalOperationId,
     pub plan_id: CapitalPlanId,
-    pub idempotency_key: kairos_primitives::IdempotencyKey,
+    pub idempotency_key: kairos_primitives::runtime::IdempotencyKey,
     #[serde(default)]
     pub operation_index: u32,
     #[serde(default)]

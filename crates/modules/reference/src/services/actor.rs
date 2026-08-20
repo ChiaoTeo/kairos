@@ -8,9 +8,10 @@ use super::publication::{StoredPublication, encode_publications};
 use super::source::ConfiguredReferenceSource;
 use super::source::ReferenceSource;
 use super::sqlx_storage::SqlxCatalogStore;
+use super::time::unix_nanos;
 use crate::domain::{
     Asset, Instrument, LifecycleEvent, Listing, ProviderCatalog, ProviderHealth, ReferenceCatalog,
-    ReferenceResult, unix_nanos,
+    ReferenceResult,
 };
 
 #[cfg(not(test))]
@@ -30,8 +31,8 @@ pub struct ReferenceActor {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CatalogMetadata {
-    pub generation: kairos_primitives::Generation,
-    pub event_sequence: kairos_primitives::Sequence,
+    pub generation: kairos_primitives::time::Generation,
+    pub event_sequence: kairos_primitives::time::Sequence,
     pub market_count: usize,
 }
 
@@ -551,8 +552,8 @@ fn provider_catalog(catalog: &ReferenceCatalog) -> ProviderCatalog {
 
 #[derive(Debug)]
 pub struct RefreshResult {
-    pub generation: kairos_primitives::Generation,
-    pub event_sequence: kairos_primitives::Sequence,
+    pub generation: kairos_primitives::time::Generation,
+    pub event_sequence: kairos_primitives::time::Sequence,
     pub changed: bool,
     pub event_count: usize,
     pub events: Vec<LifecycleEvent>,

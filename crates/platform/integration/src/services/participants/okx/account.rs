@@ -54,7 +54,7 @@ pub(crate) fn normalize_market_profile(
         fee_currency: fee_row
             .get("feeCcy")
             .and_then(Value::as_str)
-            .map(kairos_primitives::Currency::new)
+            .map(kairos_primitives::reference::Currency::new)
             .transpose()
             .map_err(|error| error.to_string())?,
         fee_discount: None,
@@ -90,8 +90,11 @@ pub(crate) fn normalize_account(
                 .or_else(|_| decimal_field(item, "cashBal"))
                 .ok()?;
             Some(Balance {
-                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}")).ok()?,
-                asset_code: kairos_primitives::Currency::new(code).ok()?,
+                asset_id: kairos_primitives::reference::AssetId::new(format!(
+                    "asset:crypto:{code}"
+                ))
+                .ok()?,
+                asset_code: kairos_primitives::reference::Currency::new(code).ok()?,
                 total,
                 available: decimal_field(item, "availBal").ok(),
                 locked: decimal_field(item, "frozenBal").ok(),
@@ -211,8 +214,10 @@ fn normalize_open_order(value: &Value) -> Result<OpenOrder, String> {
         .filter(|value| !value.is_empty())
         .unwrap_or(remote_order_id);
     Ok(OpenOrder {
-        order_id: kairos_primitives::OrderId::new(local_order_id)?,
-        remote_order_id: Some(kairos_primitives::RemoteOrderId::new(remote_order_id)?),
+        order_id: kairos_primitives::execution::OrderId::new(local_order_id)?,
+        remote_order_id: Some(kairos_primitives::integration::RemoteOrderId::new(
+            remote_order_id,
+        )?),
         participant_instrument,
         side: crate::domain::execution::normalize_order_side(
             value
@@ -261,7 +266,7 @@ mod tests {
     fn normalizes_okx_balance_and_short_position() {
         let segment = AccountSegment {
             identity: ExternalAccountIdentity::new("okx", "main").unwrap(),
-            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("swap").unwrap(),
             environment: "live".into(),
             account_model: Some("unified".into()),
         };
@@ -282,10 +287,11 @@ mod tests {
     #[test]
     fn normalizes_okx_market_fee_and_account_mode_profile() {
         let request = AccountMarketProfileRequest {
-            account_id: kairos_primitives::AccountId::new("main").unwrap(),
-            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
-            market_id: kairos_primitives::MarketId::new("market:okx:BTC-USDT-SWAP").unwrap(),
-            source_symbol: kairos_primitives::Symbol::new("BTC-USDT-SWAP").unwrap(),
+            account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("swap").unwrap(),
+            market_id: kairos_primitives::reference::MarketId::new("market:okx:BTC-USDT-SWAP")
+                .unwrap(),
+            source_symbol: kairos_primitives::reference::Symbol::new("BTC-USDT-SWAP").unwrap(),
         };
         let result = normalize_market_profile(
                 &request,

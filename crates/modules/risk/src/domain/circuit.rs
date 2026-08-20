@@ -1,4 +1,4 @@
-use kairos_primitives::UnixNanos;
+use kairos_primitives::time::UnixNanos;
 
 use super::CircuitState;
 

@@ -341,7 +341,8 @@ impl MarketApplication {
 mod tests {
     use std::time::Duration;
 
-    use kairos_primitives::{Exchange, InstrumentKind, UnixNanos};
+    use kairos_primitives::reference::{Exchange, InstrumentKind};
+    use kairos_primitives::time::UnixNanos;
     use tokio::sync::mpsc;
 
     use super::MarketApplication;

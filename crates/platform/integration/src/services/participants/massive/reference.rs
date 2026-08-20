@@ -1,6 +1,8 @@
 //! Massive instrument normalization without Reference-owned canonical IDs.
 
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 
 use crate::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, IntegrationError,

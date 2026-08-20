@@ -6,3 +6,4 @@ class CapitalReadiness(object):
     WAITING_FOR_FACTS = 0
     DEGRADED = 1
     READY = 2
+    WAITING_FOR_ACCOUNTS = 3

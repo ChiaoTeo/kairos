@@ -1,6 +1,9 @@
 //! Participant-neutral yield-product requests and external facts.
 
-use kairos_primitives::{Currency, IdempotencyKey, Quantity, Rate, SignedQuantity, UnixNanos};
+use kairos_primitives::decimal::{Quantity, Rate, SignedQuantity};
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::time::UnixNanos;
 
 use crate::domain::account::{ExternalAccountIdentity, ExternalAccountSegment};
 
@@ -236,6 +239,11 @@ impl EarnRatesRequest {
 pub struct EarnSubscriptionPreviewRequest {
     /// Required because quota and eligibility are credential-principal facts.
     pub account: ExternalAccountIdentity,
+    /// Canonical Account segment whose liquid balance would fund the product.
+    /// Providers that infer this location may ignore it, but simulation and
+    /// audit adapters must not guess it from a product identifier.
+    pub account_segment: ExternalAccountSegment,
+    pub asset: Currency,
     pub product_id: String,
     pub amount: Quantity,
 }
@@ -245,6 +253,7 @@ impl EarnSubscriptionPreviewRequest {
         if self.account.broker.is_empty() || self.account.broker.trim() != self.account.broker {
             return Err("earn preview account broker is required and must be trimmed".into());
         }
+        validate_account_segment(&self.account, &self.account_segment)?;
         validate_product_and_amount(&self.product_id, self.amount)
     }
 }
@@ -290,6 +299,8 @@ fn validate_page(cursor: Option<&str>, limit: Option<u16>) -> Result<(), String>
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnSubscribeRequest {
     pub account: crate::ExternalAccountIdentity,
+    pub account_segment: ExternalAccountSegment,
+    pub asset: Currency,
     pub idempotency_key: IdempotencyKey,
     pub product_id: String,
     pub amount: Quantity,
@@ -298,6 +309,7 @@ pub struct EarnSubscribeRequest {
 
 impl EarnSubscribeRequest {
     pub fn validate(&self) -> Result<(), String> {
+        validate_account_segment(&self.account, &self.account_segment)?;
         validate_product_and_amount(&self.product_id, self.amount)
     }
 }
@@ -305,6 +317,8 @@ impl EarnSubscribeRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnRedeemRequest {
     pub account: crate::ExternalAccountIdentity,
+    pub account_segment: ExternalAccountSegment,
+    pub asset: Currency,
     pub idempotency_key: IdempotencyKey,
     pub product_id: String,
     pub amount: EarnRedemptionAmount,
@@ -314,6 +328,7 @@ pub struct EarnRedeemRequest {
 
 impl EarnRedeemRequest {
     pub fn validate(&self) -> Result<(), String> {
+        validate_account_segment(&self.account, &self.account_segment)?;
         if self.product_id.trim().is_empty() {
             return Err("earn product id is required".into());
         }
@@ -350,6 +365,9 @@ pub struct EarnSubmission {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EarnActionQuery {
     pub account: crate::ExternalAccountIdentity,
+    pub account_segment: ExternalAccountSegment,
+    pub asset: Currency,
+    pub product_id: String,
     pub idempotency_key: IdempotencyKey,
     pub participant_action_id: Option<String>,
     pub action: EarnActionKind,
@@ -359,6 +377,16 @@ pub struct EarnActionQuery {
 pub enum EarnActionKind {
     Subscribe,
     Redeem,
+}
+
+fn validate_account_segment(
+    account: &ExternalAccountIdentity,
+    segment: &ExternalAccountSegment,
+) -> Result<(), String> {
+    if segment.identity != *account {
+        return Err("earn account segment must belong to the requested account".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,6 +416,13 @@ mod tests {
     fn rejects_zero_subscription_without_encoding_acceptance_twice() {
         let request = EarnSubscribeRequest {
             account: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
+            account_segment: crate::ExternalAccountSegment {
+                identity: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
+                segment_key: kairos_primitives::account::SegmentKey::new("spot").unwrap(),
+                environment: "paper".into(),
+                account_model: None,
+            },
+            asset: Currency::new("USDT").unwrap(),
             idempotency_key: IdempotencyKey::new("capital-plan:1:earn:1").unwrap(),
             product_id: "flexible-usdt".into(),
             amount: Quantity::ZERO,

@@ -325,17 +325,26 @@ fn simulated_account_settlement_uses_the_durable_order_settlement_asset() {
 }
 
 #[test]
-fn execution_uses_one_contract_actor_and_thin_host() {
+fn execution_uses_one_contract_actor_and_conflux_owned_control() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let application = rust_source(&root.join("src/application"));
-    let host = fs::read_to_string(root.join("src/composition/host.rs")).expect("read host");
+    let composition = rust_source(&root.join("src/composition"));
     assert!(application.contains("impl Contract for ExecutionApplication"));
     assert!(application.contains("impl ConfluxActor for ExecutionApplication"));
     assert!(application.contains("async fn handle("));
     assert!(!root.join("src/application/process").exists());
     assert!(!root.join("src/services/control").exists());
-    assert!(host.contains("ConfluxEvent::Rest"));
-    assert!(!host.contains("ExecutionActor"));
+    assert!(!root.join("src/composition/host.rs").exists());
+    assert!(composition.contains("with_http_control"));
+    assert!(composition.contains("ExecutionHttpControl"));
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(!manifest.contains("axum.workspace"));
+    for forbidden in ["axum::", "UnixListener", "TcpListener"] {
+        assert!(
+            !application.contains(forbidden),
+            "Execution Application depends on transport type {forbidden}"
+        );
+    }
 }
 
 #[test]

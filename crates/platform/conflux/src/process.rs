@@ -70,6 +70,7 @@ macro_rules! for_each_handle_collection {
     ($macro:ident) => {
         $macro! {
             (binance_capital_rest, BinanceCapitalRestHandle, crate::BinanceCapitalRestConfig, CreateBinanceCapitalRest, RemoveBinanceCapitalRest, binance_capital_rest, binance_capital_rest_connections, Rest),
+            (binance_subaccount_capital_rest, BinanceSubAccountCapitalRestHandle, crate::BinanceSubAccountCapitalRestConfig, CreateBinanceSubAccountCapitalRest, RemoveBinanceSubAccountCapitalRest, binance_subaccount_capital_rest, binance_subaccount_capital_rest_connections, Rest),
             (binance_spot_rest, BinanceSpotRestHandle, crate::BinanceRestConfig, CreateBinanceSpotRest, RemoveBinanceSpotRest, binance_spot_rest, binance_spot_rest_connections, Rest),
             (binance_funding_rest, BinanceFundingRestHandle, crate::BinanceRestConfig, CreateBinanceFundingRest, RemoveBinanceFundingRest, binance_funding_rest, binance_funding_rest_connections, Rest),
             (binance_earn_rest, BinanceEarnRestHandle, crate::BinanceRestConfig, CreateBinanceEarnRest, RemoveBinanceEarnRest, binance_earn_rest, binance_earn_rest_connections, Rest),
@@ -772,6 +773,7 @@ impl<A: ConfluxActor> Conflux<A> {
         {
             mode = ShutdownMode::Immediate;
         }
+        self.system.stop_outputs();
 
         let phase = match mode {
             ShutdownMode::Drain => ProcessPhase::Stopped,
@@ -913,12 +915,22 @@ impl<A: ConfluxActor> ConfluxHandle<A> {
         &self,
         request: RestRequestOf<A>,
     ) -> Result<Option<RestResponseOf<A>>, HandleError<RestRequestOf<A>>> {
+        self.submit_rest(request)
+            .await?
+            .await
+            .map_err(|_| HandleError::ActorStopped)
+    }
+
+    pub(crate) async fn submit_rest(
+        &self,
+        request: RestRequestOf<A>,
+    ) -> Result<oneshot::Receiver<Option<RestResponseOf<A>>>, HandleError<RestRequestOf<A>>> {
         let (completed, response) = oneshot::channel();
         self.rest_sender
             .send(RestEnvelope { request, completed })
             .await
             .map_err(|error| HandleError::Closed(error.0.request))?;
-        response.await.map_err(|_| HandleError::ActorStopped)
+        Ok(response)
     }
 
     pub fn shutdown(&self, mode: ShutdownMode) {

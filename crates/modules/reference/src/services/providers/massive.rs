@@ -696,7 +696,7 @@ fn append_massive_instrument(
         .as_ref()
         .map(|value| value.as_str().to_ascii_uppercase())
         .unwrap_or_else(|| "USD".into());
-    let status: kairos_primitives::ReferenceStatus =
+    let status: kairos_primitives::reference::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     let (family, instrument_id, symbol, underlying_id) = match value.kind {
         ExternalInstrumentKind::Equity => {
@@ -741,7 +741,7 @@ fn append_massive_instrument(
                 "options",
                 format!("instrument:option:{underlying}:{expiry}:{strike}:{right}"),
                 format!("{underlying}-{expiry}-{strike}-{right}"),
-                Some(kairos_primitives::InstrumentId::new(format!(
+                Some(kairos_primitives::reference::InstrumentId::new(format!(
                     "instrument:equity:US:{underlying}:common"
                 ))?),
             )
@@ -752,17 +752,17 @@ fn append_massive_instrument(
             )));
         },
     };
-    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
+    let instrument_id = kairos_primitives::reference::InstrumentId::new(instrument_id)?;
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_primitives::Symbol::new(symbol.clone())?,
+        symbol: kairos_primitives::reference::Symbol::new(symbol.clone())?,
         instrument_type: canonical_instrument_kind(value.kind)?,
         issuer_id: (family == "equity").then(|| {
-            kairos_primitives::IssuerId::new(format!("issuer:US:{source_symbol}"))
+            kairos_primitives::reference::IssuerId::new(format!("issuer:US:{source_symbol}"))
                 .expect("validated Massive issuer")
         }),
         share_class: (family == "equity").then(|| "common".into()),
-        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:fiat:{quote}"
         ))?),
         underlying_instrument_id: underlying_id,
@@ -784,10 +784,10 @@ fn append_massive_instrument(
             format!("listing:{exchange_id}:option:{symbol}")
         };
         catalog.listings.push(Listing {
-            listing_id: kairos_primitives::ListingId::new(listing_id)?,
+            listing_id: kairos_primitives::reference::ListingId::new(listing_id)?,
             instrument_id,
-            exchange_id: kairos_primitives::Exchange::new(exchange_id)?,
-            exchange_symbol: kairos_primitives::Symbol::new(source_symbol)?,
+            exchange_id: kairos_primitives::reference::Exchange::new(exchange_id)?,
+            exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol)?,
             status,
             effective_from_unix_nanos: 0.into(),
             effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -801,26 +801,28 @@ fn ensure_massive_underlying(
     catalog: &mut ProviderCatalog,
     ticker: &str,
     quote: &str,
-    status: kairos_primitives::ReferenceStatus,
+    status: kairos_primitives::reference::ReferenceStatus,
 ) -> ReferenceResult<()> {
-    let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{ticker}"))?;
-    let fiat_asset = kairos_primitives::AssetId::new(format!("asset:fiat:{quote}"))?;
+    let equity_asset =
+        kairos_primitives::reference::AssetId::new(format!("asset:equity:{ticker}"))?;
+    let fiat_asset = kairos_primitives::reference::AssetId::new(format!("asset:fiat:{quote}"))?;
     catalog.assets.push(Asset {
         asset_id: equity_asset.clone(),
-        code: kairos_primitives::Symbol::new(ticker)?,
+        code: kairos_primitives::reference::Symbol::new(ticker)?,
         asset_class: AssetClass::Equity,
         status: "active".into(),
         ..Asset::default()
     });
     catalog.assets.push(Asset {
         asset_id: fiat_asset.clone(),
-        code: kairos_primitives::Symbol::new(quote)?,
+        code: kairos_primitives::reference::Symbol::new(quote)?,
         asset_class: AssetClass::Fiat,
         status: "active".into(),
         ..Asset::default()
     });
-    let instrument_id =
-        kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{ticker}:common"))?;
+    let instrument_id = kairos_primitives::reference::InstrumentId::new(format!(
+        "instrument:equity:US:{ticker}:common"
+    ))?;
     if catalog
         .instruments
         .iter()
@@ -830,9 +832,9 @@ fn ensure_massive_underlying(
     }
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_primitives::Symbol::new(ticker.to_owned())?,
+        symbol: kairos_primitives::reference::Symbol::new(ticker.to_owned())?,
         instrument_type: InstrumentKind::Equity,
-        issuer_id: Some(kairos_primitives::IssuerId::new(format!(
+        issuer_id: Some(kairos_primitives::reference::IssuerId::new(format!(
             "issuer:US:{ticker}"
         ))?),
         share_class: Some("common".into()),

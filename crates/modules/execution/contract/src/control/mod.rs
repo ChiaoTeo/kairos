@@ -1,6 +1,8 @@
 mod client;
+mod http;
 mod types;
 pub use client::ExecutionControlClient;
+pub use http::ExecutionHttpControl;
 pub use types::{
     CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionCommandStatus,
     ExecutionControlError, ExecutionControlResponse, ExecutionHealthResponse,

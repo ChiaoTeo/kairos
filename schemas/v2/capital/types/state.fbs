@@ -12,7 +12,8 @@ table FundingLocation {
 enum CapitalReadiness:ubyte {
   WAITING_FOR_FACTS = 0,
   DEGRADED = 1,
-  READY = 2
+  READY = 2,
+  WAITING_FOR_ACCOUNTS = 3
 }
 
 enum CapitalPlanStatus:ubyte {
@@ -31,6 +32,16 @@ enum CapitalPlanStatus:ubyte {
   SUBSCRIBING = 12,
   AWAITING_SUBSCRIPTION = 13
 }
+
+enum CapitalRecoveryAction:ubyte {
+  NONE = 0,
+  NO_COMPENSATION_REQUIRED = 1,
+  RECONCILE_ORIGINAL_OPERATION = 2,
+  HOLD_AND_REVIEW = 3
+}
+
+enum CapitalAlertKind:ubyte { RECONCILIATION_REQUIRED = 0, MANUAL_REVIEW = 1 }
+enum CapitalAlertSeverity:ubyte { WARNING = 0, CRITICAL = 1 }
 
 enum CapitalOperationStatus:ubyte {
   PREPARED = 0,
@@ -197,6 +208,9 @@ table CapitalPlan {
   redemption_observed_available:kairos.common.v2.Decimal64;
   earn_principal_before:kairos.common.v2.Decimal64 (required);
   status:CapitalPlanStatus;
+  recovery_action:CapitalRecoveryAction;
+  recovery_reason:string;
+  recovery_decided_at_unix_nanos:ulong = null;
   created_at_unix_nanos:ulong;
   expires_at_unix_nanos:ulong;
 }
@@ -215,4 +229,15 @@ table CapitalOperation {
   failure_reason:string;
   account_observation_watermark:ulong = null;
   updated_at_unix_nanos:ulong;
+}
+
+table CapitalAlert {
+  alert_id:string (required);
+  plan_id:string (required);
+  operation_id:string;
+  kind:CapitalAlertKind;
+  severity:CapitalAlertSeverity;
+  recovery_action:CapitalRecoveryAction;
+  message:string (required);
+  opened_at_unix_nanos:ulong;
 }

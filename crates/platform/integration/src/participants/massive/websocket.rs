@@ -387,7 +387,7 @@ fn feed_parameter(feed: &MarketFeed, product: SocketProduct) -> Result<String, I
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::ParticipantSymbol;
+    use kairos_primitives::integration::ParticipantSymbol;
 
     use super::{SocketProduct, feed_parameter};
     use crate::{MarketDataKind, MarketFeed};

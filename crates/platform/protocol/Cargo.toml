@@ -9,6 +9,6 @@ description = "Generated FlatBuffers process-boundary contracts for Kairos"
 flatbuffers.workspace = true
 kairos-primitives.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true

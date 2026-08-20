@@ -1,4 +1,4 @@
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 use serde_json::Value;
 
 use crate::IntegrationError;

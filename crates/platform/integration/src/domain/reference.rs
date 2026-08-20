@@ -1,6 +1,8 @@
 //! Participant instrument catalog facts consumed by Reference.
 
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 
 use crate::domain::ParticipantRef;
 

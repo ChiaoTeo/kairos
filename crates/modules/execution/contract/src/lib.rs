@@ -12,12 +12,12 @@ use std::path::PathBuf;
 pub use control::{
     CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionCommandStatus,
     ExecutionControlClient, ExecutionControlError, ExecutionControlResponse,
-    ExecutionHealthResponse, ExecutionIntentRequest, ExecutionOrderOptionsRequest,
-    ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
-    ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesQuery,
-    ExecutionRoutesResponse, FailurePolicy, HedgePolicyRequest, IntentAdmissionEvidenceRequest,
-    IntentLegRequest, IntentType, MakerExecutionPolicyRequest, ReconcileExecutionRequest,
-    ReplaceOrderRequest, SplitOrderPolicyRequest, SubmitIntentRequest,
+    ExecutionHealthResponse, ExecutionHttpControl, ExecutionIntentRequest,
+    ExecutionOrderOptionsRequest, ExecutionReconcileResponse, ExecutionRestRequest,
+    ExecutionRestResponse, ExecutionRouteCandidateResponse, ExecutionRouteHealth,
+    ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy, HedgePolicyRequest,
+    IntentAdmissionEvidenceRequest, IntentLegRequest, IntentType, MakerExecutionPolicyRequest,
+    ReconcileExecutionRequest, ReplaceOrderRequest, SplitOrderPolicyRequest, SubmitIntentRequest,
 };
 pub use encode::{EncodeContext, event_metadata, view_metadata};
 pub use error::{ContractError, ContractResult};

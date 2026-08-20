@@ -1,4 +1,4 @@
-use kairos_primitives::Sequence;
+use kairos_primitives::time::Sequence;
 
 use super::MarketActor;
 use crate::domain::events::{MarketChange, MarketEvent};

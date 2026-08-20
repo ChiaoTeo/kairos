@@ -28,10 +28,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use kairos_execution_contract::ExecutionViewKind;
-    use kairos_primitives::{
-        AccountId, Currency, Generation, InstrumentId, Money, OrderId, Quantity, SegmentKey,
-        Sequence, UnixNanos,
-    };
+    use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
+    use kairos_primitives::decimal::{Money, Quantity};
+    use kairos_primitives::execution::OrderId;
+    use kairos_primitives::reference::{Currency, InstrumentId};
+    use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
     use super::*;
     use crate::application::{
@@ -55,12 +56,13 @@ mod tests {
             segment_key,
             instrument_id.clone(),
             OrderSide::Buy,
-            CommitmentResource::Asset(Currency::new("USDT").unwrap()),
+            CommitmentResource::CloseablePosition {
+                instrument_id: instrument_id.clone(),
+                position_side: PositionSide::Long,
+            },
             Money::new(100, 0).unwrap(),
             Quantity::new(1, 0).unwrap(),
-            CommitmentBasis::QuotePriceCap {
-                price_cap: kairos_primitives::Price::new(100, 0).unwrap(),
-            },
+            CommitmentBasis::CloseablePositionQuantity,
             UnixNanos::new(10),
         )
         .unwrap();
@@ -72,9 +74,12 @@ mod tests {
             commitments: vec![commitment],
             risk_reservations: vec![RiskReservationEvidence {
                 order_id,
-                reservation_id: kairos_primitives::ReservationId::new("execution:order-1").unwrap(),
-                idempotency_key: kairos_primitives::IdempotencyKey::new("execution:order-1")
+                reservation_id: kairos_primitives::risk::ReservationId::new("execution:order-1")
                     .unwrap(),
+                idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(
+                    "execution:order-1",
+                )
+                .unwrap(),
                 account_id,
                 amount: Money::new(100, 0).unwrap(),
                 status: RiskReservationSagaStatus::Active,
@@ -107,6 +112,14 @@ mod tests {
             Some("USDT")
         );
         assert_eq!(
+            decoded.commitments().get(0).resource_kind(),
+            fb::CommitmentResourceKind::CLOSEABLE_POSITION
+        );
+        assert_eq!(
+            decoded.commitments().get(0).position_side(),
+            fb::CommitmentPositionSide::LONG
+        );
+        assert_eq!(
             decoded.risk_reservations().get(0).lifecycle(),
             fb::RiskReservationSagaLifecycle::ACTIVE
         );
@@ -125,7 +138,7 @@ mod tests {
     #[test]
     fn lifecycle_event_preserves_correlation_previous_state_and_evidence() {
         let mut intent = ExecuteStrategyIntent::default();
-        intent.intent_id = kairos_primitives::IntentId::new("intent-1").unwrap();
+        intent.intent_id = kairos_primitives::execution::IntentId::new("intent-1").unwrap();
         intent.strategy_id = "strategy-a".into();
         intent.strategy_decision_id = Some("strategy-a:decision:1".into());
         intent.launch_id = "launch-1".into();

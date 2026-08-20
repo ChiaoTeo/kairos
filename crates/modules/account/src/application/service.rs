@@ -251,6 +251,36 @@ impl AccountApplication {
         }
     }
 
+    pub fn apply_simulated_capital_mutation(
+        &mut self,
+        mutation: crate::domain::SimulatedCapitalMutation,
+    ) -> Result<(), AccountError> {
+        if !self.simulation_commands_enabled() {
+            return Err(AccountError::Invalid(
+                "simulation command is disabled for this Account application".into(),
+            ));
+        }
+        self.runtime
+            .apply_simulated_capital_mutation(mutation)
+            .map(|_| ())
+            .map_err(AccountError::Invalid)
+    }
+
+    pub fn simulated_capital_mutation_applied(
+        &self,
+        segment_key: &crate::domain::SegmentKey,
+        mutation_id: &kairos_primitives::runtime::IdempotencyKey,
+    ) -> Result<bool, AccountError> {
+        if !self.simulation_commands_enabled() {
+            return Err(AccountError::Invalid(
+                "simulation command is disabled for this Account application".into(),
+            ));
+        }
+        self.runtime
+            .simulated_capital_mutation_applied(segment_key, mutation_id)
+            .map_err(AccountError::Invalid)
+    }
+
     pub fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), AccountError> {
         if !self.simulation_commands_enabled() {
             return Err(AccountError::Invalid(

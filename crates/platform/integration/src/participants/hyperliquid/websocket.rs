@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::task::{Context, Poll};
 
-use kairos_primitives::{FillId, OrderId, SegmentKey, Symbol};
+use kairos_primitives::account::SegmentKey;
+use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::reference::Symbol;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -258,7 +260,8 @@ impl HyperliquidWebSocketConnection {
                     order_id: order_id.clone(),
                     status: account_order_status(status),
                     remote_order_id: Some(
-                        kairos_primitives::RemoteOrderId::new(&oid).map_err(payload)?,
+                        kairos_primitives::integration::RemoteOrderId::new(&oid)
+                            .map_err(payload)?,
                     ),
                     filled_quantity: None,
                     occurred_at_unix_nanos: observed,

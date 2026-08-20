@@ -1,7 +1,8 @@
-use kairos_primitives::{
-    AccountId, DurationNanos, InstrumentId, IntentId, LegId, MarketId, OrderId, PlanId, Quantity,
-    Ratio, SegmentKey, SignedQuantity,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::{Quantity, Ratio, SignedQuantity};
+use kairos_primitives::execution::{IntentId, LegId, OrderId, PlanId};
+use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::time::DurationNanos;
 use serde::{Deserialize, Serialize};
 
 use super::{ExecutionOrderStatus, OrderSide};

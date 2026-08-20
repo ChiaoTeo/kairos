@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{
-    DecisionId, Generation, IdempotencyKey, PolicyId, RequestId, ReservationId, Sequence, UnixNanos,
-};
+use kairos_primitives::risk::{DecisionId, PolicyId, ReservationId};
+use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
 use crate::application::{
     CloseCircuit, FundingRequirement, LimitView, OpenCircuit, ResizeReservation, RiskDecision,

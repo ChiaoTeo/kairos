@@ -1,4 +1,5 @@
-use kairos_primitives::{Money, UnixNanos};
+use kairos_primitives::decimal::Money;
+use kairos_primitives::time::UnixNanos;
 
 use crate::application::{
     RiskAuthorizationContext, RiskCommandFailure, RiskCommandResult, SubmitOrder,
@@ -54,12 +55,12 @@ impl SimulatedRiskReservations {
         let at = request.submitted_at_unix_nanos.unwrap_or_default();
         Ok(RiskReservationEvidence {
             order_id: request.order_id.clone(),
-            reservation_id: kairos_primitives::ReservationId::new(format!(
+            reservation_id: kairos_primitives::risk::ReservationId::new(format!(
                 "execution:{}",
                 request.order_id
             ))
             .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-            idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+            idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(format!(
                 "execution:{}",
                 request.order_id
             ))

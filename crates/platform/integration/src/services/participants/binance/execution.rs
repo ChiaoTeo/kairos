@@ -1,4 +1,7 @@
-use kairos_primitives::{ClientOrderId, OrderId, RemoteOrderId, Symbol, UnixNanos};
+use kairos_primitives::execution::{ClientOrderId, OrderId};
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::Symbol;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -367,11 +370,11 @@ mod native_order_tests {
 
     fn order(id: &str) -> crate::OrderEntryRequest {
         crate::OrderEntryRequest {
-            order_id: kairos_primitives::OrderId::new(id).unwrap(),
+            order_id: kairos_primitives::execution::OrderId::new(id).unwrap(),
             intent_id: None,
-            account_id: kairos_primitives::AccountId::new("main").unwrap(),
-            segment_key: kairos_primitives::SegmentKey::new("usdm").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("btc-perp").unwrap(),
+            account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("usdm").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("btc-perp").unwrap(),
             market_id: None,
             participant_instrument: crate::ParticipantInstrumentRef::new(
                 crate::ParticipantRef::new(crate::ParticipantKind::Exchange, "binance").unwrap(),

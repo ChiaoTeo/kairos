@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use kairos_primitives::runtime::ActorId;
+
 use crate::{ContractError, ContractResult};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RiskViewKind {
@@ -7,13 +9,13 @@ pub enum RiskViewKind {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RiskViewKey {
-    pub actor_id: String,
+    pub actor_id: ActorId,
     pub kind: RiskViewKind,
 }
 impl RiskViewKey {
     pub fn latest(actor_id: impl Into<String>) -> Self {
         Self {
-            actor_id: actor_id.into(),
+            actor_id: ActorId::new(actor_id.into()).expect("risk actor identity is validated"),
             kind: RiskViewKind::Latest,
         }
     }

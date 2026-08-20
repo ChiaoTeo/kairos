@@ -87,7 +87,7 @@ macro_rules! websocket_connection {
             /// draining buffered Binance depth events.
             pub fn seed_order_book_sequence(
                 &mut self,
-                symbol: &kairos_primitives::ParticipantSymbol,
+                symbol: &kairos_primitives::integration::ParticipantSymbol,
                 last_update_id: u64,
             ) {
                 self.order_book_sequences
@@ -861,7 +861,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketQuoteQuery for $name {
             async fn fetch_quotes(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketQuote>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {
@@ -882,7 +882,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketTradeQuery for $name {
             async fn fetch_trades(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketTrade>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {
@@ -954,7 +954,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketMarkPriceQuery for $name {
             async fn fetch_mark_prices(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketMarkPrice>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {
@@ -975,7 +975,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketIndexPriceQuery for $name {
             async fn fetch_index_prices(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketIndexPrice>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {
@@ -996,7 +996,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketFundingRateQuery for $name {
             async fn fetch_funding_rates(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketFundingRate>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {
@@ -1019,7 +1019,7 @@ macro_rules! futures_rest_capabilities {
         impl crate::MarketOpenInterestQuery for $name {
             async fn fetch_open_interest(
                 &mut self,
-                symbols: &[kairos_primitives::ParticipantSymbol],
+                symbols: &[kairos_primitives::integration::ParticipantSymbol],
             ) -> Result<Vec<crate::MarketOpenInterest>, crate::IntegrationError> {
                 let mut values = Vec::new();
                 for symbol in symbols {

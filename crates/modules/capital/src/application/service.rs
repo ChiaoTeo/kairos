@@ -1,12 +1,12 @@
-use kairos_primitives::{Sequence, UnixNanos};
+use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
     CapitalAvailabilityView, CapitalDemand, CapitalDemandId, CapitalDemandRecord, CapitalFacts,
-    CapitalGroupId, CapitalOperation, CapitalParticipantOperationState, CapitalPlan, CapitalPlanId,
-    CapitalPolicy, CapitalReservation, CapitalRouteId, CapitalSubmissionOutcome,
-    CapitalTransferRoute, FundingLocation, FundingObjective, FundingObjectiveId,
-    FundingObjectiveRecord,
+    CapitalGroupId, CapitalMemberAccountObservation, CapitalOperation,
+    CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPolicy,
+    CapitalReservation, CapitalRouteId, CapitalSubmissionOutcome, CapitalTransferRoute,
+    FundingLocation, FundingObjective, FundingObjectiveId, FundingObjectiveRecord,
 };
 use crate::services::actor::{ActorError, CapitalActor};
 
@@ -21,7 +21,7 @@ pub struct PublishFundingObjective {
 pub struct CancelFundingObjective {
     pub capital_group_id: CapitalGroupId,
     pub objective_id: FundingObjectiveId,
-    pub expected_version: kairos_primitives::Generation,
+    pub expected_version: kairos_primitives::time::Generation,
     pub observed_at: UnixNanos,
 }
 
@@ -60,6 +60,12 @@ pub struct ObserveCapitalFacts {
     pub facts: CapitalFacts,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObserveCapitalMemberAccount {
+    pub capital_group_id: CapitalGroupId,
+    pub observation: CapitalMemberAccountObservation,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvaluateCapitalGroup {
     pub evaluated_at: UnixNanos,
@@ -94,7 +100,7 @@ pub struct AuthorizeCapitalPlan {
 pub struct CapitalYieldCandidate {
     pub route_id: CapitalRouteId,
     pub product_id: String,
-    pub amount: kairos_primitives::Quantity,
+    pub amount: kairos_primitives::decimal::Quantity,
     pub account_watermark: Sequence,
     pub risk_watermark: Sequence,
 }
@@ -109,11 +115,11 @@ pub struct AuthorizeEarnSubscriptionPlan {
     pub rebalance_decision_id: String,
     pub route_id: CapitalRouteId,
     pub source_authority: String,
-    pub previewed_amount: kairos_primitives::Quantity,
+    pub previewed_amount: kairos_primitives::decimal::Quantity,
     pub preview_observed_at: UnixNanos,
     pub eligible: bool,
     pub immediately_redeemable: bool,
-    pub redemption_quota_remaining: Option<kairos_primitives::Quantity>,
+    pub redemption_quota_remaining: Option<kairos_primitives::decimal::Quantity>,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -150,6 +156,14 @@ pub struct RecordCapitalParticipantStatus {
     pub participant_operation_id: Option<String>,
     pub participant_state: Option<String>,
     pub failure_reason: Option<String>,
+    pub at: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordCapitalRecoveryRequired {
+    pub capital_group_id: CapitalGroupId,
+    pub plan_id: CapitalPlanId,
+    pub reason: String,
     pub at: UnixNanos,
 }
 
@@ -219,9 +233,9 @@ pub enum CapitalEvent {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalSnapshot {
     pub capital_group_id: CapitalGroupId,
-    pub strategy_id: kairos_primitives::StrategyId,
+    pub strategy_id: kairos_primitives::runtime::StrategyId,
     pub environment: String,
-    pub membership_version: kairos_primitives::Generation,
+    pub membership_version: kairos_primitives::time::Generation,
     pub members: Vec<crate::domain::CapitalGroupMember>,
     pub event_sequence: Sequence,
     pub journal_sequence: Sequence,
@@ -306,6 +320,15 @@ impl CapitalApplication {
         self.actor.observe_facts(command).map_err(map_actor_error)
     }
 
+    pub fn observe_member_account(
+        &mut self,
+        command: ObserveCapitalMemberAccount,
+    ) -> Result<(), CapitalError> {
+        self.actor
+            .observe_member_account(command)
+            .map_err(map_actor_error)
+    }
+
     pub fn evaluate(
         &mut self,
         command: EvaluateCapitalGroup,
@@ -384,6 +407,15 @@ impl CapitalApplication {
     ) -> Result<CapitalPlan, CapitalError> {
         self.actor
             .record_participant_status(command)
+            .map_err(map_actor_error)
+    }
+
+    pub fn record_recovery_required(
+        &mut self,
+        command: RecordCapitalRecoveryRequired,
+    ) -> Result<CapitalPlan, CapitalError> {
+        self.actor
+            .record_recovery_required(command)
             .map_err(map_actor_error)
     }
 

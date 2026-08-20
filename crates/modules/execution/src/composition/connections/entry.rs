@@ -20,7 +20,7 @@ impl BlockingOrderCommand for SimulatedOrderEntry {
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
             status: OrderEntryStatus::Accepted,
-            remote_order_id: kairos_primitives::RemoteOrderId::new(format!(
+            remote_order_id: kairos_primitives::integration::RemoteOrderId::new(format!(
                 "simulated:{}",
                 request.order_id
             ))
@@ -39,7 +39,8 @@ impl BlockingOrderCommand for SimulatedOrderEntry {
         Ok(CommandOutcome::Confirmed(OrderEntryEvent {
             order_id: request.order_id.clone(),
             status: OrderEntryStatus::Canceled,
-            remote_order_id: kairos_primitives::RemoteOrderId::new(remote_order_id).ok(),
+            remote_order_id: kairos_primitives::integration::RemoteOrderId::new(remote_order_id)
+                .ok(),
             filled_quantity: None,
             occurred_at_unix_nanos: at_unix_nanos.into(),
             reason: String::new(),

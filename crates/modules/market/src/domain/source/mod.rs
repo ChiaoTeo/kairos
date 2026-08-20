@@ -10,7 +10,7 @@ pub use state::{SourceFailureKind, SourceState, SourceStatus};
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::Exchange;
+    use kairos_primitives::reference::Exchange;
 
     use super::{
         MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,

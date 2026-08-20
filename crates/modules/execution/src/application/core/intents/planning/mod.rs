@@ -1,6 +1,6 @@
 //! Pure fallback planning for simulated execution.
 
-use kairos_primitives::OrderId;
+use kairos_primitives::execution::OrderId;
 
 use super::super::*;
 

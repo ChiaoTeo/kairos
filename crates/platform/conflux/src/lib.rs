@@ -6,30 +6,22 @@
 //! no open resource catalog and no erased dispatch path.
 
 mod actor;
-mod capital;
 mod context;
 mod contract;
+mod control;
 mod event;
 mod lifecycle;
+mod output;
 mod process;
 mod resource;
 mod system;
 
 pub use actor::ConfluxActor;
-pub use capital::{
-    CapitalAccountIdentity, CapitalAccountSegment, CapitalCommandFailure, CapitalCommandOutcome,
-    CapitalConnectionAccount, CapitalConnectionError, CapitalEarnActionKind,
-    CapitalEarnActionQuery, CapitalEarnActionState, CapitalEarnActionStatus, CapitalEarnConnection,
-    CapitalEarnLiquidity, CapitalEarnProductConnection, CapitalEarnRedeemRequest,
-    CapitalEarnRedemptionOption, CapitalEarnSubmission, CapitalEarnSubscribeRequest,
-    CapitalEarnSubscriptionEligibility, CapitalEarnSubscriptionPreview,
-    CapitalEarnSubscriptionPreviewRequest, CapitalTransferConnection, CapitalTransferConnections,
-    CapitalTransferQuery, CapitalTransferRequest, CapitalTransferState, CapitalTransferStatus,
-    CapitalTransferSubmission, compose_capital_transfer_connections,
-    validate_capital_transfer_product,
-};
 pub use context::Context;
 pub use contract::{Contract, RestContract, RestRequestOf, RestResponseOf};
+pub use control::{
+    HttpControlConfig, HttpControlEndpoint, HttpControlRunError, HttpControlledConflux,
+};
 pub use event::{
     ConfluxEvent, ContractEvent, IntegrationEvent, ManagedConnectionIdentity, SystemEvent,
 };
@@ -125,6 +117,10 @@ pub use kairos_integration::{
     ParticipantRejection, TimeInForce,
 };
 pub use lifecycle::{ProcessPhase, ShutdownMode};
+pub use output::{
+    AeronOutputDeclaration, AeronOutputs, FileOutputDeclaration, FileOutputs,
+    MmapOutputDeclaration, MmapOutputs, OutputCollections, OutputCreateError, OutputPublishError,
+};
 pub use process::{
     BuildError, Conflux, ConfluxConfig, ConfluxHandle, ConfluxOutcome, ConnectionControlError,
     HandleConnectionCollections, HandleError, OkxPrivateRestHandle, OkxPrivateWebSocketHandle,

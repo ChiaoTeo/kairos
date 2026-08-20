@@ -1,12 +1,17 @@
 //! Capacity commitments held around exchange-facing orders.
 
+use kairos_primitives::time::Sequence;
+
 use super::*;
-use kairos_primitives::Sequence;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CommitmentResource {
     Asset(Currency),
     Instrument(InstrumentId),
+    CloseablePosition {
+        instrument_id: InstrumentId,
+        position_side: PositionSide,
+    },
     MarginNotional(Currency),
 }
 
@@ -16,6 +21,7 @@ pub enum CommitmentBasis {
         price_cap: Price,
     },
     BaseQuantity,
+    CloseablePositionQuantity,
     ContractNotional {
         price_cap: Price,
         contract_size: Quantity,

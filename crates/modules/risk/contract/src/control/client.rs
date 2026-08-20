@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 use reqwest::blocking::{Client, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -59,7 +59,7 @@ impl RiskControlClient {
 
     pub fn advance_time(
         &self,
-        event_time_unix_nanos: kairos_primitives::UnixNanos,
+        event_time_unix_nanos: kairos_primitives::time::UnixNanos,
     ) -> ContractResult<AdvanceRiskTimeResponse> {
         self.post(
             "/v1/time/advance",
@@ -85,9 +85,9 @@ impl RiskControlClient {
 
     pub fn resize(
         &self,
-        reservation_id: &kairos_primitives::ReservationId,
+        reservation_id: &kairos_primitives::risk::ReservationId,
         amount: &Amount,
-        at_unix_nanos: kairos_primitives::UnixNanos,
+        at_unix_nanos: kairos_primitives::time::UnixNanos,
     ) -> ContractResult<Reservation> {
         self.post(
             "/v1/resize",
@@ -101,8 +101,8 @@ impl RiskControlClient {
 
     pub fn release(
         &self,
-        reservation_id: &kairos_primitives::ReservationId,
-        at_unix_nanos: kairos_primitives::UnixNanos,
+        reservation_id: &kairos_primitives::risk::ReservationId,
+        at_unix_nanos: kairos_primitives::time::UnixNanos,
     ) -> ContractResult<Reservation> {
         self.post(
             "/v1/release",
@@ -115,8 +115,8 @@ impl RiskControlClient {
 
     pub fn consume(
         &self,
-        reservation_id: &kairos_primitives::ReservationId,
-        at_unix_nanos: kairos_primitives::UnixNanos,
+        reservation_id: &kairos_primitives::risk::ReservationId,
+        at_unix_nanos: kairos_primitives::time::UnixNanos,
     ) -> ContractResult<Reservation> {
         self.post(
             "/v1/consume",

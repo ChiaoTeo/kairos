@@ -20,14 +20,15 @@ impl DecimalValue {
     }
 
     pub fn try_new(mantissa: i64, scale: u8) -> Result<Self, String> {
-        kairos_primitives::DecimalParts::new(mantissa, scale).map_err(|error| error.to_string())?;
+        kairos_primitives::decimal::DecimalParts::new(mantissa, scale)
+            .map_err(|error| error.to_string())?;
         Ok(Self { mantissa, scale })
     }
 
     pub fn parse(value: &str) -> Result<Self, String> {
         let value = value
             .trim()
-            .parse::<kairos_primitives::DecimalParts>()
+            .parse::<kairos_primitives::decimal::DecimalParts>()
             .map_err(|error| error.to_string())?;
         Ok(Self::new(value.mantissa(), value.scale()))
     }
@@ -53,7 +54,7 @@ impl DecimalValue {
     }
 
     fn as_rust(self) -> Result<RustDecimal, String> {
-        if self.scale > kairos_primitives::MAX_DECIMAL_SCALE {
+        if self.scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
             return Err("decimal scale exceeds 18 digits".into());
         }
         RustDecimal::try_new(self.mantissa, u32::from(self.scale))
@@ -79,7 +80,7 @@ impl<'de> Deserialize<'de> for DecimalValue {
 
 fn rescale(value: RustDecimal, scale: u8) -> Result<RustDecimal, String> {
     let mut candidate = value;
-    if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+    if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
         return Err("decimal scale exceeds 18 digits".into());
     }
     candidate.rescale(u32::from(scale));
@@ -91,7 +92,7 @@ fn rescale(value: RustDecimal, scale: u8) -> Result<RustDecimal, String> {
 
 fn from_rust(value: RustDecimal) -> Result<DecimalValue, String> {
     let scale = u8::try_from(value.scale()).map_err(|_| "decimal scale overflow".to_string())?;
-    if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+    if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
         return Err("decimal scale exceeds 18 digits".into());
     }
     Ok(DecimalValue::new(

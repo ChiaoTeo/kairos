@@ -1,6 +1,6 @@
 //! Read-only order, fill, commitment, reservation, and audit use cases.
 
-use kairos_primitives::FillId;
+use kairos_primitives::execution::FillId;
 
 use super::*;
 

@@ -266,6 +266,8 @@ pub mod kairos {
             pub use commitment_basis_kind_generated::*;
             mod commitment_lifecycle_generated;
             pub use commitment_lifecycle_generated::*;
+            mod commitment_position_side_generated;
+            pub use commitment_position_side_generated::*;
             mod commitment_resource_kind_generated;
             pub use commitment_resource_kind_generated::*;
             mod current_execution_view_generated;
@@ -370,6 +372,12 @@ pub mod kairos {
     pub mod capital {
         pub use super::common;
         pub mod v_2 {
+            mod capital_alert_generated;
+            pub use capital_alert_generated::*;
+            mod capital_alert_kind_generated;
+            pub use capital_alert_kind_generated::*;
+            mod capital_alert_severity_generated;
+            pub use capital_alert_severity_generated::*;
             mod capital_availability_generated;
             pub use capital_availability_generated::*;
             mod capital_availability_evaluated_generated;
@@ -414,6 +422,8 @@ pub mod kairos {
             pub use capital_policy_generated::*;
             mod capital_readiness_generated;
             pub use capital_readiness_generated::*;
+            mod capital_recovery_action_generated;
+            pub use capital_recovery_action_generated::*;
             mod capital_reservation_generated;
             pub use capital_reservation_generated::*;
             mod capital_reservation_status_generated;

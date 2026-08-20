@@ -1,4 +1,4 @@
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 
 use crate::domain::market::ResolvedMarket;
 

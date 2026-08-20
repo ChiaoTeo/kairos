@@ -13,7 +13,7 @@ fn market(id: &str, symbol: &str) -> ResolvedMarket {
     ResolvedMarket::new(
         id,
         format!("instrument:{id}"),
-        kairos_primitives::InstrumentKind::Spot,
+        kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
         MarketDataRoute::new(format!("test:{id}"), "binance", "spot", symbol).unwrap(),
     )
@@ -27,12 +27,13 @@ fn rate_observation_has_a_qualified_view_and_freshness_watermark() {
         .ingest(MarketObservation::Rate(Rate {
             rate_id: "funding:8h".into(),
             scope: kairos_market::ObservationScope::market("market:btc-perp").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-perp").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc-perp")
+                .unwrap(),
             basis: "funding".into(),
             value: "0.0001".parse().unwrap(),
             mark_price: Some("100.5".parse().unwrap()),
-            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(7),
-            source_id: kairos_primitives::SourceId::new("binance").unwrap(),
+            observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(7),
+            source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
         }))
         .unwrap();
 
@@ -50,7 +51,7 @@ fn rate_observation_has_a_qualified_view_and_freshness_watermark() {
         .unwrap();
     assert_eq!(
         freshness.last_event_time_unix_nanos,
-        kairos_primitives::UnixNanos::new(7)
+        kairos_primitives::time::UnixNanos::new(7)
     );
     assert_eq!(actor.event_sequence(), 1);
 }
@@ -60,7 +61,7 @@ fn actor_owns_sequence_and_latest_observation() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let value = MarketObservation::Quote(Quote {
         scope: kairos_market::ObservationScope::market("market:btc").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc").unwrap(),
         bid_price: Some("100".parse().unwrap()),
         bid_quantity: Some("1".parse().unwrap()),
         ask_price: None,
@@ -68,8 +69,8 @@ fn actor_owns_sequence_and_latest_observation() {
         bid_venue_code: None,
         ask_venue_code: None,
         tape: None,
-        observed_at_unix_nanos: kairos_primitives::UnixNanos::new(7),
-        source_id: kairos_primitives::SourceId::new("test").unwrap(),
+        observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(7),
+        source_id: kairos_primitives::market::SourceId::new("test").unwrap(),
     });
     assert_eq!(actor.ingest(value).unwrap(), 1);
     assert_eq!(actor.event_sequence(), 1);
@@ -89,7 +90,8 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         .unwrap();
     let quote = MarketObservation::Quote(Quote {
         scope: kairos_market::ObservationScope::market("market:btc").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:market:btc").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:market:btc")
+            .unwrap(),
         bid_price: Some("100".parse().unwrap()),
         bid_quantity: None,
         ask_price: None,
@@ -97,22 +99,23 @@ fn selectors_filter_ingestion_and_current_queries_are_typed() {
         bid_venue_code: None,
         ask_venue_code: None,
         tape: None,
-        observed_at_unix_nanos: kairos_primitives::UnixNanos::new(2),
-        source_id: kairos_primitives::SourceId::new("binance").unwrap(),
+        observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(2),
+        source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
     });
     assert_eq!(actor.ingest(quote).unwrap(), 1);
     assert!(actor.query().latest_quote("market:btc").is_some());
     let bar = MarketObservation::Bar(kairos_market::Bar {
         scope: kairos_market::ObservationScope::market("market:btc").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:market:btc").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:market:btc")
+            .unwrap(),
         timeframe: "1m".into(),
         open: "1".parse().unwrap(),
         high: "2".parse().unwrap(),
         low: "1".parse().unwrap(),
         close: "1".parse().unwrap(),
         volume: None,
-        observed_at_unix_nanos: kairos_primitives::UnixNanos::new(3),
-        source_id: kairos_primitives::SourceId::new("binance").unwrap(),
+        observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(3),
+        source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
         derivation: "direct".into(),
     });
     assert_eq!(actor.ingest(bar).unwrap(), 1);
@@ -125,7 +128,8 @@ fn out_of_order_observation_does_not_regress_current_projection() {
     let quote = |time: u64, price: &str| {
         MarketObservation::Quote(Quote {
             scope: kairos_market::ObservationScope::market("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
             bid_price: Some(price.parse().unwrap()),
             bid_quantity: None,
             ask_price: None,
@@ -133,8 +137,8 @@ fn out_of_order_observation_does_not_regress_current_projection() {
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,
-            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-            source_id: kairos_primitives::SourceId::new("test").unwrap(),
+            observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
+            source_id: kairos_primitives::market::SourceId::new("test").unwrap(),
         })
     };
     actor.ingest(quote(10, "100")).unwrap();
@@ -158,7 +162,8 @@ fn source_agnostic_typed_query_rejects_ambiguous_views() {
         actor
             .ingest(MarketObservation::Quote(Quote {
                 scope: kairos_market::ObservationScope::market("market:btc").unwrap(),
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                    .unwrap(),
                 bid_price: Some("100".parse().unwrap()),
                 bid_quantity: None,
                 ask_price: None,
@@ -166,8 +171,8 @@ fn source_agnostic_typed_query_rejects_ambiguous_views() {
                 bid_venue_code: None,
                 ask_venue_code: None,
                 tape: None,
-                observed_at_unix_nanos: kairos_primitives::UnixNanos::new(10),
-                source_id: kairos_primitives::SourceId::new(source_id).unwrap(),
+                observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(10),
+                source_id: kairos_primitives::market::SourceId::new(source_id).unwrap(),
             }))
             .unwrap();
     }
@@ -183,8 +188,10 @@ fn dynamic_subscription_reconciles_reference_changes_idempotently() {
     let mut actor = MarketApplication::new("market-1", 10).unwrap();
     let id = SubscriptionId::new("dynamic-1").unwrap();
     let query = MarketSelectionQuery {
-        exchange_id: Some(kairos_primitives::Exchange::new("binance").unwrap()),
-        provider_product: Some(kairos_primitives::ProviderProductCode::new("spot").unwrap()),
+        exchange_id: Some(kairos_primitives::reference::Exchange::new("binance").unwrap()),
+        provider_product: Some(
+            kairos_primitives::integration::ProviderProductCode::new("spot").unwrap(),
+        ),
         active_only: true,
         ..Default::default()
     };

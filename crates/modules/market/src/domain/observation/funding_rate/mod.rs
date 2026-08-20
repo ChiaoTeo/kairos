@@ -1,4 +1,7 @@
-use kairos_primitives::{InstrumentId, Rate, SourceId, UnixNanos};
+use kairos_primitives::decimal::Rate;
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::InstrumentId;
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

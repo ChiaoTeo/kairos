@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{
-    Currency, DurationNanos, ExecutionRouteId, FillId, IntentId, LegId, Money, OrderId, Price,
-    Quantity, RemoteOrderId, StrategyId, UnixNanos,
-};
+use kairos_primitives::decimal::{Money, Price, Quantity};
+use kairos_primitives::execution::{ExecutionRouteId, FillId, IntentId, LegId, OrderId};
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::{ActorId, StrategyId};
+use kairos_primitives::time::{DurationNanos, UnixNanos};
 
 use super::RemoteOrderUpdate;
 use super::model::*;
@@ -65,12 +66,12 @@ fn simulation_risk_reservation(
 ) -> Result<RiskReservationEvidence, ExecutionError> {
     Ok(RiskReservationEvidence {
         order_id: request.order_id.clone(),
-        reservation_id: kairos_primitives::ReservationId::new(format!(
+        reservation_id: kairos_primitives::risk::ReservationId::new(format!(
             "execution:{}",
             request.order_id
         ))
         .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
-        idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+        idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(format!(
             "execution:{}",
             request.order_id
         ))
@@ -97,12 +98,12 @@ fn planned_risk_reservation(
     let risk = watermarks.risk.clone().unwrap_or_default();
     RiskReservationEvidence {
         order_id: request.order_id.clone(),
-        reservation_id: kairos_primitives::ReservationId::new(format!(
+        reservation_id: kairos_primitives::risk::ReservationId::new(format!(
             "execution:{}",
             request.order_id
         ))
         .expect("order identity creates a valid reservation identity"),
-        idempotency_key: kairos_primitives::IdempotencyKey::new(format!(
+        idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(format!(
             "execution:{}",
             request.order_id
         ))
@@ -534,7 +535,7 @@ fn to_connection_request(
         order_id: order.order_id.clone(),
         intent_id: order.intent_id.clone(),
         account_id: order.account_id.clone(),
-        segment_key: kairos_primitives::SegmentKey::new(segment_key)
+        segment_key: kairos_primitives::account::SegmentKey::new(segment_key)
             .map_err(|error| error.to_string())?,
         instrument_id: order.instrument_id.clone(),
         market_id: order.market_id.clone(),
@@ -790,7 +791,7 @@ fn remote_order(order: kairos_conflux::ExternalOrder) -> RemoteOrder {
 fn parse_decimal(value: &str) -> Result<(i64, u8), ExecutionError> {
     let value = value
         .trim()
-        .parse::<kairos_primitives::DecimalParts>()
+        .parse::<kairos_primitives::decimal::DecimalParts>()
         .map_err(|error| ExecutionError::Invalid(error.to_string()))?;
     Ok((value.mantissa(), value.scale()))
 }

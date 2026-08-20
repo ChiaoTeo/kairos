@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use kairos_primitives::{ParticipantSymbol, Price, Quantity, Rate, Sequence, UnixNanos};
+use kairos_primitives::decimal::{Price, Quantity, Rate};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::{Sequence, UnixNanos};
 
 use super::ParticipantRejection;
 
@@ -368,7 +370,8 @@ impl HistoricalBarRequest {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{ParticipantSymbol, UnixNanos};
+    use kairos_primitives::integration::ParticipantSymbol;
+    use kairos_primitives::time::UnixNanos;
 
     use super::{HistoricalBarRequest, HistoricalWindow, MarketSubscriptionRequest};
 

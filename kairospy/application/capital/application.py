@@ -9,6 +9,8 @@ from .models import (
     CapitalDemand,
     CapitalDemandReceipt,
     CapitalReadiness,
+    CapitalRecoveryAlert,
+    FundingForecastObservation,
     FundingLocation,
     FundingObjective,
     FundingObjectiveReceipt,
@@ -96,6 +98,12 @@ class CapitalApplication:
                 instance_id=self._instance_id,
             )
         )
+
+    def publish_forecast(
+        self, forecast: FundingForecastObservation
+    ) -> FundingObjectiveReceipt:
+        """Publish typed Strategy forecast evidence as a liquidity objective."""
+        return self.publish_objective(forecast.to_objective())
 
     def cancel_objective(
         self, objective_id: str, *, expected_version: int
@@ -198,6 +206,11 @@ class CapitalApplication:
                 location=location,
                 reason=f"Capital availability query failed: {error}",
             )
+
+    def recovery_alerts(self) -> tuple[CapitalRecoveryAlert, ...]:
+        if self._projection is None:
+            return ()
+        return tuple(self._projection.alerts())
 
     def _scope_error(self, location: FundingLocation) -> str | None:
         if self._account_ids and location.account_id not in self._account_ids:

@@ -1,4 +1,6 @@
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -273,7 +275,13 @@ pub(crate) fn derivative_instruments(
 }
 fn levels(
     value: Option<&Value>,
-) -> Result<Vec<(kairos_primitives::Price, kairos_primitives::Quantity)>, IntegrationError> {
+) -> Result<
+    Vec<(
+        kairos_primitives::decimal::Price,
+        kairos_primitives::decimal::Quantity,
+    )>,
+    IntegrationError,
+> {
     value
         .and_then(Value::as_array)
         .into_iter()

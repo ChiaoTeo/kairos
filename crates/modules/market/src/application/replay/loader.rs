@@ -86,15 +86,16 @@ mod tests {
         let manifest = directory.path().join("events.manifest.json");
         let event = MarketObservation::Bar(Bar {
             scope: crate::ObservationScope::market("market:test").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:test").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:test")
+                .unwrap(),
             timeframe: "1m".into(),
             open: "1".parse().unwrap(),
             high: "1".parse().unwrap(),
             low: "1".parse().unwrap(),
             close: "1".parse().unwrap(),
             volume: None,
-            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(1),
-            source_id: kairos_primitives::SourceId::new("test").unwrap(),
+            observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(1),
+            source_id: kairos_primitives::market::SourceId::new("test").unwrap(),
             derivation: "test".into(),
         });
         std::fs::write(&data, serde_json::to_string(&event).unwrap()).unwrap();

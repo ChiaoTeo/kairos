@@ -13,7 +13,12 @@ mod workers;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::{InstrumentId, MarketId, Money, OrderId, Price, StrategyId, UnixNanos};
+use kairos_primitives::account::PositionSide;
+use kairos_primitives::decimal::{Money, Price};
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
+use kairos_primitives::runtime::StrategyId;
+use kairos_primitives::time::UnixNanos;
 use kairos_reference_contract::ReferenceMarket;
 use projection::*;
 use rust_decimal::Decimal;
@@ -242,7 +247,7 @@ fn find_position(
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{Price, Quantity};
+    use kairos_primitives::decimal::{Price, Quantity};
 
     use super::{decimal_price, decimal_quantity, risk_amount};
 

@@ -264,7 +264,9 @@ impl ExecutionDependencyAccess {
     pub(super) fn health(&self, account_id: &str) -> Result<(), String> {
         let projection = self.account_projection(account_id)?;
         let response = projection.health;
-        if response.status != "ready" || response.lease_valid == Some(false) {
+        if response.status != kairos_account_contract::AccountHealthStatus::Ready
+            || response.lease_valid == Some(false)
+        {
             return Err(format!("account {account_id} is not ready"));
         }
         Ok(())

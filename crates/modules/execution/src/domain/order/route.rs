@@ -1,6 +1,7 @@
-use kairos_primitives::{
-    ExecutionRouteId, MarketId, ProviderProductCode, ProviderSymbol, UnixNanos,
-};
+use kairos_primitives::execution::ExecutionRouteId;
+use kairos_primitives::integration::{ProviderProductCode, ProviderSymbol};
+use kairos_primitives::reference::MarketId;
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 /// Immutable route facts selected before an order-entry command can be sent.
@@ -46,5 +47,5 @@ pub struct ExecutionAttempt {
     pub command_started_at_unix_nanos: UnixNanos,
     pub delivery_certainty: DeliveryCertainty,
     #[serde(default)]
-    pub remote_order_id: Option<kairos_primitives::RemoteOrderId>,
+    pub remote_order_id: Option<kairos_primitives::integration::RemoteOrderId>,
 }

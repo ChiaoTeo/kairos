@@ -4,7 +4,7 @@ mod frame;
 mod stream;
 mod worker;
 
-use kairos_primitives::{Sequence, UnixNanos};
+use kairos_primitives::time::{Sequence, UnixNanos};
 
 use crate::{
     CapitalAvailability, CapitalDemand, CapitalFacts, CapitalOperation, CapitalPlan, CapitalPolicy,

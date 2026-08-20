@@ -29,7 +29,7 @@ pub(crate) struct AccountStreamService {
     session: Arc<SessionService>,
     connection_key: crate::ConnectionKey,
     account_id: String,
-    segment_key: kairos_primitives::SegmentKey,
+    segment_key: kairos_primitives::account::SegmentKey,
     subscription: Option<Subscription<AccountUpdate>>,
     balance_values: BTreeMap<String, (Option<ExternalDecimal>, Option<ExternalDecimal>)>,
     lifecycle: ConnectionLifecycle,
@@ -44,7 +44,7 @@ impl AccountStreamService {
         account_id: impl Into<String>,
         segment_key: impl Into<String>,
     ) -> Result<Self, IntegrationError> {
-        let segment_key = kairos_primitives::SegmentKey::new(segment_key.into())
+        let segment_key = kairos_primitives::account::SegmentKey::new(segment_key.into())
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
         Ok(Self {
             session,
@@ -225,7 +225,7 @@ impl AccountStreamService {
 }
 
 fn partial_event(
-    segment_key: &kairos_primitives::SegmentKey,
+    segment_key: &kairos_primitives::account::SegmentKey,
     update: AccountUpdate,
     balance_values: &mut BTreeMap<String, (Option<ExternalDecimal>, Option<ExternalDecimal>)>,
 ) -> Result<Option<ExternalAccountEvent>, IntegrationError> {
@@ -262,9 +262,11 @@ fn partial_event(
                         return Ok(None);
                     };
                     snapshot.balances.push(ExternalBalance {
-                        asset_id: kairos_primitives::AssetId::new(format!("asset:fiat:{currency}"))
-                            .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-                        asset_code: kairos_primitives::Currency::new(currency)
+                        asset_id: kairos_primitives::reference::AssetId::new(format!(
+                            "asset:fiat:{currency}"
+                        ))
+                        .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+                        asset_code: kairos_primitives::reference::Currency::new(currency)
                             .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                         total,
                         available: values.1,
@@ -299,7 +301,7 @@ fn position(
     )
     .map_err(IntegrationError::InvalidPayload)?;
     Ok(ExternalPosition {
-        position_side: kairos_primitives::PositionSide::Net,
+        position_side: kairos_primitives::account::PositionSide::Net,
         participant_instrument,
         quantity: decimal_f64(value.position),
         average_price: Some(decimal_f64(value.average_cost)),
@@ -319,13 +321,16 @@ fn open_order(value: ibapi::orders::OrderData) -> Option<ExternalOpenOrder> {
     )
     .ok()?;
     Some(ExternalOpenOrder {
-        order_id: kairos_primitives::OrderId::new(value.order_id.to_string()).ok()?,
-        remote_order_id: kairos_primitives::RemoteOrderId::new(value.order_id.to_string()).ok(),
+        order_id: kairos_primitives::execution::OrderId::new(value.order_id.to_string()).ok()?,
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(
+            value.order_id.to_string(),
+        )
+        .ok(),
         participant_instrument,
         side: if format!("{:?}", value.order.action).eq_ignore_ascii_case("sell") {
-            kairos_primitives::OrderSide::Sell
+            kairos_primitives::execution::OrderSide::Sell
         } else {
-            kairos_primitives::OrderSide::Buy
+            kairos_primitives::execution::OrderSide::Buy
         },
         quantity: decimal_f64(value.order.total_quantity),
         filled_quantity: ExternalDecimal::default(),
@@ -340,9 +345,11 @@ fn normalized_balances(
         .into_iter()
         .map(|(currency, (total, available))| {
             Ok(ExternalBalance {
-                asset_id: kairos_primitives::AssetId::new(format!("asset:fiat:{currency}"))
-                    .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
-                asset_code: kairos_primitives::Currency::new(currency)
+                asset_id: kairos_primitives::reference::AssetId::new(format!(
+                    "asset:fiat:{currency}"
+                ))
+                .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
+                asset_code: kairos_primitives::reference::Currency::new(currency)
                     .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                 total: total.or(available).unwrap_or_default(),
                 available,
@@ -358,8 +365,8 @@ fn decimal_f64(value: f64) -> ExternalDecimal {
     ExternalDecimal::parse(&format!("{value:.8}")).unwrap_or_default()
 }
 
-fn now_nanos() -> kairos_primitives::UnixNanos {
-    kairos_primitives::UnixNanos::new(
+fn now_nanos() -> kairos_primitives::time::UnixNanos {
+    kairos_primitives::time::UnixNanos::new(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -380,7 +387,7 @@ mod tests {
 
     #[test]
     fn available_funds_waits_for_total_and_preserves_total_cash_value() {
-        let segment_key = kairos_primitives::SegmentKey::new("equity").unwrap();
+        let segment_key = kairos_primitives::account::SegmentKey::new("equity").unwrap();
         let mut values = BTreeMap::new();
 
         let available = partial_event(
@@ -422,7 +429,7 @@ mod tests {
 
     #[test]
     fn net_liquidation_is_emitted_as_partial_equity() {
-        let segment_key = kairos_primitives::SegmentKey::new("equity").unwrap();
+        let segment_key = kairos_primitives::account::SegmentKey::new("equity").unwrap();
         let event = partial_event(
             &segment_key,
             AccountUpdate::AccountValue(AccountValue {

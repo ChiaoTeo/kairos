@@ -1,6 +1,8 @@
 //! Massive Forex/Crypto reference and historical market-data connection.
 
-use kairos_primitives::{Currency, ParticipantSymbol, Price, Quantity};
+use kairos_primitives::decimal::{Price, Quantity};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
 use secrecy::ExposeSecret;
 
 use super::rest::map_exchange_error;

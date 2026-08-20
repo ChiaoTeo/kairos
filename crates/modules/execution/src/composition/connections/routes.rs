@@ -22,9 +22,9 @@ pub(crate) fn install_execution_connections(
         plans.push(ExecutionConnectionPlan {
             route_id: option.route_id.clone(),
             required: option.required,
-            account_id: kairos_primitives::AccountId::new(&option.account_id)
+            account_id: kairos_primitives::account::AccountId::new(&option.account_id)
                 .map_err(|e| e.to_string())?,
-            segment_key: kairos_primitives::SegmentKey::new(&option.segment_key)
+            segment_key: kairos_primitives::account::SegmentKey::new(&option.segment_key)
                 .map_err(|e| e.to_string())?,
             instrument_type,
             entry_key: installed.entry_descriptor.connection_key.to_string(),

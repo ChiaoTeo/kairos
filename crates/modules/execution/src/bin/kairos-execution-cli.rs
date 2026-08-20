@@ -6,9 +6,9 @@ use kairos_execution::application::{
     OrderType, SubmitOrder,
 };
 use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewReader};
-use kairos_primitives::{
-    AccountId, ExecutionRouteId, InstrumentId, IntentId, MarketId, OrderId, SegmentKey,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::execution::{ExecutionRouteId, IntentId, OrderId};
+use kairos_primitives::reference::{InstrumentId, MarketId};
 use kairos_workspace::cli::{OutputFormat, render};
 use kairos_workspace::workspace::Workspace;
 
@@ -389,15 +389,15 @@ async fn execute_control_command(
         ),
         Command::Fill(args) => {
             let request = ExecutionFillReport {
-                fill_id: kairos_primitives::FillId::new(args.fill_id)?,
-                order_id: kairos_primitives::OrderId::new(args.order_id)?,
+                fill_id: kairos_primitives::execution::FillId::new(args.fill_id)?,
+                order_id: kairos_primitives::execution::OrderId::new(args.order_id)?,
                 quantity: args.quantity.parse()?,
                 price: args.price.parse()?,
                 fee: args.fee.parse()?,
                 fee_currency: args
                     .fee_currency
                     .as_deref()
-                    .map(kairos_primitives::Currency::new)
+                    .map(kairos_primitives::reference::Currency::new)
                     .transpose()?,
                 occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
                 execution_market_id: None,

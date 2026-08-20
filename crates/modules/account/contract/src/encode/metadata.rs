@@ -1,6 +1,6 @@
 use flatbuffers::{Allocator, FlatBufferBuilder, WIPOffset};
-use kairos_primitives::Sequence;
 use kairos_primitives::runtime::{ActorId, InstanceIdentity};
+use kairos_primitives::time::Sequence;
 use kairos_protocol::ProtocolContext;
 use kairos_protocol::generated::kairos::common::v_2::{EventMetadata, ViewMetadata};
 

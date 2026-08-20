@@ -1,10 +1,8 @@
 mod conflux;
 pub(crate) mod contract;
-mod host;
 mod service;
 
 pub use conflux::RiskRest;
-pub use host::RiskHost;
 pub use service::{
     CloseCircuit, ConsumeReservation, ExpireReservations, FundingRequirement, LimitView,
     OpenCircuit, PublishPolicy, ReleaseReservation, ResizeReservation, RiskApplication,

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 
 use crate::application::{
     AccountBusinessChange, AccountBusinessEvent, AccountCurrentView, AccountSegmentView,
@@ -196,6 +196,20 @@ impl AccountActor {
                 };
                 Ok(account.apply_order_observation(observation))
             },
+            AccountEvent::SimulatedCapitalMutation(mutation) => {
+                let account = self
+                    .accounts
+                    .get_mut(&mutation.segment_key)
+                    .ok_or_else(|| {
+                        format!(
+                            "simulated Capital mutation segment is not configured: {}",
+                            mutation.segment_key
+                        )
+                    })?;
+                account
+                    .apply_simulated_capital_mutation(mutation)
+                    .map_err(|error| error.to_string())
+            },
             AccountEvent::Batch(_) => Err("nested account event batch is not supported".into()),
         }
     }
@@ -284,6 +298,17 @@ impl AccountActor {
             .map(AccountSegmentView::from_account)
     }
 
+    pub(crate) fn has_simulated_capital_mutation(
+        &self,
+        segment_key: &SegmentKey,
+        mutation_id: &kairos_primitives::runtime::IdempotencyKey,
+    ) -> Result<bool, String> {
+        self.accounts
+            .get(segment_key)
+            .map(|account| account.state().has_capital_mutation(mutation_id))
+            .ok_or_else(|| format!("account segment is not configured: {segment_key}"))
+    }
+
     pub fn current_view(&self) -> AccountCurrentView {
         AccountCurrentView {
             actor_id: kairos_primitives::runtime::ActorId::new(self.actor_id.clone()).unwrap(),
@@ -324,7 +349,7 @@ impl AccountActor {
             collect_business_changes(old.as_ref(), &current, changes);
             occurred_at
                 .entry(current.account_id.clone())
-                .and_modify(|value: &mut kairos_primitives::UnixNanos| {
+                .and_modify(|value: &mut kairos_primitives::time::UnixNanos| {
                     *value = (*value).max(current.observed_at_unix_nanos)
                 })
                 .or_insert(current.observed_at_unix_nanos);
@@ -519,6 +544,7 @@ fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_acco
         AccountEvent::Fill(fill) => keys.push(fill.segment_key.clone()),
         AccountEvent::ObservedFill(fill) => keys.push(fill.segment_key.clone()),
         AccountEvent::OrderObserved(_) => *all_accounts = true,
+        AccountEvent::SimulatedCapitalMutation(mutation) => keys.push(mutation.segment_key.clone()),
         AccountEvent::Batch(events) => {
             for event in events {
                 collect_event_keys(event, keys, all_accounts);
@@ -608,16 +634,17 @@ fn compare_snapshot(
         .iter()
         .map(|value| (value.order_id.clone(), value))
         .collect();
-    let order_keys: Vec<kairos_primitives::OrderId> = if snapshot.kind == SnapshotKind::Delta {
-        external_orders.keys().cloned().collect()
-    } else {
-        state
-            .open_orders()
-            .keys()
-            .chain(external_orders.keys())
-            .cloned()
-            .collect()
-    };
+    let order_keys: Vec<kairos_primitives::execution::OrderId> =
+        if snapshot.kind == SnapshotKind::Delta {
+            external_orders.keys().cloned().collect()
+        } else {
+            state
+                .open_orders()
+                .keys()
+                .chain(external_orders.keys())
+                .cloned()
+                .collect()
+        };
     for key in order_keys {
         let local = state.open_orders().get(&key).map(|value| {
             SignedQuantity::new(value.quantity.mantissa(), value.quantity.scale())

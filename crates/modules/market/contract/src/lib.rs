@@ -10,10 +10,12 @@ pub mod view;
 use std::path::PathBuf;
 
 pub use control::{
-    MarketCommandEnvelope, MarketCommandStatus, MarketControlClient, MarketControlError,
-    MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse, MarketHealthResponse,
+    MarketCommandEnvelope, MarketCommandOutcome, MarketCommandStatus, MarketControlClient,
+    MarketControlError, MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse,
+    MarketFeedStatus, MarketHealthResponse, MarketHealthStatus, MarketHttpControl, MarketOperation,
     MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
-    MarketSubscribePayload, MarketSubscriptionResponse, MarketUnsubscribePayload,
+    MarketSourceStatus, MarketSubscribePayload, MarketSubscriptionResponse,
+    MarketSubscriptionStatus, MarketUnsubscribePayload, SubscriptionOwnerKey,
 };
 pub use encode::{
     BarEncoder, EncodeContext, GreeksEncoder, OrderBookEncoder, QuoteEncoder, TradeEncoder,

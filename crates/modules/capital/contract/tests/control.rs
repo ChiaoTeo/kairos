@@ -1,11 +1,13 @@
 use kairos_capital_contract::{
     FundingLocation, FundingObjectivePriority, PublishFundingObjectiveRequest,
-    QueryCapitalAvailabilityRequest,
+    QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
 };
-use kairos_primitives::{
-    AccountId, BasisPoints, BrokerId, CapitalGroupId, Currency, FundingObjectiveId, Generation,
-    Quantity, RequestId, SegmentKey, StrategyDecisionId, StrategyId, UnixNanos,
-};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+use kairos_primitives::capital::{CapitalGroupId, CapitalPlanId, FundingObjectiveId};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::{RequestId, StrategyDecisionId, StrategyId};
+use kairos_primitives::time::{BasisPoints, Generation, UnixNanos};
 
 #[test]
 fn funding_objective_control_has_no_route_or_source_authority() {
@@ -54,4 +56,20 @@ fn availability_query_is_scoped_to_one_group_location() {
     let value = serde_json::to_value(request).unwrap();
     assert_eq!(value["location"]["segment"], "usd-m");
     assert!(value.get("source").is_none());
+}
+
+#[test]
+fn manual_reconcile_identifies_only_an_existing_plan_and_observation_time() {
+    let request = ReconcileCapitalPlanRequest {
+        request_id: RequestId::new("reconcile-1").unwrap(),
+        capital_group_id: CapitalGroupId::new("group-a").unwrap(),
+        plan_id: CapitalPlanId::new("plan-a").unwrap(),
+        observed_at_unix_nanos: UnixNanos::new(900),
+    };
+
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(value["plan_id"], "plan-a");
+    assert!(value.get("route_id").is_none());
+    assert!(value.get("amount").is_none());
+    assert!(value.get("idempotency_key").is_none());
 }

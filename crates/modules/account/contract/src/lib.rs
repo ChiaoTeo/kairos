@@ -14,10 +14,12 @@ pub mod view;
 use std::path::PathBuf;
 
 pub use control::{
-    AccountCommandStatus, AccountContractClient, AccountControlClient, AccountControlError,
-    AccountRefreshResponse, AccountRestRequest, AccountRestResponse, AccountSegmentsRequest,
-    AdvanceAccountTimeRequest, AdvanceAccountTimeResponse, DecimalValue, Health,
-    MarkToMarketRequest, SimulatedSettlement,
+    AccountCommandOutcome, AccountCommandStatus, AccountContractClient, AccountControlClient,
+    AccountControlError, AccountHealthStatus, AccountRefreshResponse, AccountRefreshStatus,
+    AccountRestRequest, AccountRestResponse, AccountSegmentsRequest, AdvanceAccountTimeRequest,
+    AdvanceAccountTimeResponse, DecimalValue, Health, MarkToMarketRequest,
+    SimulatedCapitalMutation, SimulatedCapitalMutationKind, SimulatedCapitalMutationQuery,
+    SimulatedCapitalMutationStatus, SimulatedCapitalMutationStatusResponse, SimulatedSettlement,
 };
 pub use encode::{
     BalanceEncoder, EncodeContext, ObservedOrderEncoder, PositionEncoder, StatusEncoder,

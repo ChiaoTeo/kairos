@@ -1,9 +1,13 @@
 //! Public Reference models used by SQLite payloads and change events.
 
-use kairos_primitives::{
-    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, IssuerId, ListingId,
-    MarketId, Money, Price, ProviderId, Quantity, ReferenceStatus, Sequence, Symbol, UnixNanos,
+use kairos_primitives::decimal::{Money, Price, Quantity};
+use kairos_primitives::integration::ProviderId;
+use kairos_primitives::reference::{
+    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
+    ReferenceStatus, Symbol,
 };
+use kairos_primitives::runtime::{ActorId, InstanceId, LaunchId, WorkspaceId};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -95,12 +99,12 @@ pub struct LifecycleEntry {
     pub record_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceProjectionSnapshot {
-    pub actor_id: String,
-    pub workspace_id: String,
-    pub launch_id: Option<String>,
-    pub instance_id: Option<String>,
+    pub actor_id: ActorId,
+    pub workspace_id: WorkspaceId,
+    pub launch_id: Option<LaunchId>,
+    pub instance_id: Option<InstanceId>,
     pub generation: Generation,
     pub event_sequence: Sequence,
     pub entities: Vec<Entity>,
@@ -109,8 +113,29 @@ pub struct ReferenceProjectionSnapshot {
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
     pub provider_health: Vec<ProviderHealthState>,
-    pub option_underlyings: Vec<String>,
+    pub option_underlyings: Vec<InstrumentId>,
     pub lifecycle_events: Vec<LifecycleEntry>,
+}
+
+impl Default for ReferenceProjectionSnapshot {
+    fn default() -> Self {
+        Self {
+            actor_id: ActorId::new("reference:unscoped").expect("valid reference actor"),
+            workspace_id: WorkspaceId::new("workspace:unscoped").expect("valid workspace"),
+            launch_id: None,
+            instance_id: None,
+            generation: Generation::default(),
+            event_sequence: Sequence::default(),
+            entities: Vec::new(),
+            assets: Vec::new(),
+            instruments: Vec::new(),
+            listings: Vec::new(),
+            markets: Vec::new(),
+            provider_health: Vec::new(),
+            option_underlyings: Vec::new(),
+            lifecycle_events: Vec::new(),
+        }
+    }
 }
 
 impl ReferenceProjectionSnapshot {

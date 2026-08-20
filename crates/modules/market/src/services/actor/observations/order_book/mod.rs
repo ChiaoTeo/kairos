@@ -116,13 +116,13 @@ impl MarketActor {
                 scope: crate::ObservationScope::market(market_id.to_owned())
                     .expect("validated order book market id"),
                 data_kind: crate::ObservationKind::OrderBook,
-                last_event_time_unix_nanos: kairos_primitives::UnixNanos::new(
+                last_event_time_unix_nanos: kairos_primitives::time::UnixNanos::new(
                     event_time_unix_nanos,
                 ),
-                last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(
+                last_received_time_unix_nanos: kairos_primitives::time::UnixNanos::new(
                     super::super::now_unix_nanos(),
                 ),
-                event_sequence: kairos_primitives::Sequence::new(sequence),
+                event_sequence: kairos_primitives::time::Sequence::new(sequence),
                 status: if synchronized {
                     DataFreshnessStatus::Current
                 } else {

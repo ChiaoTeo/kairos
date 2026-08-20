@@ -1,7 +1,7 @@
 //! Provider event normalization into Market-owned facts.
 
 use kairos_conflux::{MarketEvent, MarketEventKind};
-use kairos_primitives::Money;
+use kairos_primitives::decimal::Money;
 
 use super::messages::{SourceInput, SourceOrderBookUpdate};
 use crate::domain::market::ResolvedMarket;
@@ -295,7 +295,7 @@ mod tests {
         ResolvedMarket::new(
             "market:cboe-bzx:equity:AAPL",
             "instrument:equity:US:AAPL:common",
-            kairos_primitives::InstrumentKind::Equity,
+            kairos_primitives::reference::InstrumentKind::Equity,
             "exchange:cboe-bzx",
             MarketDataRoute::new("route:massive:AAPL", "massive", "equity", "AAPL").unwrap(),
         )
@@ -306,7 +306,7 @@ mod tests {
         ResolvedMarket::consolidated(
             "instrument:equity:US:AAPL:common",
             Some("sip".into()),
-            kairos_primitives::InstrumentKind::Equity,
+            kairos_primitives::reference::InstrumentKind::Equity,
             MarketDataRoute::new("route:massive:AAPL", "massive", "equity", "AAPL").unwrap(),
         )
         .unwrap()
@@ -315,7 +315,7 @@ mod tests {
     fn event(kind: MarketEventKind) -> MarketEvent {
         MarketEvent {
             kind,
-            symbol: kairos_primitives::ParticipantSymbol::new("AAPL").unwrap(),
+            symbol: kairos_primitives::integration::ParticipantSymbol::new("AAPL").unwrap(),
             price: Some("100".parse().unwrap()),
             quantity: Some("1".parse().unwrap()),
             rate: None,

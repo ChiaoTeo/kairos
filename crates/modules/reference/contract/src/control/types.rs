@@ -1,7 +1,10 @@
-use kairos_primitives::{
-    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, Price,
-    ReferenceStatus, Symbol, UnixNanos,
+use kairos_primitives::decimal::Price;
+use kairos_primitives::integration::ProviderId;
+use kairos_primitives::reference::{
+    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId,
+    ReferenceStatus, Symbol,
 };
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -45,12 +48,12 @@ pub struct UpsertListingRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceSourceControlRequest {
-    pub source_id: String,
+    pub source_id: ProviderId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceOptionCoverageRequest {
-    pub underlying: String,
+    pub underlying: InstrumentId,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -67,7 +70,7 @@ pub struct ReferenceControlError {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ReferenceRestRequest {
     Health,
-    Refresh { source_id: Option<String> },
+    Refresh { source_id: Option<ProviderId> },
     Publish,
     PauseSource(ReferenceSourceControlRequest),
     ResumeSource(ReferenceSourceControlRequest),
@@ -80,21 +83,21 @@ pub enum ReferenceRestRequest {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceHealthResponse {
-    pub status: String,
+    pub status: ReferenceHealthStatus,
     pub providers: Vec<ReferenceProviderHealth>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceProviderHealth {
-    pub source_id: String,
-    pub status: String,
+    pub source_id: ProviderId,
+    pub status: ReferenceProviderStatus,
     pub stale: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceRefreshResponse {
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub changed: bool,
     pub change_count: u64,
     pub publication_pending: bool,
@@ -102,30 +105,46 @@ pub struct ReferenceRefreshResponse {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferencePublishResponse {
-    pub generation: u64,
+    pub generation: Generation,
     pub events: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceMutationResponse {
-    pub generation: u64,
+    pub generation: Generation,
     pub events: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceSourceStatusResponse {
-    pub source_id: String,
-    pub status: String,
+    pub source_id: ProviderId,
+    pub status: ReferenceProviderStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceOptionCoverageResponse {
-    pub underlying: String,
+    pub underlying: InstrumentId,
     pub enabled: bool,
-    pub underlyings: Vec<String>,
-    pub generation: u64,
-    pub event_sequence: u64,
+    pub underlyings: Vec<InstrumentId>,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
     pub changed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceHealthStatus {
+    Ready,
+    Degraded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceProviderStatus {
+    Ready,
+    Syncing,
+    Degraded,
+    Paused,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -144,7 +163,7 @@ pub enum ReferenceRestResponse {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{AssetClass, AssetId, ReferenceStatus, Symbol};
+    use kairos_primitives::reference::{AssetClass, AssetId, ReferenceStatus, Symbol};
 
     use super::UpsertAssetRequest;
 

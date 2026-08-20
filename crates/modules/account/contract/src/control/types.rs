@@ -1,4 +1,5 @@
-use kairos_primitives::{AccountId, SegmentKey, UnixNanos};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -16,6 +17,8 @@ pub struct AccountControlError {
 pub enum AccountRestRequest {
     Health,
     ApplySimulatedSettlement(super::SimulatedSettlement),
+    ApplySimulatedCapitalMutation(super::SimulatedCapitalMutation),
+    QuerySimulatedCapitalMutation(super::SimulatedCapitalMutationQuery),
     MarkToMarket(super::MarkToMarketRequest),
     AdvanceTime(super::AdvanceAccountTimeRequest),
     Refresh(AccountSegmentsRequest),
@@ -28,6 +31,10 @@ pub enum AccountRestRequest {
 pub enum AccountRestResponse {
     Health(Result<super::Health, AccountControlError>),
     ApplySimulatedSettlement(Result<AccountCommandStatus, AccountControlError>),
+    ApplySimulatedCapitalMutation(Result<AccountCommandStatus, AccountControlError>),
+    QuerySimulatedCapitalMutation(
+        Result<super::SimulatedCapitalMutationStatusResponse, AccountControlError>,
+    ),
     MarkToMarket(Result<AccountCommandStatus, AccountControlError>),
     AdvanceTime(Result<AdvanceAccountTimeResponse, AccountControlError>),
     Refresh(Result<AccountRefreshResponse, AccountControlError>),
@@ -40,9 +47,21 @@ pub struct AccountSegmentsRequest {
     pub segments: Vec<SegmentKey>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountCommandOutcome {
+    Applied,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountCommandStatus {
-    pub status: String,
+    pub status: AccountCommandOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountRefreshStatus {
+    Completed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -52,7 +71,7 @@ pub struct AdvanceAccountTimeResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountRefreshResponse {
-    pub status: String,
+    pub status: AccountRefreshStatus,
     pub account_id: Option<AccountId>,
     pub segments: Vec<SegmentKey>,
 }

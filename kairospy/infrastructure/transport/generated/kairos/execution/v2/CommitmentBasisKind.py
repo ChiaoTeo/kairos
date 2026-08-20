@@ -8,3 +8,4 @@ class CommitmentBasisKind(object):
     BASE_QUANTITY = 2
     CONTRACT_NOTIONAL = 3
     SIMULATION_QUANTITY = 4
+    CLOSEABLE_POSITION_QUANTITY = 5

@@ -5,7 +5,12 @@ use crate::services::actor::CapitalActor;
 use crate::services::persistence::JournalCapitalStore;
 use crate::{CapitalApplication, CapitalTransferProcess};
 
+mod connections;
 mod projection;
+pub use connections::{
+    CapitalConnectionAccount, CapitalTransferConnections, compose_capital_transfer_connections,
+    validate_capital_transfer_product,
+};
 pub use projection::{capital_current_view, capital_event};
 
 pub fn compose_capital_application(config: CapitalGroupConfig) -> CapitalApplication {
@@ -27,7 +32,7 @@ pub fn compose_capital_transfer_process<C>(
     connection: C,
 ) -> Result<CapitalTransferProcess<C>, String>
 where
-    C: kairos_conflux::CapitalTransferConnection,
+    C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();
@@ -42,7 +47,7 @@ pub fn compose_persistent_capital_transfer_process<C>(
     connection: C,
 ) -> Result<CapitalTransferProcess<C>, String>
 where
-    C: kairos_conflux::CapitalTransferConnection,
+    C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();

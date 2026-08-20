@@ -11,17 +11,18 @@ pub const ENUM_MIN_COMMITMENT_RESOURCE_KIND: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_COMMITMENT_RESOURCE_KIND: u8 = 3;
+pub const ENUM_MAX_COMMITMENT_RESOURCE_KIND: u8 = 4;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_COMMITMENT_RESOURCE_KIND: [CommitmentResourceKind; 4] = [
+pub const ENUM_VALUES_COMMITMENT_RESOURCE_KIND: [CommitmentResourceKind; 5] = [
     CommitmentResourceKind::UNSPECIFIED,
     CommitmentResourceKind::ASSET,
     CommitmentResourceKind::INSTRUMENT,
     CommitmentResourceKind::MARGIN_NOTIONAL,
+    CommitmentResourceKind::CLOSEABLE_POSITION,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -33,14 +34,16 @@ impl CommitmentResourceKind {
     pub const ASSET: Self = Self(1);
     pub const INSTRUMENT: Self = Self(2);
     pub const MARGIN_NOTIONAL: Self = Self(3);
+    pub const CLOSEABLE_POSITION: Self = Self(4);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 3;
+    pub const ENUM_MAX: u8 = 4;
     pub const ENUM_VALUES: &'static [Self] = &[
         Self::UNSPECIFIED,
         Self::ASSET,
         Self::INSTRUMENT,
         Self::MARGIN_NOTIONAL,
+        Self::CLOSEABLE_POSITION,
     ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
@@ -49,6 +52,7 @@ impl CommitmentResourceKind {
             Self::ASSET => Some("ASSET"),
             Self::INSTRUMENT => Some("INSTRUMENT"),
             Self::MARGIN_NOTIONAL => Some("MARGIN_NOTIONAL"),
+            Self::CLOSEABLE_POSITION => Some("CLOSEABLE_POSITION"),
             _ => None,
         }
     }

@@ -26,7 +26,7 @@ impl ExecutionOrderStatus {
     }
 }
 
-impl From<ExecutionOrderStatus> for kairos_primitives::OrderStatus {
+impl From<ExecutionOrderStatus> for kairos_primitives::integration::OrderStatus {
     fn from(status: ExecutionOrderStatus) -> Self {
         match status {
             ExecutionOrderStatus::Pending | ExecutionOrderStatus::Submitting => Self::Pending,
@@ -52,7 +52,7 @@ pub struct ExecutionOrder {
     pub leg_id: Option<LegId>,
     pub intent_id: Option<IntentId>,
     #[serde(default)]
-    pub strategy_id: Option<kairos_primitives::StrategyId>,
+    pub strategy_id: Option<kairos_primitives::runtime::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,

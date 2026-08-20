@@ -1,6 +1,8 @@
 //! Typed Hyperliquid fills, funding payments, and non-funding ledger records.
 
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{ExternalDecimal, IntegrationError, OrderSide};

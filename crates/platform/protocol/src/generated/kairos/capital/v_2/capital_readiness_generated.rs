@@ -11,16 +11,17 @@ pub const ENUM_MIN_CAPITAL_READINESS: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_CAPITAL_READINESS: u8 = 2;
+pub const ENUM_MAX_CAPITAL_READINESS: u8 = 3;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_CAPITAL_READINESS: [CapitalReadiness; 3] = [
+pub const ENUM_VALUES_CAPITAL_READINESS: [CapitalReadiness; 4] = [
     CapitalReadiness::WAITING_FOR_FACTS,
     CapitalReadiness::DEGRADED,
     CapitalReadiness::READY,
+    CapitalReadiness::WAITING_FOR_ACCOUNTS,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -31,17 +32,23 @@ impl CapitalReadiness {
     pub const WAITING_FOR_FACTS: Self = Self(0);
     pub const DEGRADED: Self = Self(1);
     pub const READY: Self = Self(2);
+    pub const WAITING_FOR_ACCOUNTS: Self = Self(3);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 2;
-    pub const ENUM_VALUES: &'static [Self] =
-        &[Self::WAITING_FOR_FACTS, Self::DEGRADED, Self::READY];
+    pub const ENUM_MAX: u8 = 3;
+    pub const ENUM_VALUES: &'static [Self] = &[
+        Self::WAITING_FOR_FACTS,
+        Self::DEGRADED,
+        Self::READY,
+        Self::WAITING_FOR_ACCOUNTS,
+    ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
         match self {
             Self::WAITING_FOR_FACTS => Some("WAITING_FOR_FACTS"),
             Self::DEGRADED => Some("DEGRADED"),
             Self::READY => Some("READY"),
+            Self::WAITING_FOR_ACCOUNTS => Some("WAITING_FOR_ACCOUNTS"),
             _ => None,
         }
     }

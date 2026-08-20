@@ -44,7 +44,7 @@ fn context(actor_id: &str, identity: &InstanceIdentity, sequence: u64) -> Encode
     .expect("market publication actor identity and event id are valid")
 }
 
-fn dec(value: impl Into<kairos_primitives::DecimalParts>) -> Decimal64 {
+fn dec(value: impl Into<kairos_primitives::decimal::DecimalParts>) -> Decimal64 {
     let value = value.into();
     Decimal64::new(value.mantissa(), value.scale())
 }
@@ -961,8 +961,10 @@ fn encode_orderbook_resync(
 #[cfg(test)]
 mod tests {
     use kairos_market_contract::event::decode_event;
+    use kairos_primitives::decimal::{Price, Quantity, Rate as FixedRate};
+    use kairos_primitives::reference::InstrumentId;
     use kairos_primitives::runtime::InstanceIdentity;
-    use kairos_primitives::{InstrumentId, Price, Quantity, Rate as FixedRate, UnixNanos};
+    use kairos_primitives::time::UnixNanos;
 
     use super::encode_contract_event as encode_event;
     use crate::domain::events::MarketEvent;
@@ -981,7 +983,7 @@ mod tests {
             ask_venue_code: None,
             tape: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: kairos_primitives::SourceId::new("source").unwrap(),
+            source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",
@@ -1004,7 +1006,7 @@ mod tests {
             value: "0.01".parse::<FixedRate>().unwrap(),
             mark_price: None,
             observed_at_unix_nanos: UnixNanos::new(7),
-            source_id: kairos_primitives::SourceId::new("source").unwrap(),
+            source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
         };
         let bytes = encode_event(
             "market",

@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use kairos_primitives::{ProviderId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::integration::{ProviderId, ProviderProductCode, ProviderSymbol};
 use serde::{Deserialize, Serialize};
 
 /// Provider access selected by composition for one canonical market.

@@ -20,9 +20,9 @@ pub struct ExecutionFill {
     #[serde(default)]
     pub reported_provider_id: Option<String>,
     #[serde(default)]
-    pub provider_product: Option<kairos_primitives::ProviderProductCode>,
+    pub provider_product: Option<kairos_primitives::integration::ProviderProductCode>,
     #[serde(default)]
-    pub provider_symbol: Option<kairos_primitives::ProviderSymbol>,
+    pub provider_symbol: Option<kairos_primitives::integration::ProviderSymbol>,
     #[serde(default)]
     pub remote_order_id: Option<RemoteOrderId>,
     pub side: OrderSide,

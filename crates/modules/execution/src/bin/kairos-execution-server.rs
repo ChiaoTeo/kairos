@@ -75,7 +75,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         execution_events_stream_id: args.execution_events_stream_id,
     })?
     .run()
-    .await
+    .await?;
+    Ok(())
 }
 
 fn acquire_exclusive_provider_process_locks(

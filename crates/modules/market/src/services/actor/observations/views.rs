@@ -38,10 +38,10 @@ impl MarketActor {
                 scope: observation.scope().clone(),
                 data_kind: observation.kind(),
                 last_event_time_unix_nanos: observation.observed_at_unix_nanos(),
-                last_received_time_unix_nanos: kairos_primitives::UnixNanos::new(
+                last_received_time_unix_nanos: kairos_primitives::time::UnixNanos::new(
                     super::super::now_unix_nanos(),
                 ),
-                event_sequence: kairos_primitives::Sequence::new(next_sequence),
+                event_sequence: kairos_primitives::time::Sequence::new(next_sequence),
                 status: DataFreshnessStatus::Current,
             },
         );

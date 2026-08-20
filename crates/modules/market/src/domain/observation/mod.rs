@@ -1,4 +1,4 @@
-use kairos_primitives::UnixNanos;
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 pub mod bar;
@@ -125,7 +125,7 @@ impl MarketObservation {
         }
     }
 
-    pub fn market_id(&self) -> Option<&kairos_primitives::MarketId> {
+    pub fn market_id(&self) -> Option<&kairos_primitives::reference::MarketId> {
         self.scope().market_id()
     }
 
@@ -168,7 +168,7 @@ impl MarketObservation {
         }
     }
 
-    pub fn source_id(&self) -> &kairos_primitives::SourceId {
+    pub fn source_id(&self) -> &kairos_primitives::market::SourceId {
         match self {
             Self::Quote(value) => &value.source_id,
             Self::Trade(value) => &value.source_id,

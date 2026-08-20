@@ -453,14 +453,39 @@ pub(super) fn encode_commitment_state<'a>(
     let account_id = builder.create_string(commitment.account_id.as_str());
     let segment_key = builder.create_string(commitment.segment_key.as_str());
     let instrument_id = builder.create_string(commitment.instrument_id.as_str());
-    let (resource_kind, resource_id) = match &commitment.resource {
-        CommitmentResource::Asset(value) => (fb::CommitmentResourceKind::ASSET, value.as_str()),
-        CommitmentResource::Instrument(value) => {
-            (fb::CommitmentResourceKind::INSTRUMENT, value.as_str())
+    let (resource_kind, resource_id, position_side) = match &commitment.resource {
+        CommitmentResource::Asset(value) => (
+            fb::CommitmentResourceKind::ASSET,
+            value.as_str(),
+            fb::CommitmentPositionSide::UNSPECIFIED,
+        ),
+        CommitmentResource::Instrument(value) => (
+            fb::CommitmentResourceKind::INSTRUMENT,
+            value.as_str(),
+            fb::CommitmentPositionSide::UNSPECIFIED,
+        ),
+        CommitmentResource::CloseablePosition {
+            instrument_id,
+            position_side,
+        } => {
+            let position_side = match position_side {
+                kairos_primitives::account::PositionSide::Net => fb::CommitmentPositionSide::NET,
+                kairos_primitives::account::PositionSide::Long => fb::CommitmentPositionSide::LONG,
+                kairos_primitives::account::PositionSide::Short => {
+                    fb::CommitmentPositionSide::SHORT
+                },
+            };
+            (
+                fb::CommitmentResourceKind::CLOSEABLE_POSITION,
+                instrument_id.as_str(),
+                position_side,
+            )
         },
-        CommitmentResource::MarginNotional(value) => {
-            (fb::CommitmentResourceKind::MARGIN_NOTIONAL, value.as_str())
-        },
+        CommitmentResource::MarginNotional(value) => (
+            fb::CommitmentResourceKind::MARGIN_NOTIONAL,
+            value.as_str(),
+            fb::CommitmentPositionSide::UNSPECIFIED,
+        ),
     };
     let resource_id = builder.create_string(resource_id);
     let settlement_asset = commitment
@@ -476,6 +501,11 @@ pub(super) fn encode_commitment_state<'a>(
             None,
         ),
         CommitmentBasis::BaseQuantity => (fb::CommitmentBasisKind::BASE_QUANTITY, None, None),
+        CommitmentBasis::CloseablePositionQuantity => (
+            fb::CommitmentBasisKind::CLOSEABLE_POSITION_QUANTITY,
+            None,
+            None,
+        ),
         CommitmentBasis::ContractNotional {
             price_cap,
             contract_size,
@@ -501,6 +531,7 @@ pub(super) fn encode_commitment_state<'a>(
             },
             resource_kind,
             resource_id: Some(resource_id),
+            position_side,
             amount: Some(&amount),
             remaining_quantity: Some(&remaining_quantity),
             lifecycle: match commitment.status {
@@ -798,7 +829,7 @@ pub(super) fn intent_lifecycle(status: crate::application::IntentStatus) -> fb::
 }
 
 pub(super) fn decimal(
-    value: impl Into<kairos_primitives::DecimalParts>,
+    value: impl Into<kairos_primitives::decimal::DecimalParts>,
 ) -> kairos_protocol::generated::kairos::common::v_2::Decimal64 {
     let value = value.into();
     kairos_protocol::generated::kairos::common::v_2::Decimal64::new(value.mantissa(), value.scale())

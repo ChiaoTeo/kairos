@@ -1,4 +1,4 @@
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use crate::participants::ibkr::{IbkrMarketDataConfig, descriptor};
 use crate::services::participants::ibkr::IbkrOptions;

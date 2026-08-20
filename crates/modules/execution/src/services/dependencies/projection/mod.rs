@@ -11,8 +11,12 @@ use kairos_account_contract::{
     AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader,
     DecimalValue as AccountDecimal, Health,
 };
-use kairos_primitives::{OrderId, Sequence};
-use kairos_protocol::generated::kairos::account::v_2::{AccountStatus, FreshnessState};
+use kairos_primitives::account::PositionSide;
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::time::Sequence;
+use kairos_protocol::generated::kairos::account::v_2::{
+    AccountStatus, FreshnessState, PositionSide as AccountPositionSide,
+};
 use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
 use kairos_risk_contract::{Health as RiskHealth, RiskControlClient};
@@ -41,7 +45,9 @@ pub(super) struct ProjectedBalance {
 
 #[derive(Clone)]
 pub(super) struct ProjectedPosition {
+    pub(super) segment_key: String,
     pub(super) instrument_id: String,
+    pub(super) position_side: PositionSide,
     pub(super) quantity: AccountDecimal,
 }
 
@@ -451,7 +457,13 @@ pub(super) fn read_account_projection(
         positions.extend(segment.positions().iter().map(|position| {
             let quantity = position.quantity();
             ProjectedPosition {
+                segment_key: segment.segment_key().to_owned(),
                 instrument_id: position.instrument_id().to_owned(),
+                position_side: match position.position_side() {
+                    AccountPositionSide::LONG => PositionSide::Long,
+                    AccountPositionSide::SHORT => PositionSide::Short,
+                    _ => PositionSide::Net,
+                },
                 quantity: AccountDecimal::new(quantity.mantissa(), quantity.scale())
                     .expect("Account position satisfies contract decimal bounds"),
             }

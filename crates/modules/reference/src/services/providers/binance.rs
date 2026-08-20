@@ -198,23 +198,25 @@ pub(super) fn binance_equity_provider_catalog(
             )));
         }
         let symbol = value.source_symbol.as_str().trim().to_ascii_uppercase();
-        let status: kairos_primitives::ReferenceStatus =
+        let status: kairos_primitives::reference::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
-        let equity_asset = kairos_primitives::AssetId::new(format!("asset:equity:{symbol}"))?;
-        let instrument_id =
-            kairos_primitives::InstrumentId::new(format!("instrument:equity:US:{symbol}:common"))?;
+        let equity_asset =
+            kairos_primitives::reference::AssetId::new(format!("asset:equity:{symbol}"))?;
+        let instrument_id = kairos_primitives::reference::InstrumentId::new(format!(
+            "instrument:equity:US:{symbol}:common"
+        ))?;
         catalog.assets.push(Asset {
             asset_id: equity_asset,
-            code: kairos_primitives::Symbol::new(symbol.clone())?,
+            code: kairos_primitives::reference::Symbol::new(symbol.clone())?,
             asset_class: AssetClass::Equity,
             status,
             ..Asset::default()
         });
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
-            symbol: kairos_primitives::Symbol::new(symbol.clone())?,
+            symbol: kairos_primitives::reference::Symbol::new(symbol.clone())?,
             instrument_type: InstrumentKind::Equity,
-            issuer_id: Some(kairos_primitives::IssuerId::new(format!(
+            issuer_id: Some(kairos_primitives::reference::IssuerId::new(format!(
                 "issuer:US:{symbol}"
             ))?),
             share_class: Some("common".into()),
@@ -288,8 +290,10 @@ fn append_binance_instrument(
         (&quote, "crypto"),
     ] {
         catalog.assets.push(Asset {
-            asset_id: kairos_primitives::AssetId::new(format!("asset:{asset_class}:{code}"))?,
-            code: kairos_primitives::Symbol::new(code.clone())?,
+            asset_id: kairos_primitives::reference::AssetId::new(format!(
+                "asset:{asset_class}:{code}"
+            ))?,
+            code: kairos_primitives::reference::Symbol::new(code.clone())?,
             asset_class: AssetClass::parse_known(asset_class)?,
             status: "active".into(),
             ..Asset::default()
@@ -330,7 +334,7 @@ fn append_binance_instrument(
         ExternalInstrumentKind::EquityPerpetual
             if instrument_type == BinanceProduct::UsdMFutures =>
         {
-            let underlying = kairos_primitives::InstrumentId::new(format!(
+            let underlying = kairos_primitives::reference::InstrumentId::new(format!(
                 "instrument:equity:US:{base}:common"
             ))?;
             if !catalog
@@ -340,9 +344,9 @@ fn append_binance_instrument(
             {
                 catalog.instruments.push(Instrument {
                     instrument_id: underlying.clone(),
-                    symbol: kairos_primitives::Symbol::new(base.clone())?,
+                    symbol: kairos_primitives::reference::Symbol::new(base.clone())?,
                     instrument_type: InstrumentKind::Equity,
-                    issuer_id: Some(kairos_primitives::IssuerId::new(format!(
+                    issuer_id: Some(kairos_primitives::reference::IssuerId::new(format!(
                         "issuer:US:{base}"
                     ))?),
                     share_class: Some("common".into()),
@@ -386,7 +390,7 @@ fn append_binance_instrument(
                 ReferenceError::Provider("Binance option right is missing".into())
             })?;
             let underlying =
-                kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
+                kairos_primitives::reference::InstrumentId::new(format!("instrument:spot:{base}"))?;
             if !catalog
                 .instruments
                 .iter()
@@ -394,11 +398,11 @@ fn append_binance_instrument(
             {
                 catalog.instruments.push(Instrument {
                     instrument_id: underlying.clone(),
-                    symbol: kairos_primitives::Symbol::new(base.clone())?,
+                    symbol: kairos_primitives::reference::Symbol::new(base.clone())?,
                     instrument_type: InstrumentKind::Spot,
-                    primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
-                        "asset:crypto:{base}"
-                    ))?),
+                    primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(
+                        format!("asset:crypto:{base}"),
+                    )?),
                     status: "active".into(),
                     ..Instrument::default()
                 });
@@ -435,24 +439,24 @@ fn append_binance_instrument(
             )));
         },
     };
-    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_primitives::ListingId::new(if canonical_family == "spot" {
+    let instrument_id = kairos_primitives::reference::InstrumentId::new(instrument_id)?;
+    let listing_id = kairos_primitives::reference::ListingId::new(if canonical_family == "spot" {
         format!("listing:binance:spot:{base}:{quote}")
     } else {
         format!("listing:binance:{canonical_family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_primitives::Exchange::new("exchange:binance")?;
-    let market_id = kairos_primitives::MarketId::new(format!(
+    let exchange_id = kairos_primitives::reference::Exchange::new("exchange:binance")?;
+    let market_id = kairos_primitives::reference::MarketId::new(format!(
         "market:binance:{canonical_family}:{source_symbol}"
     ))?;
     let instrument_kind = canonical_instrument_kind(value.kind)?;
-    let status: kairos_primitives::ReferenceStatus =
+    let status: kairos_primitives::reference::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
+        symbol: kairos_primitives::reference::Symbol::new(canonical_symbol)?,
         instrument_type: instrument_kind,
-        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
                 &base
@@ -476,7 +480,7 @@ fn append_binance_instrument(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),
-        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
+        exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -493,8 +497,8 @@ fn append_binance_instrument(
         } else {
             AssetClass::Crypto
         }),
-        venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
-        base_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        venue_symbol: Some(kairos_primitives::reference::Symbol::new(source_symbol)?),
+        base_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:{}:{base}",
             if value.kind == ExternalInstrumentKind::EquityPerpetual {
                 "equity"
@@ -502,7 +506,7 @@ fn append_binance_instrument(
                 "crypto"
             }
         ))?),
-        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        quote_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{quote}"
         ))?),
         status,

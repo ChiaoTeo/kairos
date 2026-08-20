@@ -11,18 +11,19 @@ pub const ENUM_MIN_COMMITMENT_BASIS_KIND: u8 = 0;
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
-pub const ENUM_MAX_COMMITMENT_BASIS_KIND: u8 = 4;
+pub const ENUM_MAX_COMMITMENT_BASIS_KIND: u8 = 5;
 #[deprecated(
     since = "2.0.0",
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_COMMITMENT_BASIS_KIND: [CommitmentBasisKind; 5] = [
+pub const ENUM_VALUES_COMMITMENT_BASIS_KIND: [CommitmentBasisKind; 6] = [
     CommitmentBasisKind::UNSPECIFIED,
     CommitmentBasisKind::QUOTE_PRICE_CAP,
     CommitmentBasisKind::BASE_QUANTITY,
     CommitmentBasisKind::CONTRACT_NOTIONAL,
     CommitmentBasisKind::SIMULATION_QUANTITY,
+    CommitmentBasisKind::CLOSEABLE_POSITION_QUANTITY,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -35,15 +36,17 @@ impl CommitmentBasisKind {
     pub const BASE_QUANTITY: Self = Self(2);
     pub const CONTRACT_NOTIONAL: Self = Self(3);
     pub const SIMULATION_QUANTITY: Self = Self(4);
+    pub const CLOSEABLE_POSITION_QUANTITY: Self = Self(5);
 
     pub const ENUM_MIN: u8 = 0;
-    pub const ENUM_MAX: u8 = 4;
+    pub const ENUM_MAX: u8 = 5;
     pub const ENUM_VALUES: &'static [Self] = &[
         Self::UNSPECIFIED,
         Self::QUOTE_PRICE_CAP,
         Self::BASE_QUANTITY,
         Self::CONTRACT_NOTIONAL,
         Self::SIMULATION_QUANTITY,
+        Self::CLOSEABLE_POSITION_QUANTITY,
     ];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
@@ -53,6 +56,7 @@ impl CommitmentBasisKind {
             Self::BASE_QUANTITY => Some("BASE_QUANTITY"),
             Self::CONTRACT_NOTIONAL => Some("CONTRACT_NOTIONAL"),
             Self::SIMULATION_QUANTITY => Some("SIMULATION_QUANTITY"),
+            Self::CLOSEABLE_POSITION_QUANTITY => Some("CLOSEABLE_POSITION_QUANTITY"),
             _ => None,
         }
     }

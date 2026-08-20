@@ -421,7 +421,7 @@ mod availability_tests {
         ResolvedMarket::new(
             "market:binance:spot:BTCUSDT",
             "instrument:spot:BTC",
-            kairos_primitives::InstrumentKind::Spot,
+            kairos_primitives::reference::InstrumentKind::Spot,
             "binance",
             MarketDataRoute::new("route:binance:spot:BTCUSDT", "binance", "spot", "BTCUSDT")
                 .unwrap()
@@ -451,7 +451,7 @@ mod availability_tests {
             .register_source(
                 SourceDescriptor::new(
                     SourceId::new("binance-primary").unwrap(),
-                    kairos_primitives::Exchange::new("binance").unwrap(),
+                    kairos_primitives::reference::Exchange::new("binance").unwrap(),
                     "spot",
                     None,
                 )

@@ -7,16 +7,25 @@ import pytest
 
 from kairospy.application.capital import (
     CapitalApplication,
+    CapitalAlertKind,
+    CapitalAlertSeverity,
     CapitalAvailability,
     CapitalDemand,
     CapitalReadiness,
+    CapitalRecoveryAction,
+    FundingForecastObservation,
+    FundingForecastSource,
     FundingLocation,
     FundingObjective,
     FundingObjectiveReceipt,
     FundingObjectiveStatus,
 )
 from kairospy.domain_types import AccountId, SegmentKey
-from kairospy.infrastructure.contracts.capital.view import CapitalViewKey, decode_view
+from kairospy.infrastructure.contracts.capital.view import (
+    CapitalViewKey,
+    _recovery_alert,
+    decode_view,
+)
 
 
 def _objective(account: str = "account-a") -> FundingObjective:
@@ -106,6 +115,54 @@ def test_enabled_facade_adds_identity_but_does_not_select_a_route() -> None:
         is FundingObjectiveStatus.ACCEPTED
     )
     assert capital.availability(_objective().destination).deficit == Decimal("30000")
+
+
+def test_typed_historical_forecast_becomes_a_deterministic_funding_objective() -> None:
+    captured: list[FundingObjective] = []
+
+    class Commands:
+        def publish_funding_objective(self, objective, **_identity):
+            captured.append(objective)
+            return FundingObjectiveReceipt(
+                objective.objective_id,
+                objective.version,
+                FundingObjectiveStatus.ACCEPTED,
+            )
+
+    capital = CapitalApplication(
+        Commands(),
+        None,
+        strategy_id="basis",
+        launch_id="launch-a",
+        instance_id="instance-a",
+        capital_group_id="group-a",
+        account_ids=(AccountId("account-a"),),
+    )
+    observed_at = datetime(2026, 8, 20, tzinfo=timezone.utc)
+    forecast = FundingForecastObservation.from_historical_peak(
+        forecast_id="session-usdt-peak",
+        version=3,
+        destination=FundingLocation(
+            AccountId("account-a"), SegmentKey("usd-m"), "USDT"
+        ),
+        observed_samples=(Decimal("50"), Decimal("80"), Decimal("65")),
+        safety_buffer=Decimal("10"),
+        observed_at=observed_at,
+        required_by=observed_at + timedelta(hours=1),
+        expires_at=observed_at + timedelta(hours=2),
+        evidence_references=("history:30d:usd-m",),
+    )
+
+    receipt = capital.publish_forecast(forecast)
+
+    assert receipt.status is FundingObjectiveStatus.ACCEPTED
+    assert forecast.source is FundingForecastSource.HISTORICAL_PEAK
+    assert captured[0].desired_available == Decimal("90")
+    assert captured[0].observed_at == observed_at
+    assert captured[0].strategy_decision_id == (
+        "forecast:historical_peak:session-usdt-peak:3"
+    )
+    assert not hasattr(captured[0], "source_account")
 
 
 def test_availability_transport_failure_degrades_without_blocking_strategy() -> None:
@@ -212,3 +269,39 @@ def test_capital_view_key_matches_the_rust_resource_topology(tmp_path) -> None:
 def test_capital_view_decoder_fails_closed_on_another_root() -> None:
     with pytest.raises(ValueError, match="CPV2"):
         decode_view(b"\0\0\0\0NOPE")
+
+
+def test_capital_recovery_alert_decoder_preserves_operator_evidence() -> None:
+    class Row:
+        def AlertId(self):
+            return b"capital-recovery:plan-a"
+
+        def PlanId(self):
+            return b"plan-a"
+
+        def OperationId(self):
+            return b"operation-a"
+
+        def Kind(self):
+            return 1
+
+        def Severity(self):
+            return 1
+
+        def RecoveryAction(self):
+            return 3
+
+        def Message(self):
+            return b"hold funds and review"
+
+        def OpenedAtUnixNanos(self):
+            return 1_787_200_000_000_000_000
+
+    alert = _recovery_alert(Row())
+
+    assert alert.plan_id == "plan-a"
+    assert alert.operation_id == "operation-a"
+    assert alert.kind is CapitalAlertKind.MANUAL_REVIEW
+    assert alert.severity is CapitalAlertSeverity.CRITICAL
+    assert alert.recovery_action is CapitalRecoveryAction.HOLD_AND_REVIEW
+    assert alert.opened_at.tzinfo is timezone.utc

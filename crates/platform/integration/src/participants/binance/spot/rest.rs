@@ -1,4 +1,4 @@
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use crate::services::participants::binance::{account, execution, market};
 use crate::{
@@ -281,13 +281,13 @@ impl HistoricalTradeQuery for BinanceSpotRestConnection {
                         .and_then(serde_json::Value::as_u64)
                         .map(|value| value.to_string()),
                     price: text("p")?
-                        .parse::<kairos_primitives::Price>()
+                        .parse::<kairos_primitives::decimal::Price>()
                         .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                     quantity: text("q")?
-                        .parse::<kairos_primitives::Quantity>()
+                        .parse::<kairos_primitives::decimal::Quantity>()
                         .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?,
                     is_buyer_maker: row.get("m").and_then(serde_json::Value::as_bool),
-                    event_at_unix_nanos: kairos_primitives::UnixNanos::from(
+                    event_at_unix_nanos: kairos_primitives::time::UnixNanos::from(
                         row.get("T")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or_default()

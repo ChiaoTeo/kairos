@@ -27,7 +27,7 @@ pub(crate) enum CapitalJournalRecord {
         event_sequence: u64,
         policy: Box<crate::domain::CapitalPolicy>,
         #[serde(default)]
-        occurred_at: kairos_primitives::UnixNanos,
+        occurred_at: kairos_primitives::time::UnixNanos,
     },
     FactsObserved {
         journal_sequence: u64,
@@ -44,7 +44,7 @@ pub(crate) enum CapitalJournalRecord {
         event_sequence: u64,
         route: Box<crate::domain::CapitalTransferRoute>,
         #[serde(default)]
-        occurred_at: kairos_primitives::UnixNanos,
+        occurred_at: kairos_primitives::time::UnixNanos,
     },
     PlanAuthorized {
         journal_sequence: u64,

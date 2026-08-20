@@ -1,7 +1,11 @@
-pub use kairos_primitives::{
-    AccountId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId, MarketId, Money,
-    OrderId, OrderSide, OrderType, PlanId, Price, Quantity, RemoteOrderId, SegmentKey, UnixNanos,
+pub use kairos_primitives::account::{AccountId, PositionSide, SegmentKey};
+pub use kairos_primitives::decimal::{Money, Price, Quantity};
+pub use kairos_primitives::execution::{
+    ExecutionRouteId, FillId, IntentId, LegId, OrderId, OrderSide, OrderType, PlanId,
 };
+pub use kairos_primitives::integration::RemoteOrderId;
+pub use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
+pub use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 mod commitment;

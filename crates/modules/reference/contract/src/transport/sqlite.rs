@@ -8,10 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kairos_primitives::{
-    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, ListingId, MarketId,
-    ReferenceStatus, Sequence, Symbol, UnixNanos,
+use kairos_primitives::reference::{
+    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, ListingId, MarketId,
+    ReferenceStatus, Symbol,
 };
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
 
@@ -143,7 +144,10 @@ impl ReferenceSqliteReader {
         let transaction = connection.transaction().map_err(transport)?;
         let watermark = read_watermark(&transaction)?;
         let snapshot = ReferenceProjectionSnapshot {
-            actor_id: actor_id.to_owned(),
+            actor_id: kairos_primitives::runtime::ActorId::new(actor_id)
+                .map_err(|error| ContractError::Invalid(error.to_string()))?,
+            workspace_id: kairos_primitives::runtime::WorkspaceId::new("workspace:reference")
+                .expect("valid reference workspace"),
             generation: watermark.generation,
             event_sequence: watermark.event_sequence,
             instruments: if include_instruments {
@@ -696,7 +700,7 @@ mod tests {
         let reader = ReferenceSqliteReader::open(&path).unwrap();
         let projection = reader
             .projection(&SqliteMarketQuery {
-                venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
                 limit: 100,
                 ..Default::default()
             })

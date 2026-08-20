@@ -36,6 +36,10 @@ impl<'process, A: ConfluxActor> Context<'process, A> {
         self.system.connections()
     }
 
+    pub fn outputs(&mut self) -> crate::OutputCollections<'_> {
+        self.system.outputs()
+    }
+
     pub fn reference_client(
         &mut self,
         key: &str,
@@ -204,4 +208,71 @@ async fn send_event<A: ConfluxActor>(
         .send(EventEnvelope { event, completed })
         .await
         .map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use kairos_market_contract::{MarketViewKey, MarketViewKind};
+
+    use super::*;
+    use crate::process::EventEnvelope;
+    use crate::{Contract, RestContract};
+
+    struct NoRest;
+    impl RestContract for NoRest {
+        type Request = ();
+        type Response = ();
+    }
+
+    struct TestActor;
+    impl Contract for TestActor {
+        type Rest = NoRest;
+    }
+    impl ConfluxActor for TestActor {
+        type FatalError = Infallible;
+        type LocalEvent = Infallible;
+
+        async fn handle(
+            &mut self,
+            _event: ConfluxEvent<Self, Self::LocalEvent>,
+            _context: &mut Context<'_, Self>,
+        ) -> Result<Option<()>, Self::FatalError> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn handle_context_can_declare_a_dynamic_typed_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut system = ConfluxSystem::new();
+        let mut shutdown = None;
+        let (sender, _receiver) = mpsc::channel::<EventEnvelope<TestActor>>(1);
+        let mut source_tasks = Vec::new();
+        let mut context = Context::new(&mut system, &mut shutdown, sender, &mut source_tasks);
+        let key =
+            MarketViewKey::new("scope", "source", MarketViewKind::Quote, None::<String>).unwrap();
+
+        let resource_key = key.canonical_key();
+        let root = directory.path().to_path_buf();
+        let resource_key = context
+            .declare_output(
+                |system| &mut system.market_view_publishers,
+                resource_key,
+                7,
+                move || {
+                    kairos_market_contract::MarketViewPublisher::create(root, key, 4_096)
+                        .map_err(|error| crate::OutputBindingError::Create(error.to_string()))
+                },
+            )
+            .unwrap();
+
+        let resource = system.market_view_publishers.get(&resource_key).unwrap();
+        assert_eq!(resource.revision(), 7);
+        assert_eq!(resource.state(), crate::ResourceState::Ready);
+        assert!(std::fs::read_dir(directory.path()).unwrap().any(|entry| {
+            entry.is_ok_and(|entry| entry.path().to_string_lossy().ends_with(".e1.mmap"))
+        }));
+    }
 }

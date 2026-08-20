@@ -1,6 +1,8 @@
 //! Typed Binance trade, commission, funding, and income records.
 
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{ExternalDecimal, IntegrationError, OrderSide};

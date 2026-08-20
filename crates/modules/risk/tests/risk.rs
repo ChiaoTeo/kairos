@@ -11,24 +11,24 @@ use kairos_risk::{
     ResizeReservation, RiskApplication, RiskClockMode, RiskContext, RiskPolicy, TradeRiskProposal,
 };
 
-fn policy_id(value: &str) -> kairos_primitives::PolicyId {
-    kairos_primitives::PolicyId::new(value).unwrap()
+fn policy_id(value: &str) -> kairos_primitives::risk::PolicyId {
+    kairos_primitives::risk::PolicyId::new(value).unwrap()
 }
 
-fn request_id(value: &str) -> kairos_primitives::RequestId {
-    kairos_primitives::RequestId::new(value).unwrap()
+fn request_id(value: &str) -> kairos_primitives::runtime::RequestId {
+    kairos_primitives::runtime::RequestId::new(value).unwrap()
 }
 
-fn idempotency_key(value: &str) -> kairos_primitives::IdempotencyKey {
-    kairos_primitives::IdempotencyKey::new(value).unwrap()
+fn idempotency_key(value: &str) -> kairos_primitives::runtime::IdempotencyKey {
+    kairos_primitives::runtime::IdempotencyKey::new(value).unwrap()
 }
 
-fn reservation_id(value: &str) -> kairos_primitives::ReservationId {
-    kairos_primitives::ReservationId::new(value).unwrap()
+fn reservation_id(value: &str) -> kairos_primitives::risk::ReservationId {
+    kairos_primitives::risk::ReservationId::new(value).unwrap()
 }
 
-fn strategy_id(value: &str) -> kairos_primitives::StrategyId {
-    kairos_primitives::StrategyId::new(value).unwrap()
+fn strategy_id(value: &str) -> kairos_primitives::runtime::StrategyId {
+    kairos_primitives::runtime::StrategyId::new(value).unwrap()
 }
 
 fn amount(value: i64) -> Amount {
@@ -40,7 +40,7 @@ fn policy(id: &str, limit: i64, account: &str) -> RiskPolicy {
         policy_id: policy_id(id),
         version: 1.into(),
         scope: PolicyScope {
-            account_id: Some(kairos_primitives::AccountId::new(account).unwrap()),
+            account_id: Some(kairos_primitives::account::AccountId::new(account).unwrap()),
             strategy_id: None,
             instrument_id: None,
             exchange_id: None,
@@ -68,15 +68,15 @@ fn request(id: &str, value: i64) -> AuthorizeRequest {
         request_id: request_id(id),
         idempotency_key: idempotency_key(&format!("key:{id}")),
         reservation_id: reservation_id(&format!("reservation:{id}")),
-        account_id: kairos_primitives::AccountId::new("main").unwrap(),
+        account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
         strategy_id: strategy_id("strategy"),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument").unwrap(),
-        exchange_id: kairos_primitives::Exchange::new("exchange").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument").unwrap(),
+        exchange_id: kairos_primitives::reference::Exchange::new("exchange").unwrap(),
         proposal: TradeRiskProposal {
             notional: amount(value),
             initial_margin_rate_bps: 10_000.into(),
-            account_segment: kairos_primitives::SegmentKey::new("usd-m").unwrap(),
-            collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
+            account_segment: kairos_primitives::account::SegmentKey::new("usd-m").unwrap(),
+            collateral_asset: kairos_primitives::reference::Currency::new("USDT").unwrap(),
             reduce_only: false,
             margin_rule_id: "test:fully-funded".into(),
         },
@@ -296,7 +296,7 @@ fn pre_trade_rejects_stale_market_and_insufficient_margin() {
             policy_id: policy_id("margin"),
             version: 1.into(),
             scope: PolicyScope {
-                account_id: Some(kairos_primitives::AccountId::new("main").unwrap()),
+                account_id: Some(kairos_primitives::account::AccountId::new("main").unwrap()),
                 strategy_id: None,
                 instrument_id: None,
                 exchange_id: None,
@@ -335,7 +335,7 @@ fn pre_trade_rejects_stale_market_and_insufficient_margin() {
 fn circuit_blocks_and_resume_restores_admission() {
     let mut app = application(100);
     let scope = CircuitScope {
-        account_id: Some(kairos_primitives::AccountId::new("main").unwrap()),
+        account_id: Some(kairos_primitives::account::AccountId::new("main").unwrap()),
         strategy_id: None,
         exchange_id: None,
     };
@@ -492,7 +492,7 @@ fn circuit_state_is_recovered_from_the_journal() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("risk-state.json");
     let scope = CircuitScope {
-        account_id: Some(kairos_primitives::AccountId::new("main").unwrap()),
+        account_id: Some(kairos_primitives::account::AccountId::new("main").unwrap()),
         strategy_id: None,
         exchange_id: None,
     };
@@ -518,7 +518,7 @@ fn circuit_state_is_published_in_the_risk_current_view() {
     let mut app = application(100);
     app.open_circuit(OpenCircuit {
         scope: CircuitScope {
-            account_id: Some(kairos_primitives::AccountId::new("main").unwrap()),
+            account_id: Some(kairos_primitives::account::AccountId::new("main").unwrap()),
             strategy_id: None,
             exchange_id: None,
         },
@@ -591,7 +591,7 @@ fn circuit_reset_time_allows_a_new_admission_window() {
     let mut app = application(100);
     app.open_circuit(OpenCircuit {
         scope: CircuitScope {
-            account_id: Some(kairos_primitives::AccountId::new("main").unwrap()),
+            account_id: Some(kairos_primitives::account::AccountId::new("main").unwrap()),
             strategy_id: None,
             exchange_id: None,
         },

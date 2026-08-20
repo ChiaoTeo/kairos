@@ -39,7 +39,11 @@ class CapitalContractClient:
                 "confidence_bps": int(objective.confidence * 10_000),
                 "strategy_decision_id": objective.strategy_decision_id
                 or str(scope["request_id"]),
-                "observed_at_unix_nanos": time.time_ns(),
+                "observed_at_unix_nanos": (
+                    _nanos(objective.observed_at)
+                    if objective.observed_at is not None
+                    else time.time_ns()
+                ),
             },
         )
 
@@ -108,6 +112,25 @@ class CapitalContractClient:
             risk_policy_version=_required_int(value, "risk_policy_version"),
             risk_watermark=_required_int(value, "risk_watermark"),
             reason=None if value.get("reason") is None else str(value["reason"]),
+        )
+
+    def reconcile_plan(
+        self,
+        *,
+        capital_group_id: str,
+        plan_id: str,
+        request_id: str | None = None,
+    ) -> dict[str, object]:
+        if not capital_group_id.strip() or not plan_id.strip():
+            raise ValueError("Capital group and plan identities are required")
+        return self._post(
+            "/v1/plans/reconcile",
+            {
+                "request_id": request_id or f"capital.reconcile:{time.time_ns()}",
+                "capital_group_id": capital_group_id,
+                "plan_id": plan_id,
+                "observed_at_unix_nanos": time.time_ns(),
+            },
         )
 
     def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:

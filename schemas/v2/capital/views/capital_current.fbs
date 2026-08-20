@@ -19,6 +19,7 @@ table CapitalCurrentState {
   plans:[CapitalPlan] (required);
   reservations:[CapitalReservation] (required);
   operations:[CapitalOperation] (required);
+  alerts:[CapitalAlert] (required);
 }
 
 table CapitalCurrentView {

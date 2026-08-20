@@ -1,10 +1,15 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{
-    AccountId, BasisPoints, BrokerId, CapitalDemandId, CapitalGroupId, Currency,
-    FundingObjectiveId, Generation, IdempotencyKey, Quantity, RequestId, SegmentKey, Sequence,
-    StrategyDecisionId, StrategyId, UnixNanos,
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+use kairos_primitives::capital::{
+    CapitalDemandId, CapitalGroupId, CapitalPlanId, FundingObjectiveId,
 };
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::{
+    IdempotencyKey, InstanceId, LaunchId, RequestId, StrategyDecisionId, StrategyId,
+};
+use kairos_primitives::time::{BasisPoints, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -68,8 +73,8 @@ pub struct ObserveCapitalDemandRequest {
     pub confidence_bps: BasisPoints,
     pub account_watermark: Sequence,
     pub risk_watermark: Sequence,
-    pub launch_id: String,
-    pub instance_id: String,
+    pub launch_id: LaunchId,
+    pub instance_id: InstanceId,
     pub destination_lease_fence: String,
     #[serde(default)]
     pub causal_references: Vec<String>,
@@ -130,6 +135,7 @@ pub struct QueryCapitalAvailabilityRequest {
 #[serde(rename_all = "snake_case")]
 pub enum CapitalReadinessStatus {
     WaitingForFacts,
+    WaitingForAccounts,
     Degraded,
     Ready,
 }
@@ -155,4 +161,30 @@ pub struct CapitalAvailabilityResponse {
     pub risk_watermark: Sequence,
     pub evaluated_at_unix_nanos: UnixNanos,
     pub reason: Option<String>,
+}
+
+/// Operator request to query and reconcile the participant operation already
+/// fenced for a Capital plan. This command never authorizes or submits work.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReconcileCapitalPlanRequest {
+    pub request_id: RequestId,
+    pub capital_group_id: CapitalGroupId,
+    pub plan_id: CapitalPlanId,
+    pub observed_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapitalPlanReconcileStatus {
+    Reconciled,
+    Unchanged,
+    Rejected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReconcileCapitalPlanResponse {
+    pub request_id: RequestId,
+    pub plan_id: CapitalPlanId,
+    pub status: CapitalPlanReconcileStatus,
+    pub error: Option<CapitalControlError>,
 }

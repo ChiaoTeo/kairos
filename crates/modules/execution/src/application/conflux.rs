@@ -44,8 +44,6 @@ pub(crate) struct ExecutionConfluxState {
     plans: Vec<ExecutionConnectionPlan>,
     writer_fences: Vec<ExecutionWriterFence>,
     identity: InstanceIdentity,
-    view_root: std::path::PathBuf,
-    view_slot_size: usize,
     producer_incarnation: u64,
     route_status: BTreeMap<String, (bool, String)>,
     audit: Option<ExecutionAudit>,
@@ -59,8 +57,6 @@ impl Default for ExecutionConfluxState {
             plans: Vec::new(),
             writer_fences: Vec::new(),
             identity: InstanceIdentity::default(),
-            view_root: std::path::PathBuf::new(),
-            view_slot_size: 4 * 1024 * 1024,
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             route_status: BTreeMap::new(),
             audit: None,
@@ -76,14 +72,9 @@ impl ExecutionApplication {
         plans: Vec<ExecutionConnectionPlan>,
         writer_fences: Vec<ExecutionWriterFence>,
         identity: InstanceIdentity,
-        view_root: std::path::PathBuf,
-        view_slot_size: usize,
         audit: ExecutionAudit,
         simulated_account_settlement: Option<SimulatedAccountSettlement>,
     ) -> Result<(), String> {
-        if view_slot_size == 0 {
-            return Err("Execution Conflux view slot size must be positive".into());
-        }
         self.conflux.route_status = plans
             .iter()
             .map(|plan| (plan.route_id.clone(), (plan.required, "created".into())))
@@ -91,8 +82,6 @@ impl ExecutionApplication {
         self.conflux.plans = plans;
         self.conflux.writer_fences = writer_fences;
         self.conflux.identity = identity;
-        self.conflux.view_root = view_root;
-        self.conflux.view_slot_size = view_slot_size;
         self.conflux.audit = Some(audit);
         self.conflux.simulated_account_settlement = simulated_account_settlement;
         Ok(())
@@ -587,7 +576,12 @@ impl ExecutionApplication {
                 let idempotency_key = request
                     .envelope
                     .idempotency_key
-                    .or(command_id.clone())
+                    .or_else(|| {
+                        command_id.as_ref().map(|value| {
+                            kairos_primitives::runtime::IdempotencyKey::new(value.to_string())
+                                .expect("request id is a valid idempotency fallback")
+                        })
+                    })
                     .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
                 let decoded = decode_contract_intent(request.intent);
                 let prepared = decoded.and_then(|intent| {
@@ -600,9 +594,11 @@ impl ExecutionApplication {
                 let result = match (prepared, idempotency_key) {
                     (Ok((intent, evidence)), Ok(key)) => {
                         if let Some(evidence) = evidence {
-                            admission = Some((evidence, key.clone(), intent.intent_id.to_string()));
+                            admission =
+                                Some((evidence, key.to_string(), intent.intent_id.to_string()));
                         }
-                        match self.accept_intent_with_idempotency_deferred(intent, key) {
+                        match self.accept_intent_with_idempotency_deferred(intent, key.to_string())
+                        {
                             Ok((intent, duplicate)) => {
                                 admission_result =
                                     if duplicate { "duplicate" } else { "accepted" }.into();
@@ -623,7 +619,7 @@ impl ExecutionApplication {
                                         Ok(ExecutionCommandStatus {
                                             status: "accepted".into(),
                                             command_id: command_id.clone(),
-                                            intent_id: Some(intent.intent.intent_id.to_string()),
+                                            intent_id: Some(intent.intent.intent_id.clone()),
                                             order_id: None,
                                         })
                                     }
@@ -631,7 +627,7 @@ impl ExecutionApplication {
                                     Ok(ExecutionCommandStatus {
                                         status: "duplicate".into(),
                                         command_id: command_id.clone(),
-                                        intent_id: Some(intent.intent.intent_id.to_string()),
+                                        intent_id: Some(intent.intent.intent_id.clone()),
                                         order_id: None,
                                     })
                                 }
@@ -645,7 +641,7 @@ impl ExecutionApplication {
                     self.conflux
                         .pending_admissions
                         .push(IntentAdmissionAuditRecord {
-                            command_id,
+                            command_id: command_id.map(|value| value.to_string()),
                             idempotency_key,
                             intent_id,
                             evidence,
@@ -702,7 +698,7 @@ impl ExecutionApplication {
 
     async fn replace_contract_order(
         &mut self,
-        order_id: kairos_primitives::OrderId,
+        order_id: kairos_primitives::execution::OrderId,
         patch: kairos_execution_contract::ReplaceOrderRequest,
         context: &mut Context<'_, Self>,
     ) -> Result<ExecutionCommandStatus, ExecutionError> {
@@ -716,8 +712,11 @@ impl ExecutionApplication {
             .map(decode_contract_options)
             .unwrap_or_default();
         let replacement = SubmitOrder {
-            order_id: kairos_primitives::OrderId::new(format!("{}:replacement", order_id))
-                .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
+            order_id: kairos_primitives::execution::OrderId::new(format!(
+                "{}:replacement",
+                order_id
+            ))
+            .map_err(|e| ExecutionError::Invalid(e.to_string()))?,
             intent_id: original.intent_id,
             strategy_id: original.strategy_id,
             account_id: original.account_id,
@@ -753,7 +752,7 @@ impl ExecutionApplication {
             .route_status
             .iter()
             .map(|(route_id, (required, status))| ExecutionRouteHealth {
-                route_id: kairos_primitives::ExecutionRouteId::new(route_id.clone())
+                route_id: kairos_primitives::execution::ExecutionRouteId::new(route_id.clone())
                     .expect("validated execution route identity"),
                 status: status.clone(),
                 required: *required,
@@ -883,9 +882,7 @@ impl ExecutionApplication {
         context: &mut Context<'_, Self>,
         actor_id: &str,
     ) -> Result<(), ExecutionError> {
-        use kairos_execution_contract::{
-            ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
-        };
+        use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind};
         let snapshot = self.current_view();
         let metadata = SnapshotEnvelopeMetadata {
             resource_epoch: 1,
@@ -931,24 +928,6 @@ impl ExecutionApplication {
             }
             .map_err(ExecutionError::Gateway)?;
             let resource_key = key.canonical_key();
-            if context
-                .system()
-                .execution_view_publishers
-                .get(&resource_key)
-                .is_none()
-            {
-                let publisher = ExecutionViewPublisher::create(
-                    &self.conflux.view_root,
-                    key,
-                    self.conflux.view_slot_size,
-                )
-                .map_err(|e| ExecutionError::Gateway(e.to_string()))?;
-                context
-                    .system()
-                    .execution_view_publishers
-                    .ensure_with(resource_key.clone(), 1, || publisher)
-                    .map_err(|e| ExecutionError::Gateway(e.to_string()))?;
-            }
             context
                 .system()
                 .execution_view_publishers
@@ -1060,7 +1039,7 @@ fn route_response(
         segment_key: route.segment_key,
         instrument_id: route.instrument_id,
         market_id: route.market_id,
-        participant_id: kairos_primitives::ParticipantId::new(route.participant_id)
+        participant_id: kairos_primitives::integration::ParticipantId::new(route.participant_id)
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         provider_product: route.provider_product,
         provider_symbol: route.provider_symbol,
@@ -1068,7 +1047,7 @@ fn route_response(
         supported_options: route
             .supported_options
             .into_iter()
-            .map(kairos_primitives::OrderOptionCode::new)
+            .map(kairos_primitives::execution::OrderOptionCode::new)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| ExecutionError::Invalid(error.to_string()))?,
         ready: route.ready,
@@ -1294,7 +1273,10 @@ fn command_status(status: &str, order_id: Option<String>) -> ExecutionCommandSta
         status: status.into(),
         command_id: None,
         intent_id: None,
-        order_id,
+        order_id: order_id.map(|value| {
+            kairos_primitives::execution::OrderId::new(value)
+                .expect("execution order identity is validated")
+        }),
     }
 }
 fn control_error(error: impl ToString) -> ExecutionControlError {

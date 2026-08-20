@@ -50,12 +50,12 @@ pub struct MassiveIndexDefinition {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MassiveOptionSnapshot {
-    pub symbol: kairos_primitives::ParticipantSymbol,
+    pub symbol: kairos_primitives::integration::ParticipantSymbol,
     pub values: crate::Greeks,
-    pub break_even_price: Option<kairos_primitives::Price>,
-    pub open_interest: Option<kairos_primitives::Quantity>,
+    pub break_even_price: Option<kairos_primitives::decimal::Price>,
+    pub open_interest: Option<kairos_primitives::decimal::Quantity>,
     pub market_status: Option<String>,
-    pub observed_at_unix_nanos: kairos_primitives::UnixNanos,
+    pub observed_at_unix_nanos: kairos_primitives::time::UnixNanos,
 }
 
 impl InstrumentQuery {

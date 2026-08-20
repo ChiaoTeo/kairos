@@ -2,7 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_primitives::{Currency, FillId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::reference::{Currency, Symbol};
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::domain::account::{
@@ -232,7 +234,7 @@ fn snapshot(
     observed_millis: Option<&str>,
 ) -> Result<AccountSnapshot, String> {
     Ok(AccountSnapshot {
-        segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
+        segment_key: kairos_primitives::account::SegmentKey::new(segment_key)?,
         collateral: balances.clone(),
         balances,
         positions,
@@ -260,8 +262,8 @@ fn balance(row: &Value) -> Result<Balance, String> {
         .ok_or_else(|| "OKX account event currency is missing".to_string())?;
     let total = decimal_field(row, "eq").or_else(|_| decimal_field(row, "cashBal"))?;
     Ok(Balance {
-        asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-        asset_code: kairos_primitives::Currency::new(code)?,
+        asset_id: kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}"))?,
+        asset_code: kairos_primitives::reference::Currency::new(code)?,
         total,
         available: decimal_field(row, "availBal")
             .or_else(|_| decimal_field(row, "cashBal"))
@@ -288,9 +290,9 @@ fn position(row: &Value) -> Result<Position, String> {
             instrument,
         )?,
         position_side: match row.get("posSide").and_then(Value::as_str) {
-            Some("long") => kairos_primitives::PositionSide::Long,
-            Some("short") => kairos_primitives::PositionSide::Short,
-            _ => kairos_primitives::PositionSide::Net,
+            Some("long") => kairos_primitives::account::PositionSide::Long,
+            Some("short") => kairos_primitives::account::PositionSide::Short,
+            _ => kairos_primitives::account::PositionSide::Net,
         },
         quantity: decimal_field(row, "pos")?,
         average_price: decimal_field(row, "avgPx").ok(),
@@ -338,12 +340,12 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
         .unwrap_or_else(now_nanos)
         * 1_000_000;
     let mut events = vec![AccountEvent::Order(OrderEvent {
-        order_id: kairos_primitives::OrderId::new(order_id)?,
+        order_id: kairos_primitives::execution::OrderId::new(order_id)?,
         status,
         remote_order_id: row
             .get("ordId")
             .and_then(Value::as_str)
-            .map(kairos_primitives::RemoteOrderId::new)
+            .map(kairos_primitives::integration::RemoteOrderId::new)
             .transpose()?,
         filled_quantity: row
             .get("accFillSz")
@@ -383,9 +385,9 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             .map(str::to_owned)
             .unwrap_or_else(|| format!("{order_id}:{occurred_at_unix_nanos}"));
         events.push(AccountEvent::Fill(FillEvent {
-            fill_id: kairos_primitives::FillId::new(fill_id)?,
-            order_id: kairos_primitives::OrderId::new(order_id)?,
-            segment_key: kairos_primitives::SegmentKey::new(segment_key)?,
+            fill_id: kairos_primitives::execution::FillId::new(fill_id)?,
+            order_id: kairos_primitives::execution::OrderId::new(order_id)?,
+            segment_key: kairos_primitives::account::SegmentKey::new(segment_key)?,
             participant_instrument: external_instrument_ref(
                 crate::domain::ParticipantKind::Exchange,
                 "okx",
@@ -402,7 +404,7 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             fee_asset: row
                 .get("feeCcy")
                 .and_then(Value::as_str)
-                .map(kairos_primitives::Currency::new)
+                .map(kairos_primitives::reference::Currency::new)
                 .transpose()?,
             fee_amount: row
                 .get("fee")
@@ -444,7 +446,8 @@ fn now_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{OrderStatus, UnixNanos};
+    use kairos_primitives::integration::OrderStatus;
+    use kairos_primitives::time::UnixNanos;
 
     use super::{parse_event, parse_execution_events};
     use crate::domain::account::{

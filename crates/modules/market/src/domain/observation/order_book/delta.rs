@@ -1,4 +1,6 @@
-use kairos_primitives::{InstrumentId, MarketId, Sequence, SourceId, UnixNanos};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::time::{Sequence, UnixNanos};
 
 use super::PriceLevel;
 

@@ -1,4 +1,5 @@
-use kairos_primitives::{AssetId, Currency, UnixNanos};
+use kairos_primitives::reference::{AssetId, Currency};
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -288,7 +289,7 @@ pub(crate) fn options(
                     symbol,
                 )
                 .map_err(IntegrationError::InvalidPayload)?,
-                position_side: kairos_primitives::PositionSide::Net,
+                position_side: kairos_primitives::account::PositionSide::Net,
                 quantity: first_decimal(row, &["quantity", "positionAmt"])?.unwrap_or_default(),
                 average_price: first_decimal(row, &["entryPrice", "averagePrice"])?,
                 mark_price: first_decimal(row, &["markPrice"])?,
@@ -476,7 +477,7 @@ mod tests {
     fn funding_wallet_combines_every_unavailable_balance_bucket() {
         let segment = ExternalAccountSegment {
             identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_primitives::SegmentKey::new("funding").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("funding").unwrap(),
             environment: "test".into(),
             account_model: Some("no_margin".into()),
         };

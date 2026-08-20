@@ -35,6 +35,7 @@ impl<'a> CapitalCurrentState<'a> {
     pub const VT_PLANS: ::flatbuffers::VOffsetT = 28;
     pub const VT_RESERVATIONS: ::flatbuffers::VOffsetT = 30;
     pub const VT_OPERATIONS: ::flatbuffers::VOffsetT = 32;
+    pub const VT_ALERTS: ::flatbuffers::VOffsetT = 34;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -54,6 +55,9 @@ impl<'a> CapitalCurrentState<'a> {
         builder.add_journal_sequence(args.journal_sequence);
         builder.add_event_sequence(args.event_sequence);
         builder.add_membership_version(args.membership_version);
+        if let Some(x) = args.alerts {
+            builder.add_alerts(x);
+        }
         if let Some(x) = args.operations {
             builder.add_operations(x);
         }
@@ -303,6 +307,21 @@ impl<'a> CapitalCurrentState<'a> {
                 .unwrap()
         }
     }
+    #[inline]
+    pub fn alerts(
+        &self,
+    ) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CapitalAlert<'a>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CapitalAlert>>,
+                >>(CapitalCurrentState::VT_ALERTS, None)
+                .unwrap()
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for CapitalCurrentState<'_> {
@@ -357,6 +376,9 @@ impl ::flatbuffers::Verifiable for CapitalCurrentState<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<CapitalOperation>>,
             >>("operations", Self::VT_OPERATIONS, true)?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<CapitalAlert>>,
+            >>("alerts", Self::VT_ALERTS, true)?
             .finish();
         Ok(())
     }
@@ -413,6 +435,11 @@ pub struct CapitalCurrentStateArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CapitalOperation<'a>>>,
         >,
     >,
+    pub alerts: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<CapitalAlert<'a>>>,
+        >,
+    >,
 }
 impl<'a> Default for CapitalCurrentStateArgs<'a> {
     #[inline]
@@ -433,6 +460,7 @@ impl<'a> Default for CapitalCurrentStateArgs<'a> {
             plans: None,        // required field
             reservations: None, // required field
             operations: None,   // required field
+            alerts: None,       // required field
         }
     }
 }
@@ -589,6 +617,18 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CapitalCurrentStateBuilder<'a
         );
     }
     #[inline]
+    pub fn add_alerts(
+        &mut self,
+        alerts: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<CapitalAlert<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            CapitalCurrentState::VT_ALERTS,
+            alerts,
+        );
+    }
+    #[inline]
     pub fn new(
         _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
     ) -> CapitalCurrentStateBuilder<'a, 'b, A> {
@@ -628,6 +668,8 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CapitalCurrentStateBuilder<'a
             .required(o, CapitalCurrentState::VT_RESERVATIONS, "reservations");
         self.fbb_
             .required(o, CapitalCurrentState::VT_OPERATIONS, "operations");
+        self.fbb_
+            .required(o, CapitalCurrentState::VT_ALERTS, "alerts");
         ::flatbuffers::WIPOffset::new(o.value())
     }
 }
@@ -650,6 +692,7 @@ impl ::core::fmt::Debug for CapitalCurrentState<'_> {
         ds.field("plans", &self.plans());
         ds.field("reservations", &self.reservations());
         ds.field("operations", &self.operations());
+        ds.field("alerts", &self.alerts());
         ds.finish()
     }
 }

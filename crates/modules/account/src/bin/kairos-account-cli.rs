@@ -353,7 +353,7 @@ impl FillArgs {
             order_id: self
                 .order_id
                 .clone()
-                .map(kairos_primitives::OrderId::new)
+                .map(kairos_primitives::execution::OrderId::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             segment_key: kairos_account::domain::SegmentKey::new(self.segment.clone())
@@ -375,7 +375,7 @@ impl FillArgs {
             settlement_asset: self
                 .settlement_asset
                 .clone()
-                .map(kairos_primitives::Currency::new)
+                .map(kairos_primitives::reference::Currency::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             settlement_delta: self
@@ -387,7 +387,7 @@ impl FillArgs {
             fee_asset: self
                 .fee_asset
                 .clone()
-                .map(kairos_primitives::Currency::new)
+                .map(kairos_primitives::reference::Currency::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             fee_amount: self
@@ -396,7 +396,7 @@ impl FillArgs {
                 .map(str::parse)
                 .transpose()
                 .map_err(|error: kairos_primitives::DomainTypeError| error.to_string())?,
-            occurred_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
+            occurred_at_unix_nanos: kairos_primitives::time::UnixNanos::new(0),
         })
     }
 

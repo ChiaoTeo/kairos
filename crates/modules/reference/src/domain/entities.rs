@@ -1,9 +1,11 @@
 //! Reference domain entities and provider snapshots.
 
-use kairos_primitives::{
-    AssetClass, AssetId, Exchange, Generation, InstrumentId, InstrumentKind, IssuerId, ListingId,
-    MarketId, Money, Price, Quantity, ReferenceStatus, Symbol, UnixNanos,
+use kairos_primitives::decimal::{Money, Price, Quantity};
+use kairos_primitives::reference::{
+    AssetClass, AssetId, Exchange, InstrumentId, InstrumentKind, IssuerId, ListingId, MarketId,
+    ReferenceStatus, Symbol,
 };
+use kairos_primitives::time::{Generation, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use super::{ReferenceError, ReferenceResult};
@@ -677,10 +679,10 @@ pub(crate) fn merge_asset(previous: &mut Asset, incoming: &Asset) -> Result<(), 
 }
 
 fn merged_reference_status(
-    left: kairos_primitives::ReferenceStatus,
-    right: kairos_primitives::ReferenceStatus,
-) -> kairos_primitives::ReferenceStatus {
-    use kairos_primitives::ReferenceStatus;
+    left: kairos_primitives::reference::ReferenceStatus,
+    right: kairos_primitives::reference::ReferenceStatus,
+) -> kairos_primitives::reference::ReferenceStatus {
+    use kairos_primitives::reference::ReferenceStatus;
     if matches!(left, ReferenceStatus::Active | ReferenceStatus::Trading)
         || matches!(right, ReferenceStatus::Active | ReferenceStatus::Trading)
     {

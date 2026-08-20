@@ -1,14 +1,20 @@
-use kairos_primitives::{
-    BasisPoints, CapitalDemandId, CapitalGroupId, CapitalOperationId, CapitalPlanId,
-    CapitalReservationId, CapitalRouteId, FundingObjectiveId, Generation, IdempotencyKey, Quantity,
-    Sequence, StrategyDecisionId, StrategyId, UnixNanos,
+use kairos_primitives::capital::{
+    CapitalDemandId, CapitalGroupId, CapitalOperationId, CapitalPlanId, CapitalReservationId,
+    CapitalRouteId, FundingObjectiveId,
 };
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::integration::{ProviderId, ProviderProductCode, RemoteOrderId};
+use kairos_primitives::runtime::{
+    EventId, IdempotencyKey, InstanceId, LaunchId, StrategyDecisionId, StrategyId,
+};
+use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
 
 use crate::FundingLocation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapitalReadiness {
     WaitingForFacts,
+    WaitingForAccounts,
     Degraded,
     Ready,
 }
@@ -29,6 +35,26 @@ pub enum CapitalPlanStatus {
     Rejected,
     Expired,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapitalRecoveryAction {
+    None,
+    NoCompensationRequired,
+    ReconcileOriginalOperation,
+    HoldAndReview,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapitalAlertKind {
+    ReconciliationRequired,
+    ManualReview,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapitalAlertSeverity {
+    Warning,
+    Critical,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,8 +128,8 @@ pub struct CapitalDemand {
     pub confidence_bps: BasisPoints,
     pub account_watermark: Sequence,
     pub risk_watermark: Sequence,
-    pub launch_id: String,
-    pub instance_id: String,
+    pub launch_id: LaunchId,
+    pub instance_id: InstanceId,
     pub causal_references: Vec<String>,
     pub status: CapitalDemandLifecycleStatus,
     pub updated_at: UnixNanos,
@@ -119,9 +145,9 @@ pub struct CapitalPolicy {
     pub stress_buffer: Quantity,
     pub minimum_movement: Quantity,
     pub hysteresis: Quantity,
-    pub deficit_dwell_nanos: u64,
-    pub cooldown_nanos: u64,
-    pub max_fact_age_nanos: u64,
+    pub deficit_dwell_nanos: DurationNanos,
+    pub cooldown_nanos: DurationNanos,
+    pub max_fact_age_nanos: DurationNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,7 +165,7 @@ pub struct CapitalFacts {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapitalEarnHolding {
-    pub product_id: String,
+    pub product_id: ProviderProductCode,
     pub principal: Quantity,
     pub redeemable_amount: Quantity,
     pub immediately_redeemable: bool,
@@ -169,11 +195,11 @@ pub struct CapitalRoute {
     pub kind: CapitalRouteKind,
     pub per_operation_limit: Quantity,
     pub daily_limit: Quantity,
-    pub required_source_authority: String,
+    pub required_source_authority: ProviderId,
     pub settlement_class: CapitalSettlementClass,
     pub enabled: bool,
-    pub earn_product_id: Option<String>,
-    pub demand_guard_nanos: u64,
+    pub earn_product_id: Option<ProviderProductCode>,
+    pub demand_guard_nanos: DurationNanos,
     pub allow_unknown_redemption_quota: bool,
 }
 
@@ -229,7 +255,7 @@ pub struct CapitalFundingHorizon {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapitalPlan {
     pub plan_id: CapitalPlanId,
-    pub rebalance_decision_id: String,
+    pub rebalance_decision_id: StrategyDecisionId,
     pub route_id: CapitalRouteId,
     pub route_version: Generation,
     pub route_kind: CapitalRouteKind,
@@ -249,6 +275,9 @@ pub struct CapitalPlan {
     pub redemption_observed_available: Option<Quantity>,
     pub earn_principal_before: Quantity,
     pub status: CapitalPlanStatus,
+    pub recovery_action: CapitalRecoveryAction,
+    pub recovery_reason: Option<String>,
+    pub recovery_decided_at: Option<UnixNanos>,
     pub created_at: UnixNanos,
     pub expires_at: UnixNanos,
 }
@@ -261,13 +290,25 @@ pub struct CapitalOperation {
     pub operation_index: u32,
     pub kind: CapitalOperationKind,
     pub status: CapitalOperationStatus,
-    pub participant_operation_id: Option<String>,
+    pub participant_operation_id: Option<RemoteOrderId>,
     pub participant_state: Option<String>,
     pub dispatch_started_at: Option<UnixNanos>,
     pub attempt_count: u32,
     pub failure_reason: Option<String>,
     pub account_observation_watermark: Option<Sequence>,
     pub updated_at: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapitalAlert {
+    pub alert_id: EventId,
+    pub plan_id: CapitalPlanId,
+    pub operation_id: Option<CapitalOperationId>,
+    pub kind: CapitalAlertKind,
+    pub severity: CapitalAlertSeverity,
+    pub recovery_action: CapitalRecoveryAction,
+    pub message: String,
+    pub opened_at: UnixNanos,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,4 +328,5 @@ pub struct CapitalCurrentView {
     pub plans: Vec<CapitalPlan>,
     pub reservations: Vec<CapitalReservation>,
     pub operations: Vec<CapitalOperation>,
+    pub alerts: Vec<CapitalAlert>,
 }

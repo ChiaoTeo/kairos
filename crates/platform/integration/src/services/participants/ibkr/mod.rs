@@ -10,22 +10,24 @@ pub(crate) fn normalize_ibkr_order_status(
     status: OrderStatusKind,
     filled: Option<f64>,
     remaining: Option<f64>,
-) -> kairos_primitives::OrderStatus {
+) -> kairos_primitives::integration::OrderStatus {
     if filled.is_some_and(|value| value > 0.0) && remaining.is_some_and(|value| value > 0.0) {
-        return kairos_primitives::OrderStatus::PartiallyFilled;
+        return kairos_primitives::integration::OrderStatus::PartiallyFilled;
     }
     match status {
         OrderStatusKind::ApiPending
         | OrderStatusKind::PendingSubmit
-        | OrderStatusKind::PreSubmitted => kairos_primitives::OrderStatus::Acknowledged,
+        | OrderStatusKind::PreSubmitted => {
+            kairos_primitives::integration::OrderStatus::Acknowledged
+        },
         OrderStatusKind::PendingCancel | OrderStatusKind::Submitted => {
-            kairos_primitives::OrderStatus::Accepted
+            kairos_primitives::integration::OrderStatus::Accepted
         },
         OrderStatusKind::ApiCancelled | OrderStatusKind::Cancelled => {
-            kairos_primitives::OrderStatus::Canceled
+            kairos_primitives::integration::OrderStatus::Canceled
         },
-        OrderStatusKind::Filled => kairos_primitives::OrderStatus::Filled,
-        OrderStatusKind::Inactive => kairos_primitives::OrderStatus::Unknown,
+        OrderStatusKind::Filled => kairos_primitives::integration::OrderStatus::Filled,
+        OrderStatusKind::Inactive => kairos_primitives::integration::OrderStatus::Unknown,
     }
 }
 

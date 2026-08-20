@@ -1,7 +1,7 @@
 //! Shared context for encoding process-boundary events and views.
 
 use kairos_primitives::runtime::{EventId, InstanceIdentity, ProducerId};
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 
 /// Common protocol metadata carried by every module event or view.
 #[derive(Clone, Debug)]

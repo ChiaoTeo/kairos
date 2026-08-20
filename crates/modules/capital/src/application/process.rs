@@ -1,12 +1,12 @@
 use kairos_conflux::{
-    CapitalAccountIdentity, CapitalAccountSegment, CapitalCommandOutcome, CapitalConnectionError,
-    CapitalEarnActionKind, CapitalEarnActionQuery, CapitalEarnActionState, CapitalEarnConnection,
-    CapitalEarnLiquidity, CapitalEarnProductConnection, CapitalEarnRedeemRequest,
-    CapitalEarnSubscribeRequest, CapitalEarnSubscriptionEligibility,
-    CapitalEarnSubscriptionPreviewRequest, CapitalTransferConnection, CapitalTransferQuery,
-    CapitalTransferRequest, CapitalTransferState,
+    AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
+    AssetTransferStatusQuery, CommandOutcome, EarnActionKind, EarnActionQuery, EarnActionState,
+    EarnActionStatusQuery, EarnCommand, EarnLiquidity, EarnProductQuery, EarnRedeemRequest,
+    EarnRedemptionAmount, EarnRedemptionChannel, EarnSubscribeRequest, EarnSubscriptionEligibility,
+    EarnSubscriptionPreviewRequest, ExternalAccountIdentity, ExternalAccountSegment,
+    IntegrationError,
 };
-use kairos_primitives::UnixNanos;
+use kairos_primitives::time::UnixNanos;
 
 use crate::application::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation, CapitalApplication,
@@ -29,7 +29,7 @@ pub struct CapitalTransferProcess<C> {
 
 impl<C> CapitalTransferProcess<C>
 where
-    C: CapitalTransferConnection,
+    C: AssetTransferCommand + AssetTransferStatusQuery,
 {
     pub(crate) fn new(
         application: CapitalApplication,
@@ -88,9 +88,9 @@ where
             })?;
         let plan = self.plan(&plan_id)?;
         let request = self.transfer_request(&plan, &operation)?;
-        let outcome = self.connection.submit_capital_transfer(&request).await;
+        let outcome = self.connection.submit_transfer(&request).await;
         let command = match outcome {
-            Ok(CapitalCommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Confirmed,
@@ -98,7 +98,7 @@ where
                 failure_reason: None,
                 at,
             },
-            Ok(CapitalCommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Rejected,
@@ -106,7 +106,7 @@ where
                 failure_reason: Some(rejection.message),
                 at,
             },
-            Ok(CapitalCommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Indeterminate,
@@ -153,11 +153,11 @@ where
             ));
         }
         let request = self.transfer_request(&plan, &operation)?;
-        let query = CapitalTransferQuery {
+        let query = AssetTransferQuery {
             request,
             participant_transfer_id: operation.participant_operation_id.clone(),
         };
-        let Some(status) = self.connection.capital_transfer_status(&query).await? else {
+        let Some(status) = self.connection.transfer_status(&query).await? else {
             if operation.status == CapitalOperationStatus::Dispatching {
                 return self
                     .application
@@ -177,11 +177,11 @@ where
             return Ok(plan);
         };
         let state = match status.state {
-            CapitalTransferState::Pending => CapitalParticipantOperationState::Pending,
-            CapitalTransferState::Succeeded => CapitalParticipantOperationState::Succeeded,
-            CapitalTransferState::Failed => CapitalParticipantOperationState::Failed,
-            CapitalTransferState::Cancelled => CapitalParticipantOperationState::Cancelled,
-            CapitalTransferState::Unknown => CapitalParticipantOperationState::Unknown,
+            AssetTransferState::Pending => CapitalParticipantOperationState::Pending,
+            AssetTransferState::Succeeded => CapitalParticipantOperationState::Succeeded,
+            AssetTransferState::Failed => CapitalParticipantOperationState::Failed,
+            AssetTransferState::Cancelled => CapitalParticipantOperationState::Cancelled,
+            AssetTransferState::Unknown => CapitalParticipantOperationState::Unknown,
         };
         self.application
             .record_participant_status(RecordCapitalParticipantStatus {
@@ -217,13 +217,13 @@ where
         &self,
         plan: &CapitalPlan,
         operation: &CapitalOperation,
-    ) -> Result<CapitalTransferRequest, CapitalProcessError> {
+    ) -> Result<AssetTransferRequest, CapitalProcessError> {
         let requested_at_unix_nanos = operation.dispatch_started_at.ok_or_else(|| {
             CapitalProcessError::Invalid(
                 "Capital transfer operation has no durable dispatch timestamp".into(),
             )
         })?;
-        Ok(CapitalTransferRequest {
+        Ok(AssetTransferRequest {
             idempotency_key: operation.idempotency_key.clone(),
             source: self.external_segment(&plan.source),
             destination: self.external_segment(&plan.destination),
@@ -237,21 +237,25 @@ where
         })
     }
 
-    fn external_segment(&self, location: &crate::domain::FundingLocation) -> CapitalAccountSegment {
-        CapitalAccountSegment {
-            identity: CapitalAccountIdentity {
+    fn external_segment(
+        &self,
+        location: &crate::domain::FundingLocation,
+    ) -> ExternalAccountSegment {
+        ExternalAccountSegment {
+            identity: ExternalAccountIdentity {
                 broker: location.broker.to_string(),
                 account_id: location.account_id.clone(),
             },
             segment_key: location.segment.clone(),
             environment: self.environment.clone(),
+            account_model: None,
         }
     }
 }
 
 impl<C> CapitalTransferProcess<C>
 where
-    C: CapitalTransferConnection + CapitalEarnConnection,
+    C: AssetTransferCommand + AssetTransferStatusQuery + EarnCommand + EarnActionStatusQuery,
 {
     /// Queries principal-specific product terms through Conflux and then asks
     /// the Capital Actor to atomically reserve only the still-deployable cash.
@@ -260,7 +264,7 @@ where
         command: AuthorizeCapitalPlan,
     ) -> Result<Option<CapitalPlan>, CapitalProcessError>
     where
-        C: CapitalEarnProductConnection,
+        C: EarnProductQuery,
     {
         let Some(candidate) = self
             .application
@@ -277,20 +281,22 @@ where
             .ok_or_else(|| CapitalProcessError::Invalid("Capital route disappeared".into()))?;
         let preview = self
             .connection
-            .preview_earn_subscription(&CapitalEarnSubscriptionPreviewRequest {
-                account: CapitalAccountIdentity {
+            .subscription_preview(&EarnSubscriptionPreviewRequest {
+                account: ExternalAccountIdentity {
                     broker: route.source.broker.to_string(),
                     account_id: route.source.account_id.clone(),
                 },
+                account_segment: self.external_segment(&route.source),
+                asset: route.source.asset.clone(),
                 product_id: candidate.product_id.clone(),
                 amount: candidate.amount,
             })
             .await?;
-        let immediate = preview.liquidity == CapitalEarnLiquidity::Immediate;
-        let immediate_redemption = preview
-            .redemption_options
-            .iter()
-            .find(|option| option.immediate && option.settlement_delay_seconds.unwrap_or(0) == 0);
+        let immediate = preview.liquidity == EarnLiquidity::Immediate;
+        let immediate_redemption = preview.redemption_options.iter().find(|option| {
+            option.channel == EarnRedemptionChannel::Immediate
+                && option.settlement_delay_seconds.unwrap_or(0) == 0
+        });
         let plan = self
             .application
             .authorize_earn_subscription(AuthorizeEarnSubscriptionPlan {
@@ -301,7 +307,7 @@ where
                 source_authority: command.source_authority,
                 previewed_amount: preview.amount,
                 preview_observed_at: preview.observed_at_unix_nanos,
-                eligible: preview.eligibility == CapitalEarnSubscriptionEligibility::Eligible,
+                eligible: preview.eligibility == EarnSubscriptionEligibility::Eligible,
                 immediately_redeemable: immediate && immediate_redemption.is_some(),
                 redemption_quota_remaining: immediate_redemption
                     .and_then(|option| option.remaining_quota),
@@ -342,6 +348,33 @@ where
         }
     }
 
+    /// Reconciles the operation already durably attached to a plan.
+    ///
+    /// This is intentionally narrower than [`Self::execute_capital_plan`]: it
+    /// never creates the next operation, crosses a delivery fence, or submits
+    /// a participant command. It is therefore safe for operator-triggered
+    /// recovery and bounded shutdown draining.
+    pub async fn reconcile_capital_plan(
+        &mut self,
+        plan_id: CapitalPlanId,
+        at: UnixNanos,
+    ) -> Result<CapitalPlan, CapitalProcessError> {
+        let operation = self.operation(&plan_id)?;
+        if operation.status == CapitalOperationStatus::Prepared {
+            return Err(CapitalProcessError::Invalid(
+                "a Prepared Capital operation has not been delivered and cannot be reconciled"
+                    .into(),
+            ));
+        }
+        match operation.kind {
+            CapitalOperationKind::Transfer => self.reconcile_transfer(plan_id, at).await,
+            CapitalOperationKind::EarnRedemption => self.reconcile_redemption(plan_id, at).await,
+            CapitalOperationKind::EarnSubscription => {
+                self.reconcile_subscription(plan_id, at).await
+            },
+        }
+    }
+
     async fn submit_subscription(
         &mut self,
         plan_id: CapitalPlanId,
@@ -358,11 +391,13 @@ where
         let product_id = plan.selected_earn_product_id.clone().ok_or_else(|| {
             CapitalProcessError::Invalid("Capital Earn plan has no selected product".into())
         })?;
-        let request = CapitalEarnSubscribeRequest {
-            account: CapitalAccountIdentity {
+        let request = EarnSubscribeRequest {
+            account: ExternalAccountIdentity {
                 broker: plan.source.broker.to_string(),
                 account_id: plan.source.account_id.clone(),
             },
+            account_segment: self.external_segment(&plan.source),
+            asset: plan.source.asset.clone(),
             idempotency_key: operation.idempotency_key,
             product_id,
             amount: plan.amount,
@@ -372,9 +407,9 @@ where
                 )
             })?,
         };
-        let outcome = self.connection.subscribe_capital_earn(&request).await;
+        let outcome = self.connection.subscribe(&request).await;
         let command = match outcome {
-            Ok(CapitalCommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Confirmed,
@@ -382,7 +417,7 @@ where
                 failure_reason: None,
                 at,
             },
-            Ok(CapitalCommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Rejected,
@@ -390,7 +425,7 @@ where
                 failure_reason: Some(rejection.message),
                 at,
             },
-            Ok(CapitalCommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Indeterminate,
@@ -428,16 +463,21 @@ where
         ) {
             return Ok(plan);
         }
-        let query = CapitalEarnActionQuery {
-            account: CapitalAccountIdentity {
+        let query = EarnActionQuery {
+            account: ExternalAccountIdentity {
                 broker: plan.source.broker.to_string(),
                 account_id: plan.source.account_id.clone(),
             },
+            account_segment: self.external_segment(&plan.source),
+            asset: plan.source.asset.clone(),
+            product_id: plan.selected_earn_product_id.clone().ok_or_else(|| {
+                CapitalProcessError::Invalid("Capital Earn plan has no selected product".into())
+            })?,
             idempotency_key: operation.idempotency_key,
             participant_action_id: operation.participant_operation_id.clone(),
-            action: CapitalEarnActionKind::Subscribe,
+            action: EarnActionKind::Subscribe,
         };
-        let Some(status) = self.connection.capital_earn_action_status(&query).await? else {
+        let Some(status) = self.connection.action_status(&query).await? else {
             if operation.status == CapitalOperationStatus::Dispatching {
                 return self
                     .application
@@ -461,12 +501,10 @@ where
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 state: match status.state {
-                    CapitalEarnActionState::Pending => CapitalParticipantOperationState::Pending,
-                    CapitalEarnActionState::Succeeded => {
-                        CapitalParticipantOperationState::Succeeded
-                    },
-                    CapitalEarnActionState::Failed => CapitalParticipantOperationState::Failed,
-                    CapitalEarnActionState::Unknown => CapitalParticipantOperationState::Unknown,
+                    EarnActionState::Pending => CapitalParticipantOperationState::Pending,
+                    EarnActionState::Succeeded => CapitalParticipantOperationState::Succeeded,
+                    EarnActionState::Failed => CapitalParticipantOperationState::Failed,
+                    EarnActionState::Unknown => CapitalParticipantOperationState::Unknown,
                 },
                 participant_operation_id: status.participant_action_id,
                 participant_state: status.participant_state,
@@ -492,23 +530,26 @@ where
         let product_id = plan.selected_earn_product_id.clone().ok_or_else(|| {
             CapitalProcessError::Invalid("Capital Earn plan has no selected product".into())
         })?;
-        let request = CapitalEarnRedeemRequest {
-            account: CapitalAccountIdentity {
+        let request = EarnRedeemRequest {
+            account: ExternalAccountIdentity {
                 broker: plan.source.broker.to_string(),
                 account_id: plan.source.account_id.clone(),
             },
+            account_segment: self.external_segment(&plan.source),
+            asset: plan.source.asset.clone(),
             idempotency_key: operation.idempotency_key,
             product_id,
-            amount: plan.amount,
+            amount: EarnRedemptionAmount::Exact(plan.amount),
+            destination: Some(self.external_segment(&plan.destination)),
             requested_at_unix_nanos: operation.dispatch_started_at.ok_or_else(|| {
                 CapitalProcessError::Invalid(
                     "Capital redemption has no durable dispatch timestamp".into(),
                 )
             })?,
         };
-        let outcome = self.connection.redeem_capital_earn(&request).await;
+        let outcome = self.connection.redeem(&request).await;
         let command = match outcome {
-            Ok(CapitalCommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Confirmed(submission)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Confirmed,
@@ -516,7 +557,7 @@ where
                 failure_reason: None,
                 at,
             },
-            Ok(CapitalCommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Rejected(rejection)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Rejected,
@@ -524,7 +565,7 @@ where
                 failure_reason: Some(rejection.message),
                 at,
             },
-            Ok(CapitalCommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
+            Ok(CommandOutcome::Indeterminate(indeterminate)) => RecordCapitalSubmission {
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 outcome: CapitalSubmissionOutcome::Indeterminate,
@@ -562,16 +603,21 @@ where
         ) {
             return Ok(plan);
         }
-        let query = CapitalEarnActionQuery {
-            account: CapitalAccountIdentity {
+        let query = EarnActionQuery {
+            account: ExternalAccountIdentity {
                 broker: plan.source.broker.to_string(),
                 account_id: plan.source.account_id.clone(),
             },
+            account_segment: self.external_segment(&plan.source),
+            asset: plan.source.asset.clone(),
+            product_id: plan.selected_earn_product_id.clone().ok_or_else(|| {
+                CapitalProcessError::Invalid("Capital Earn plan has no selected product".into())
+            })?,
             idempotency_key: operation.idempotency_key,
             participant_action_id: operation.participant_operation_id.clone(),
-            action: CapitalEarnActionKind::Redeem,
+            action: EarnActionKind::Redeem,
         };
-        let Some(status) = self.connection.capital_earn_action_status(&query).await? else {
+        let Some(status) = self.connection.action_status(&query).await? else {
             if operation.status == CapitalOperationStatus::Dispatching {
                 return self
                     .application
@@ -595,12 +641,10 @@ where
                 capital_group_id: self.capital_group_id.clone(),
                 plan_id,
                 state: match status.state {
-                    CapitalEarnActionState::Pending => CapitalParticipantOperationState::Pending,
-                    CapitalEarnActionState::Succeeded => {
-                        CapitalParticipantOperationState::Succeeded
-                    },
-                    CapitalEarnActionState::Failed => CapitalParticipantOperationState::Failed,
-                    CapitalEarnActionState::Unknown => CapitalParticipantOperationState::Unknown,
+                    EarnActionState::Pending => CapitalParticipantOperationState::Pending,
+                    EarnActionState::Succeeded => CapitalParticipantOperationState::Succeeded,
+                    EarnActionState::Failed => CapitalParticipantOperationState::Failed,
+                    EarnActionState::Unknown => CapitalParticipantOperationState::Unknown,
                 },
                 participant_operation_id: status.participant_action_id,
                 participant_state: status.participant_state,
@@ -621,8 +665,8 @@ pub enum CapitalProcessError {
     Invalid(String),
 }
 
-impl From<CapitalConnectionError> for CapitalProcessError {
-    fn from(value: CapitalConnectionError) -> Self {
+impl From<IntegrationError> for CapitalProcessError {
+    fn from(value: IntegrationError) -> Self {
         Self::Connection(value.to_string())
     }
 }

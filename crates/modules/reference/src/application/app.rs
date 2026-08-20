@@ -4,7 +4,7 @@
 //! refresh/publish commands or read-only market queries; persistence,
 //! provider connections and publication transports stay behind private services.
 
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 use tracing::{info, warn};
 
 use crate::application::queries::{LifecycleQuery, ReferenceQuery, ReferenceRecord};
@@ -468,8 +468,8 @@ impl ReferenceApplication {
     /// Replay lifecycle events in their persisted sequence order.
     pub async fn replay_lifecycle_events(
         &mut self,
-        sequence_from: Option<kairos_primitives::Sequence>,
-        sequence_to: Option<kairos_primitives::Sequence>,
+        sequence_from: Option<kairos_primitives::time::Sequence>,
+        sequence_to: Option<kairos_primitives::time::Sequence>,
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         self.lifecycle_events(&LifecycleQuery {
             sequence_from,
@@ -627,7 +627,7 @@ impl ReferenceApplication {
                 venue_symbol: query
                     .text
                     .as_deref()
-                    .and_then(|value| kairos_primitives::Symbol::new(value).ok()),
+                    .and_then(|value| kairos_primitives::reference::Symbol::new(value).ok()),
                 active_only: query.active_only,
                 as_of_unix_nanos: query.as_of_unix_nanos,
                 status: query.status.clone(),

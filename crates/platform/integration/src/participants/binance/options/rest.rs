@@ -1,4 +1,6 @@
-use kairos_primitives::{ParticipantSymbol, Rate, UnixNanos};
+use kairos_primitives::decimal::Rate;
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use super::super::{

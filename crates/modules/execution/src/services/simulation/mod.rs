@@ -6,9 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use kairos_primitives::{
-    Currency, FillId, InstrumentId, MarketId, Money, OrderId, Price, Quantity, Rate, UnixNanos,
-};
+use kairos_primitives::decimal::{Money, Price, Quantity, Rate};
+use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
+use kairos_primitives::time::UnixNanos;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 

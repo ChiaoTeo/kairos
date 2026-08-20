@@ -1,5 +1,5 @@
 use kairos_capital::composition::{
-    compose_capital_application, compose_capital_transfer_process,
+    capital_current_view, compose_capital_application, compose_capital_transfer_process,
     compose_persistent_capital_application, compose_persistent_capital_transfer_process,
 };
 use kairos_capital::{
@@ -8,27 +8,30 @@ use kairos_capital::{
     CapitalDemandReceipt, CapitalDemandStatus, CapitalEarnHoldingFact, CapitalError, CapitalFacts,
     CapitalGroupConfig, CapitalGroupId, CapitalGroupMember, CapitalOperationKind,
     CapitalOperationStatus, CapitalParticipantOperationState, CapitalPlanId, CapitalPlanStatus,
-    CapitalPolicy, CapitalReadiness, CapitalReservationStatus, CapitalRouteId, CapitalRouteKind,
-    CapitalSettlementClass, CapitalSubmissionOutcome, CapitalTransferRoute, EvaluateCapitalGroup,
-    ExpireCapitalDemands, ExpireCapitalPlans, FundingLocation, FundingObjective,
-    FundingObjectiveId, FundingObjectiveReceipt, FundingObjectiveStatus, FundingPriority,
-    MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
-    ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
-    RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
+    CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservationStatus,
+    CapitalRouteId, CapitalRouteKind, CapitalSettlementClass, CapitalSubmissionOutcome,
+    CapitalTransferRoute, EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans,
+    FundingLocation, FundingObjective, FundingObjectiveId, FundingObjectiveReceipt,
+    FundingObjectiveStatus, FundingPriority, MarkCapitalDeliveryStarted, ObserveCapitalDemand,
+    ObserveCapitalFacts, ObserveCapitalSettlement, PublishFundingObjective,
+    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
+    UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 use kairos_conflux::{
-    CapitalCommandOutcome, CapitalConnectionError, CapitalEarnActionQuery, CapitalEarnActionState,
-    CapitalEarnActionStatus, CapitalEarnConnection, CapitalEarnLiquidity,
-    CapitalEarnProductConnection, CapitalEarnRedeemRequest, CapitalEarnRedemptionOption,
-    CapitalEarnSubmission, CapitalEarnSubscribeRequest, CapitalEarnSubscriptionEligibility,
-    CapitalEarnSubscriptionPreview, CapitalEarnSubscriptionPreviewRequest,
-    CapitalTransferConnection, CapitalTransferQuery, CapitalTransferRequest, CapitalTransferState,
-    CapitalTransferStatus, CapitalTransferSubmission,
+    AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
+    AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission, CommandOutcome,
+    CommandResult, EarnActionQuery, EarnActionState, EarnActionStatus, EarnActionStatusQuery,
+    EarnCommand, EarnLiquidity, EarnPage, EarnPosition, EarnPositionsRequest, EarnProduct,
+    EarnProductQuery, EarnProductsRequest, EarnRateObservation, EarnRatesRequest, EarnRedeemRequest,
+    EarnRedemptionChannel, EarnRedemptionOption, EarnReward, EarnRewardsRequest, EarnSubmission,
+    EarnSubscribeRequest, EarnSubscriptionEligibility, EarnSubscriptionPreview,
+    EarnSubscriptionPreviewRequest, IntegrationError,
 };
-use kairos_primitives::{
-    AccountId, BasisPoints, BrokerId, Currency, Generation, IdempotencyKey, Quantity, SegmentKey,
-    StrategyDecisionId, StrategyId, UnixNanos,
-};
+use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::{IdempotencyKey, StrategyDecisionId, StrategyId};
+use kairos_primitives::time::{BasisPoints, Generation, UnixNanos};
 
 fn objective(version: u64) -> FundingObjective {
     FundingObjective {
@@ -63,6 +66,7 @@ fn group_config(group_id: &str) -> CapitalGroupConfig {
                 SegmentKey::new("funding").unwrap(),
                 SegmentKey::new("usd-m").unwrap(),
             ],
+            readiness_role: kairos_capital::CapitalMemberReadinessRole::Critical,
         }],
     }
 }
@@ -95,8 +99,8 @@ fn demand(id: &str, shortfall: i64, expires_at: u64) -> CapitalDemand {
         expires_at: UnixNanos::new(expires_at),
         priority: FundingPriority::High,
         confidence_bps: BasisPoints::new(9_000),
-        account_watermark: kairos_primitives::Sequence::new(11),
-        risk_watermark: kairos_primitives::Sequence::new(17),
+        account_watermark: kairos_primitives::time::Sequence::new(11),
+        risk_watermark: kairos_primitives::time::Sequence::new(17),
         launch_id: "basis-live".into(),
         instance_id: "instance-7".into(),
         destination_lease_fence: "account-a:lease:4".into(),
@@ -108,12 +112,12 @@ fn facts(available: i64, risk_capacity: i64, observed_at: u64) -> CapitalFacts {
     CapitalFacts {
         destination: objective(1).destination,
         observed_available: Quantity::new(available, 0).unwrap(),
-        account_watermark: kairos_primitives::Sequence::new(11),
+        account_watermark: kairos_primitives::time::Sequence::new(11),
         account_observed_at: UnixNanos::new(observed_at),
         account_complete: true,
         risk_capacity: Quantity::new(risk_capacity, 0).unwrap(),
         risk_policy_version: Generation::new(3),
-        risk_watermark: kairos_primitives::Sequence::new(17),
+        risk_watermark: kairos_primitives::time::Sequence::new(17),
         earn_holdings: Vec::new(),
     }
 }
@@ -208,6 +212,172 @@ fn configure_ready_planner(application: &mut CapitalApplication, group_id: &Capi
             evaluated_at: UnixNanos::new(120),
         })
         .unwrap();
+}
+
+fn group_with_secondary_member(
+    group_id: &str,
+    role: kairos_capital::CapitalMemberReadinessRole,
+) -> CapitalGroupConfig {
+    let mut config = group_config(group_id);
+    config.members.push(CapitalGroupMember {
+        broker: BrokerId::new("binance").unwrap(),
+        account_id: AccountId::new("binance-observer-b").unwrap(),
+        permitted_segments: vec![SegmentKey::new("spot").unwrap()],
+        readiness_role: role,
+    });
+    config
+}
+
+fn secondary_policy() -> CapitalPolicy {
+    let mut value = policy();
+    value.destination.account_id = AccountId::new("binance-observer-b").unwrap();
+    value.destination.segment = SegmentKey::new("spot").unwrap();
+    value
+}
+
+#[test]
+fn unavailable_optional_member_degrades_group_but_does_not_freeze_ready_route() {
+    let group_id = CapitalGroupId::new("capital-group-optional-member").unwrap();
+    let mut application = compose_capital_application(group_with_secondary_member(
+        group_id.as_str(),
+        kairos_capital::CapitalMemberReadinessRole::Optional,
+    ));
+    configure_ready_planner(&mut application, &group_id);
+    application
+        .update_policy(UpdateCapitalPolicy {
+            capital_group_id: group_id.clone(),
+            policy: secondary_policy(),
+            updated_at: UnixNanos::new(121),
+        })
+        .unwrap();
+    application
+        .evaluate(EvaluateCapitalGroup {
+            evaluated_at: UnixNanos::new(122),
+        })
+        .unwrap();
+
+    let primary = application
+        .availability(&objective(1).destination)
+        .expect("primary availability");
+    assert_eq!(primary.readiness, CapitalReadiness::Degraded);
+    assert!(primary.reason.as_deref().unwrap().contains("optional"));
+    assert!(primary.deficit.is_positive());
+
+    let plan = application
+        .authorize_plan(AuthorizeCapitalPlan {
+            capital_group_id: group_id,
+            plan_id: CapitalPlanId::new("optional-member-plan").unwrap(),
+            rebalance_decision_id: "optional-member-decision".into(),
+            route_id: route().route_id,
+            source_authority: "lease:account-a:7".into(),
+            created_at: UnixNanos::new(122),
+            expires_at: UnixNanos::new(200),
+        })
+        .expect("an unrelated optional Account must not freeze this route");
+    assert_eq!(plan.status, CapitalPlanStatus::Authorized);
+}
+
+#[test]
+fn unavailable_critical_member_closes_global_capital_write_barrier() {
+    let group_id = CapitalGroupId::new("capital-group-critical-member").unwrap();
+    let mut application = compose_capital_application(group_with_secondary_member(
+        group_id.as_str(),
+        kairos_capital::CapitalMemberReadinessRole::Critical,
+    ));
+    configure_ready_planner(&mut application, &group_id);
+    application
+        .update_policy(UpdateCapitalPolicy {
+            capital_group_id: group_id.clone(),
+            policy: secondary_policy(),
+            updated_at: UnixNanos::new(121),
+        })
+        .unwrap();
+    application
+        .evaluate(EvaluateCapitalGroup {
+            evaluated_at: UnixNanos::new(122),
+        })
+        .unwrap();
+
+    let primary = application
+        .availability(&objective(1).destination)
+        .expect("primary availability");
+    assert_eq!(primary.readiness, CapitalReadiness::WaitingForAccounts);
+    assert!(primary.reason.as_deref().unwrap().contains("critical"));
+    assert!(primary.deficit.is_zero());
+    assert!(
+        application
+            .authorize_plan(AuthorizeCapitalPlan {
+                capital_group_id: group_id,
+                plan_id: CapitalPlanId::new("critical-member-plan").unwrap(),
+                rebalance_decision_id: "critical-member-decision".into(),
+                route_id: route().route_id,
+                source_authority: "lease:account-a:7".into(),
+                created_at: UnixNanos::new(122),
+                expires_at: UnixNanos::new(200),
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn restart_requires_fresh_member_observation_before_reopening_write_barrier() {
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("capital-member-readiness.json");
+    let group_id = CapitalGroupId::new("capital-group-member-restart").unwrap();
+    {
+        let mut application = compose_persistent_capital_application(
+            group_config(group_id.as_str()),
+            state_path.clone(),
+        )
+        .unwrap();
+        configure_ready_planner(&mut application, &group_id);
+        assert_eq!(
+            application
+                .availability(&objective(1).destination)
+                .unwrap()
+                .readiness,
+            CapitalReadiness::Ready
+        );
+    }
+
+    let mut recovered =
+        compose_persistent_capital_application(group_config(group_id.as_str()), state_path)
+            .unwrap();
+    recovered
+        .evaluate(EvaluateCapitalGroup {
+            evaluated_at: UnixNanos::new(121),
+        })
+        .unwrap();
+    assert_eq!(
+        recovered
+            .availability(&objective(1).destination)
+            .unwrap()
+            .readiness,
+        CapitalReadiness::WaitingForAccounts
+    );
+
+    // Re-observing the same Account projection is not a business-fact change,
+    // but it is the fresh runtime evidence required to reopen the barrier.
+    for value in [facts(30, 70, 100), source_facts(35, 100)] {
+        recovered
+            .observe_facts(ObserveCapitalFacts {
+                capital_group_id: group_id.clone(),
+                facts: value,
+            })
+            .unwrap();
+    }
+    recovered
+        .evaluate(EvaluateCapitalGroup {
+            evaluated_at: UnixNanos::new(121),
+        })
+        .unwrap();
+    assert_eq!(
+        recovered
+            .availability(&objective(1).destination)
+            .unwrap()
+            .readiness,
+        CapitalReadiness::Ready
+    );
 }
 
 #[test]
@@ -876,6 +1046,15 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
         })
         .unwrap();
     assert_eq!(indeterminate.status, CapitalPlanStatus::Indeterminate);
+    assert_eq!(
+        indeterminate.recovery_action,
+        CapitalRecoveryAction::ReconcileOriginalOperation
+    );
+    assert_eq!(indeterminate.recovery_decided_at, Some(UnixNanos::new(122)));
+    let projected = capital_current_view(&application.snapshot());
+    assert_eq!(projected.alerts.len(), 1);
+    assert_eq!(projected.alerts[0].plan_id, plan_id);
+    assert_eq!(projected.alerts[0].opened_at, UnixNanos::new(122));
     let same_operation = application
         .begin_operation(BeginCapitalOperation {
             capital_group_id: group_id.clone(),
@@ -900,7 +1079,7 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
     assert_eq!(reconciling.status, CapitalPlanStatus::Reconciling);
 
     let mut source = source_facts(5, 131);
-    source.account_watermark = kairos_primitives::Sequence::new(12);
+    source.account_watermark = kairos_primitives::time::Sequence::new(12);
     let destination_not_yet_observed = facts(30, 70, 131);
     let still_reconciling = application
         .observe_settlement(ObserveCapitalSettlement {
@@ -914,7 +1093,7 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
     assert_eq!(still_reconciling.status, CapitalPlanStatus::Reconciling);
 
     let mut destination = facts(60, 70, 132);
-    destination.account_watermark = kairos_primitives::Sequence::new(12);
+    destination.account_watermark = kairos_primitives::time::Sequence::new(12);
     let completed = application
         .observe_settlement(ObserveCapitalSettlement {
             capital_group_id: group_id,
@@ -925,6 +1104,7 @@ fn indeterminate_transfer_reconciles_before_account_observed_completion() {
         })
         .unwrap();
     assert_eq!(completed.status, CapitalPlanStatus::Completed);
+    assert_eq!(completed.recovery_action, CapitalRecoveryAction::None);
     let snapshot = application.snapshot();
     assert_eq!(
         snapshot.operations[0].status,
@@ -1001,6 +1181,15 @@ fn restart_preserves_indeterminate_operation_and_original_idempotency_key() {
         snapshot.operations[0].status,
         CapitalOperationStatus::Indeterminate
     );
+    assert_eq!(
+        snapshot.plans[0].recovery_action,
+        CapitalRecoveryAction::ReconcileOriginalOperation
+    );
+    assert_eq!(
+        snapshot.plans[0].recovery_decided_at,
+        Some(UnixNanos::new(122))
+    );
+    assert_eq!(capital_current_view(&snapshot).alerts.len(), 1);
     let operation = recovered
         .begin_operation(BeginCapitalOperation {
             capital_group_id: group_id,
@@ -1068,35 +1257,150 @@ fn restart_after_delivery_fence_never_returns_a_prepared_operation() {
     assert_eq!(operation.attempt_count, 1);
 }
 
+#[test]
+fn shutdown_recovery_decision_is_durable_and_projects_an_alert() {
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("capital-shutdown-recovery.json");
+    let group_id = CapitalGroupId::new("capital-group-shutdown-recovery").unwrap();
+    let plan_id = CapitalPlanId::new("plan-shutdown-recovery").unwrap();
+    {
+        let mut application = compose_persistent_capital_application(
+            group_config(group_id.as_str()),
+            state_path.clone(),
+        )
+        .unwrap();
+        configure_ready_planner(&mut application, &group_id);
+        application
+            .authorize_plan(AuthorizeCapitalPlan {
+                capital_group_id: group_id.clone(),
+                plan_id: plan_id.clone(),
+                rebalance_decision_id: "decision-shutdown-recovery".into(),
+                route_id: route().route_id,
+                source_authority: "lease:account-a:7".into(),
+                created_at: UnixNanos::new(120),
+                expires_at: UnixNanos::new(300),
+            })
+            .unwrap();
+        application
+            .begin_operation(BeginCapitalOperation {
+                capital_group_id: group_id.clone(),
+                plan_id: plan_id.clone(),
+                at: UnixNanos::new(121),
+            })
+            .unwrap();
+        application
+            .mark_delivery_started(MarkCapitalDeliveryStarted {
+                capital_group_id: group_id.clone(),
+                plan_id: plan_id.clone(),
+                at: UnixNanos::new(122),
+            })
+            .unwrap();
+        let held = application
+            .record_recovery_required(RecordCapitalRecoveryRequired {
+                capital_group_id: group_id.clone(),
+                plan_id: plan_id.clone(),
+                reason: "process stopped before participant status became terminal".into(),
+                at: UnixNanos::new(130),
+            })
+            .unwrap();
+        assert_eq!(
+            held.recovery_action,
+            CapitalRecoveryAction::ReconcileOriginalOperation
+        );
+        assert_eq!(held.recovery_decided_at, Some(UnixNanos::new(130)));
+        assert_eq!(
+            capital_current_view(&application.snapshot()).alerts.len(),
+            1
+        );
+    }
+
+    let recovered =
+        compose_persistent_capital_application(group_config(group_id.as_str()), state_path)
+            .unwrap();
+    let plan = recovered.plan(&plan_id).unwrap();
+    assert_eq!(
+        plan.recovery_action,
+        CapitalRecoveryAction::ReconcileOriginalOperation
+    );
+    assert_eq!(plan.recovery_decided_at, Some(UnixNanos::new(130)));
+    assert_eq!(capital_current_view(&recovered.snapshot()).alerts.len(), 1);
+}
+
 #[derive(Clone)]
 struct ConfirmedTransferConnection {
     submissions: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl CapitalTransferConnection for ConfirmedTransferConnection {
-    async fn submit_capital_transfer(
+fn confirmed_transfer_status(
+    query: &AssetTransferQuery,
+    participant_state: &str,
+) -> AssetTransferStatus {
+    AssetTransferStatus {
+        idempotency_key: query.request.idempotency_key.clone(),
+        participant_transfer_id: query.participant_transfer_id.clone(),
+        source: query.request.source.clone(),
+        destination: query.request.destination.clone(),
+        asset: query.request.asset.clone(),
+        requested_amount: query.request.amount,
+        settled_amount: Some(query.request.amount),
+        state: AssetTransferState::Succeeded,
+        participant_state: Some(participant_state.into()),
+        updated_at_unix_nanos: None,
+        failure_reason: None,
+    }
+}
+
+fn confirmed_earn_status(query: &EarnActionQuery) -> EarnActionStatus {
+    EarnActionStatus {
+        idempotency_key: query.idempotency_key.clone(),
+        participant_action_id: query.participant_action_id.clone(),
+        action: query.action,
+        state: EarnActionState::Succeeded,
+        participant_state: Some("SUCCESS".into()),
+        updated_at_unix_nanos: None,
+        failure_reason: None,
+    }
+}
+
+impl AssetTransferCommand for ConfirmedTransferConnection {
+    async fn submit_transfer(
         &mut self,
-        _request: &CapitalTransferRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalTransferSubmission>, CapitalConnectionError> {
+        request: &AssetTransferRequest,
+    ) -> CommandResult<AssetTransferSubmission> {
         self.submissions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(CapitalCommandOutcome::Confirmed(
-            CapitalTransferSubmission {
-                participant_transfer_id: Some("transfer-1".into()),
-            },
-        ))
+        Ok(CommandOutcome::Confirmed(AssetTransferSubmission {
+            participant_transfer_id: Some("transfer-1".into()),
+            acknowledged_at_unix_nanos: Some(request.requested_at_unix_nanos),
+        }))
+    }
+}
+
+impl AssetTransferStatusQuery for ConfirmedTransferConnection {
+    async fn transfer_status(
+        &mut self,
+        query: &AssetTransferQuery,
+    ) -> Result<Option<AssetTransferStatus>, IntegrationError> {
+        Ok(Some(confirmed_transfer_status(query, "CONFIRMED")))
+    }
+}
+
+impl EarnCommand for ConfirmedTransferConnection {
+    async fn subscribe(&mut self, _request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
+        unreachable!("this fixture only transfers")
     }
 
-    async fn capital_transfer_status(
+    async fn redeem(&mut self, _request: &EarnRedeemRequest) -> CommandResult<EarnSubmission> {
+        unreachable!("this fixture only transfers")
+    }
+}
+
+impl EarnActionStatusQuery for ConfirmedTransferConnection {
+    async fn action_status(
         &mut self,
-        query: &CapitalTransferQuery,
-    ) -> Result<Option<CapitalTransferStatus>, CapitalConnectionError> {
-        Ok(Some(CapitalTransferStatus {
-            participant_transfer_id: query.participant_transfer_id.clone(),
-            state: CapitalTransferState::Succeeded,
-            participant_state: Some("CONFIRMED".into()),
-            failure_reason: None,
-        }))
+        _query: &EarnActionQuery,
+    ) -> Result<Option<EarnActionStatus>, IntegrationError> {
+        unreachable!("this fixture only transfers")
     }
 }
 
@@ -1106,62 +1410,50 @@ struct ConfirmedEarnTransferConnection {
     transfer_submissions: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl CapitalTransferConnection for ConfirmedEarnTransferConnection {
-    async fn submit_capital_transfer(
+impl AssetTransferCommand for ConfirmedEarnTransferConnection {
+    async fn submit_transfer(
         &mut self,
-        _request: &CapitalTransferRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalTransferSubmission>, CapitalConnectionError> {
+        request: &AssetTransferRequest,
+    ) -> CommandResult<AssetTransferSubmission> {
         self.transfer_submissions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(CapitalCommandOutcome::Confirmed(
-            CapitalTransferSubmission {
-                participant_transfer_id: Some("transfer-after-redemption".into()),
-            },
-        ))
-    }
-
-    async fn capital_transfer_status(
-        &mut self,
-        query: &CapitalTransferQuery,
-    ) -> Result<Option<CapitalTransferStatus>, CapitalConnectionError> {
-        Ok(Some(CapitalTransferStatus {
-            participant_transfer_id: query.participant_transfer_id.clone(),
-            state: CapitalTransferState::Succeeded,
-            participant_state: Some("CONFIRMED".into()),
-            failure_reason: None,
+        Ok(CommandOutcome::Confirmed(AssetTransferSubmission {
+            participant_transfer_id: Some("transfer-after-redemption".into()),
+            acknowledged_at_unix_nanos: Some(request.requested_at_unix_nanos),
         }))
     }
 }
 
-impl CapitalEarnConnection for ConfirmedEarnTransferConnection {
-    async fn subscribe_capital_earn(
+impl AssetTransferStatusQuery for ConfirmedEarnTransferConnection {
+    async fn transfer_status(
         &mut self,
-        _request: &CapitalEarnSubscribeRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalEarnSubmission>, CapitalConnectionError> {
+        query: &AssetTransferQuery,
+    ) -> Result<Option<AssetTransferStatus>, IntegrationError> {
+        Ok(Some(confirmed_transfer_status(query, "CONFIRMED")))
+    }
+}
+
+impl EarnCommand for ConfirmedEarnTransferConnection {
+    async fn subscribe(&mut self, _request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
         unreachable!("this fixture only redeems")
     }
 
-    async fn redeem_capital_earn(
-        &mut self,
-        _request: &CapitalEarnRedeemRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalEarnSubmission>, CapitalConnectionError> {
+    async fn redeem(&mut self, request: &EarnRedeemRequest) -> CommandResult<EarnSubmission> {
         self.redemption_submissions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(CapitalCommandOutcome::Confirmed(CapitalEarnSubmission {
+        Ok(CommandOutcome::Confirmed(EarnSubmission {
             participant_action_id: Some("redemption-1".into()),
+            acknowledged_at_unix_nanos: Some(request.requested_at_unix_nanos),
         }))
     }
+}
 
-    async fn capital_earn_action_status(
+impl EarnActionStatusQuery for ConfirmedEarnTransferConnection {
+    async fn action_status(
         &mut self,
-        query: &CapitalEarnActionQuery,
-    ) -> Result<Option<CapitalEarnActionStatus>, CapitalConnectionError> {
-        Ok(Some(CapitalEarnActionStatus {
-            participant_action_id: query.participant_action_id.clone(),
-            state: CapitalEarnActionState::Succeeded,
-            participant_state: Some("SUCCESS".into()),
-            failure_reason: None,
-        }))
+        query: &EarnActionQuery,
+    ) -> Result<Option<EarnActionStatus>, IntegrationError> {
+        Ok(Some(confirmed_earn_status(query)))
     }
 }
 
@@ -1171,67 +1463,93 @@ struct ConfirmedEarnSubscriptionConnection {
     redemption_quota: Option<Quantity>,
 }
 
-impl CapitalTransferConnection for ConfirmedEarnSubscriptionConnection {
-    async fn submit_capital_transfer(
+impl AssetTransferCommand for ConfirmedEarnSubscriptionConnection {
+    async fn submit_transfer(
         &mut self,
-        _request: &CapitalTransferRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalTransferSubmission>, CapitalConnectionError> {
-        unreachable!("this fixture only subscribes")
-    }
-
-    async fn capital_transfer_status(
-        &mut self,
-        _query: &CapitalTransferQuery,
-    ) -> Result<Option<CapitalTransferStatus>, CapitalConnectionError> {
+        _request: &AssetTransferRequest,
+    ) -> CommandResult<AssetTransferSubmission> {
         unreachable!("this fixture only subscribes")
     }
 }
 
-impl CapitalEarnConnection for ConfirmedEarnSubscriptionConnection {
-    async fn subscribe_capital_earn(
+impl AssetTransferStatusQuery for ConfirmedEarnSubscriptionConnection {
+    async fn transfer_status(
         &mut self,
-        _request: &CapitalEarnSubscribeRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalEarnSubmission>, CapitalConnectionError> {
+        _query: &AssetTransferQuery,
+    ) -> Result<Option<AssetTransferStatus>, IntegrationError> {
+        unreachable!("this fixture only subscribes")
+    }
+}
+
+impl EarnCommand for ConfirmedEarnSubscriptionConnection {
+    async fn subscribe(&mut self, request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
         self.submissions
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(CapitalCommandOutcome::Confirmed(CapitalEarnSubmission {
+        Ok(CommandOutcome::Confirmed(EarnSubmission {
             participant_action_id: Some("subscription-1".into()),
+            acknowledged_at_unix_nanos: Some(request.requested_at_unix_nanos),
         }))
     }
 
-    async fn redeem_capital_earn(
-        &mut self,
-        _request: &CapitalEarnRedeemRequest,
-    ) -> Result<CapitalCommandOutcome<CapitalEarnSubmission>, CapitalConnectionError> {
+    async fn redeem(&mut self, _request: &EarnRedeemRequest) -> CommandResult<EarnSubmission> {
         unreachable!("this fixture only subscribes")
-    }
-
-    async fn capital_earn_action_status(
-        &mut self,
-        query: &CapitalEarnActionQuery,
-    ) -> Result<Option<CapitalEarnActionStatus>, CapitalConnectionError> {
-        Ok(Some(CapitalEarnActionStatus {
-            participant_action_id: query.participant_action_id.clone(),
-            state: CapitalEarnActionState::Succeeded,
-            participant_state: Some("SUCCESS".into()),
-            failure_reason: None,
-        }))
     }
 }
 
-impl CapitalEarnProductConnection for ConfirmedEarnSubscriptionConnection {
-    async fn preview_earn_subscription(
+impl EarnActionStatusQuery for ConfirmedEarnSubscriptionConnection {
+    async fn action_status(
         &mut self,
-        request: &CapitalEarnSubscriptionPreviewRequest,
-    ) -> Result<CapitalEarnSubscriptionPreview, CapitalConnectionError> {
-        Ok(CapitalEarnSubscriptionPreview {
+        query: &EarnActionQuery,
+    ) -> Result<Option<EarnActionStatus>, IntegrationError> {
+        Ok(Some(confirmed_earn_status(query)))
+    }
+}
+
+impl EarnProductQuery for ConfirmedEarnSubscriptionConnection {
+    async fn products(
+        &mut self,
+        _request: &EarnProductsRequest,
+    ) -> Result<EarnPage<EarnProduct>, IntegrationError> {
+        Err(IntegrationError::UnsupportedOperation)
+    }
+
+    async fn positions(
+        &mut self,
+        _request: &EarnPositionsRequest,
+    ) -> Result<EarnPage<EarnPosition>, IntegrationError> {
+        Err(IntegrationError::UnsupportedOperation)
+    }
+
+    async fn rewards(
+        &mut self,
+        _request: &EarnRewardsRequest,
+    ) -> Result<EarnPage<EarnReward>, IntegrationError> {
+        Err(IntegrationError::UnsupportedOperation)
+    }
+
+    async fn rates(
+        &mut self,
+        _request: &EarnRatesRequest,
+    ) -> Result<EarnPage<EarnRateObservation>, IntegrationError> {
+        Err(IntegrationError::UnsupportedOperation)
+    }
+
+    async fn subscription_preview(
+        &mut self,
+        request: &EarnSubscriptionPreviewRequest,
+    ) -> Result<EarnSubscriptionPreview, IntegrationError> {
+        Ok(EarnSubscriptionPreview {
+            product_id: request.product_id.clone(),
             amount: request.amount,
-            eligibility: CapitalEarnSubscriptionEligibility::Eligible,
-            liquidity: CapitalEarnLiquidity::Immediate,
-            redemption_options: vec![CapitalEarnRedemptionOption {
-                immediate: true,
+            eligibility: EarnSubscriptionEligibility::Eligible,
+            rate_components: Vec::new(),
+            remaining_subscription_quota: self.redemption_quota,
+            liquidity: EarnLiquidity::Immediate,
+            redemption_options: vec![EarnRedemptionOption {
+                channel: EarnRedemptionChannel::Immediate,
                 settlement_delay_seconds: Some(0),
                 remaining_quota: self.redemption_quota,
+                forfeits_accrued_rewards: Some(false),
             }],
             observed_at_unix_nanos: UnixNanos::new(120),
         })
@@ -1275,6 +1593,84 @@ async fn transfer_process_submits_once_and_reconciles_repeated_calls() {
         .unwrap();
     assert_eq!(reconciled.status, CapitalPlanStatus::Reconciling);
     assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn operator_reconcile_queries_existing_operation_without_resubmitting() {
+    let group_id = CapitalGroupId::new("capital-group-operator-reconcile").unwrap();
+    let plan_id = CapitalPlanId::new("plan-operator-reconcile").unwrap();
+    let submissions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = ConfirmedTransferConnection {
+        submissions: submissions.clone(),
+    };
+    let mut process =
+        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    configure_ready_planner(process.application_mut(), &group_id);
+    process
+        .application_mut()
+        .authorize_plan(AuthorizeCapitalPlan {
+            capital_group_id: group_id,
+            plan_id: plan_id.clone(),
+            rebalance_decision_id: "decision-operator-reconcile".into(),
+            route_id: route().route_id,
+            source_authority: "lease:account-a:7".into(),
+            created_at: UnixNanos::new(120),
+            expires_at: UnixNanos::new(300),
+        })
+        .unwrap();
+
+    process
+        .execute_capital_plan(plan_id.clone(), UnixNanos::new(121))
+        .await
+        .unwrap();
+    assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let reconciled = process
+        .reconcile_capital_plan(plan_id, UnixNanos::new(130))
+        .await
+        .unwrap();
+    assert_eq!(reconciled.status, CapitalPlanStatus::Reconciling);
+    assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn operator_reconcile_refuses_an_undelivered_prepared_operation() {
+    let group_id = CapitalGroupId::new("capital-group-prepared-reconcile").unwrap();
+    let plan_id = CapitalPlanId::new("plan-prepared-reconcile").unwrap();
+    let submissions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let connection = ConfirmedTransferConnection {
+        submissions: submissions.clone(),
+    };
+    let mut process =
+        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    configure_ready_planner(process.application_mut(), &group_id);
+    process
+        .application_mut()
+        .authorize_plan(AuthorizeCapitalPlan {
+            capital_group_id: group_id.clone(),
+            plan_id: plan_id.clone(),
+            rebalance_decision_id: "decision-prepared-reconcile".into(),
+            route_id: route().route_id,
+            source_authority: "lease:account-a:7".into(),
+            created_at: UnixNanos::new(120),
+            expires_at: UnixNanos::new(300),
+        })
+        .unwrap();
+    process
+        .application_mut()
+        .begin_operation(BeginCapitalOperation {
+            capital_group_id: group_id,
+            plan_id: plan_id.clone(),
+            at: UnixNanos::new(121),
+        })
+        .unwrap();
+
+    let error = process
+        .reconcile_capital_plan(plan_id, UnixNanos::new(130))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Prepared"));
+    assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1430,7 +1826,7 @@ async fn idle_cash_subscription_waits_for_participant_and_account_principal() {
     assert_eq!(submissions.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     let mut observed = earn_source_facts(70, 30, 124);
-    observed.account_watermark = kairos_primitives::Sequence::new(12);
+    observed.account_watermark = kairos_primitives::time::Sequence::new(12);
     let completed = process
         .application_mut()
         .observe_settlement(ObserveCapitalSettlement {
@@ -1558,7 +1954,7 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
         );
 
         let mut liquid_source = earn_source_facts(40, 70, 131);
-        liquid_source.account_watermark = kairos_primitives::Sequence::new(12);
+        liquid_source.account_watermark = kairos_primitives::time::Sequence::new(12);
         let available = process
             .application_mut()
             .observe_settlement(ObserveCapitalSettlement {
@@ -1603,9 +1999,9 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
     );
 
     let mut debited_source = earn_source_facts(10, 70, 141);
-    debited_source.account_watermark = kairos_primitives::Sequence::new(13);
+    debited_source.account_watermark = kairos_primitives::time::Sequence::new(13);
     let mut credited_destination = facts(60, 70, 141);
-    credited_destination.account_watermark = kairos_primitives::Sequence::new(12);
+    credited_destination.account_watermark = kairos_primitives::time::Sequence::new(12);
     let completed = recovered
         .application_mut()
         .observe_settlement(ObserveCapitalSettlement {

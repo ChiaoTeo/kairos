@@ -90,7 +90,8 @@ enum CommitmentResourceKind:ubyte {
   UNSPECIFIED = 0,
   ASSET = 1,
   INSTRUMENT = 2,
-  MARGIN_NOTIONAL = 3
+  MARGIN_NOTIONAL = 3,
+  CLOSEABLE_POSITION = 4
 }
 
 enum CommitmentBasisKind:ubyte {
@@ -98,7 +99,15 @@ enum CommitmentBasisKind:ubyte {
   QUOTE_PRICE_CAP = 1,
   BASE_QUANTITY = 2,
   CONTRACT_NOTIONAL = 3,
-  SIMULATION_QUANTITY = 4
+  SIMULATION_QUANTITY = 4,
+  CLOSEABLE_POSITION_QUANTITY = 5
+}
+
+enum CommitmentPositionSide:ubyte {
+  UNSPECIFIED = 0,
+  NET = 1,
+  LONG = 2,
+  SHORT = 3
 }
 
 enum CommitmentLifecycle:ubyte {
@@ -119,6 +128,7 @@ table OrderCommitmentState {
   side:kairos.common.v2.Side = UNSPECIFIED;
   resource_kind:CommitmentResourceKind = UNSPECIFIED;
   resource_id:string (required);
+  position_side:CommitmentPositionSide = UNSPECIFIED;
   amount:kairos.common.v2.Decimal64 (required);
   remaining_quantity:kairos.common.v2.Decimal64 (required);
   lifecycle:CommitmentLifecycle = UNSPECIFIED;

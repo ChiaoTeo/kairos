@@ -1,4 +1,6 @@
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 use serde_json::{Value, json};
 
 use crate::participants::hyperliquid::HyperliquidRestConfig;
@@ -444,7 +446,13 @@ fn context_rows(value: &Value) -> Result<Vec<(String, Value)>, IntegrationError>
 
 fn book_side(
     value: Option<&Value>,
-) -> Result<Vec<(kairos_primitives::Price, kairos_primitives::Quantity)>, IntegrationError> {
+) -> Result<
+    Vec<(
+        kairos_primitives::decimal::Price,
+        kairos_primitives::decimal::Quantity,
+    )>,
+    IntegrationError,
+> {
     value
         .and_then(Value::as_array)
         .into_iter()
@@ -453,16 +461,22 @@ fn book_side(
         .collect()
 }
 
-fn required_price(row: &Value, field: &str) -> Result<kairos_primitives::Price, IntegrationError> {
+fn required_price(
+    row: &Value,
+    field: &str,
+) -> Result<kairos_primitives::decimal::Price, IntegrationError> {
     required(row, field)
 }
 fn required_quantity(
     row: &Value,
     field: &str,
-) -> Result<kairos_primitives::Quantity, IntegrationError> {
+) -> Result<kairos_primitives::decimal::Quantity, IntegrationError> {
     required(row, field)
 }
-fn required_rate(row: &Value, field: &str) -> Result<kairos_primitives::Rate, IntegrationError> {
+fn required_rate(
+    row: &Value,
+    field: &str,
+) -> Result<kairos_primitives::decimal::Rate, IntegrationError> {
     required(row, field)
 }
 fn required<T: std::str::FromStr>(row: &Value, field: &str) -> Result<T, IntegrationError>

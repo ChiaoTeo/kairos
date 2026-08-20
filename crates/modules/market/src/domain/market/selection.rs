@@ -1,7 +1,5 @@
-use kairos_primitives::{
-    AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId, ProviderProductCode,
-    ProviderSymbol,
-};
+use kairos_primitives::integration::{ProviderProductCode, ProviderSymbol};
+use kairos_primitives::reference::{AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId};
 use serde::{Deserialize, Serialize};
 
 use super::ResolvedMarket;

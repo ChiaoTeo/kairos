@@ -1,4 +1,4 @@
-use kairos_primitives::Sequence;
+use kairos_primitives::time::Sequence;
 
 use super::{OrderBook, OrderBookDelta, PriceLevel};
 
@@ -55,7 +55,7 @@ fn apply_levels(levels: &mut Vec<PriceLevel>, updates: Vec<PriceLevel>) {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{Price, Quantity};
+    use kairos_primitives::decimal::{Price, Quantity};
     use proptest::prelude::*;
 
     use super::{OrderBook, OrderBookDelta, PriceLevel};
@@ -73,9 +73,9 @@ mod tests {
             };
             let mut book = OrderBook::snapshot("BTC-USD", "BTC-USD", 10_u64, 1_u64, vec![initial], vec![]).unwrap();
             let delta = OrderBookDelta {
-                source_id: kairos_primitives::SourceId::new("market").unwrap(),
-                market_id: kairos_primitives::MarketId::new("BTC-USD").unwrap(),
-                instrument_id: kairos_primitives::InstrumentId::new("BTC-USD").unwrap(),
+                source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+                market_id: kairos_primitives::reference::MarketId::new("BTC-USD").unwrap(),
+                instrument_id: kairos_primitives::reference::InstrumentId::new("BTC-USD").unwrap(),
                 first_sequence: 11_u64.into(),
                 last_sequence: 11_u64.into(),
                 event_time_unix_nanos: 2_u64.into(),

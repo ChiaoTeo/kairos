@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{InstrumentKind, SourceId};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::InstrumentKind;
 
 use crate::{MarketDataRoute, ObservationKind, ReconcileMarketUniverse, ResolvedMarket};
 

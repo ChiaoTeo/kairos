@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 
-use kairos_primitives::{
-    AccountId, BasisPoints, Currency, DurationNanos, Exchange, Generation, IdempotencyKey,
-    InstrumentId, Money, PolicyId, RequestId, ReservationId, SegmentKey, Sequence, StrategyId,
-    UnixNanos,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::Money;
+use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+use kairos_primitives::risk::{PolicyId, ReservationId};
+use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
+use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
 use rust_decimal::Decimal as RustDecimal;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +28,7 @@ impl Amount {
         if mantissa < 0 {
             return Err("risk amounts cannot be negative".into());
         }
-        if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+        if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
             return Err("risk amount scale exceeds 18 digits".into());
         }
         let value = RustDecimal::try_new(mantissa, u32::from(scale))
@@ -102,7 +103,7 @@ impl Amount {
         let mantissa =
             i64::try_from(value.mantissa()).map_err(|_| "risk amount overflow".to_string())?;
         let scale = u8::try_from(value.scale()).map_err(|_| "risk amount overflow".to_string())?;
-        if scale > kairos_primitives::MAX_DECIMAL_SCALE {
+        if scale > kairos_primitives::decimal::MAX_DECIMAL_SCALE {
             return Err("risk amount scale exceeds 18 digits".into());
         }
         Ok(Self { mantissa, scale })
@@ -130,7 +131,7 @@ impl<'de> Deserialize<'de> for Amount {
     {
         let value = String::deserialize(deserializer)?;
         let value = value
-            .parse::<kairos_primitives::DecimalParts>()
+            .parse::<kairos_primitives::decimal::DecimalParts>()
             .map_err(serde::de::Error::custom)?;
         Self::new(value.mantissa(), value.scale()).map_err(serde::de::Error::custom)
     }

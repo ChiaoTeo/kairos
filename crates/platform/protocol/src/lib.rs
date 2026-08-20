@@ -8,6 +8,7 @@
 )]
 
 pub mod context;
+pub mod control;
 pub mod generated;
 pub mod metadata;
 

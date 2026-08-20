@@ -1,7 +1,9 @@
 //! Private messages between the single Market Actor and Integration I/O
 //! drivers. These are Market runtime mechanics, not application API types.
 
-use kairos_primitives::{InstrumentId, MarketId, Sequence, SourceId, UnixNanos};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::time::{Sequence, UnixNanos};
 
 use crate::domain::market::ResolvedMarket;
 use crate::domain::observation::MarketObservation;

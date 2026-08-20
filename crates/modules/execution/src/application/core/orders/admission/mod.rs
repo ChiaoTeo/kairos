@@ -1,6 +1,7 @@
 //! Pure order-admission rules and exact decimal conversions.
 
-use kairos_primitives::{Money, Price, Quantity, SignedQuantity, UnixNanos};
+use kairos_primitives::decimal::{Money, Price, Quantity, SignedQuantity};
+use kairos_primitives::time::UnixNanos;
 use kairos_reference_contract::ReferenceMarket;
 #[cfg(test)]
 use kairos_risk_contract::Amount as RiskAmount;
@@ -264,7 +265,9 @@ pub(crate) fn decimal_signed_quantity(value: SignedQuantity) -> Result<Decimal, 
 
 pub(crate) fn quantity_from_decimal(value: Decimal) -> Result<Quantity, String> {
     let value = value.normalize();
-    if value < Decimal::ZERO || value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
+    if value < Decimal::ZERO
+        || value.scale() > u32::from(kairos_primitives::decimal::MAX_DECIMAL_SCALE)
+    {
         return Err("quantity is outside the supported decimal range".into());
     }
     Quantity::new(
@@ -287,7 +290,9 @@ pub(crate) fn decimal_money(value: Money) -> Result<Decimal, String> {
 
 pub(crate) fn money_from_decimal(value: Decimal) -> Result<Money, String> {
     let value = value.normalize();
-    if value <= Decimal::ZERO || value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
+    if value <= Decimal::ZERO
+        || value.scale() > u32::from(kairos_primitives::decimal::MAX_DECIMAL_SCALE)
+    {
         return Err("commitment amount is outside the supported decimal range".into());
     }
     Money::new(
@@ -336,7 +341,7 @@ pub(crate) fn simulation_commitment(
         .options
         .quote_asset
         .as_deref()
-        .map(kairos_primitives::Currency::new)
+        .map(kairos_primitives::reference::Currency::new)
         .transpose()
         .map_err(|error| error.to_string())?;
     Ok(commitment)
@@ -345,7 +350,7 @@ pub(crate) fn simulation_commitment(
 #[cfg(test)]
 pub(crate) fn risk_amount(value: Decimal) -> Result<RiskAmount, String> {
     let value = value.normalize();
-    if value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
+    if value.scale() > u32::from(kairos_primitives::decimal::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
     RiskAmount::new(

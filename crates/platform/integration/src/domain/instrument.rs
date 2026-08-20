@@ -1,6 +1,6 @@
 //! Participant-owned instrument identity at the Integration boundary.
 
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use super::ParticipantRef;
 

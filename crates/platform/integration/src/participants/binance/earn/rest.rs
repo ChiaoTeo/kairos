@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use kairos_primitives::{Quantity, Rate, SignedQuantity, UnixNanos};
+use kairos_primitives::decimal::{Quantity, Rate, SignedQuantity};
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -317,7 +318,7 @@ fn parse_product(row: &Value) -> Result<EarnProduct, IntegrationError> {
         .collect();
     Ok(EarnProduct {
         product_id: text(row, "productId")?.into(),
-        asset: kairos_primitives::Currency::new(text(row, "asset")?).map_err(payload)?,
+        asset: kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?,
         family: EarnProductFamily::Flexible,
         participant_product_type: "FLEXIBLE".into(),
         rate_components,
@@ -341,7 +342,7 @@ fn parse_position(row: &Value) -> Result<EarnPosition, IntegrationError> {
     Ok(EarnPosition {
         participant_position_id: scalar_string(row.get("positionId")),
         product_id: text(row, "productId")?.into(),
-        asset: kairos_primitives::Currency::new(text(row, "asset")?).map_err(payload)?,
+        asset: kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?,
         family: EarnProductFamily::Flexible,
         principal,
         accrued_rewards: Vec::new(),
@@ -366,7 +367,7 @@ fn parse_reward(row: &Value) -> Result<EarnReward, IntegrationError> {
     Ok(EarnReward {
         participant_reward_id: scalar_string(row.get("id")),
         product_id: scalar_string(row.get("productId")),
-        asset: kairos_primitives::Currency::new(text(row, "asset")?).map_err(payload)?,
+        asset: kairos_primitives::reference::Currency::new(text(row, "asset")?).map_err(payload)?,
         amount,
         occurred_at_unix_nanos: timestamp(row, &["time", "createTime"]),
     })
@@ -560,7 +561,16 @@ mod tests {
     fn unknown_action_status_is_not_guessed_as_success() {
         let query = EarnActionQuery {
             account: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
-            idempotency_key: kairos_primitives::IdempotencyKey::new("capital:1:redeem").unwrap(),
+            account_segment: crate::ExternalAccountSegment {
+                identity: crate::ExternalAccountIdentity::new("binance", "account-1").unwrap(),
+                segment_key: kairos_primitives::account::SegmentKey::new("spot").unwrap(),
+                environment: "live".into(),
+                account_model: None,
+            },
+            asset: kairos_primitives::reference::Currency::new("USDT").unwrap(),
+            product_id: "USDT001".into(),
+            idempotency_key: kairos_primitives::runtime::IdempotencyKey::new("capital:1:redeem")
+                .unwrap(),
             participant_action_id: Some("42".into()),
             action: EarnActionKind::Redeem,
         };

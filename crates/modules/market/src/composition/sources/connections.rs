@@ -422,12 +422,12 @@ fn install_one(
             .map_err(|error| error.to_string())?;
             let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
             descriptor.market_type = Some(
-                kairos_primitives::ProviderProductCode::new(product_name)
+                kairos_primitives::integration::ProviderProductCode::new(product_name)
                     .map_err(|e| e.to_string())?,
             );
             descriptor.asset_type = Some(
                 "equity"
-                    .parse::<kairos_primitives::AssetClass>()
+                    .parse::<kairos_primitives::reference::AssetClass>()
                     .map_err(|e| e.to_string())?,
             );
             plans.push(MarketSourcePlan {
@@ -464,12 +464,12 @@ fn install_one(
                 .map_err(|error| error.to_string())?;
             let mut descriptor = SourceDescriptor::all_routes(SourceId::new(source_id)?);
             descriptor.market_type = Some(
-                kairos_primitives::ProviderProductCode::new("equity")
+                kairos_primitives::integration::ProviderProductCode::new("equity")
                     .map_err(|error| error.to_string())?,
             );
             descriptor.asset_type = Some(
                 "equity"
-                    .parse::<kairos_primitives::AssetClass>()
+                    .parse::<kairos_primitives::reference::AssetClass>()
                     .map_err(|error| error.to_string())?,
             );
             plans.push(MarketSourcePlan {
@@ -493,7 +493,7 @@ fn descriptor(
 ) -> Result<SourceDescriptor, String> {
     Ok(SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_primitives::Exchange::new(exchange).map_err(|e| e.to_string())?,
+        kairos_primitives::reference::Exchange::new(exchange).map_err(|e| e.to_string())?,
         product,
         Some(asset.into()),
     )?

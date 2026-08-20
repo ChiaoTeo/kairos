@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ibapi::contracts::Contract;
 use ibapi::contracts::tick_types::TickType;
 use ibapi::market_data::realtime::TickTypes;
-use kairos_primitives::{ParticipantSymbol, Price, Quantity, UnixNanos};
+use kairos_primitives::decimal::{Price, Quantity};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::UnixNanos;
 
 use super::execution::SessionService;
 use crate::{IntegrationError, MarketQuote};

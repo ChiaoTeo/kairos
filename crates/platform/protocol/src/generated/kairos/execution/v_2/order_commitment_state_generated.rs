@@ -27,15 +27,16 @@ impl<'a> OrderCommitmentState<'a> {
     pub const VT_SIDE: ::flatbuffers::VOffsetT = 12;
     pub const VT_RESOURCE_KIND: ::flatbuffers::VOffsetT = 14;
     pub const VT_RESOURCE_ID: ::flatbuffers::VOffsetT = 16;
-    pub const VT_AMOUNT: ::flatbuffers::VOffsetT = 18;
-    pub const VT_REMAINING_QUANTITY: ::flatbuffers::VOffsetT = 20;
-    pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 22;
-    pub const VT_BASIS_KIND: ::flatbuffers::VOffsetT = 24;
-    pub const VT_PRICE_CAP: ::flatbuffers::VOffsetT = 26;
-    pub const VT_CONTRACT_SIZE: ::flatbuffers::VOffsetT = 28;
-    pub const VT_SETTLEMENT_ASSET: ::flatbuffers::VOffsetT = 30;
-    pub const VT_REFLECTED_ACCOUNT_WATERMARK: ::flatbuffers::VOffsetT = 32;
-    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 34;
+    pub const VT_POSITION_SIDE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_AMOUNT: ::flatbuffers::VOffsetT = 20;
+    pub const VT_REMAINING_QUANTITY: ::flatbuffers::VOffsetT = 22;
+    pub const VT_LIFECYCLE: ::flatbuffers::VOffsetT = 24;
+    pub const VT_BASIS_KIND: ::flatbuffers::VOffsetT = 26;
+    pub const VT_PRICE_CAP: ::flatbuffers::VOffsetT = 28;
+    pub const VT_CONTRACT_SIZE: ::flatbuffers::VOffsetT = 30;
+    pub const VT_SETTLEMENT_ASSET: ::flatbuffers::VOffsetT = 32;
+    pub const VT_REFLECTED_ACCOUNT_WATERMARK: ::flatbuffers::VOffsetT = 34;
+    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 36;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -88,6 +89,7 @@ impl<'a> OrderCommitmentState<'a> {
         }
         builder.add_basis_kind(args.basis_kind);
         builder.add_lifecycle(args.lifecycle);
+        builder.add_position_side(args.position_side);
         builder.add_resource_kind(args.resource_kind);
         builder.add_side(args.side);
         builder.finish()
@@ -187,6 +189,20 @@ impl<'a> OrderCommitmentState<'a> {
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(
                     OrderCommitmentState::VT_RESOURCE_ID,
                     None,
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn position_side(&self) -> CommitmentPositionSide {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<CommitmentPositionSide>(
+                    OrderCommitmentState::VT_POSITION_SIDE,
+                    Some(CommitmentPositionSide::UNSPECIFIED),
                 )
                 .unwrap()
         }
@@ -337,6 +353,7 @@ impl ::flatbuffers::Verifiable for OrderCommitmentState<'_> {
                 Self::VT_RESOURCE_ID,
                 true,
             )?
+            .visit_field::<CommitmentPositionSide>("position_side", Self::VT_POSITION_SIDE, false)?
             .visit_field::<super::super::common::v_2::Decimal64>("amount", Self::VT_AMOUNT, true)?
             .visit_field::<super::super::common::v_2::Decimal64>(
                 "remaining_quantity",
@@ -382,6 +399,7 @@ pub struct OrderCommitmentStateArgs<'a> {
     pub side: super::super::common::v_2::Side,
     pub resource_kind: CommitmentResourceKind,
     pub resource_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub position_side: CommitmentPositionSide,
     pub amount: Option<&'a super::super::common::v_2::Decimal64>,
     pub remaining_quantity: Option<&'a super::super::common::v_2::Decimal64>,
     pub lifecycle: CommitmentLifecycle,
@@ -402,7 +420,8 @@ impl<'a> Default for OrderCommitmentStateArgs<'a> {
             instrument_id: None, // required field
             side: super::super::common::v_2::Side::UNSPECIFIED,
             resource_kind: CommitmentResourceKind::UNSPECIFIED,
-            resource_id: None,        // required field
+            resource_id: None, // required field
+            position_side: CommitmentPositionSide::UNSPECIFIED,
             amount: None,             // required field
             remaining_quantity: None, // required field
             lifecycle: CommitmentLifecycle::UNSPECIFIED,
@@ -470,6 +489,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> OrderCommitmentStateBuilder<'
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             OrderCommitmentState::VT_RESOURCE_ID,
             resource_id,
+        );
+    }
+    #[inline]
+    pub fn add_position_side(&mut self, position_side: CommitmentPositionSide) {
+        self.fbb_.push_slot::<CommitmentPositionSide>(
+            OrderCommitmentState::VT_POSITION_SIDE,
+            position_side,
+            CommitmentPositionSide::UNSPECIFIED,
         );
     }
     #[inline]
@@ -589,6 +616,7 @@ impl ::core::fmt::Debug for OrderCommitmentState<'_> {
         ds.field("side", &self.side());
         ds.field("resource_kind", &self.resource_kind());
         ds.field("resource_id", &self.resource_id());
+        ds.field("position_side", &self.position_side());
         ds.field("amount", &self.amount());
         ds.field("remaining_quantity", &self.remaining_quantity());
         ds.field("lifecycle", &self.lifecycle());

@@ -5,9 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use kairos_primitives::{
-    AccountId, AssetId, Currency, MarketId, OrderId, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::{AssetId, Currency, MarketId, Symbol};
+use kairos_primitives::time::UnixNanos;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{ParticipantInstrumentRef, ParticipantKind, ParticipantRef};
@@ -125,7 +127,7 @@ impl Default for ExternalBalance {
 pub struct ExternalPosition {
     pub participant_instrument: ParticipantInstrumentRef,
     #[serde(default)]
-    pub position_side: kairos_primitives::PositionSide,
+    pub position_side: kairos_primitives::account::PositionSide,
     pub quantity: ExternalDecimal,
     pub average_price: Option<ExternalDecimal>,
     pub mark_price: Option<ExternalDecimal>,
@@ -144,7 +146,7 @@ impl Default for ExternalPosition {
                 "UNKNOWN",
             )
             .expect("static provider instrument"),
-            position_side: kairos_primitives::PositionSide::Net,
+            position_side: kairos_primitives::account::PositionSide::Net,
             quantity: ExternalDecimal::default(),
             average_price: None,
             mark_price: None,
@@ -195,10 +197,10 @@ pub struct ExternalOpenOrder {
     pub order_id: OrderId,
     pub remote_order_id: Option<RemoteOrderId>,
     pub participant_instrument: ParticipantInstrumentRef,
-    pub side: kairos_primitives::OrderSide,
+    pub side: kairos_primitives::execution::OrderSide,
     pub quantity: ExternalDecimal,
     pub filled_quantity: ExternalDecimal,
-    pub status: kairos_primitives::OrderStatus,
+    pub status: kairos_primitives::integration::OrderStatus,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -225,7 +227,7 @@ pub struct ExternalOrderEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExternalFillEvent {
-    pub fill_id: kairos_primitives::FillId,
+    pub fill_id: kairos_primitives::execution::FillId,
     pub order_id: OrderId,
     pub segment_key: SegmentKey,
     pub participant_instrument: ParticipantInstrumentRef,

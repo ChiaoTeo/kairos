@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::SourceId;
+use kairos_primitives::market::SourceId;
 
 use crate::{ContractError, ContractResult};
 

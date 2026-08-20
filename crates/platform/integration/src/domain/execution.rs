@@ -1,10 +1,14 @@
 //! Participant-neutral order and execution data.
 
-use kairos_primitives::{
-    AccountId, ClientOrderId, Currency, DomainTypeError, FillId, InstrumentId, IntentId, MarketId,
-    Money, OrderId, Price, Quantity, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
-};
-pub use kairos_primitives::{OrderSide, OrderStatus};
+use kairos_primitives::DomainTypeError;
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::{Money, Price, Quantity};
+pub use kairos_primitives::execution::OrderSide;
+use kairos_primitives::execution::{ClientOrderId, FillId, IntentId, OrderId};
+pub use kairos_primitives::integration::OrderStatus;
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
+use kairos_primitives::time::UnixNanos;
 
 pub use super::decimal::DecimalValue;
 use crate::domain::ParticipantInstrumentRef;
@@ -231,7 +235,7 @@ pub struct ExternalExecutionEvent {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::Symbol;
+    use kairos_primitives::reference::Symbol;
 
     use super::{OrderRequest, OrderSide, OrderType};
 

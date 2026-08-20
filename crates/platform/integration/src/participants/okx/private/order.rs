@@ -1,6 +1,8 @@
 //! OKX-native ordinary-order extensions that do not widen the shared capability surface.
 
-use kairos_primitives::{ClientOrderId, ParticipantSymbol, Price, Quantity, RemoteOrderId};
+use kairos_primitives::decimal::{Price, Quantity};
+use kairos_primitives::execution::ClientOrderId;
+use kairos_primitives::integration::{ParticipantSymbol, RemoteOrderId};
 use serde_json::Value;
 
 use crate::{CommandOutcome, IndeterminateCommand, IntegrationError, ParticipantRejection};

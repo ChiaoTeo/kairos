@@ -1,4 +1,4 @@
-use kairos_primitives::InstrumentKind;
+use kairos_primitives::reference::InstrumentKind;
 
 use super::super::{MarketApplication, MarketError};
 use crate::domain::market::ResolvedMarket;
@@ -122,7 +122,7 @@ fn exchange_matches(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::InstrumentKind;
+    use kairos_primitives::reference::InstrumentKind;
 
     use super::resolve_market;
     use crate::domain::market::{MarketDataRoute, ResolvedMarket};

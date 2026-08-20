@@ -1,6 +1,6 @@
 //! Synchronous market capabilities.
 
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use crate::{
     HistoricalBarRequest, HistoricalWindow, IntegrationError, MarketBar, MarketBarRequest,

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
-use kairos_primitives::{AssetClass, Exchange, ProviderProductCode};
+use kairos_primitives::integration::ProviderProductCode;
+use kairos_primitives::reference::{AssetClass, Exchange};
 use serde::{Deserialize, Serialize};
 
 use super::SourceId;

@@ -9,32 +9,32 @@ use kairos_account::domain::{
     Account, AccountFill, AccountObservedFill, AccountSegment, AccountSnapshot, AccountStatus,
     ApplyOutcome, AssetId, Balance, EarnHolding, EarnHoldingLiquidity, EarnHoldingState,
     EarnHoldingsSnapshot, ExternalAccountIdentity, FillId, InstrumentId, Money, OrderSide,
-    Position, SegmentKey, SignedQuantity,
+    Position, SegmentKey, SignedQuantity, SimulatedCapitalMutation, SimulatedCapitalMutationKind,
 };
-use kairos_primitives::{Price, Quantity};
+use kairos_primitives::decimal::{Price, Quantity};
 
-fn order_id(value: &str) -> kairos_primitives::OrderId {
-    kairos_primitives::OrderId::new(value).unwrap()
+fn order_id(value: &str) -> kairos_primitives::execution::OrderId {
+    kairos_primitives::execution::OrderId::new(value).unwrap()
 }
 
-fn remote_order_id(value: &str) -> kairos_primitives::RemoteOrderId {
-    kairos_primitives::RemoteOrderId::new(value).unwrap()
+fn remote_order_id(value: &str) -> kairos_primitives::integration::RemoteOrderId {
+    kairos_primitives::integration::RemoteOrderId::new(value).unwrap()
 }
 
-fn currency(value: &str) -> kairos_primitives::Currency {
-    kairos_primitives::Currency::new(value).unwrap()
+fn currency(value: &str) -> kairos_primitives::reference::Currency {
+    kairos_primitives::reference::Currency::new(value).unwrap()
 }
 
-fn nanos(value: u64) -> kairos_primitives::UnixNanos {
-    kairos_primitives::UnixNanos::new(value)
+fn nanos(value: u64) -> kairos_primitives::time::UnixNanos {
+    kairos_primitives::time::UnixNanos::new(value)
 }
 
 fn binding(value: &str) -> AccountSegmentBinding {
     AccountSegmentBinding::new(value, value)
 }
 
-fn account_id(value: &str) -> kairos_primitives::AccountId {
-    kairos_primitives::AccountId::new(value).unwrap()
+fn account_id(value: &str) -> kairos_primitives::account::AccountId {
+    kairos_primitives::account::AccountId::new(value).unwrap()
 }
 
 fn segment_key(value: &str) -> SegmentKey {
@@ -69,6 +69,124 @@ fn simulation_business_time_is_owned_by_the_account_application() {
     assert_eq!(application.business_time_unix_nanos(), Some(10));
     assert!(application.advance_business_time(9).is_err());
     assert_eq!(application.business_time_unix_nanos(), Some(10));
+}
+
+#[test]
+fn simulated_capital_mutation_is_idempotent_persistent_and_updates_earn() {
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("account-capital-simulation.json");
+    let mutation_id =
+        kairos_primitives::runtime::IdempotencyKey::new("capital:subscribe:1").unwrap();
+    let mut initial = empty_snapshot("spot");
+    initial.observed_at_unix_nanos = nanos(100);
+    initial.status = AccountStatus::Ready;
+    initial.balances = vec![Balance {
+        asset_id: AssetId::new("asset:usdt").unwrap(),
+        asset_code: currency("USDT"),
+        total: SignedQuantity::new(100, 0).unwrap(),
+        available: Some(SignedQuantity::new(100, 0).unwrap()),
+        locked: Some(SignedQuantity::ZERO),
+        borrowed: None,
+        interest: None,
+    }];
+    let snapshots = BTreeMap::from([("spot".into(), initial.clone())]);
+    {
+        let mut application = compose_in_memory_account_application(
+            vec![segment("spot")],
+            snapshots.clone(),
+            Some(state_path.clone()),
+        )
+        .unwrap();
+        application
+            .refresh(RefreshAccount {
+                account_id: account_id("main"),
+                segments: Vec::new(),
+            })
+            .unwrap();
+        let mutation = SimulatedCapitalMutation {
+            mutation_id: mutation_id.clone(),
+            segment_key: segment_key("spot"),
+            asset: currency("USDT"),
+            amount: Quantity::new(30, 0).unwrap(),
+            kind: SimulatedCapitalMutationKind::SubscribeEarn,
+            product_id: Some("USDT001".into()),
+            occurred_at_unix_nanos: nanos(110),
+        };
+        application
+            .apply_simulated_capital_mutation(mutation.clone())
+            .unwrap();
+        application
+            .apply_simulated_capital_mutation(mutation)
+            .unwrap();
+        let projection = account_projection(&application);
+        assert_eq!(projection.balances[0].total.mantissa(), 70);
+        assert_eq!(projection.earn_holdings[0].principal.mantissa(), 30);
+    }
+
+    let mut recovered =
+        compose_in_memory_account_application(vec![segment("spot")], snapshots, Some(state_path))
+            .unwrap();
+    assert!(
+        recovered
+            .simulated_capital_mutation_applied(&segment_key("spot"), &mutation_id)
+            .unwrap()
+    );
+    recovered
+        .apply_simulated_capital_mutation(SimulatedCapitalMutation {
+            mutation_id: kairos_primitives::runtime::IdempotencyKey::new("capital:redeem:1")
+                .unwrap(),
+            segment_key: segment_key("spot"),
+            asset: currency("USDT"),
+            amount: Quantity::new(10, 0).unwrap(),
+            kind: SimulatedCapitalMutationKind::RedeemEarn,
+            product_id: Some("USDT001".into()),
+            occurred_at_unix_nanos: nanos(120),
+        })
+        .unwrap();
+    let projection = account_projection(&recovered);
+    assert_eq!(projection.balances[0].total.mantissa(), 80);
+    assert_eq!(projection.earn_holdings[0].principal.mantissa(), 20);
+}
+
+#[test]
+fn account_rejects_simulated_capital_mutation_until_simulation_mode_is_enabled() {
+    let options = AccountOptions {
+        provider: "paper".into(),
+        product: "spot".into(),
+        api_key: String::new().into(),
+        secret: String::new().into(),
+        passphrase: String::new().into(),
+        base_url: String::new(),
+        account_id: "paper-main".into(),
+        segment: "spot".into(),
+        environment: "paper".into(),
+        account_model: None,
+        initial_balances: vec!["USDT=100".into()],
+        host: "127.0.0.1".into(),
+        port: 4002,
+        client_id: 0,
+        isolated_margin_symbol: None,
+        reference_database: None,
+    };
+    let mut application =
+        compose_local_account_application_for_segments(&options, &[binding("spot")], None)
+            .unwrap()
+            .application;
+
+    let error = application
+        .apply_simulated_capital_mutation(SimulatedCapitalMutation {
+            mutation_id: kairos_primitives::runtime::IdempotencyKey::new("capital:disabled:1")
+                .unwrap(),
+            segment_key: segment_key("spot"),
+            asset: currency("USDT"),
+            amount: Quantity::new(1, 0).unwrap(),
+            kind: SimulatedCapitalMutationKind::DebitLiquid,
+            product_id: None,
+            occurred_at_unix_nanos: nanos(1),
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("simulation command is disabled"));
 }
 
 #[derive(Default)]
@@ -129,7 +247,7 @@ fn money(mantissa: i64, scale: u8) -> Money {
 fn balance(asset_id: &str, asset_code: &str, total: SignedQuantity) -> Balance {
     Balance {
         asset_id: AssetId::new(asset_id).unwrap(),
-        asset_code: kairos_primitives::Currency::new(asset_code).unwrap(),
+        asset_code: kairos_primitives::reference::Currency::new(asset_code).unwrap(),
         total,
         available: None,
         locked: None,
@@ -142,13 +260,13 @@ fn position(instrument_id: &str, quantity: SignedQuantity) -> Position {
     Position {
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
         market_id: None,
-        position_side: kairos_primitives::PositionSide::Net,
+        position_side: kairos_primitives::account::PositionSide::Net,
         quantity,
         average_price: None,
         mark_price: None,
         unrealized_pnl: None,
         realized_pnl: None,
-        updated_at_unix_nanos: kairos_primitives::UnixNanos::new(0),
+        updated_at_unix_nanos: kairos_primitives::time::UnixNanos::new(0),
     }
 }
 
@@ -706,7 +824,7 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
     assert!(account.state().balances().contains_key("asset:usdc"));
     assert!(!account.state().positions().contains_key(&(
         InstrumentId::new("instrument:btc").unwrap(),
-        kairos_primitives::PositionSide::Net,
+        kairos_primitives::account::PositionSide::Net,
     )));
 }
 
@@ -720,9 +838,9 @@ fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
     };
     let mut account = Account::new(segment).unwrap();
     let mut long = position("instrument:btc-perp", signed(2, 0));
-    long.position_side = kairos_primitives::PositionSide::Long;
+    long.position_side = kairos_primitives::account::PositionSide::Long;
     let mut short = position("instrument:btc-perp", signed(-1, 0));
-    short.position_side = kairos_primitives::PositionSide::Short;
+    short.position_side = kairos_primitives::account::PositionSide::Short;
     account
         .apply_snapshot(AccountSnapshot {
             segment_key: SegmentKey::new("usd_m_futures").unwrap(),
@@ -736,11 +854,11 @@ fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
     assert_eq!(account.state().positions().len(), 2);
     assert!(account.state().positions().contains_key(&(
         InstrumentId::new("instrument:btc-perp").unwrap(),
-        kairos_primitives::PositionSide::Long,
+        kairos_primitives::account::PositionSide::Long,
     )));
     assert!(account.state().positions().contains_key(&(
         InstrumentId::new("instrument:btc-perp").unwrap(),
-        kairos_primitives::PositionSide::Short,
+        kairos_primitives::account::PositionSide::Short,
     )));
 
     long.quantity = signed(0, 0);
@@ -757,7 +875,7 @@ fn hedge_mode_positions_keep_long_and_short_as_distinct_facts() {
     assert_eq!(account.state().positions().len(), 1);
     assert!(account.state().positions().contains_key(&(
         InstrumentId::new("instrument:btc-perp").unwrap(),
-        kairos_primitives::PositionSide::Short,
+        kairos_primitives::account::PositionSide::Short,
     )));
 }
 
@@ -877,8 +995,8 @@ fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     full.observed_at_unix_nanos = 100.into();
     assert_eq!(account.apply_snapshot(full).unwrap(), ApplyOutcome::Applied);
     account.evaluate_staleness(
-        kairos_primitives::UnixNanos::new(200),
-        kairos_primitives::DurationNanos::new(50),
+        kairos_primitives::time::UnixNanos::new(200),
+        kairos_primitives::time::DurationNanos::new(50),
     );
     assert!(account.state().stale());
 
@@ -893,7 +1011,7 @@ fn delta_snapshot_does_not_make_a_stale_account_fresh() {
     assert!(account.state().stale());
     assert_eq!(
         account.state().observed_at_unix_nanos(),
-        kairos_primitives::UnixNanos::new(100)
+        kairos_primitives::time::UnixNanos::new(100)
     );
 }
 

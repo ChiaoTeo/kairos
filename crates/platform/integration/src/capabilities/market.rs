@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::task::{Context, Poll};
 
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use crate::IntegrationError;
 use crate::domain::market::{

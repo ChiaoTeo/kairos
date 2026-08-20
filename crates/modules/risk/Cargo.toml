@@ -11,7 +11,6 @@ name = "kairos_risk"
 path = "src/lib.rs"
 
 [dependencies]
-axum.workspace = true
 clap.workspace = true
 flatbuffers.workspace = true
 kairos-conflux.workspace = true

@@ -18,9 +18,9 @@ fn orderbook_applies_contiguous_deltas() {
     )
     .unwrap();
     book.apply_delta(OrderBookDelta {
-        source_id: kairos_primitives::SourceId::new("market").unwrap(),
-        market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+        source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+        market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 11.into(),
         last_sequence: 11.into(),
         event_time_unix_nanos: 2.into(),
@@ -41,7 +41,7 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
     let descriptor = ResolvedMarket::new(
         "market:btc",
         "instrument:btc",
-        kairos_primitives::InstrumentKind::Spot,
+        kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
         MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
     )
@@ -57,7 +57,7 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
     application
         .ingest_orderbook_snapshot(
             OrderBook::snapshot_with_source(
-                kairos_primitives::SourceId::new("binance.spot").unwrap(),
+                kairos_primitives::market::SourceId::new("binance.spot").unwrap(),
                 "market:btc",
                 "instrument:btc",
                 1,
@@ -84,7 +84,7 @@ fn query_estimates_execution_with_decimal_vwap_and_slippage() {
     let estimate = application
         .query()
         .estimate_execution(
-            &kairos_primitives::SourceId::new("binance.spot").unwrap(),
+            &kairos_primitives::market::SourceId::new("binance.spot").unwrap(),
             "market:btc",
             OrderBookSide::Buy,
             "3",
@@ -100,9 +100,9 @@ fn orderbook_accepts_overlapping_provider_delta_ranges() {
     let mut book =
         OrderBook::snapshot("market:btc", "instrument:btc", 10, 1, vec![], vec![]).unwrap();
     book.apply_delta(OrderBookDelta {
-        source_id: kairos_primitives::SourceId::new("market").unwrap(),
-        market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+        source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+        market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc").unwrap(),
         first_sequence: 9.into(),
         last_sequence: 12.into(),
         event_time_unix_nanos: 2.into(),
@@ -120,9 +120,10 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
         OrderBook::snapshot("market:btc", "instrument:btc", 10, 1, vec![], vec![]).unwrap();
     assert!(
         book.apply_delta(OrderBookDelta {
-            source_id: kairos_primitives::SourceId::new("market").unwrap(),
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
             first_sequence: 12.into(),
             last_sequence: 12.into(),
             event_time_unix_nanos: 2.into(),
@@ -135,9 +136,10 @@ fn orderbook_gap_marks_book_unsynchronized_until_snapshot() {
     assert!(!book.synchronized);
     assert!(
         book.apply_delta(OrderBookDelta {
-            source_id: kairos_primitives::SourceId::new("market").unwrap(),
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            source_id: kairos_primitives::market::SourceId::new("market").unwrap(),
+            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
             first_sequence: 11.into(),
             last_sequence: 11.into(),
             event_time_unix_nanos: 3.into(),

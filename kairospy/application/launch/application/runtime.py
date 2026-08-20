@@ -480,6 +480,9 @@ class LaunchRuntimeApplication:
                 instance_workspace=market_instance_workspace,
             )
             account_endpoints: dict[str, dict[str, Any]] = {}
+            capital_member_readiness = dict(
+                plan.capital.get("member_readiness") or {}
+            )
             for bound_account_id in lease_account_ids:
                 required_segments = tuple(
                     plan.required_account_segments.get(bound_account_id, ())
@@ -531,6 +534,9 @@ class LaunchRuntimeApplication:
                     "participant_account_ref": (
                         account_records[bound_account_id].get("values") or {}
                     ).get("participant_account_ref"),
+                    "capital_readiness_role": capital_member_readiness.get(
+                        bound_account_id, "critical"
+                    ),
                     "lease_fence": account_lease_fences[bound_account_id],
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)

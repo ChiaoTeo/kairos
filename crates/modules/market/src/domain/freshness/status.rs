@@ -1,4 +1,5 @@
-use kairos_primitives::{Sequence, SourceId, UnixNanos};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::observation::{ObservationKind, ObservationScope};

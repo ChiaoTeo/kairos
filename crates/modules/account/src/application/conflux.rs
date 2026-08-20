@@ -8,7 +8,7 @@ use kairos_conflux::{
     ExternalParticipantEvent, ResourceOperationError, RestContract, SystemEvent,
     TypedConnectionCollection,
 };
-use kairos_primitives::SegmentKey;
+use kairos_primitives::account::SegmentKey;
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
 
@@ -338,7 +338,7 @@ impl AccountApplication {
         context: &mut Context<'_, Self>,
     ) -> Result<kairos_account_contract::AccountRestResponse, AccountError> {
         use kairos_account_contract::{
-            AccountCommandStatus, AccountRestRequest, AccountRestResponse,
+            AccountCommandOutcome, AccountCommandStatus, AccountRestRequest, AccountRestResponse,
         };
         Ok(match request {
             AccountRestRequest::Health => AccountRestResponse::Health(Ok(self.contract_health())),
@@ -347,15 +347,43 @@ impl AccountApplication {
                     simulated_fill(value)
                         .and_then(|fill| self.apply_simulated_fill(fill))
                         .map(|()| AccountCommandStatus {
-                            status: "applied".into(),
+                            status: AccountCommandOutcome::Applied,
                         })
                         .map_err(control_error),
+                )
+            },
+            AccountRestRequest::ApplySimulatedCapitalMutation(value) => {
+                AccountRestResponse::ApplySimulatedCapitalMutation(
+                    simulated_capital_mutation(value)
+                        .and_then(|mutation| self.apply_simulated_capital_mutation(mutation))
+                        .map(|()| AccountCommandStatus {
+                            status: AccountCommandOutcome::Applied,
+                        })
+                        .map_err(control_error),
+                )
+            },
+            AccountRestRequest::QuerySimulatedCapitalMutation(value) => {
+                AccountRestResponse::QuerySimulatedCapitalMutation(
+                    self.simulated_capital_mutation_applied(
+                        &value.segment_key,
+                        &value.mutation_id,
+                    )
+                    .map(|applied| {
+                        kairos_account_contract::SimulatedCapitalMutationStatusResponse {
+                            status: if applied {
+                                kairos_account_contract::SimulatedCapitalMutationStatus::Applied
+                            } else {
+                                kairos_account_contract::SimulatedCapitalMutationStatus::NotFound
+                            },
+                        }
+                    })
+                    .map_err(control_error),
                 )
             },
             AccountRestRequest::MarkToMarket(value) => AccountRestResponse::MarkToMarket(
                 self.mark_to_market(value.into())
                     .map(|()| AccountCommandStatus {
-                        status: "applied".into(),
+                        status: AccountCommandOutcome::Applied,
                     })
                     .map_err(control_error),
             ),
@@ -395,7 +423,7 @@ impl AccountApplication {
             .first()
             .map(|value| value.account_id.clone());
         kairos_account_contract::AccountRefreshResponse {
-            status: "completed".into(),
+            status: kairos_account_contract::AccountRefreshStatus::Completed,
             account_id,
             segments,
         }
@@ -405,7 +433,11 @@ impl AccountApplication {
         let ready = !self.conflux.segments.is_empty()
             && self.conflux.segments.values().all(SegmentSyncState::ready);
         kairos_account_contract::Health {
-            status: if ready { "ready" } else { "degraded" }.into(),
+            status: if ready {
+                kairos_account_contract::AccountHealthStatus::Ready
+            } else {
+                kairos_account_contract::AccountHealthStatus::Degraded
+            },
             lease_valid: None,
             generation: self.generation().into(),
             event_sequence: self.event_sequence().into(),
@@ -805,6 +837,33 @@ fn simulated_fill(
         settlement_delta: value.settlement_delta,
         fee_asset: value.fee_asset,
         fee_amount: value.fee_amount,
+        occurred_at_unix_nanos: value.occurred_at_unix_nanos,
+    })
+}
+
+fn simulated_capital_mutation(
+    value: kairos_account_contract::SimulatedCapitalMutation,
+) -> Result<crate::domain::SimulatedCapitalMutation, AccountError> {
+    Ok(crate::domain::SimulatedCapitalMutation {
+        mutation_id: value.mutation_id,
+        segment_key: value.segment_key,
+        asset: value.asset,
+        amount: value.amount,
+        kind: match value.kind {
+            kairos_account_contract::SimulatedCapitalMutationKind::DebitLiquid => {
+                crate::domain::SimulatedCapitalMutationKind::DebitLiquid
+            },
+            kairos_account_contract::SimulatedCapitalMutationKind::CreditLiquid => {
+                crate::domain::SimulatedCapitalMutationKind::CreditLiquid
+            },
+            kairos_account_contract::SimulatedCapitalMutationKind::SubscribeEarn => {
+                crate::domain::SimulatedCapitalMutationKind::SubscribeEarn
+            },
+            kairos_account_contract::SimulatedCapitalMutationKind::RedeemEarn => {
+                crate::domain::SimulatedCapitalMutationKind::RedeemEarn
+            },
+        },
+        product_id: value.product_id,
         occurred_at_unix_nanos: value.occurred_at_unix_nanos,
     })
 }

@@ -1,4 +1,6 @@
-use kairos_primitives::{AssetId, ClientOrderId, Currency, OrderId, Symbol, UnixNanos};
+use kairos_primitives::execution::{ClientOrderId, OrderId};
+use kairos_primitives::reference::{AssetId, Currency, Symbol};
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -65,7 +67,7 @@ pub(crate) fn snapshot(
                     symbol,
                 )
                 .map_err(IntegrationError::InvalidPayload)?,
-                position_side: kairos_primitives::PositionSide::Net,
+                position_side: kairos_primitives::account::PositionSide::Net,
                 quantity: external_decimal(text(row, "szi")?)?,
                 average_price: optional_external(row, "entryPx")?,
                 mark_price: None,

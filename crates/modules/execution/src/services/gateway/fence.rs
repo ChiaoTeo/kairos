@@ -2,8 +2,8 @@ use kairos_conflux::{IntegrationError, OrderEntryRequest};
 
 #[derive(Debug)]
 pub struct ExecutionWriterFence {
-    account_id: kairos_primitives::AccountId,
-    segment_key: kairos_primitives::SegmentKey,
+    account_id: kairos_primitives::account::AccountId,
+    segment_key: kairos_primitives::account::SegmentKey,
     lease: std::sync::Arc<kairos_workspace::WorkspaceFencedLease>,
 }
 
@@ -14,9 +14,9 @@ impl ExecutionWriterFence {
         lease: kairos_workspace::WorkspaceFencedLease,
     ) -> Result<Self, String> {
         Ok(Self {
-            account_id: kairos_primitives::AccountId::new(account_id.into())
+            account_id: kairos_primitives::account::AccountId::new(account_id.into())
                 .map_err(|error| error.to_string())?,
-            segment_key: kairos_primitives::SegmentKey::new(segment_key.into())
+            segment_key: kairos_primitives::account::SegmentKey::new(segment_key.into())
                 .map_err(|error| error.to_string())?,
             lease: std::sync::Arc::new(lease),
         })

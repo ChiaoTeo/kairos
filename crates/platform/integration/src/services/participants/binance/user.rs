@@ -1,6 +1,8 @@
-use kairos_primitives::{
-    AssetId, Currency, FillId, OrderId, RemoteOrderId, SegmentKey, Symbol, UnixNanos,
-};
+use kairos_primitives::account::SegmentKey;
+use kairos_primitives::execution::{FillId, OrderId};
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::{AssetId, Currency, Symbol};
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::domain::execution::normalize_order_status;
@@ -274,9 +276,9 @@ fn futures_account(
                 )
                 .map_err(IntegrationError::InvalidPayload)?,
                 position_side: match row.get("ps").and_then(Value::as_str) {
-                    Some("LONG") => kairos_primitives::PositionSide::Long,
-                    Some("SHORT") => kairos_primitives::PositionSide::Short,
-                    _ => kairos_primitives::PositionSide::Net,
+                    Some("LONG") => kairos_primitives::account::PositionSide::Long,
+                    Some("SHORT") => kairos_primitives::account::PositionSide::Short,
+                    _ => kairos_primitives::account::PositionSide::Net,
                 },
                 quantity: account_decimal(row.get("pa").and_then(Value::as_str).unwrap_or("0"))?,
                 average_price: account_optional(row.get("ep").and_then(Value::as_str))?,

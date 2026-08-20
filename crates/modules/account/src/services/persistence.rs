@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Account, AccountEvent, AccountSegment, AccountState};
@@ -29,7 +29,7 @@ pub(crate) enum AccountJournalRecord {
     },
     PublicationAcknowledged {
         sequence: Sequence,
-        account_id: kairos_primitives::AccountId,
+        account_id: kairos_primitives::account::AccountId,
     },
 }
 

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use kairos_primitives::{AccountId, Quantity, SegmentKey, UnixNanos};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use super::BinanceTransferAccount;

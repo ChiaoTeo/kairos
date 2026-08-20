@@ -74,18 +74,14 @@ class OrderCommitmentState(object):
         return None
 
     # OrderCommitmentState
-    def Amount(self):
+    def PositionSide(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
         if o != 0:
-            x = o + self._tab.Pos
-            from kairos.common.v2.Decimal64 import Decimal64
-            obj = Decimal64()
-            obj.Init(self._tab.Bytes, x)
-            return obj
-        return None
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
 
     # OrderCommitmentState
-    def RemainingQuantity(self):
+    def Amount(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
         if o != 0:
             x = o + self._tab.Pos
@@ -96,22 +92,8 @@ class OrderCommitmentState(object):
         return None
 
     # OrderCommitmentState
-    def Lifecycle(self):
+    def RemainingQuantity(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
-        return 0
-
-    # OrderCommitmentState
-    def BasisKind(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
-        if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
-        return 0
-
-    # OrderCommitmentState
-    def PriceCap(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v2.Decimal64 import Decimal64
@@ -121,7 +103,21 @@ class OrderCommitmentState(object):
         return None
 
     # OrderCommitmentState
-    def ContractSize(self):
+    def Lifecycle(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # OrderCommitmentState
+    def BasisKind(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # OrderCommitmentState
+    def PriceCap(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             x = o + self._tab.Pos
@@ -132,28 +128,39 @@ class OrderCommitmentState(object):
         return None
 
     # OrderCommitmentState
-    def SettlementAsset(self):
+    def ContractSize(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v2.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # OrderCommitmentState
+    def SettlementAsset(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # OrderCommitmentState
     def ReflectedAccountWatermark(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return None
 
     # OrderCommitmentState
     def UpdatedAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def OrderCommitmentStateStart(builder):
-    builder.StartObject(16)
+    builder.StartObject(17)
 
 def Start(builder):
     OrderCommitmentStateStart(builder)
@@ -200,56 +207,62 @@ def OrderCommitmentStateAddResourceId(builder, resourceId):
 def AddResourceId(builder, resourceId):
     OrderCommitmentStateAddResourceId(builder, resourceId)
 
+def OrderCommitmentStateAddPositionSide(builder, positionSide):
+    builder.PrependUint8Slot(7, positionSide, 0)
+
+def AddPositionSide(builder, positionSide):
+    OrderCommitmentStateAddPositionSide(builder, positionSide)
+
 def OrderCommitmentStateAddAmount(builder, amount):
-    builder.PrependStructSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(amount), 0)
+    builder.PrependStructSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(amount), 0)
 
 def AddAmount(builder, amount):
     OrderCommitmentStateAddAmount(builder, amount)
 
 def OrderCommitmentStateAddRemainingQuantity(builder, remainingQuantity):
-    builder.PrependStructSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(remainingQuantity), 0)
+    builder.PrependStructSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(remainingQuantity), 0)
 
 def AddRemainingQuantity(builder, remainingQuantity):
     OrderCommitmentStateAddRemainingQuantity(builder, remainingQuantity)
 
 def OrderCommitmentStateAddLifecycle(builder, lifecycle):
-    builder.PrependUint8Slot(9, lifecycle, 0)
+    builder.PrependUint8Slot(10, lifecycle, 0)
 
 def AddLifecycle(builder, lifecycle):
     OrderCommitmentStateAddLifecycle(builder, lifecycle)
 
 def OrderCommitmentStateAddBasisKind(builder, basisKind):
-    builder.PrependUint8Slot(10, basisKind, 0)
+    builder.PrependUint8Slot(11, basisKind, 0)
 
 def AddBasisKind(builder, basisKind):
     OrderCommitmentStateAddBasisKind(builder, basisKind)
 
 def OrderCommitmentStateAddPriceCap(builder, priceCap):
-    builder.PrependStructSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(priceCap), 0)
+    builder.PrependStructSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(priceCap), 0)
 
 def AddPriceCap(builder, priceCap):
     OrderCommitmentStateAddPriceCap(builder, priceCap)
 
 def OrderCommitmentStateAddContractSize(builder, contractSize):
-    builder.PrependStructSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(contractSize), 0)
+    builder.PrependStructSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(contractSize), 0)
 
 def AddContractSize(builder, contractSize):
     OrderCommitmentStateAddContractSize(builder, contractSize)
 
 def OrderCommitmentStateAddSettlementAsset(builder, settlementAsset):
-    builder.PrependUOffsetTRelativeSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(settlementAsset), 0)
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(settlementAsset), 0)
 
 def AddSettlementAsset(builder, settlementAsset):
     OrderCommitmentStateAddSettlementAsset(builder, settlementAsset)
 
 def OrderCommitmentStateAddReflectedAccountWatermark(builder, reflectedAccountWatermark):
-    builder.PrependUint64Slot(14, reflectedAccountWatermark, None)
+    builder.PrependUint64Slot(15, reflectedAccountWatermark, None)
 
 def AddReflectedAccountWatermark(builder, reflectedAccountWatermark):
     OrderCommitmentStateAddReflectedAccountWatermark(builder, reflectedAccountWatermark)
 
 def OrderCommitmentStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
-    builder.PrependUint64Slot(15, updatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(16, updatedAtUnixNanos, 0)
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     OrderCommitmentStateAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)

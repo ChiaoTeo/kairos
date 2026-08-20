@@ -1,6 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_primitives::{ClientOrderId, OrderId, Symbol, UnixNanos};
+use kairos_primitives::execution::{ClientOrderId, OrderId};
+use kairos_primitives::reference::Symbol;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -146,7 +148,7 @@ pub(crate) fn normalize_order_submission(
         remote_order_id: row
             .get("ordId")
             .and_then(Value::as_str)
-            .and_then(|value| kairos_primitives::RemoteOrderId::new(value).ok()),
+            .and_then(|value| kairos_primitives::integration::RemoteOrderId::new(value).ok()),
         filled_quantity: None,
         occurred_at_unix_nanos: now_nanos().into(),
         reason: row
@@ -195,7 +197,7 @@ pub(crate) fn normalize_order_cancellation(
     Ok(CommandOutcome::Confirmed(OrderEntryEvent {
         order_id: request.order_id.clone(),
         status: OrderEntryStatus::Canceled,
-        remote_order_id: kairos_primitives::RemoteOrderId::new(remote_order_id).ok(),
+        remote_order_id: kairos_primitives::integration::RemoteOrderId::new(remote_order_id).ok(),
         filled_quantity: None,
         occurred_at_unix_nanos: at_unix_nanos.into(),
         reason: row
@@ -276,13 +278,15 @@ mod tests {
     #[test]
     fn order_uses_participant_instrument_instead_of_parsing_market_id() {
         let request = crate::OrderEntryRequest {
-            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
             intent_id: None,
-            account_id: kairos_primitives::AccountId::new("main").unwrap(),
-            segment_key: kairos_primitives::SegmentKey::new("swap").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc-swap").unwrap(),
+            account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("swap").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc-swap")
+                .unwrap(),
             market_id: Some(
-                kairos_primitives::MarketId::new("market:canonical:not-an-okx-symbol").unwrap(),
+                kairos_primitives::reference::MarketId::new("market:canonical:not-an-okx-symbol")
+                    .unwrap(),
             ),
             participant_instrument: crate::domain::ParticipantInstrumentRef::new(
                 crate::domain::ParticipantRef::new(crate::domain::ParticipantKind::Exchange, "okx")

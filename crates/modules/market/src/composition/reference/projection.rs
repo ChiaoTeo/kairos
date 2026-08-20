@@ -7,7 +7,7 @@ use crate::{MarketDataRoute, ReconcileMarketUniverse, ResolvedMarket};
 pub(crate) fn build_reference_projection(
     sources: &BTreeMap<String, MarketSourceBinding>,
 ) -> crate::services::reference_projection::ReferenceUniverseProjection {
-    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+    use kairos_primitives::reference::InstrumentKind::{Future, Option, Perpetual, Spot};
 
     use crate::composition::config::{
         BinanceDerivativeProduct, HyperliquidMarketType, OkxInstrumentType,
@@ -108,7 +108,7 @@ pub(crate) fn project_market_universe(
             .collect::<Vec<_>>();
         if candidates.is_empty()
             && market.exchange_id.eq_ignore_ascii_case("exchange:binance")
-            && market.instrument_kind == kairos_primitives::InstrumentKind::Spot
+            && market.instrument_kind == kairos_primitives::reference::InstrumentKind::Spot
         {
             candidates.push((None, "binance", "spot"));
         }
@@ -195,10 +195,11 @@ pub(super) fn project_market_universe_at_sequence(
     project_market_universe(snapshot, sources)
 }
 
-fn is_active(status: &kairos_primitives::ReferenceStatus) -> bool {
+fn is_active(status: &kairos_primitives::reference::ReferenceStatus) -> bool {
     matches!(
         status,
-        kairos_primitives::ReferenceStatus::Active | kairos_primitives::ReferenceStatus::Trading
+        kairos_primitives::reference::ReferenceStatus::Active
+            | kairos_primitives::reference::ReferenceStatus::Trading
     )
 }
 
@@ -218,17 +219,19 @@ mod tests {
         snapshot
             .instruments
             .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Spot,
+                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                    .unwrap(),
+                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             });
         snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
-            exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
-            instrument_kind: kairos_primitives::InstrumentKind::Spot,
-            venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
+            exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance").unwrap(),
+            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+            venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
         });
@@ -264,7 +267,7 @@ mod tests {
     fn excludes_market_without_a_configured_or_builtin_venue_adapter() {
         let mut snapshot = fixture();
         snapshot.markets[0].exchange_id =
-            kairos_primitives::Exchange::new("exchange:curated").unwrap();
+            kairos_primitives::reference::Exchange::new("exchange:curated").unwrap();
         let update = project_market_universe(&snapshot, &BTreeMap::new()).unwrap();
         assert!(update.markets.is_empty());
     }
@@ -285,17 +288,19 @@ mod tests {
         snapshot
             .instruments
             .push(kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Spot,
+                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                    .unwrap(),
+                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             });
         snapshot.markets.push(kairos_reference_contract::Market {
-            market_id: kairos_primitives::MarketId::new("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
-            exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
-            instrument_kind: kairos_primitives::InstrumentKind::Spot,
-            venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+            market_id: kairos_primitives::reference::MarketId::new("market:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
+            exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance").unwrap(),
+            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+            venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
         });

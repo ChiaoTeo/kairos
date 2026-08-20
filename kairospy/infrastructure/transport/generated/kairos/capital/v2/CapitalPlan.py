@@ -226,21 +226,42 @@ class CapitalPlan(object):
         return 0
 
     # CapitalPlan
-    def CreatedAtUnixNanos(self):
+    def RecoveryAction(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(46))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint8Flags, o + self._tab.Pos)
+        return 0
+
+    # CapitalPlan
+    def RecoveryReason(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # CapitalPlan
+    def RecoveryDecidedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(50))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return None
+
+    # CapitalPlan
+    def CreatedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(52))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
     # CapitalPlan
     def ExpiresAtUnixNanos(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(48))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(54))
         if o != 0:
             return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
         return 0
 
 def CapitalPlanStart(builder):
-    builder.StartObject(23)
+    builder.StartObject(26)
 
 def Start(builder):
     CapitalPlanStart(builder)
@@ -383,14 +404,32 @@ def CapitalPlanAddStatus(builder, status):
 def AddStatus(builder, status):
     CapitalPlanAddStatus(builder, status)
 
+def CapitalPlanAddRecoveryAction(builder, recoveryAction):
+    builder.PrependUint8Slot(21, recoveryAction, 0)
+
+def AddRecoveryAction(builder, recoveryAction):
+    CapitalPlanAddRecoveryAction(builder, recoveryAction)
+
+def CapitalPlanAddRecoveryReason(builder, recoveryReason):
+    builder.PrependUOffsetTRelativeSlot(22, flatbuffers.number_types.UOffsetTFlags.py_type(recoveryReason), 0)
+
+def AddRecoveryReason(builder, recoveryReason):
+    CapitalPlanAddRecoveryReason(builder, recoveryReason)
+
+def CapitalPlanAddRecoveryDecidedAtUnixNanos(builder, recoveryDecidedAtUnixNanos):
+    builder.PrependUint64Slot(23, recoveryDecidedAtUnixNanos, None)
+
+def AddRecoveryDecidedAtUnixNanos(builder, recoveryDecidedAtUnixNanos):
+    CapitalPlanAddRecoveryDecidedAtUnixNanos(builder, recoveryDecidedAtUnixNanos)
+
 def CapitalPlanAddCreatedAtUnixNanos(builder, createdAtUnixNanos):
-    builder.PrependUint64Slot(21, createdAtUnixNanos, 0)
+    builder.PrependUint64Slot(24, createdAtUnixNanos, 0)
 
 def AddCreatedAtUnixNanos(builder, createdAtUnixNanos):
     CapitalPlanAddCreatedAtUnixNanos(builder, createdAtUnixNanos)
 
 def CapitalPlanAddExpiresAtUnixNanos(builder, expiresAtUnixNanos):
-    builder.PrependUint64Slot(22, expiresAtUnixNanos, 0)
+    builder.PrependUint64Slot(25, expiresAtUnixNanos, 0)
 
 def AddExpiresAtUnixNanos(builder, expiresAtUnixNanos):
     CapitalPlanAddExpiresAtUnixNanos(builder, expiresAtUnixNanos)

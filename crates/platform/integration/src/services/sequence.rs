@@ -124,7 +124,8 @@ impl OrderBookSequenceTracker {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{ParticipantSymbol, UnixNanos};
+    use kairos_primitives::integration::ParticipantSymbol;
+    use kairos_primitives::time::UnixNanos;
 
     use super::*;
 

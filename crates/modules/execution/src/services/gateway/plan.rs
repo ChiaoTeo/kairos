@@ -1,5 +1,5 @@
 use kairos_conflux::ParticipantInstrumentTypeRef;
-use kairos_primitives::{AccountId, SegmentKey};
+use kairos_primitives::account::{AccountId, SegmentKey};
 
 #[derive(Clone)]
 pub(crate) struct ExecutionConnectionPlan {

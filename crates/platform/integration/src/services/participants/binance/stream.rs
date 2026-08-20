@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
-use kairos_primitives::{ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{Bar, IntegrationError, MarketDataKind, MarketEvent, MarketEventKind, MarketFeed};
@@ -179,7 +180,13 @@ fn empty(symbol: &str, observed_at_unix_nanos: UnixNanos) -> Result<MarketEvent,
 
 fn levels(
     value: Option<&Value>,
-) -> Result<Vec<(kairos_primitives::Price, kairos_primitives::Quantity)>, IntegrationError> {
+) -> Result<
+    Vec<(
+        kairos_primitives::decimal::Price,
+        kairos_primitives::decimal::Quantity,
+    )>,
+    IntegrationError,
+> {
     value
         .and_then(Value::as_array)
         .into_iter()

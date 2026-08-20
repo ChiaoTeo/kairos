@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 mod market;
 
-use kairos_primitives::{InstrumentId, Money, Price, Quantity, Rate, UnixNanos};
+use kairos_primitives::decimal::{Money, Price, Quantity, Rate};
+use kairos_primitives::reference::InstrumentId;
+use kairos_primitives::time::UnixNanos;
 pub use market::{Bar, MarketObservation, ObservationScope, Quote, QuoteBar, TradeBar};
 use rust_decimal::Decimal;
 

@@ -1,4 +1,4 @@
-use kairos_primitives::MarketId;
+use kairos_primitives::reference::MarketId;
 use serde::{Deserialize, Serialize};
 
 use super::{SourceDescriptor, SourceEpoch};

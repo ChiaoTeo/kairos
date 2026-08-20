@@ -1,11 +1,14 @@
 use kairos_capital_contract as contract;
+use kairos_primitives::integration::{ProviderId, ProviderProductCode, RemoteOrderId};
+use kairos_primitives::runtime::{EventId, InstanceId, LaunchId, StrategyDecisionId};
 
 use crate::{
     CapitalAvailabilityView, CapitalDemandRecord, CapitalDemandStatus, CapitalFacts,
     CapitalOperation, CapitalOperationKind, CapitalOperationStatus, CapitalPlan, CapitalPlanStatus,
-    CapitalPolicy, CapitalReadiness, CapitalReservation, CapitalReservationStatus,
-    CapitalRouteKind, CapitalSettlementClass, CapitalSnapshot, CapitalTransferRoute,
-    FundingLocation, FundingObjectiveRecord, FundingObjectiveStatus, FundingPriority,
+    CapitalPolicy, CapitalReadiness, CapitalRecoveryAction, CapitalReservation,
+    CapitalReservationStatus, CapitalRouteKind, CapitalSettlementClass, CapitalSnapshot,
+    CapitalTransferRoute, FundingLocation, FundingObjectiveRecord, FundingObjectiveStatus,
+    FundingPriority,
 };
 
 pub fn capital_current_view(snapshot: &CapitalSnapshot) -> contract::CapitalCurrentView {
@@ -25,7 +28,60 @@ pub fn capital_current_view(snapshot: &CapitalSnapshot) -> contract::CapitalCurr
         plans: snapshot.plans.iter().map(plan).collect(),
         reservations: snapshot.reservations.iter().map(reservation).collect(),
         operations: snapshot.operations.iter().map(operation).collect(),
+        alerts: snapshot
+            .plans
+            .iter()
+            .filter_map(|value| recovery_alert(value, &snapshot.operations))
+            .collect(),
     }
+}
+
+fn recovery_alert(
+    value: &CapitalPlan,
+    operations: &[CapitalOperation],
+) -> Option<contract::CapitalAlert> {
+    let (kind, severity, default_message) = match value.recovery_action {
+        CapitalRecoveryAction::ReconcileOriginalOperation => (
+            contract::CapitalAlertKind::ReconciliationRequired,
+            contract::CapitalAlertSeverity::Warning,
+            "the original participant operation requires reconciliation",
+        ),
+        CapitalRecoveryAction::HoldAndReview => (
+            contract::CapitalAlertKind::ManualReview,
+            contract::CapitalAlertSeverity::Critical,
+            "automatic compensation is unsafe; hold funds and review manually",
+        ),
+        CapitalRecoveryAction::None | CapitalRecoveryAction::NoCompensationRequired => {
+            return None;
+        },
+    };
+    let operation_id = operations
+        .iter()
+        .filter(|operation| operation.plan_id == value.plan_id)
+        .max_by_key(|operation| operation.operation_index)
+        .map(|operation| operation.operation_id.clone());
+    Some(contract::CapitalAlert {
+        alert_id: EventId::new(format!("capital-recovery:{}", value.plan_id))
+            .expect("recovery alert identity is non-empty"),
+        plan_id: value.plan_id.clone(),
+        operation_id,
+        kind,
+        severity,
+        recovery_action: match value.recovery_action {
+            CapitalRecoveryAction::ReconcileOriginalOperation => {
+                contract::CapitalRecoveryAction::ReconcileOriginalOperation
+            },
+            CapitalRecoveryAction::HoldAndReview => contract::CapitalRecoveryAction::HoldAndReview,
+            CapitalRecoveryAction::None | CapitalRecoveryAction::NoCompensationRequired => {
+                unreachable!("non-alert recovery actions returned above")
+            },
+        },
+        message: value
+            .recovery_reason
+            .clone()
+            .unwrap_or_else(|| default_message.into()),
+        opened_at: value.recovery_decided_at.unwrap_or(value.created_at),
+    })
 }
 
 pub fn capital_event(value: &crate::CapitalEvent) -> contract::CapitalEvent {
@@ -170,8 +226,10 @@ fn demand(value: &CapitalDemandRecord) -> contract::CapitalDemand {
         confidence_bps: value.demand.confidence_bps,
         account_watermark: value.demand.account_watermark,
         risk_watermark: value.demand.risk_watermark,
-        launch_id: value.demand.launch_id.clone(),
-        instance_id: value.demand.instance_id.clone(),
+        launch_id: LaunchId::new(value.demand.launch_id.clone())
+            .expect("capital demand launch identity is validated"),
+        instance_id: InstanceId::new(value.demand.instance_id.clone())
+            .expect("capital demand instance identity is validated"),
         causal_references: value.demand.causal_references.clone(),
         status: match value.status {
             CapitalDemandStatus::Active => contract::CapitalDemandLifecycleStatus::Active,
@@ -191,9 +249,9 @@ fn policy(value: &CapitalPolicy) -> contract::CapitalPolicy {
         stress_buffer: value.stress_buffer,
         minimum_movement: value.minimum_movement,
         hysteresis: value.hysteresis,
-        deficit_dwell_nanos: value.deficit_dwell_nanos,
-        cooldown_nanos: value.cooldown_nanos,
-        max_fact_age_nanos: value.max_fact_age_nanos,
+        deficit_dwell_nanos: value.deficit_dwell_nanos.into(),
+        cooldown_nanos: value.cooldown_nanos.into(),
+        max_fact_age_nanos: value.max_fact_age_nanos.into(),
     }
 }
 
@@ -211,7 +269,8 @@ fn facts(value: &CapitalFacts) -> contract::CapitalFacts {
             .earn_holdings
             .iter()
             .map(|holding| contract::CapitalEarnHolding {
-                product_id: holding.product_id.clone(),
+                product_id: ProviderProductCode::new(holding.product_id.clone())
+                    .expect("capital product identity is validated"),
                 principal: holding.principal,
                 redeemable_amount: holding.redeemable_amount,
                 immediately_redeemable: holding.immediately_redeemable,
@@ -237,7 +296,8 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
         },
         per_operation_limit: value.per_operation_limit,
         daily_limit: value.daily_limit,
-        required_source_authority: value.required_source_authority.clone(),
+        required_source_authority: ProviderId::new(value.required_source_authority.clone())
+            .expect("capital source authority is validated"),
         settlement_class: match value.settlement_class {
             CapitalSettlementClass::ImmediateBookTransfer => {
                 contract::CapitalSettlementClass::ImmediateBookTransfer
@@ -247,8 +307,11 @@ fn route(value: &CapitalTransferRoute) -> contract::CapitalRoute {
             },
         },
         enabled: value.enabled,
-        earn_product_id: value.earn_product_id.clone(),
-        demand_guard_nanos: value.demand_guard_nanos,
+        earn_product_id: value
+            .earn_product_id
+            .clone()
+            .map(|value| ProviderProductCode::new(value).expect("capital product identity")),
+        demand_guard_nanos: value.demand_guard_nanos.into(),
         allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
     }
 }
@@ -285,6 +348,7 @@ fn availability(value: &CapitalAvailabilityView) -> contract::CapitalAvailabilit
         destination: location(&value.destination),
         readiness: match value.readiness {
             CapitalReadiness::WaitingForFacts => contract::CapitalReadiness::WaitingForFacts,
+            CapitalReadiness::WaitingForAccounts => contract::CapitalReadiness::WaitingForAccounts,
             CapitalReadiness::Degraded => contract::CapitalReadiness::Degraded,
             CapitalReadiness::Ready => contract::CapitalReadiness::Ready,
         },
@@ -318,7 +382,8 @@ fn availability(value: &CapitalAvailabilityView) -> contract::CapitalAvailabilit
 fn plan(value: &CapitalPlan) -> contract::CapitalPlan {
     contract::CapitalPlan {
         plan_id: value.plan_id.clone(),
-        rebalance_decision_id: value.rebalance_decision_id.clone(),
+        rebalance_decision_id: StrategyDecisionId::new(value.rebalance_decision_id.clone())
+            .expect("capital rebalance decision identity is validated"),
         route_id: value.route_id.clone(),
         route_version: value.route_version,
         route_kind: match value.route_kind {
@@ -364,6 +429,18 @@ fn plan(value: &CapitalPlan) -> contract::CapitalPlan {
             CapitalPlanStatus::Expired => contract::CapitalPlanStatus::Expired,
             CapitalPlanStatus::Failed => contract::CapitalPlanStatus::Failed,
         },
+        recovery_action: match value.recovery_action {
+            CapitalRecoveryAction::None => contract::CapitalRecoveryAction::None,
+            CapitalRecoveryAction::NoCompensationRequired => {
+                contract::CapitalRecoveryAction::NoCompensationRequired
+            },
+            CapitalRecoveryAction::ReconcileOriginalOperation => {
+                contract::CapitalRecoveryAction::ReconcileOriginalOperation
+            },
+            CapitalRecoveryAction::HoldAndReview => contract::CapitalRecoveryAction::HoldAndReview,
+        },
+        recovery_reason: value.recovery_reason.clone(),
+        recovery_decided_at: value.recovery_decided_at,
         created_at: value.created_at,
         expires_at: value.expires_at,
     }
@@ -399,7 +476,10 @@ fn operation(value: &CapitalOperation) -> contract::CapitalOperation {
             CapitalOperationStatus::Rejected => contract::CapitalOperationStatus::Rejected,
             CapitalOperationStatus::Failed => contract::CapitalOperationStatus::Failed,
         },
-        participant_operation_id: value.participant_operation_id.clone(),
+        participant_operation_id: value
+            .participant_operation_id
+            .clone()
+            .map(|value| RemoteOrderId::new(value).expect("participant operation identity")),
         participant_state: value.participant_state.clone(),
         dispatch_started_at: value.dispatch_started_at,
         attempt_count: value.attempt_count,

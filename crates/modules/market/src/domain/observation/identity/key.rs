@@ -1,4 +1,4 @@
-use kairos_primitives::SourceId;
+use kairos_primitives::market::SourceId;
 use serde::{Deserialize, Serialize};
 
 use super::qualifier::validate_path_component;

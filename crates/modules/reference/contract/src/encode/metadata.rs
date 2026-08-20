@@ -10,7 +10,7 @@ use crate::transport::{Asset, Entity, Instrument, Listing, Market};
 #[derive(Clone, Debug)]
 pub struct EncodeContext {
     pub common: ProtocolContext,
-    pub catalog_revision: kairos_primitives::Generation,
+    pub catalog_revision: kairos_primitives::time::Generation,
 }
 
 impl std::ops::Deref for EncodeContext {
@@ -407,17 +407,31 @@ fn optional_string<'a, A: Allocator + 'a>(
     value.map(|value| builder.create_string(value))
 }
 
-fn status(value: kairos_primitives::ReferenceStatus) -> fb::ReferenceLifecycleStatus {
+fn status(value: kairos_primitives::reference::ReferenceStatus) -> fb::ReferenceLifecycleStatus {
     match value {
-        kairos_primitives::ReferenceStatus::Draft => fb::ReferenceLifecycleStatus::DRAFT,
-        kairos_primitives::ReferenceStatus::Active => fb::ReferenceLifecycleStatus::ACTIVE,
-        kairos_primitives::ReferenceStatus::Trading => fb::ReferenceLifecycleStatus::TRADING,
-        kairos_primitives::ReferenceStatus::Suspended => fb::ReferenceLifecycleStatus::SUSPENDED,
-        kairos_primitives::ReferenceStatus::Inactive => fb::ReferenceLifecycleStatus::INACTIVE,
-        kairos_primitives::ReferenceStatus::Retired
-        | kairos_primitives::ReferenceStatus::Delisted => fb::ReferenceLifecycleStatus::RETIRED,
-        kairos_primitives::ReferenceStatus::Expired => fb::ReferenceLifecycleStatus::EXPIRED,
-        kairos_primitives::ReferenceStatus::Unknown => fb::ReferenceLifecycleStatus::UNSPECIFIED,
+        kairos_primitives::reference::ReferenceStatus::Draft => fb::ReferenceLifecycleStatus::DRAFT,
+        kairos_primitives::reference::ReferenceStatus::Active => {
+            fb::ReferenceLifecycleStatus::ACTIVE
+        },
+        kairos_primitives::reference::ReferenceStatus::Trading => {
+            fb::ReferenceLifecycleStatus::TRADING
+        },
+        kairos_primitives::reference::ReferenceStatus::Suspended => {
+            fb::ReferenceLifecycleStatus::SUSPENDED
+        },
+        kairos_primitives::reference::ReferenceStatus::Inactive => {
+            fb::ReferenceLifecycleStatus::INACTIVE
+        },
+        kairos_primitives::reference::ReferenceStatus::Retired
+        | kairos_primitives::reference::ReferenceStatus::Delisted => {
+            fb::ReferenceLifecycleStatus::RETIRED
+        },
+        kairos_primitives::reference::ReferenceStatus::Expired => {
+            fb::ReferenceLifecycleStatus::EXPIRED
+        },
+        kairos_primitives::reference::ReferenceStatus::Unknown => {
+            fb::ReferenceLifecycleStatus::UNSPECIFIED
+        },
     }
 }
 

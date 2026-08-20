@@ -364,7 +364,8 @@ async fn send_status(
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{InstrumentId, UnixNanos};
+    use kairos_primitives::reference::InstrumentId;
+    use kairos_primitives::time::UnixNanos;
 
     use super::{ReplayClock, ReplaySource};
     use crate::domain::observation::{Bar, MarketObservation};
@@ -380,7 +381,7 @@ mod tests {
             close: "1".parse().unwrap(),
             volume: None,
             observed_at_unix_nanos: UnixNanos::new(time),
-            source_id: kairos_primitives::SourceId::new("replay-fixture").unwrap(),
+            source_id: kairos_primitives::market::SourceId::new("replay-fixture").unwrap(),
             derivation: "test".into(),
         })
     }
@@ -432,7 +433,7 @@ mod tests {
         source.cursor = 1;
         source.virtual_time_unix_nanos = Some(1);
         let mut replay_checkpoint = crate::services::actor::ReplayCheckpoint::default();
-        replay_checkpoint.event_sequence = kairos_primitives::Sequence::new(1);
+        replay_checkpoint.event_sequence = kairos_primitives::time::Sequence::new(1);
         replay_checkpoint
             .views
             .insert(first.view_key().unwrap().as_str(), first);

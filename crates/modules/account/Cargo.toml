@@ -11,7 +11,6 @@ name = "kairos_account"
 path = "src/lib.rs"
 
 [dependencies]
-axum.workspace = true
 clap.workspace = true
 flatbuffers.workspace = true
 futures-util = { workspace = true, features = ["alloc"] }

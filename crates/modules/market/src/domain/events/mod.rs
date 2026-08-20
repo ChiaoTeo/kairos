@@ -1,4 +1,4 @@
-use kairos_primitives::SourceId;
+use kairos_primitives::market::SourceId;
 
 use super::freshness::MarketFreshness;
 use super::observation::MarketObservation;
@@ -19,10 +19,10 @@ pub enum MarketEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderBookResyncRequired {
     pub source_id: SourceId,
-    pub market_id: kairos_primitives::MarketId,
-    pub instrument_id: kairos_primitives::InstrumentId,
-    pub expected_sequence: kairos_primitives::Sequence,
-    pub observed_sequence: kairos_primitives::Sequence,
+    pub market_id: kairos_primitives::reference::MarketId,
+    pub instrument_id: kairos_primitives::reference::InstrumentId,
+    pub expected_sequence: kairos_primitives::time::Sequence,
+    pub observed_sequence: kairos_primitives::time::Sequence,
     pub reason: String,
 }
 
@@ -31,7 +31,7 @@ pub struct OrderBookResyncRequired {
 /// but a view update is scoped to exactly one resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MarketChange {
-    pub sequence: kairos_primitives::Sequence,
+    pub sequence: kairos_primitives::time::Sequence,
     pub event: Option<MarketEvent>,
     pub view: Option<MarketViewUpdate>,
 }

@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use kairos_primitives::account::AccountId;
+use kairos_primitives::runtime::InstanceId;
+
 use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -18,8 +21,8 @@ impl AccountViewKind {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct AccountViewKey {
-    pub account_runtime_id: String,
-    pub account_id: String,
+    pub account_runtime_id: InstanceId,
+    pub account_id: AccountId,
     pub kind: AccountViewKind,
 }
 impl AccountViewKey {
@@ -28,11 +31,10 @@ impl AccountViewKey {
         account_id: impl Into<String>,
         kind: AccountViewKind,
     ) -> ContractResult<Self> {
-        let account_runtime_id = account_runtime_id.into();
-        let account_id = account_id.into();
-        if account_runtime_id.trim().is_empty() || account_id.trim().is_empty() {
-            return Err(ContractError::Invalid("view identity is incomplete".into()));
-        }
+        let account_runtime_id = InstanceId::new(account_runtime_id.into())
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
+        let account_id = AccountId::new(account_id.into())
+            .map_err(|error| ContractError::Invalid(error.to_string()))?;
         Ok(Self {
             account_runtime_id,
             account_id,

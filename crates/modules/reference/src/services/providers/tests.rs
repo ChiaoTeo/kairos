@@ -8,9 +8,9 @@ use kairos_conflux::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, ParticipantKind,
     ParticipantRef,
 };
-use kairos_primitives::{
-    AssetClass, Currency, InstrumentId, InstrumentKind, MarketId,
-    ParticipantSymbol as ProviderSymbol, Symbol,
+use kairos_primitives::integration::ParticipantSymbol as ProviderSymbol;
+use kairos_primitives::reference::{
+    AssetClass, Currency, InstrumentId, InstrumentKind, MarketId, Symbol,
 };
 
 use super::{
@@ -419,8 +419,8 @@ fn okx_provider_facts_receive_canonical_identity_only_in_reference() {
 
 #[test]
 fn spot_listing_expiry_does_not_split_or_mutate_the_canonical_instrument() {
-    let first_expiry = kairos_primitives::UnixNanos::new(1_786_694_400_000_000_000);
-    let second_expiry = kairos_primitives::UnixNanos::new(1_786_953_600_000_000_000);
+    let first_expiry = kairos_primitives::time::UnixNanos::new(1_786_694_400_000_000_000);
+    let second_expiry = kairos_primitives::time::UnixNanos::new(1_786_953_600_000_000_000);
     let spot = |symbol: &str, quote: &str, expiry| ExternalInstrument {
         source_symbol: ProviderSymbol::new(symbol).unwrap(),
         source_venue: None,
@@ -501,7 +501,7 @@ fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
                 quote_currency: Some(Currency::new("USDT").unwrap()),
                 settlement_currency: Some(Currency::new("USDT").unwrap()),
                 underlying: Some(ProviderSymbol::new("BTCUSDT").unwrap()),
-                expiry_unix_nanos: Some(kairos_primitives::UnixNanos::new(
+                expiry_unix_nanos: Some(kairos_primitives::time::UnixNanos::new(
                     1_780_000_000_000_000_000,
                 )),
                 strike: Some("50000".into()),
@@ -549,7 +549,7 @@ fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
 
 #[test]
 fn binance_derivative_facts_keep_product_selection_but_not_canonical_identity() {
-    let expiry = kairos_primitives::UnixNanos::new(1_782_432_000_000_000_000);
+    let expiry = kairos_primitives::time::UnixNanos::new(1_782_432_000_000_000_000);
     let catalog = binance_provider_catalog(
         ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -678,7 +678,7 @@ fn binance_equity_broker_catalog_does_not_invent_exchange_listing_or_market() {
 
 #[test]
 fn massive_provider_facts_receive_canonical_identity_only_in_reference() {
-    let expiry = kairos_primitives::UnixNanos::new(1_800_000_000_000_000_000);
+    let expiry = kairos_primitives::time::UnixNanos::new(1_800_000_000_000_000_000);
     let catalog = massive_provider_catalog(ExternalInstrumentCatalog {
         participant: ParticipantRef::new(ParticipantKind::DataProvider, "massive").unwrap(),
         instruments: vec![ExternalInstrument {
@@ -1047,7 +1047,7 @@ async fn shared_canonical_instrument_aggregates_listing_availability() {
         symbol: Symbol::new("BTC").unwrap(),
         instrument_type: InstrumentKind::Spot,
         primary_currency_asset_id: Some(
-            kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
+            kairos_primitives::reference::AssetId::new("asset:crypto:BTC").unwrap(),
         ),
         status,
         ..Instrument::default()
@@ -1084,7 +1084,7 @@ async fn shared_canonical_instrument_is_enriched_by_an_authoritative_optional_fa
         symbol: Symbol::new("BTC").unwrap(),
         instrument_type: InstrumentKind::Spot,
         primary_currency_asset_id: Some(
-            kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
+            kairos_primitives::reference::AssetId::new("asset:crypto:BTC").unwrap(),
         ),
         status: "active".into(),
         ..Instrument::default()
@@ -1121,8 +1121,8 @@ async fn shared_canonical_instrument_is_enriched_by_an_authoritative_optional_fa
 #[tokio::test]
 async fn shared_canonical_asset_is_active_when_any_provider_observes_it_active() {
     let asset = |status| Asset {
-        asset_id: kairos_primitives::AssetId::new("asset:equity:AVB").unwrap(),
-        code: kairos_primitives::Symbol::new("AVB").unwrap(),
+        asset_id: kairos_primitives::reference::AssetId::new("asset:equity:AVB").unwrap(),
+        code: kairos_primitives::reference::Symbol::new("AVB").unwrap(),
         asset_class: AssetClass::Equity,
         status,
         ..Asset::default()
@@ -1157,7 +1157,7 @@ fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
         symbol: Symbol::new("BTC").unwrap(),
         instrument_type: InstrumentKind::Spot,
         primary_currency_asset_id: Some(
-            kairos_primitives::AssetId::new("asset:crypto:BTC").unwrap(),
+            kairos_primitives::reference::AssetId::new("asset:crypto:BTC").unwrap(),
         ),
         status: "active".into(),
         ..Instrument::default()
@@ -1171,7 +1171,7 @@ fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
 
     let mut legacy_quote_owned = canonical.clone();
     legacy_quote_owned.primary_currency_asset_id =
-        Some(kairos_primitives::AssetId::new("asset:crypto:USDT").unwrap());
+        Some(kairos_primitives::reference::AssetId::new("asset:crypto:USDT").unwrap());
     assert!(!provider_catalog_uses_current_canonical_shape(
         &ProviderCatalog {
             instruments: vec![legacy_quote_owned],

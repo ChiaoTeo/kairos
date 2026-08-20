@@ -77,3 +77,19 @@ fn capital_uses_conflux_instead_of_integration_directly() {
         );
     }
 }
+
+#[test]
+fn capital_shutdown_reconciles_but_never_compensates_or_resubmits() {
+    let server = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/bin/kairos-capital-server.rs"),
+    )
+    .unwrap();
+    let start = server.find("async fn stop_handler").unwrap();
+    let end = server[start..].find("async fn reconcile_plan").unwrap() + start;
+    let handler = &server[start..end];
+    assert!(handler.contains("reconcile_capital_plan"));
+    assert!(handler.contains("record_recovery_required"));
+    assert!(!handler.contains("execute_capital_plan"));
+    assert!(!handler.contains("submit_"));
+    assert!(!handler.contains("compensate"));
+}

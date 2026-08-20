@@ -1,16 +1,20 @@
-use kairos_primitives::{
-    AccountId, DecisionId, DurationNanos, ExecutionRouteId, InstrumentId, IntentId, LegId,
-    MarketId, OrderId, OrderOptionCode, OrderSide, OrderType, ParticipantId, Price,
-    ProviderProductCode, ProviderSymbol, Quantity, Ratio, SegmentKey, SignedQuantity, StrategyId,
-    UnixNanos,
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::{Price, Quantity, Ratio, SignedQuantity};
+use kairos_primitives::execution::{
+    ExecutionRouteId, IntentId, LegId, OrderId, OrderOptionCode, OrderSide, OrderType,
 };
+use kairos_primitives::integration::{ParticipantId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::risk::DecisionId;
+use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
+use kairos_primitives::time::{DurationNanos, UnixNanos};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionControlResponse {
     pub status: Option<String>,
-    pub command_id: Option<String>,
-    pub intent_id: Option<String>,
-    pub order_id: Option<String>,
+    pub command_id: Option<RequestId>,
+    pub intent_id: Option<IntentId>,
+    pub order_id: Option<OrderId>,
     pub accepted: Option<bool>,
     pub error: Option<String>,
 }
@@ -43,10 +47,10 @@ pub struct ExecutionRoutesResponse {
 /// JSON control-plane values belong to UDS; they are not event or view models.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommandEnvelope {
-    pub command_id: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub caller_id: Option<String>,
-    pub workspace_id: Option<String>,
+    pub command_id: Option<RequestId>,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub caller_id: Option<ActorId>,
+    pub workspace_id: Option<WorkspaceId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -162,7 +166,7 @@ pub struct ExecutionIntentRequest {
     pub target_quantity: Quantity,
     pub limit_price: Option<Price>,
     pub source_snapshot_id: Option<String>,
-    pub source_event_sequence: Option<kairos_primitives::Sequence>,
+    pub source_event_sequence: Option<kairos_primitives::time::Sequence>,
     pub source_event_time_unix_nanos: Option<UnixNanos>,
     pub reason: String,
     pub intent_type: IntentType,
@@ -173,8 +177,8 @@ pub struct ExecutionIntentRequest {
     pub min_edge_bps: Option<u32>,
     pub max_slippage_bps: Option<u32>,
     pub estimated_fee_bps: Option<u32>,
-    pub minimum_net_credit: Option<kairos_primitives::Money>,
-    pub maximum_loss: Option<kairos_primitives::Money>,
+    pub minimum_net_credit: Option<kairos_primitives::decimal::Money>,
+    pub maximum_loss: Option<kairos_primitives::decimal::Money>,
     pub hedge_policy: Option<HedgePolicyRequest>,
     pub order_options: ExecutionOrderOptionsRequest,
 }
@@ -266,9 +270,9 @@ pub struct ExecutionHealthResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionCommandStatus {
     pub status: String,
-    pub command_id: Option<String>,
-    pub intent_id: Option<String>,
-    pub order_id: Option<String>,
+    pub command_id: Option<RequestId>,
+    pub intent_id: Option<IntentId>,
+    pub order_id: Option<OrderId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

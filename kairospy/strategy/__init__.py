@@ -46,6 +46,8 @@ from kairospy.application.capital import (
     CapitalAvailability,
     CapitalReadiness,
     FundingLocation,
+    FundingForecastObservation,
+    FundingForecastSource,
     FundingObjective,
     FundingObjectiveReceipt,
     FundingObjectiveStatus,

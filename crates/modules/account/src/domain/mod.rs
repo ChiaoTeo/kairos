@@ -1,17 +1,19 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{
-    BrokerId, Currency, DurationNanos, Generation, MarketId, OrderId, OrderStatus, RemoteOrderId,
-    Sequence, UnixNanos,
-};
+use kairos_primitives::account::BrokerId;
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::integration::{OrderStatus, RemoteOrderId};
+use kairos_primitives::reference::{Currency, MarketId};
+use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::time::{DurationNanos, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 mod error;
 pub use error::AccountDomainError;
-pub use kairos_primitives::{
-    AccountId, AssetId, FillId, InstrumentId, Money, OrderSide, Price, Quantity, Rate, SegmentKey,
-    SignedQuantity,
-};
+pub use kairos_primitives::account::{AccountId, SegmentKey};
+pub use kairos_primitives::decimal::{Money, Price, Quantity, Rate, SignedQuantity};
+pub use kairos_primitives::execution::{FillId, OrderSide};
+pub use kairos_primitives::reference::{AssetId, InstrumentId};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ExternalAccountIdentity {
@@ -111,7 +113,7 @@ pub struct Position {
     pub instrument_id: InstrumentId,
     pub market_id: Option<MarketId>,
     #[serde(default)]
-    pub position_side: kairos_primitives::PositionSide,
+    pub position_side: kairos_primitives::account::PositionSide,
     pub quantity: SignedQuantity,
     pub average_price: Option<Price>,
     pub mark_price: Option<Price>,
@@ -173,6 +175,25 @@ pub struct EarnHoldingsSnapshot {
     pub complete: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SimulatedCapitalMutationKind {
+    DebitLiquid,
+    CreditLiquid,
+    SubscribeEarn,
+    RedeemEarn,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SimulatedCapitalMutation {
+    pub mutation_id: IdempotencyKey,
+    pub segment_key: SegmentKey,
+    pub asset: Currency,
+    pub amount: Quantity,
+    pub kind: SimulatedCapitalMutationKind,
+    pub product_id: Option<String>,
+    pub occurred_at_unix_nanos: UnixNanos,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AccountStatus {
     #[default]
@@ -201,7 +222,7 @@ impl AccountStatus {
 pub struct AccountState {
     balances: BTreeMap<AssetId, Balance>,
     collateral: BTreeMap<AssetId, Balance>,
-    positions: BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position>,
+    positions: BTreeMap<(InstrumentId, kairos_primitives::account::PositionSide), Position>,
     #[serde(default)]
     earn_holdings: BTreeMap<String, EarnHolding>,
     open_orders: BTreeMap<OrderId, OpenOrder>,
@@ -230,6 +251,8 @@ pub struct AccountState {
     fills: BTreeMap<FillId, AccountFill>,
     #[serde(default)]
     observed_fills: BTreeMap<FillId, AccountObservedFill>,
+    #[serde(default)]
+    applied_capital_mutation_ids: std::collections::BTreeSet<IdempotencyKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -249,7 +272,7 @@ impl AccountState {
 
     pub fn positions(
         &self,
-    ) -> &BTreeMap<(InstrumentId, kairos_primitives::PositionSide), Position> {
+    ) -> &BTreeMap<(InstrumentId, kairos_primitives::account::PositionSide), Position> {
         &self.positions
     }
 
@@ -263,6 +286,10 @@ impl AccountState {
 
     pub fn open_orders(&self) -> &BTreeMap<OrderId, OpenOrder> {
         &self.open_orders
+    }
+
+    pub fn has_capital_mutation(&self, mutation_id: &IdempotencyKey) -> bool {
+        self.applied_capital_mutation_ids.contains(mutation_id)
     }
 
     pub fn status(&self) -> AccountStatus {
@@ -481,6 +508,233 @@ impl Account {
         self.state.event_sequence += 1;
         Ok(ApplyOutcome::Applied)
     }
+
+    pub fn apply_simulated_capital_mutation(
+        &mut self,
+        mutation: SimulatedCapitalMutation,
+    ) -> Result<ApplyOutcome, AccountDomainError> {
+        if mutation.segment_key != self.segment.segment_key {
+            return Err(AccountDomainError::SegmentMismatch {
+                expected: self.segment.segment_key.to_string(),
+                observed: mutation.segment_key.to_string(),
+            });
+        }
+        if mutation.amount.is_zero() {
+            return Err(AccountDomainError::Invalid {
+                field: "amount",
+                reason: "simulated Capital mutation amount must be positive",
+            });
+        }
+        if self
+            .state
+            .applied_capital_mutation_ids
+            .contains(&mutation.mutation_id)
+        {
+            return Ok(ApplyOutcome::Duplicate);
+        }
+        if mutation.occurred_at_unix_nanos < self.state.observed_at_unix_nanos {
+            return Ok(ApplyOutcome::Stale);
+        }
+        match mutation.kind {
+            SimulatedCapitalMutationKind::SubscribeEarn => {
+                let product_id = required_simulated_product_id(&mutation)?;
+                if let Some(holding) = self.state.earn_holdings.get(product_id) {
+                    if holding.asset != mutation.asset {
+                        return Err(AccountDomainError::Invalid {
+                            field: "asset",
+                            reason: "simulated Earn product asset cannot change",
+                        });
+                    }
+                    holding.principal.checked_add(mutation.amount)?;
+                    holding
+                        .redeemable
+                        .unwrap_or(Quantity::ZERO)
+                        .checked_add(mutation.amount)?;
+                }
+            },
+            SimulatedCapitalMutationKind::RedeemEarn => {
+                let product_id = required_simulated_product_id(&mutation)?;
+                let holding = self.state.earn_holdings.get(product_id).ok_or(
+                    AccountDomainError::Invalid {
+                        field: "product_id",
+                        reason: "simulated Earn holding was not found",
+                    },
+                )?;
+                if holding.asset != mutation.asset {
+                    return Err(AccountDomainError::Invalid {
+                        field: "asset",
+                        reason: "simulated Earn redemption asset does not match the holding",
+                    });
+                }
+                holding.principal.checked_sub(mutation.amount)?;
+                holding
+                    .redeemable
+                    .unwrap_or(Quantity::ZERO)
+                    .checked_sub(mutation.amount)?;
+            },
+            SimulatedCapitalMutationKind::DebitLiquid
+            | SimulatedCapitalMutationKind::CreditLiquid => {},
+        }
+        let asset_id = self
+            .state
+            .balances
+            .iter()
+            .find_map(|(asset_id, balance)| {
+                (balance.asset_code == mutation.asset).then(|| asset_id.clone())
+            })
+            .unwrap_or(AssetId::new(format!(
+                "asset:{}",
+                mutation.asset.as_str().to_ascii_lowercase()
+            ))?);
+        let amount = SignedQuantity::new(mutation.amount.mantissa(), mutation.amount.scale())?;
+        match mutation.kind {
+            SimulatedCapitalMutationKind::DebitLiquid
+            | SimulatedCapitalMutationKind::SubscribeEarn => {
+                adjust_simulated_liquid_balance(
+                    &mut self.state.balances,
+                    &asset_id,
+                    &mutation.asset,
+                    amount.checked_neg()?,
+                    true,
+                )?;
+            },
+            SimulatedCapitalMutationKind::CreditLiquid
+            | SimulatedCapitalMutationKind::RedeemEarn => {
+                adjust_simulated_liquid_balance(
+                    &mut self.state.balances,
+                    &asset_id,
+                    &mutation.asset,
+                    amount,
+                    false,
+                )?;
+            },
+        }
+        match mutation.kind {
+            SimulatedCapitalMutationKind::SubscribeEarn => {
+                let product_id = mutation
+                    .product_id
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or(AccountDomainError::Required {
+                        field: "product_id",
+                    })?;
+                let holding = self
+                    .state
+                    .earn_holdings
+                    .entry(product_id.to_owned())
+                    .or_insert_with(|| EarnHolding {
+                        participant_position_id: None,
+                        product_id: product_id.to_owned(),
+                        asset: mutation.asset.clone(),
+                        principal: Quantity::ZERO,
+                        redeemable: Some(Quantity::ZERO),
+                        accrued_rewards: Vec::new(),
+                        liquidity: EarnHoldingLiquidity::Immediate,
+                        state: EarnHoldingState::Active,
+                        observed_at_unix_nanos: mutation.occurred_at_unix_nanos,
+                    });
+                if holding.asset != mutation.asset {
+                    return Err(AccountDomainError::Invalid {
+                        field: "asset",
+                        reason: "simulated Earn product asset cannot change",
+                    });
+                }
+                holding.principal = holding.principal.checked_add(mutation.amount)?;
+                holding.redeemable = Some(
+                    holding
+                        .redeemable
+                        .unwrap_or(Quantity::ZERO)
+                        .checked_add(mutation.amount)?,
+                );
+                holding.state = EarnHoldingState::Active;
+                holding.observed_at_unix_nanos = mutation.occurred_at_unix_nanos;
+                self.state.earn_watermark_unix_nanos = mutation.occurred_at_unix_nanos;
+            },
+            SimulatedCapitalMutationKind::RedeemEarn => {
+                let product_id = mutation
+                    .product_id
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or(AccountDomainError::Required {
+                        field: "product_id",
+                    })?;
+                let holding = self.state.earn_holdings.get_mut(product_id).ok_or(
+                    AccountDomainError::Invalid {
+                        field: "product_id",
+                        reason: "simulated Earn holding was not found",
+                    },
+                )?;
+                holding.principal = holding.principal.checked_sub(mutation.amount)?;
+                holding.redeemable = Some(
+                    holding
+                        .redeemable
+                        .unwrap_or(Quantity::ZERO)
+                        .checked_sub(mutation.amount)?,
+                );
+                holding.state = if holding.principal.is_zero() {
+                    EarnHoldingState::Redeemed
+                } else {
+                    EarnHoldingState::Active
+                };
+                holding.observed_at_unix_nanos = mutation.occurred_at_unix_nanos;
+                self.state.earn_watermark_unix_nanos = mutation.occurred_at_unix_nanos;
+            },
+            SimulatedCapitalMutationKind::DebitLiquid
+            | SimulatedCapitalMutationKind::CreditLiquid => {},
+        }
+        self.state
+            .applied_capital_mutation_ids
+            .insert(mutation.mutation_id);
+        self.state.snapshot_watermark_unix_nanos = mutation.occurred_at_unix_nanos;
+        self.state.observed_at_unix_nanos = mutation.occurred_at_unix_nanos;
+        self.state.status = AccountStatus::Ready;
+        self.state.stale = false;
+        self.state.generation += 1;
+        self.state.event_sequence += 1;
+        Ok(ApplyOutcome::Applied)
+    }
+}
+
+fn required_simulated_product_id(
+    mutation: &SimulatedCapitalMutation,
+) -> Result<&str, AccountDomainError> {
+    mutation
+        .product_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(AccountDomainError::Required {
+            field: "product_id",
+        })
+}
+
+fn adjust_simulated_liquid_balance(
+    balances: &mut BTreeMap<AssetId, Balance>,
+    asset_id: &AssetId,
+    asset: &Currency,
+    delta: SignedQuantity,
+    require_available: bool,
+) -> Result<(), AccountDomainError> {
+    let balance = balances.entry(asset_id.clone()).or_insert(Balance {
+        asset_id: asset_id.clone(),
+        asset_code: asset.clone(),
+        total: SignedQuantity::ZERO,
+        available: Some(SignedQuantity::ZERO),
+        locked: Some(SignedQuantity::ZERO),
+        borrowed: None,
+        interest: None,
+    });
+    let available = balance.available.unwrap_or(balance.total);
+    let next_available = available.checked_add(delta)?;
+    let next_total = balance.total.checked_add(delta)?;
+    if require_available && (next_available.is_negative() || next_total.is_negative()) {
+        return Err(AccountDomainError::Invalid {
+            field: "amount",
+            reason: "simulated Capital mutation exceeds liquid balance",
+        });
+    }
+    balance.available = Some(next_available);
+    balance.total = next_total;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -582,6 +836,7 @@ pub enum AccountEvent {
     Fill(AccountFill),
     ObservedFill(AccountObservedFill),
     OrderObserved(AccountOrderObservation),
+    SimulatedCapitalMutation(SimulatedCapitalMutation),
     Batch(Vec<AccountEvent>),
 }
 

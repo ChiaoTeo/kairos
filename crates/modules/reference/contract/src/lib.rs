@@ -13,12 +13,12 @@ pub mod transport;
 use std::path::PathBuf;
 
 pub use control::{
-    ReferenceControlClient, ReferenceControlError, ReferenceHealthResponse,
-    ReferenceMutationResponse, ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse,
-    ReferenceProviderHealth, ReferencePublishResponse, ReferenceRefreshResponse,
-    ReferenceRestRequest, ReferenceRestResponse, ReferenceSourceControlRequest,
-    ReferenceSourceStatusResponse, UpsertAssetRequest, UpsertInstrumentRequest,
-    UpsertListingRequest,
+    ReferenceControlClient, ReferenceControlError, ReferenceHealthResponse, ReferenceHealthStatus,
+    ReferenceHttpControl, ReferenceMutationResponse, ReferenceOptionCoverageRequest,
+    ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferenceProviderStatus,
+    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRestRequest,
+    ReferenceRestResponse, ReferenceSourceControlRequest, ReferenceSourceStatusResponse,
+    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
 };
 pub use encode::{EncodeContext, ReferenceEncoder, event_metadata};
 pub use error::{ContractError, ContractResult};

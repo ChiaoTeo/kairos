@@ -32,7 +32,7 @@ pub(crate) enum PendingSourceRequest {
     },
     ResyncOrderBook {
         source_id: SourceId,
-        market_id: kairos_primitives::MarketId,
+        market_id: kairos_primitives::reference::MarketId,
     },
 }
 

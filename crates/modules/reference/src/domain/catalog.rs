@@ -1,12 +1,9 @@
 //! Reference catalog aggregate and lifecycle reconciliation.
 
-use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use kairos_primitives::{
-    Generation, InstrumentId, ListingId, MarketId, ReferenceStatus, Sequence, UnixNanos,
-};
+use kairos_primitives::reference::{InstrumentId, ListingId, MarketId, ReferenceStatus};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog};
 
@@ -227,7 +224,7 @@ impl ReferenceCatalog {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+    use kairos_primitives::reference::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
     use super::{Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog};
 
@@ -255,7 +252,7 @@ mod tests {
             instruments: vec![Instrument {
                 instrument_id: instrument_id("instrument:test"),
                 symbol: Symbol::new("TEST").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Spot,
+                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
                 status: status.into(),
                 ..Default::default()
             }],
@@ -273,8 +270,8 @@ mod tests {
                 instrument_id: instrument_id("instrument:test"),
                 listing_id: Some(listing_id("listing:test")),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                instrument_kind: kairos_primitives::InstrumentKind::Spot,
-                venue_symbol: Some(kairos_primitives::Symbol::new("TEST").unwrap()),
+                instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new("TEST").unwrap()),
                 status: status.into(),
                 effective_from_unix_nanos: 1.into(),
                 ..Default::default()
@@ -353,7 +350,7 @@ mod tests {
         catalog.instruments[0] = Instrument {
             instrument_id: instrument_id("instrument:test"),
             symbol: Symbol::new("TEST").unwrap(),
-            instrument_type: kairos_primitives::InstrumentKind::Spot,
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         };
@@ -366,8 +363,8 @@ mod tests {
         let error = ProviderCatalog {
             instruments: vec![Instrument {
                 instrument_id: instrument_id("instrument:option"),
-                symbol: kairos_primitives::Symbol::new("BTC-OPT").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Option,
+                symbol: kairos_primitives::reference::Symbol::new("BTC-OPT").unwrap(),
+                instrument_type: kairos_primitives::reference::InstrumentKind::Option,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -414,13 +411,4 @@ fn record_event(
         record_id: Some(record_id.to_string()),
         ..LifecycleEvent::default()
     }
-}
-
-pub(crate) fn unix_nanos() -> UnixNanos {
-    UnixNanos::from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64,
-    )
 }

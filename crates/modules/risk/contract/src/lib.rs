@@ -17,12 +17,12 @@ pub use control::{
     DependencyWatermarks, EnforcementMode, FundingRequirement, Health, LimitView, Metric,
     OpenCircuitRequest, PolicyScope, PublishPolicyRequest, ReasonCode, ReleaseReservationRequest,
     Reservation, ReservationStatus, ResizeReservationRequest, RiskCommandStatus, RiskContext,
-    RiskControlClient, RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskPolicy,
-    RiskRestRequest, RiskRestResponse, TradeRiskProposal,
+    RiskControlClient, RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskHttpControl,
+    RiskPolicy, RiskRestRequest, RiskRestResponse, TradeRiskProposal,
 };
 pub use encode::{
-    FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, MmapRiskSnapshotPublisher,
-    RiskAeronEventPublisher,
+    FileRiskSnapshotPublisher, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
+    MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskSnapshotPublisher,
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};

@@ -15,6 +15,12 @@ class FundingPriority(StrEnum):
     CRITICAL = "critical"
 
 
+class FundingForecastSource(StrEnum):
+    STRATEGY_SCHEDULE = "strategy_schedule"
+    MARKET_SESSION = "market_session"
+    HISTORICAL_PEAK = "historical_peak"
+
+
 class FundingObjectiveStatus(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"
@@ -30,6 +36,21 @@ class CapitalReadiness(StrEnum):
     WAITING_FOR_FACTS = "waiting_for_facts"
     DEGRADED = "degraded"
     READY = "ready"
+
+
+class CapitalRecoveryAction(StrEnum):
+    RECONCILE_ORIGINAL_OPERATION = "reconcile_original_operation"
+    HOLD_AND_REVIEW = "hold_and_review"
+
+
+class CapitalAlertKind(StrEnum):
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    MANUAL_REVIEW = "manual_review"
+
+
+class CapitalAlertSeverity(StrEnum):
+    WARNING = "warning"
+    CRITICAL = "critical"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +88,7 @@ class FundingObjective:
     priority: FundingPriority = FundingPriority.NORMAL
     confidence: Decimal = Decimal("1")
     strategy_decision_id: str | None = None
+    observed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         objective_id = self.objective_id.strip()
@@ -80,6 +102,13 @@ class FundingObjective:
         expires_at = _utc(self.expires_at, "expires_at")
         if expires_at < required_by:
             raise ValueError("Funding objective cannot expire before required_by")
+        observed_at = (
+            _utc(self.observed_at, "observed_at")
+            if self.observed_at is not None
+            else None
+        )
+        if observed_at is not None and observed_at > required_by:
+            raise ValueError("Funding objective cannot be observed after required_by")
         if not Decimal("0") <= self.confidence <= Decimal("1"):
             raise ValueError("Funding objective confidence must be between 0 and 1")
         decision_id = self.strategy_decision_id
@@ -88,6 +117,102 @@ class FundingObjective:
         object.__setattr__(self, "objective_id", objective_id)
         object.__setattr__(self, "required_by", required_by)
         object.__setattr__(self, "expires_at", expires_at)
+        object.__setattr__(self, "observed_at", observed_at)
+
+
+@dataclass(frozen=True, slots=True)
+class FundingForecastObservation:
+    """Strategy-side forecast evidence converted into a Capital objective."""
+
+    forecast_id: str
+    version: int
+    source: FundingForecastSource
+    destination: FundingLocation
+    predicted_required_available: Decimal
+    observed_at: datetime
+    required_by: datetime
+    expires_at: datetime
+    priority: FundingPriority = FundingPriority.NORMAL
+    confidence: Decimal = Decimal("1")
+    evidence_references: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        forecast_id = self.forecast_id.strip()
+        if not forecast_id:
+            raise ValueError("Funding forecast id is required")
+        if self.version <= 0:
+            raise ValueError("Funding forecast version must be positive")
+        if self.predicted_required_available < 0:
+            raise ValueError("Funding forecast predicted availability cannot be negative")
+        source = FundingForecastSource(self.source)
+        observed_at = _utc(self.observed_at, "observed_at")
+        required_by = _utc(self.required_by, "required_by")
+        expires_at = _utc(self.expires_at, "expires_at")
+        if not observed_at <= required_by <= expires_at:
+            raise ValueError(
+                "Funding forecast requires observed_at <= required_by <= expires_at"
+            )
+        if not Decimal("0") <= self.confidence <= Decimal("1"):
+            raise ValueError("Funding forecast confidence must be between 0 and 1")
+        references = tuple(value.strip() for value in self.evidence_references)
+        if any(not value for value in references):
+            raise ValueError("Funding forecast evidence references cannot be blank")
+        object.__setattr__(self, "forecast_id", forecast_id)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "observed_at", observed_at)
+        object.__setattr__(self, "required_by", required_by)
+        object.__setattr__(self, "expires_at", expires_at)
+        object.__setattr__(self, "evidence_references", references)
+
+    @classmethod
+    def from_historical_peak(
+        cls,
+        *,
+        forecast_id: str,
+        version: int,
+        destination: FundingLocation,
+        observed_samples: tuple[Decimal, ...],
+        observed_at: datetime,
+        required_by: datetime,
+        expires_at: datetime,
+        safety_buffer: Decimal = Decimal("0"),
+        priority: FundingPriority = FundingPriority.NORMAL,
+        confidence: Decimal = Decimal("1"),
+        evidence_references: tuple[str, ...] = (),
+    ) -> "FundingForecastObservation":
+        if not observed_samples:
+            raise ValueError("Historical funding forecast requires observed samples")
+        if any(value < 0 for value in observed_samples) or safety_buffer < 0:
+            raise ValueError("Historical funding samples and safety buffer cannot be negative")
+        return cls(
+            forecast_id=forecast_id,
+            version=version,
+            source=FundingForecastSource.HISTORICAL_PEAK,
+            destination=destination,
+            predicted_required_available=max(observed_samples) + safety_buffer,
+            observed_at=observed_at,
+            required_by=required_by,
+            expires_at=expires_at,
+            priority=priority,
+            confidence=confidence,
+            evidence_references=evidence_references,
+        )
+
+    def to_objective(self) -> FundingObjective:
+        return FundingObjective(
+            objective_id=f"forecast:{self.forecast_id}",
+            version=self.version,
+            destination=self.destination,
+            desired_available=self.predicted_required_available,
+            required_by=self.required_by,
+            expires_at=self.expires_at,
+            priority=self.priority,
+            confidence=self.confidence,
+            strategy_decision_id=(
+                f"forecast:{self.source.value}:{self.forecast_id}:{self.version}"
+            ),
+            observed_at=self.observed_at,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +297,18 @@ class CapitalAvailability:
     risk_policy_version: int | None = None
     risk_watermark: int | None = None
     reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CapitalRecoveryAlert:
+    alert_id: str
+    plan_id: str
+    operation_id: str | None
+    kind: CapitalAlertKind
+    severity: CapitalAlertSeverity
+    recovery_action: CapitalRecoveryAction
+    message: str
+    opened_at: datetime
 
 
 def _utc(value: datetime, name: str) -> datetime:

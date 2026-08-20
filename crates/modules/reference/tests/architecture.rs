@@ -6,6 +6,18 @@ fn source(path: &str) -> String {
 }
 
 #[test]
+fn reference_control_transport_is_framework_owned() {
+    let manifest = source("Cargo.toml");
+    let server = source("src/bin/kairos-reference-server.rs");
+    assert!(!manifest.contains("axum.workspace"));
+    assert!(server.contains("with_http_control"));
+    assert!(server.contains("ReferenceHttpControl"));
+    for forbidden in ["axum::", "UnixListener", "TcpListener"] {
+        assert!(!server.contains(forbidden));
+    }
+}
+
+#[test]
 fn reference_connections_enter_through_exact_conflux_collections() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let plan = std::fs::read_to_string(root.join("src/services/providers/plan.rs"))
@@ -132,10 +144,12 @@ fn reference_domain_classification_is_not_unconstrained_text() {
 #[test]
 fn reference_rest_exposes_health_as_its_only_get_query() {
     let server = source("src/bin/kairos-reference-server.rs");
-    assert!(server.contains("if path == control::HEALTH"));
-    assert!(server.contains("Reference business queries use the contract-owned SQLite client"));
-    assert!(server.contains("method == \"GET\""));
-    assert!(server.contains("ConfluxEvent::Rest(request)"));
+    let codec = source("contract/src/control/http.rs");
+    assert!(server.contains("ReferenceHttpControl"));
+    assert!(codec.contains("runtime::HEALTH_PATH"));
+    assert!(codec.contains("Reference business queries use the contract-owned SQLite client"));
+    assert!(codec.contains("request.method == \"GET\""));
+    assert!(codec.contains("ControlAction::Request"));
     assert!(!server.contains("mpsc::channel"));
     assert!(!server.contains("oneshot::channel"));
     let contract = source("contract/src/control/types.rs");

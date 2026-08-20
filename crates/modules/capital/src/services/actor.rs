@@ -1,23 +1,28 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use kairos_primitives::{Quantity, Sequence, UnixNanos};
+use kairos_primitives::account::{AccountId, BrokerId};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::time::{Sequence, UnixNanos};
 
 use crate::application::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
     CancelFundingObjective, CapitalDemandReceipt, CapitalEvent, CapitalSnapshot,
     CapitalYieldCandidate, EvaluateCapitalGroup, FundingObjectiveReceipt,
     MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
-    ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
-    RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
+    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PublishFundingObjective,
+    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
+    UpdateCapitalPolicy, UpdateCapitalRoute,
 };
 use crate::domain::{
     CapitalAvailabilityView, CapitalDemandId, CapitalDemandRecord, CapitalDemandStatus,
-    CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig, CapitalGroupId, CapitalOperation,
+    CapitalFacts, CapitalFundingHorizon, CapitalGroupConfig, CapitalGroupId,
+    CapitalMemberAccountObservation, CapitalMemberReadinessRole, CapitalOperation,
     CapitalOperationId, CapitalOperationKind, CapitalOperationStatus,
     CapitalParticipantOperationState, CapitalPlan, CapitalPlanId, CapitalPlanStatus, CapitalPolicy,
-    CapitalReadiness, CapitalReservation, CapitalReservationId, CapitalReservationStatus,
-    CapitalRouteId, CapitalRouteKind, CapitalSubmissionOutcome, CapitalTransferRoute,
-    FundingLocation, FundingObjectiveId, FundingObjectiveRecord, FundingObjectiveStatus,
+    CapitalReadiness, CapitalRecoveryAction, CapitalReservation, CapitalReservationId,
+    CapitalReservationStatus, CapitalRouteId, CapitalRouteKind, CapitalSubmissionOutcome,
+    CapitalTransferRoute, FundingLocation, FundingObjectiveId, FundingObjectiveRecord,
+    FundingObjectiveStatus,
 };
 use crate::services::persistence::{CapitalJournalRecord, JournalCapitalStore};
 
@@ -37,6 +42,7 @@ pub(crate) struct CapitalActor {
     demands: HashMap<CapitalDemandId, CapitalDemandRecord>,
     policies: HashMap<FundingLocation, CapitalPolicy>,
     facts: HashMap<FundingLocation, CapitalFacts>,
+    member_account_observations: HashMap<(BrokerId, AccountId), CapitalMemberAccountObservation>,
     availability: HashMap<FundingLocation, CapitalAvailabilityView>,
     routes: HashMap<CapitalRouteId, CapitalTransferRoute>,
     plans: HashMap<CapitalPlanId, CapitalPlan>,
@@ -61,6 +67,7 @@ impl CapitalActor {
             demands: HashMap::new(),
             policies: HashMap::new(),
             facts: HashMap::new(),
+            member_account_observations: HashMap::new(),
             availability: HashMap::new(),
             routes: HashMap::new(),
             plans: HashMap::new(),
@@ -253,6 +260,13 @@ impl CapitalActor {
     pub(crate) fn observe_facts(&mut self, command: ObserveCapitalFacts) -> Result<(), ActorError> {
         self.validate_group(&command.capital_group_id)?;
         self.validate_location(&command.facts.destination)?;
+        let member_observation = CapitalMemberAccountObservation {
+            broker: command.facts.destination.broker.clone(),
+            account_id: command.facts.destination.account_id.clone(),
+            account_watermark: command.facts.account_watermark,
+            account_observed_at: command.facts.account_observed_at,
+            account_complete: command.facts.account_complete,
+        };
         if command.facts.account_watermark.get() == 0
             || command.facts.risk_policy_version.get() == 0
             || command.facts.risk_watermark.get() == 0
@@ -263,6 +277,7 @@ impl CapitalActor {
         }
         if let Some(existing) = self.facts.get(&command.facts.destination) {
             if command.facts == *existing {
+                self.apply_member_account_observation(member_observation);
                 return Ok(());
             }
             if command.facts.account_watermark < existing.account_watermark
@@ -274,7 +289,26 @@ impl CapitalActor {
                 ));
             }
         }
-        self.persist_and_apply_facts(command.facts)
+        self.persist_and_apply_facts(command.facts)?;
+        self.apply_member_account_observation(member_observation);
+        Ok(())
+    }
+
+    pub(crate) fn observe_member_account(
+        &mut self,
+        command: ObserveCapitalMemberAccount,
+    ) -> Result<(), ActorError> {
+        self.validate_group(&command.capital_group_id)?;
+        if !self.config.members.iter().any(|member| {
+            member.broker == command.observation.broker
+                && member.account_id == command.observation.account_id
+        }) {
+            return Err(ActorError::Rejected(
+                "Capital Account observation is outside this CapitalGroup".into(),
+            ));
+        }
+        self.apply_member_account_observation(command.observation);
+        Ok(())
     }
 
     pub(crate) fn evaluate(
@@ -387,7 +421,7 @@ impl CapitalActor {
             .get(&route.destination)
             .cloned()
             .ok_or_else(|| ActorError::Rejected("Capital destination was not evaluated".into()))?;
-        if view.readiness != CapitalReadiness::Ready || view.deficit.is_zero() {
+        if view.deficit.is_zero() {
             return Err(ActorError::Rejected(
                 "Capital destination has no actionable deficit".into(),
             ));
@@ -396,6 +430,7 @@ impl CapitalActor {
             .policies
             .get(&route.destination)
             .ok_or_else(|| ActorError::State("Capital destination policy disappeared".into()))?;
+        self.ensure_route_accounts_ready(&route, command.created_at, policy.max_fact_age_nanos)?;
         let source = self
             .facts
             .get(&route.source)
@@ -486,7 +521,7 @@ impl CapitalActor {
         } else {
             "transfer"
         };
-        let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
+        let idempotency_key = kairos_primitives::runtime::IdempotencyKey::new(format!(
             "{}:0:{first_operation_kind}",
             command.plan_id.as_str()
         ))
@@ -523,6 +558,9 @@ impl CapitalActor {
             redemption_observed_available: None,
             earn_principal_before: Quantity::ZERO,
             status: CapitalPlanStatus::Authorized,
+            recovery_action: CapitalRecoveryAction::None,
+            recovery_reason: None,
+            recovery_decided_at: None,
             created_at: command.created_at,
             expires_at: command.expires_at,
         };
@@ -558,13 +596,19 @@ impl CapitalActor {
             .availability
             .get(&route.source)
             .ok_or_else(|| ActorError::Rejected("Capital source was not evaluated".into()))?;
-        if view.readiness != CapitalReadiness::Ready || !view.deficit.is_zero() {
+        if !view.deficit.is_zero() {
             return Ok(None);
         }
         let policy = self
             .policies
             .get(&route.source)
             .ok_or_else(|| ActorError::State("Capital source policy disappeared".into()))?;
+        if self
+            .ensure_route_accounts_ready(route, evaluated_at, policy.max_fact_age_nanos)
+            .is_err()
+        {
+            return Ok(None);
+        }
         let facts = self
             .facts
             .get(&route.source)
@@ -707,7 +751,7 @@ impl CapitalActor {
         let reservation_id =
             CapitalReservationId::new(format!("capital-reservation:{}", command.plan_id.as_str()))
                 .map_err(|error| ActorError::Invalid(error.to_string()))?;
-        let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
+        let idempotency_key = kairos_primitives::runtime::IdempotencyKey::new(format!(
             "{}:0:earn-subscription",
             command.plan_id.as_str()
         ))
@@ -748,6 +792,9 @@ impl CapitalActor {
             redemption_observed_available: None,
             earn_principal_before,
             status: CapitalPlanStatus::Authorized,
+            recovery_action: CapitalRecoveryAction::None,
+            recovery_reason: None,
+            recovery_decided_at: None,
             created_at: command.created_at,
             expires_at: command.expires_at,
         };
@@ -786,6 +833,9 @@ impl CapitalActor {
                 continue;
             }
             plan.status = CapitalPlanStatus::Expired;
+            plan.recovery_action = CapitalRecoveryAction::NoCompensationRequired;
+            plan.recovery_reason = Some("plan expired before participant delivery".into());
+            plan.recovery_decided_at = Some(observed_at);
             reservation.status = CapitalReservationStatus::Expired;
             if let Some(operation) = &mut operation {
                 operation.status = CapitalOperationStatus::Expired;
@@ -849,7 +899,7 @@ impl CapitalActor {
             plan.plan_id.as_str()
         ))
         .map_err(|error| ActorError::Invalid(error.to_string()))?;
-        let idempotency_key = kairos_primitives::IdempotencyKey::new(format!(
+        let idempotency_key = kairos_primitives::runtime::IdempotencyKey::new(format!(
             "{}:{operation_index}:{kind_name}",
             plan.plan_id.as_str()
         ))
@@ -939,11 +989,27 @@ impl CapitalActor {
             },
             CapitalSubmissionOutcome::Rejected => {
                 plan.status = CapitalPlanStatus::Rejected;
+                plan.recovery_action = CapitalRecoveryAction::NoCompensationRequired;
+                plan.recovery_reason = Some(
+                    operation
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "participant command was definitely rejected".into()),
+                );
+                plan.recovery_decided_at = Some(command.at);
                 operation.status = CapitalOperationStatus::Rejected;
                 reservation.status = CapitalReservationStatus::Released;
             },
             CapitalSubmissionOutcome::Indeterminate => {
                 plan.status = CapitalPlanStatus::Indeterminate;
+                plan.recovery_action = CapitalRecoveryAction::ReconcileOriginalOperation;
+                plan.recovery_reason = Some(
+                    operation
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "participant delivery is indeterminate".into()),
+                );
+                plan.recovery_decided_at = Some(command.at);
                 operation.status = CapitalOperationStatus::Indeterminate;
             },
         }
@@ -1010,14 +1076,76 @@ impl CapitalActor {
             CapitalParticipantOperationState::Failed
             | CapitalParticipantOperationState::Cancelled => {
                 plan.status = CapitalPlanStatus::Failed;
+                plan.recovery_action = CapitalRecoveryAction::HoldAndReview;
+                plan.recovery_reason =
+                    Some(operation.failure_reason.clone().unwrap_or_else(|| {
+                        "participant reported terminal failure; automatic compensation is unsafe"
+                            .into()
+                    }));
+                plan.recovery_decided_at = Some(command.at);
                 operation.status = CapitalOperationStatus::Failed;
                 reservation.status = CapitalReservationStatus::Released;
             },
             CapitalParticipantOperationState::Unknown => {
                 plan.status = CapitalPlanStatus::Indeterminate;
+                plan.recovery_action = CapitalRecoveryAction::ReconcileOriginalOperation;
+                plan.recovery_reason = Some(
+                    operation
+                        .failure_reason
+                        .clone()
+                        .unwrap_or_else(|| "participant operation state is unknown".into()),
+                );
+                plan.recovery_decided_at = Some(command.at);
                 operation.status = CapitalOperationStatus::Indeterminate;
             },
         }
+        self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
+        Ok(plan)
+    }
+
+    pub(crate) fn record_recovery_required(
+        &mut self,
+        command: RecordCapitalRecoveryRequired,
+    ) -> Result<CapitalPlan, ActorError> {
+        self.validate_group(&command.capital_group_id)?;
+        if command.reason.trim().is_empty() {
+            return Err(ActorError::Invalid(
+                "Capital recovery reason must be non-empty".into(),
+            ));
+        }
+        let mut plan = self.plan(&command.plan_id)?;
+        let reservation = self.reservation(&plan.reservation_id)?;
+        let mut operation = self
+            .operation_for_plan(&plan.plan_id)
+            .cloned()
+            .ok_or_else(|| ActorError::Rejected("Capital operation was not prepared".into()))?;
+        if operation.status == CapitalOperationStatus::Prepared {
+            return Err(ActorError::Rejected(
+                "an undelivered Capital operation does not require participant reconciliation"
+                    .into(),
+            ));
+        }
+        if matches!(
+            operation.status,
+            CapitalOperationStatus::Settled
+                | CapitalOperationStatus::Expired
+                | CapitalOperationStatus::Rejected
+                | CapitalOperationStatus::Failed
+        ) {
+            return Ok(plan);
+        }
+        if command.at < operation.updated_at {
+            return Err(ActorError::Invalid(
+                "Capital recovery decision time cannot move backwards".into(),
+            ));
+        }
+        if plan.recovery_action == CapitalRecoveryAction::HoldAndReview {
+            return Ok(plan);
+        }
+        plan.recovery_action = CapitalRecoveryAction::ReconcileOriginalOperation;
+        plan.recovery_reason = Some(command.reason);
+        plan.recovery_decided_at = plan.recovery_decided_at.or(Some(command.at));
+        operation.updated_at = command.at;
         self.persist_and_apply_plan_state(plan.clone(), reservation, operation)?;
         Ok(plan)
     }
@@ -1061,6 +1189,9 @@ impl CapitalActor {
                 return Ok(plan);
             }
             plan.status = CapitalPlanStatus::Available;
+            plan.recovery_action = CapitalRecoveryAction::None;
+            plan.recovery_reason = None;
+            plan.recovery_decided_at = None;
             plan.redemption_account_watermark = Some(command.source.account_watermark);
             plan.redemption_observed_available = Some(command.source.observed_available);
             operation.status = CapitalOperationStatus::Settled;
@@ -1100,6 +1231,9 @@ impl CapitalActor {
                 return Ok(plan);
             }
             plan.status = CapitalPlanStatus::Completed;
+            plan.recovery_action = CapitalRecoveryAction::None;
+            plan.recovery_reason = None;
+            plan.recovery_decided_at = None;
             reservation.status = CapitalReservationStatus::Consumed;
             operation.status = CapitalOperationStatus::Settled;
             operation.account_observation_watermark = Some(command.source.account_watermark);
@@ -1128,6 +1262,9 @@ impl CapitalActor {
             return Ok(plan);
         }
         plan.status = CapitalPlanStatus::Completed;
+        plan.recovery_action = CapitalRecoveryAction::None;
+        plan.recovery_reason = None;
+        plan.recovery_decided_at = None;
         reservation.status = CapitalReservationStatus::Consumed;
         operation.status = CapitalOperationStatus::Settled;
         operation.account_observation_watermark = Some(command.destination.account_watermark);
@@ -1219,6 +1356,120 @@ impl CapitalActor {
             return Err(ActorError::Rejected(
                 "Capital location is outside this CapitalGroup".into(),
             ));
+        }
+        Ok(())
+    }
+
+    fn apply_member_account_observation(&mut self, value: CapitalMemberAccountObservation) {
+        let key = (value.broker.clone(), value.account_id.clone());
+        if self
+            .member_account_observations
+            .get(&key)
+            .is_some_and(|existing| {
+                value.account_observed_at < existing.account_observed_at
+                    || (value.account_observed_at == existing.account_observed_at
+                        && value.account_watermark < existing.account_watermark)
+            })
+        {
+            return;
+        }
+        self.member_account_observations.insert(key, value);
+    }
+
+    fn location_facts_ready(
+        &self,
+        location: &FundingLocation,
+        at: UnixNanos,
+        max_fact_age_nanos: u64,
+    ) -> bool {
+        self.facts.get(location).is_some_and(|facts| {
+            facts.account_complete
+                && at >= facts.account_observed_at
+                && at.get().saturating_sub(facts.account_observed_at.get()) <= max_fact_age_nanos
+        })
+    }
+
+    /// Returns the group-visible readiness and whether the condition closes
+    /// the global write barrier. Optional member loss degrades observability
+    /// but does not stop routes whose own endpoints remain ready.
+    fn group_account_readiness(
+        &self,
+        at: UnixNanos,
+        max_fact_age_nanos: u64,
+    ) -> (CapitalReadiness, Option<String>, bool) {
+        let mut optional_unavailable = Vec::new();
+        for member in &self.config.members {
+            let observation = self
+                .member_account_observations
+                .get(&(member.broker.clone(), member.account_id.clone()));
+            let ready = observation.is_some_and(|observation| {
+                observation.account_complete
+                    && observation.account_watermark.get() > 0
+                    && at >= observation.account_observed_at
+                    && at
+                        .get()
+                        .saturating_sub(observation.account_observed_at.get())
+                        <= max_fact_age_nanos
+            });
+            if ready {
+                continue;
+            }
+            match member.readiness_role {
+                CapitalMemberReadinessRole::Critical => {
+                    return (
+                        if observation.is_none() {
+                            CapitalReadiness::WaitingForAccounts
+                        } else {
+                            CapitalReadiness::Degraded
+                        },
+                        Some(format!(
+                            "critical Capital Account '{}' is incomplete, stale, or unavailable",
+                            member.account_id
+                        )),
+                        true,
+                    );
+                },
+                CapitalMemberReadinessRole::Optional => {
+                    optional_unavailable.push(member.account_id.to_string());
+                },
+            }
+        }
+        if optional_unavailable.is_empty() {
+            (CapitalReadiness::Ready, None, false)
+        } else {
+            optional_unavailable.sort();
+            (
+                CapitalReadiness::Degraded,
+                Some(format!(
+                    "optional Capital Accounts are incomplete, stale, or unavailable: {}",
+                    optional_unavailable.join(", ")
+                )),
+                false,
+            )
+        }
+    }
+
+    fn ensure_route_accounts_ready(
+        &self,
+        route: &CapitalTransferRoute,
+        at: UnixNanos,
+        max_fact_age_nanos: u64,
+    ) -> Result<(), ActorError> {
+        let (_, reason, globally_blocked) = self.group_account_readiness(at, max_fact_age_nanos);
+        if globally_blocked {
+            return Err(ActorError::Rejected(reason.unwrap_or_else(|| {
+                "critical Capital Account is unavailable".into()
+            })));
+        }
+        for (name, location) in [
+            ("source", &route.source),
+            ("destination", &route.destination),
+        ] {
+            if !self.location_facts_ready(location, at, max_fact_age_nanos) {
+                return Err(ActorError::Rejected(format!(
+                    "Capital route {name} Account facts are incomplete, stale, or unavailable"
+                )));
+            }
         }
         Ok(())
     }
@@ -1653,7 +1904,7 @@ impl CapitalActor {
         }
         let fact_age = evaluated_at.get() - facts.account_observed_at.get();
         let risk_below_minimum = facts.risk_capacity < policy.minimum;
-        let readiness_reason = if !facts.account_complete {
+        let local_readiness_reason = if !facts.account_complete {
             Some("Account facts are incomplete".to_string())
         } else if fact_age > policy.max_fact_age_nanos {
             Some("Account facts are stale".to_string())
@@ -1662,6 +1913,15 @@ impl CapitalActor {
         } else {
             None
         };
+        let (group_readiness, group_readiness_reason, group_writes_blocked) =
+            self.group_account_readiness(evaluated_at, policy.max_fact_age_nanos);
+        let readiness_reason = local_readiness_reason.clone().or(group_readiness_reason);
+        let readiness = if local_readiness_reason.is_some() {
+            CapitalReadiness::Degraded
+        } else {
+            group_readiness
+        };
+        let writes_blocked = local_readiness_reason.is_some() || group_writes_blocked;
         let effective = governed.min(facts.risk_capacity);
         let raw_deficit = if effective > facts.observed_available {
             effective
@@ -1702,17 +1962,13 @@ impl CapitalActor {
             || deficit < policy.hysteresis
             || !dwell_satisfied
             || !cooldown_satisfied
-            || readiness_reason.is_some()
+            || writes_blocked
         {
             deficit = Quantity::ZERO;
         }
         Ok(CapitalAvailabilityView {
             destination: policy.destination.clone(),
-            readiness: if readiness_reason.is_some() {
-                CapitalReadiness::Degraded
-            } else {
-                CapitalReadiness::Ready
-            },
+            readiness,
             policy_version: policy.version,
             active_objective_ids: objective_ids,
             active_demand_ids: demand_ids,

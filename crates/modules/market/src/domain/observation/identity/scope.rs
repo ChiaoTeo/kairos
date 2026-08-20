@@ -1,4 +1,4 @@
-use kairos_primitives::{InstrumentId, MarketId};
+use kairos_primitives::reference::{InstrumentId, MarketId};
 use serde::{Deserialize, Serialize};
 
 /// Business identity of one observation. Consolidated observations are

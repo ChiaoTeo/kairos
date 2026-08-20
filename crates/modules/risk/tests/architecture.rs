@@ -58,25 +58,29 @@ fn risk_server_selects_a_profile_instead_of_an_account_or_exchange() {
 }
 
 #[test]
-fn risk_rest_host_only_adapts_transport_into_the_typed_conflux_contract() {
-    let host = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/application/host.rs"),
-    )
-    .unwrap();
-    assert!(host.contains("RiskRestRequest::Health"));
-    assert!(host.contains("ConfluxHandle<RiskApplication>"));
-    assert!(host.contains("handle.handle(ConfluxEvent::Rest(request))"));
-    assert!(host.contains("Risk business queries use typed mmap views"));
-    for forbidden in [
-        "application.authorize_and_reserve",
-        "application.publish_policy",
-        "application.maintenance_tick",
-        "RiskSnapshotPublisher",
-        "RiskEventPublisher",
-    ] {
-        assert!(
-            !host.contains(forbidden),
-            "Risk Contract host bypasses Conflux through {forbidden}"
-        );
+fn risk_transport_is_owned_by_conflux_and_not_application() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert!(!root.join("src/application/host.rs").exists());
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(!manifest.contains("axum.workspace"));
+
+    for path in rust_files(&root.join("src/application")) {
+        let source = fs::read_to_string(path).unwrap();
+        for forbidden in [
+            "axum::",
+            "UnixListener",
+            "TcpListener",
+            "HttpControlRequest",
+            "HttpControlResponse",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "Risk Application depends on transport type {forbidden}"
+            );
+        }
     }
+
+    let composition = fs::read_to_string(root.join("src/composition/mod.rs")).unwrap();
+    assert!(composition.contains("with_http_control"));
+    assert!(composition.contains("RiskHttpControl"));
 }

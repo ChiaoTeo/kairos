@@ -7,6 +7,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqlitePool};
 
 use super::publication::StoredPublication;
+use super::time::unix_nanos;
 use crate::domain::{
     Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog, ReferenceCatalog,
     ReferenceError, ReferenceResult,
@@ -18,8 +19,8 @@ pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 4;
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) struct CatalogState {
-    pub generation: kairos_primitives::Generation,
-    pub event_sequence: kairos_primitives::Sequence,
+    pub generation: kairos_primitives::time::Generation,
+    pub event_sequence: kairos_primitives::time::Sequence,
     pub market_count: usize,
 }
 
@@ -169,7 +170,7 @@ impl SqlxCatalogStore {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use kairos_primitives::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
+    use kairos_primitives::reference::{Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
     use super::{SqlxCatalogStore, SqlxProviderSyncStore};
     use crate::domain::{
@@ -178,8 +179,8 @@ mod tests {
 
     #[derive(Debug)]
     struct TestRefresh {
-        generation: kairos_primitives::Generation,
-        event_sequence: kairos_primitives::Sequence,
+        generation: kairos_primitives::time::Generation,
+        event_sequence: kairos_primitives::time::Sequence,
         market_count: usize,
         changed: bool,
         event_count: usize,
@@ -333,16 +334,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         let asset = |status| crate::domain::Asset {
-            asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
-            code: kairos_primitives::Symbol::new("BTC").unwrap(),
-            asset_class: kairos_primitives::AssetClass::Crypto,
+            asset_id: kairos_primitives::reference::AssetId::new("asset:BTC").unwrap(),
+            code: kairos_primitives::reference::Symbol::new("BTC").unwrap(),
+            asset_class: kairos_primitives::reference::AssetClass::Crypto,
             status,
             ..Default::default()
         };
         let mut catalog = ReferenceCatalog::default();
         let first = catalog.apply(
             ProviderCatalog {
-                assets: vec![asset(kairos_primitives::ReferenceStatus::Active)],
+                assets: vec![asset(kairos_primitives::reference::ReferenceStatus::Active)],
                 ..Default::default()
             },
             10.into(),
@@ -357,7 +358,9 @@ mod tests {
 
         let second = catalog.apply(
             ProviderCatalog {
-                assets: vec![asset(kairos_primitives::ReferenceStatus::Inactive)],
+                assets: vec![asset(
+                    kairos_primitives::reference::ReferenceStatus::Inactive,
+                )],
                 ..Default::default()
             },
             20.into(),
@@ -394,7 +397,7 @@ mod tests {
         let instrument = Instrument {
             instrument_id: instrument_id.clone(),
             symbol: Symbol::new("BTC").unwrap(),
-            instrument_type: kairos_primitives::InstrumentKind::Spot,
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         };
@@ -403,7 +406,7 @@ mod tests {
             instrument_id: instrument_id.clone(),
             listing_id: Some(ListingId::new("listing:binance:btc-usdt").unwrap()),
             exchange_id: Exchange::new("binance").unwrap(),
-            instrument_kind: kairos_primitives::InstrumentKind::Spot,
+            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
             venue_symbol: Some(Symbol::new("BTCUSDT").unwrap()),
             status: "active".into(),
             ..Default::default()
@@ -449,7 +452,7 @@ mod tests {
         assert!(reader.record("market:binance:btc-usdt").unwrap().is_some());
         let projection = reader
             .projection(&kairos_reference_contract::SqliteMarketQuery {
-                venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
                 limit: 100,
                 ..Default::default()
             })
@@ -484,7 +487,7 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let first = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_primitives::MarketId::new("market:first").unwrap(),
+                market_id: kairos_primitives::reference::MarketId::new("market:first").unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -492,7 +495,7 @@ mod tests {
         };
         let second = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_primitives::MarketId::new("market:second").unwrap(),
+                market_id: kairos_primitives::reference::MarketId::new("market:second").unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -545,8 +548,10 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let page = ProviderCatalog {
             markets: vec![crate::domain::Market {
-                market_id: kairos_primitives::MarketId::new("market:legacy-provider:equity:BCPC")
-                    .unwrap(),
+                market_id: kairos_primitives::reference::MarketId::new(
+                    "market:legacy-provider:equity:BCPC",
+                )
+                .unwrap(),
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -590,9 +595,9 @@ mod tests {
         let path = directory.path().join("reference.sqlite");
         let catalog = ProviderCatalog {
             assets: vec![crate::domain::Asset {
-                asset_id: kairos_primitives::AssetId::new("asset:BTC").unwrap(),
-                code: kairos_primitives::Symbol::new("BTC").unwrap(),
-                asset_class: kairos_primitives::AssetClass::Crypto,
+                asset_id: kairos_primitives::reference::AssetId::new("asset:BTC").unwrap(),
+                code: kairos_primitives::reference::Symbol::new("BTC").unwrap(),
+                asset_class: kairos_primitives::reference::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -696,7 +701,7 @@ mod tests {
             instruments: vec![Instrument {
                 instrument_id: instrument_id.clone(),
                 symbol: Symbol::new("TEST").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Spot,
+                instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -714,7 +719,7 @@ mod tests {
                 instrument_id,
                 listing_id: Some(listing_id),
                 exchange_id: Exchange::new("exchange:test").unwrap(),
-                instrument_kind: kairos_primitives::InstrumentKind::Spot,
+                instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
                 venue_symbol: Some(Symbol::new("TEST").unwrap()),
                 status: "active".into(),
                 effective_from_unix_nanos: 1.into(),
@@ -1014,7 +1019,7 @@ impl SqlxProviderSyncStore {
                 .execute(&mut *tx)
                 .await?;
                 sqlx::query("UPDATE reference_provider_sync SET cursor = NULL, updated_at_unix_nanos = ? WHERE provider = ?")
-                    .bind(crate::domain::unix_nanos().get() as i64)
+                    .bind(unix_nanos().get() as i64)
                     .bind(&provider)
                     .execute(&mut *tx)
                     .await?;
@@ -1073,7 +1078,7 @@ impl SqlxProviderSyncStore {
                 }
             }
             sqlx::query("INSERT INTO reference_provider_sync(provider,cursor,updated_at_unix_nanos) VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET cursor=excluded.cursor,updated_at_unix_nanos=excluded.updated_at_unix_nanos")
-                .bind(&provider).bind(cursor).bind(crate::domain::unix_nanos().get() as i64).execute(&mut *tx).await?;
+        .bind(&provider).bind(cursor).bind(unix_nanos().get() as i64).execute(&mut *tx).await?;
             tx.commit().await
         })
         .await
@@ -1169,7 +1174,7 @@ impl SqlxProviderSyncStore {
                     .bind(&provider).execute(&mut *tx).await?;
             }
             sqlx::query("INSERT INTO reference_provider_sync(provider,updated_at_unix_nanos) VALUES (?,?) ON CONFLICT(provider) DO UPDATE SET updated_at_unix_nanos=excluded.updated_at_unix_nanos")
-                .bind(&provider).bind(crate::domain::unix_nanos().get() as i64).execute(&mut *tx).await?;
+                .bind(&provider).bind(unix_nanos().get() as i64).execute(&mut *tx).await?;
             tx.commit().await
         })
         .await
@@ -1199,7 +1204,7 @@ impl SqlxProviderSyncStore {
             sqlx::query("INSERT INTO reference_provider_sync(provider,cursor,updated_at_unix_nanos) VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET cursor=excluded.cursor,updated_at_unix_nanos=excluded.updated_at_unix_nanos")
                 .bind(&provider)
                 .bind(cursor)
-                .bind(crate::domain::unix_nanos().get() as i64)
+                .bind(unix_nanos().get() as i64)
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await
@@ -1248,7 +1253,7 @@ impl SqlxProviderSyncStore {
                 .await?;
             sqlx::query("INSERT INTO reference_provider_sync(provider,cursor,updated_at_unix_nanos) VALUES (?,NULL,?) ON CONFLICT(provider) DO UPDATE SET cursor=NULL,updated_at_unix_nanos=excluded.updated_at_unix_nanos")
                 .bind(&provider)
-                .bind(crate::domain::unix_nanos().get() as i64)
+                .bind(unix_nanos().get() as i64)
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await
@@ -1264,7 +1269,7 @@ impl SqlxProviderSyncStore {
                 .bind(&provider).execute(&mut *tx).await?;
             sqlx::query("INSERT INTO reference_provider_sync(provider,cursor,updated_at_unix_nanos) VALUES (?,NULL,?) ON CONFLICT(provider) DO UPDATE SET cursor=NULL,updated_at_unix_nanos=excluded.updated_at_unix_nanos")
                 .bind(&provider)
-                .bind(crate::domain::unix_nanos().get() as i64)
+                .bind(unix_nanos().get() as i64)
                 .execute(&mut *tx)
                 .await?;
             tx.commit().await
@@ -1304,7 +1309,7 @@ impl SqlxProviderSyncStore {
             sqlx::query("INSERT INTO reference_provider_control(provider, paused, updated_at_unix_nanos) VALUES (?, ?, ?) ON CONFLICT(provider) DO UPDATE SET paused = excluded.paused, updated_at_unix_nanos = excluded.updated_at_unix_nanos")
                 .bind(provider)
                 .bind(i64::from(paused))
-                .bind(crate::domain::unix_nanos().get() as i64)
+                .bind(unix_nanos().get() as i64)
                 .execute(&pool)
                 .await?;
             Ok(())
@@ -1341,7 +1346,7 @@ impl SqlxProviderSyncStore {
                 .bind(provider)
                 .bind(underlying)
                 .bind(i64::from(enabled))
-                .bind(crate::domain::unix_nanos().get() as i64)
+                .bind(unix_nanos().get() as i64)
                 .execute(&pool)
                 .await?;
             Ok(())
@@ -1755,7 +1760,7 @@ async fn replace_current_state(
     ))
     .bind(catalog.generation.get() as i64)
     .bind(catalog.event_sequence.get() as i64)
-    .bind(crate::domain::unix_nanos().get() as i64)
+    .bind(unix_nanos().get() as i64)
     .execute(&mut **tx)
     .await?;
     Ok(())

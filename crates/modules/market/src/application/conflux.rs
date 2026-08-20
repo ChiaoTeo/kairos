@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
@@ -7,9 +8,11 @@ use kairos_conflux::{
     RestContract, SystemEvent,
 };
 use kairos_market_contract::{
-    MarketCommandStatus, MarketControlError, MarketDataSource, MarketDataSourcesResponse,
-    MarketHealthResponse, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
-    MarketSubscriptionResponse,
+    MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataSource,
+    MarketDataSourcesResponse, MarketFeedStatus, MarketHealthResponse, MarketHealthStatus,
+    MarketOperation, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
+    MarketSourceStatus, MarketSubscriptionResponse, MarketSubscriptionStatus, MarketViewPublisher,
+    SubscriptionOwnerKey,
 };
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_transport::SnapshotEnvelopeMetadata;
@@ -88,14 +91,19 @@ pub(crate) struct MarketConfluxState {
     freshness_interval: Duration,
     freshness_max_age: Duration,
     shutdown_timeout: Duration,
-    view_root: std::path::PathBuf,
-    view_slot_size: usize,
     identity: InstanceIdentity,
     producer_incarnation: u64,
     source_plans: BTreeMap<String, MarketSourcePlan>,
     history: Option<HistoryQueue>,
     reference_projection: Option<ReferenceProjectionState>,
     command_results: BTreeMap<String, (MarketRestRequest, MarketRestResponse)>,
+    view_publication: Option<MarketViewPublication>,
+}
+
+struct MarketViewPublication {
+    root: PathBuf,
+    slot_size: usize,
+    revision: u64,
 }
 
 impl Default for MarketConfluxState {
@@ -104,39 +112,50 @@ impl Default for MarketConfluxState {
             freshness_interval: Duration::from_secs(1),
             freshness_max_age: Duration::from_secs(5),
             shutdown_timeout: Duration::from_secs(5),
-            view_root: std::path::PathBuf::new(),
-            view_slot_size: 4 * 1024 * 1024,
             identity: InstanceIdentity::default(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
             source_plans: BTreeMap::new(),
             history: None,
             reference_projection: None,
             command_results: BTreeMap::new(),
+            view_publication: None,
         }
     }
 }
 
 impl MarketApplication {
+    pub(crate) fn configure_view_publication(
+        &mut self,
+        root: PathBuf,
+        slot_size: usize,
+    ) -> Result<(), String> {
+        if slot_size == 0 {
+            return Err("Market mmap view slot size must be positive".into());
+        }
+        self.conflux.view_publication = Some(MarketViewPublication {
+            root,
+            slot_size,
+            revision: 1,
+        });
+        Ok(())
+    }
+
     pub(crate) fn configure_conflux(
         &mut self,
         freshness_interval: Duration,
         freshness_max_age: Duration,
         shutdown_timeout: Duration,
-        view_root: std::path::PathBuf,
-        view_slot_size: usize,
         identity: InstanceIdentity,
         source_plans: Vec<MarketSourcePlan>,
         history: Option<HistoryQueue>,
         reference_projection: Option<ReferenceProjectionConfig>,
     ) -> Result<(), String> {
-        if freshness_interval.is_zero() || freshness_max_age.is_zero() || view_slot_size == 0 {
+        if freshness_interval.is_zero() || freshness_max_age.is_zero() {
             return Err("Market Conflux intervals and view slot size must be positive".into());
         }
         self.conflux.freshness_interval = freshness_interval;
         self.conflux.freshness_max_age = freshness_max_age;
         self.conflux.shutdown_timeout = shutdown_timeout;
-        self.conflux.view_root = view_root;
-        self.conflux.view_slot_size = view_slot_size;
         self.conflux.identity = identity;
         self.conflux.source_plans = source_plans
             .into_iter()
@@ -441,7 +460,15 @@ impl MarketApplication {
                         .values()
                         .map(|source| MarketDataSource {
                             source_id: source.descriptor.id.clone(),
-                            status: format!("{:?}", source.status).to_ascii_lowercase(),
+                            status: match source.status {
+                                SourceStatus::Starting => MarketSourceStatus::Connecting,
+                                SourceStatus::Ready => MarketSourceStatus::Ready,
+                                SourceStatus::Paused => MarketSourceStatus::Paused,
+                                SourceStatus::Reconnecting => MarketSourceStatus::Reconnecting,
+                                SourceStatus::WarmingUp => MarketSourceStatus::WarmingUp,
+                                SourceStatus::Degraded => MarketSourceStatus::Degraded,
+                                SourceStatus::Stopped => MarketSourceStatus::Disconnected,
+                            },
                             ready: source.status == crate::SourceStatus::Ready,
                             stale: source.status == crate::SourceStatus::Degraded,
                         })
@@ -474,7 +501,7 @@ impl MarketApplication {
                     .and_then(|removed| {
                         removed
                             .then_some(MarketCommandStatus {
-                                status: "completed".into(),
+                                status: MarketCommandOutcome::Applied,
                             })
                             .ok_or_else(|| MarketError::NotFound("subscription not found".into()))
                     });
@@ -503,7 +530,7 @@ impl MarketApplication {
                 self.recover_sources()
                     .await
                     .map(|()| MarketCommandStatus {
-                        status: "accepted".into(),
+                        status: MarketCommandOutcome::Accepted,
                     })
                     .map_err(control_error),
             ),
@@ -511,7 +538,7 @@ impl MarketApplication {
                 self.set_replay_paused(true)
                     .await
                     .map(|()| MarketCommandStatus {
-                        status: "paused".into(),
+                        status: MarketCommandOutcome::Paused,
                     })
                     .map_err(control_error),
             ),
@@ -519,7 +546,7 @@ impl MarketApplication {
                 self.set_replay_paused(false)
                     .await
                     .map(|()| MarketCommandStatus {
-                        status: "running".into(),
+                        status: MarketCommandOutcome::Running,
                     })
                     .map_err(control_error),
             ),
@@ -533,7 +560,7 @@ impl MarketApplication {
         >,
     ) -> Result<MarketSubscriptionResponse, MarketError> {
         if !matches!(command.schema_version, 1 | 2)
-            || command.operation != "market.subscribe"
+            || command.operation != MarketOperation::Subscribe
             || command.command_id.trim().is_empty()
             || command.idempotency_key.trim().is_empty()
             || command.strategy_id.trim().is_empty()
@@ -551,7 +578,7 @@ impl MarketApplication {
             .map(|value| ObservationSelector::parse(value))
             .collect::<Result<Vec<_>, _>>()
             .map_err(MarketError::InvalidSubscription)?;
-        let subscription_id = SubscriptionId::new(command.command_id.clone())
+        let subscription_id = SubscriptionId::new(command.command_id.as_str())
             .map_err(|error| MarketError::InvalidSubscription(error.to_string()))?;
         let owner = strategy_subscription_owner(
             command.launch_id.as_deref(),
@@ -605,11 +632,11 @@ impl MarketApplication {
             }
             let query = crate::MarketSelectionQuery {
                 exchange_id: Some(
-                    kairos_primitives::Exchange::new(exchange)
+                    kairos_primitives::reference::Exchange::new(exchange)
                         .map_err(|error| MarketError::Invalid(error.to_string()))?,
                 ),
                 provider_product: Some(
-                    kairos_primitives::ProviderProductCode::new(market_type)
+                    kairos_primitives::integration::ProviderProductCode::new(market_type)
                         .map_err(|error| MarketError::Invalid(error.to_string()))?,
                 ),
                 source_id: command.payload.source_id.clone(),
@@ -646,26 +673,37 @@ impl MarketApplication {
         }
         Ok(MarketSubscriptionResponse {
             subscription_id: subscription_id.clone(),
-            owner_id: owner,
-            status: self
-                .subscription_status(&subscription_id)
-                .map(|value| format!("{value:?}").to_ascii_lowercase())
-                .unwrap_or_else(|| "pending".into()),
+            owner_id: SubscriptionOwnerKey::new(owner).map_err(MarketError::InvalidSubscription)?,
+            status: match self.subscription_status(&subscription_id) {
+                Some(crate::SubscriptionStatus::Pending) => MarketSubscriptionStatus::Pending,
+                Some(crate::SubscriptionStatus::Ready) => MarketSubscriptionStatus::Ready,
+                Some(crate::SubscriptionStatus::Degraded) => MarketSubscriptionStatus::Degraded,
+                Some(crate::SubscriptionStatus::Unavailable) => {
+                    MarketSubscriptionStatus::Unavailable
+                },
+                Some(crate::SubscriptionStatus::Rejected) => MarketSubscriptionStatus::Rejected,
+                None => MarketSubscriptionStatus::Pending,
+            },
         })
     }
 
     fn contract_health(&self) -> MarketHealthResponse {
         let view = self.current_view();
-        let feed_status = format!("{:?}", view.feed_status).to_ascii_lowercase();
+        let feed_status = match view.feed_status {
+            crate::FeedStatus::Disconnected => MarketFeedStatus::Disconnected,
+            crate::FeedStatus::Ready => MarketFeedStatus::Ready,
+            crate::FeedStatus::Reconnecting => MarketFeedStatus::Reconnecting,
+            crate::FeedStatus::WarmingUp => MarketFeedStatus::WarmingUp,
+            crate::FeedStatus::Degraded => MarketFeedStatus::Degraded,
+        };
         MarketHealthResponse {
             status: if matches!(view.feed_status, crate::FeedStatus::Degraded) {
-                "degraded"
+                MarketHealthStatus::Degraded
             } else {
-                "ready"
-            }
-            .into(),
-            actor_id: view.actor_id.to_string(),
-            event_sequence: self.event_sequence(),
+                MarketHealthStatus::Ready
+            },
+            actor_id: view.actor_id,
+            event_sequence: self.event_sequence().into(),
             feed_status,
         }
     }
@@ -709,25 +747,27 @@ impl MarketApplication {
             else {
                 continue;
             };
+            let publication = self.conflux.view_publication.as_ref().ok_or_else(|| {
+                MarketError::Recovery(
+                    "Market mmap view publication is not configured by Composition".into(),
+                )
+            })?;
             let resource_key = encoded.key.canonical_key();
-            if context
-                .system()
-                .market_view_publishers
-                .get(&resource_key)
-                .is_none()
-            {
-                let writer = kairos_market_contract::MarketViewPublisher::create(
-                    &self.conflux.view_root,
-                    encoded.key,
-                    self.conflux.view_slot_size,
+            let root = publication.root.clone();
+            let slot_size = publication.slot_size;
+            let key = encoded.key;
+            let resource_key = context
+                .declare_output(
+                    |system| &mut system.market_view_publishers,
+                    resource_key,
+                    publication.revision,
+                    move || {
+                        MarketViewPublisher::create(root, key, slot_size).map_err(|error| {
+                            kairos_conflux::OutputBindingError::Create(error.to_string())
+                        })
+                    },
                 )
                 .map_err(|error| MarketError::Recovery(error.to_string()))?;
-                context
-                    .system()
-                    .market_view_publishers
-                    .ensure_with(resource_key.clone(), 1, || writer)
-                    .map_err(|error| MarketError::Recovery(error.to_string()))?;
-            }
             context
                 .system()
                 .market_view_publishers
@@ -1004,8 +1044,10 @@ impl MarketApplication {
         let symbols = markets
             .values()
             .map(|market| {
-                kairos_primitives::ParticipantSymbol::new(market.route.provider_symbol.as_str())
-                    .expect("resolved provider symbol is valid")
+                kairos_primitives::integration::ParticipantSymbol::new(
+                    market.route.provider_symbol.as_str(),
+                )
+                .expect("resolved provider symbol is valid")
             })
             .collect::<Vec<_>>();
         match managed_fetch_quotes(
@@ -1106,7 +1148,7 @@ async fn managed_unsubscribe(
 async fn managed_fetch_quotes(
     context: &mut Context<'_, MarketApplication>,
     key: &ConnectionKey,
-    symbols: &[kairos_primitives::ParticipantSymbol],
+    symbols: &[kairos_primitives::integration::ParticipantSymbol],
 ) -> Result<Vec<kairos_conflux::MarketQuote>, IntegrationError> {
     macro_rules! try_family {
         ($field:ident) => {{

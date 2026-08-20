@@ -1,4 +1,4 @@
-use kairos_primitives::{
+use kairos_primitives::reference::{
     AssetClass, Exchange, InstrumentId, InstrumentKind, MarketId, ReferenceStatus,
 };
 use serde::{Deserialize, Serialize};

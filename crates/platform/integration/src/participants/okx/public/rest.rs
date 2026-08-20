@@ -1,4 +1,6 @@
-use kairos_primitives::{Currency, ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 
 use crate::participants::okx::OkxRestConfig;
 use crate::services::participants::okx::rest::{RestService, map_error};

@@ -2,6 +2,13 @@
 
 use std::path::PathBuf;
 
+use kairos_conflux::{
+    AeronOutputDeclaration, Conflux, ConfluxConfig, HttpControlConfig, MmapOutputDeclaration,
+};
+use kairos_execution_contract::{
+    ExecutionHttpControl, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
+};
+
 use super::{
     ExecutionConnectionOptions, ExecutionHost, ExecutionWriterFence, SimulatedAccountSettlement,
     SqlxExecutionAudit, SqlxExecutionStore, compose_order_entry, configure_execution_dependencies,
@@ -93,12 +100,11 @@ pub fn build_execution_host(
         .simulated
         .then(|| SimulatedAccountSettlement::from_manifest(&config.manifest_path))
         .transpose()?;
+    let transport_identity = config.transport_identity.clone();
     application.configure_conflux(
         plans,
         config.writer_fences,
-        config.transport_identity,
-        config.view_root,
-        4 * 1024 * 1024,
+        transport_identity.clone(),
         ExecutionAudit::from(audit),
         settlement,
     )?;
@@ -107,11 +113,43 @@ pub fn build_execution_host(
         config.aeron_channel.clone(),
         config.execution_events_stream_id,
     )?;
-    let publisher = kairos_execution_contract::ExecutionEventPublisher::connect(&event_endpoint)?;
-    system
-        .execution_event_publishers
-        .ensure_with("execution-events".to_owned(), 1, || publisher)?;
+    for kind in [
+        ExecutionViewKind::ActiveOrders,
+        ExecutionViewKind::CurrentExecution,
+        ExecutionViewKind::ActiveIntents,
+    ] {
+        let key = ExecutionViewKey::from_identity(&transport_identity, kind);
+        let resource_key = key.canonical_key();
+        let path = ExecutionViewPublisher::resolved_path(&config.view_root, &key)?;
+        system.outputs().mmap.declare(
+            resource_key,
+            MmapOutputDeclaration {
+                path,
+                slot_capacity: 4 * 1024 * 1024,
+                revision: 1,
+            },
+        )?;
+    }
+    system.outputs().aeron.declare(
+        "execution-events".to_owned(),
+        AeronOutputDeclaration {
+            endpoint: event_endpoint,
+            revision: 1,
+        },
+    )?;
 
     let _ = config.source_id;
-    Ok(ExecutionHost::new(application, system, config.socket_path))
+    let (conflux, handle) = Conflux::new(
+        application,
+        system,
+        ConfluxConfig {
+            ingress_capacity: 1_024,
+            ..ConfluxConfig::default()
+        },
+    )?;
+    Ok(conflux.with_http_control(
+        handle,
+        ExecutionHttpControl,
+        HttpControlConfig::uds(config.socket_path),
+    ))
 }

@@ -4,6 +4,7 @@ use kairos_conflux::{
     ConfluxActor, ConfluxEvent, Context, Contract, ResourceOperationError, RestContract,
     SystemEvent,
 };
+use kairos_primitives::reference::InstrumentId;
 use kairos_reference_contract::{
     ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
     ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferencePublishResponse,
@@ -105,8 +106,8 @@ impl ReferenceApplication {
                     Ok(result) => {
                         let publication_pending = self.publish_pending(context).await.is_err();
                         Ok(ReferenceRefreshResponse {
-                            generation: result.generation.get(),
-                            event_sequence: result.event_sequence.get(),
+                            generation: result.generation,
+                            event_sequence: result.event_sequence,
                             changed: result.changed,
                             change_count: result.change_count as u64,
                             publication_pending,
@@ -121,7 +122,7 @@ impl ReferenceApplication {
                     self.publish_pending(context)
                         .await
                         .map(|events| ReferencePublishResponse {
-                            generation: self.generation().get(),
+                            generation: self.generation().into(),
                             events: events as u64,
                         });
                 ReferenceRestResponse::Publish(response)
@@ -133,7 +134,7 @@ impl ReferenceApplication {
                     .await
                     .map(|()| ReferenceSourceStatusResponse {
                         source_id,
-                        status: "paused".into(),
+                        status: kairos_reference_contract::ReferenceProviderStatus::Paused,
                     })
                     .map_err(control_error);
                 ReferenceRestResponse::PauseSource(response)
@@ -145,7 +146,7 @@ impl ReferenceApplication {
                     .await
                     .map(|()| ReferenceSourceStatusResponse {
                         source_id,
-                        status: "resumed".into(),
+                        status: kairos_reference_contract::ReferenceProviderStatus::Ready,
                     })
                     .map_err(control_error);
                 ReferenceRestResponse::ResumeSource(response)
@@ -164,21 +165,21 @@ impl ReferenceApplication {
             },
             ReferenceRestRequest::UpsertAsset(request) => {
                 let response = match self.upsert_asset(request).await {
-                    Ok(generation) => self.mutation_response(generation.get(), context).await,
+                    Ok(generation) => self.mutation_response(generation, context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertAsset(response)
             },
             ReferenceRestRequest::UpsertInstrument(request) => {
                 let response = match self.upsert_instrument(request).await {
-                    Ok(generation) => self.mutation_response(generation.get(), context).await,
+                    Ok(generation) => self.mutation_response(generation, context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertInstrument(response)
             },
             ReferenceRestRequest::UpsertListing(request) => {
                 let response = match self.upsert_listing(request).await {
-                    Ok(generation) => self.mutation_response(generation.get(), context).await,
+                    Ok(generation) => self.mutation_response(generation, context).await,
                     Err(error) => Err(control_error(error)),
                 };
                 ReferenceRestResponse::UpsertListing(response)
@@ -192,23 +193,41 @@ impl ReferenceApplication {
             .provider_health()
             .iter()
             .map(|provider| ReferenceProviderHealth {
-                source_id: provider.source_id.clone(),
-                status: provider.status.clone(),
+                source_id: kairos_primitives::integration::ProviderId::new(
+                    provider.source_id.clone(),
+                )
+                .expect("normalized provider source identity"),
+                status: match provider.status.as_str() {
+                    "ready" | "unknown" => {
+                        kairos_reference_contract::ReferenceProviderStatus::Ready
+                    },
+                    "paused" => kairos_reference_contract::ReferenceProviderStatus::Paused,
+                    "syncing" => kairos_reference_contract::ReferenceProviderStatus::Syncing,
+                    _ => kairos_reference_contract::ReferenceProviderStatus::Degraded,
+                },
                 stale: provider.stale,
             })
             .collect::<Vec<_>>();
         let degraded = providers.iter().any(|provider| {
-            provider.stale || !matches!(provider.status.as_str(), "ready" | "unknown")
+            provider.stale
+                || !matches!(
+                    provider.status,
+                    kairos_reference_contract::ReferenceProviderStatus::Ready
+                )
         });
         ReferenceHealthResponse {
-            status: if degraded { "degraded" } else { "ready" }.into(),
+            status: if degraded {
+                kairos_reference_contract::ReferenceHealthStatus::Degraded
+            } else {
+                kairos_reference_contract::ReferenceHealthStatus::Ready
+            },
             providers,
         }
     }
 
     async fn change_option_coverage(
         &mut self,
-        underlying: String,
+        underlying: InstrumentId,
         enabled: bool,
         context: &mut Context<'_, Self>,
     ) -> Result<ReferenceOptionCoverageResponse, ReferenceControlError> {
@@ -216,12 +235,17 @@ impl ReferenceApplication {
         let result = {
             let key = kairos_conflux::ConnectionKey::new(
                 crate::services::providers::MassiveOptionsCoverageSource::connection_key(
-                    &underlying,
+                    underlying.as_str(),
                 )
                 .map_err(control_error)?,
             )
             .map_err(|error| control_error(ReferenceError::Provider(error)))?;
-            let created = if enabled && !self.option_underlyings().contains(&underlying) {
+            let created = if enabled
+                && !self
+                    .option_underlyings()
+                    .iter()
+                    .any(|value| value == underlying.as_str())
+            {
                 let (planned_key, parameters) = self
                     .massive_option_connection_plan(&underlying)
                     .map_err(control_error)?;
@@ -261,16 +285,20 @@ impl ReferenceApplication {
         Ok(ReferenceOptionCoverageResponse {
             underlying,
             enabled,
-            underlyings: self.option_underlyings(),
-            generation: result.generation.get(),
-            event_sequence: result.event_sequence.get(),
+            underlyings: self
+                .option_underlyings()
+                .into_iter()
+                .filter_map(|value| InstrumentId::new(value).ok())
+                .collect(),
+            generation: result.generation,
+            event_sequence: result.event_sequence,
             changed: result.changed,
         })
     }
 
     async fn mutation_response(
         &mut self,
-        generation: u64,
+        generation: kairos_primitives::time::Generation,
         context: &mut Context<'_, Self>,
     ) -> Result<ReferenceMutationResponse, ReferenceControlError> {
         let events = self.publish_pending(context).await?;

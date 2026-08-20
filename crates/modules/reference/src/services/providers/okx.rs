@@ -98,109 +98,111 @@ fn append_okx_instrument(
         instrument_id,
         canonical_symbol,
         underlying_instrument_id,
-    ) =
-        match value.kind {
-            ExternalInstrumentKind::Equity | ExternalInstrumentKind::EquityPerpetual => {
-                return Err(ReferenceError::Provider(
-                    "OKX catalog cannot contain Binance equity instrument kinds".into(),
-                ));
-            },
-            ExternalInstrumentKind::Spot => (
-                "spot",
-                "spot",
-                format!("instrument:spot:{base}"),
-                base.clone(),
+    ) = match value.kind {
+        ExternalInstrumentKind::Equity | ExternalInstrumentKind::EquityPerpetual => {
+            return Err(ReferenceError::Provider(
+                "OKX catalog cannot contain Binance equity instrument kinds".into(),
+            ));
+        },
+        ExternalInstrumentKind::Spot => (
+            "spot",
+            "spot",
+            format!("instrument:spot:{base}"),
+            base.clone(),
+            None,
+        ),
+        ExternalInstrumentKind::Margin => (
+            "margin",
+            "spot",
+            format!("instrument:spot:{base}"),
+            base.clone(),
+            None,
+        ),
+        ExternalInstrumentKind::Perpetual => (
+            "swap",
+            "perpetual",
+            format!("instrument:perpetual:{base}-{quote}"),
+            format!("{base}-{quote}"),
+            None,
+        ),
+        ExternalInstrumentKind::Future => {
+            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+            (
+                "futures",
+                "future",
+                format!("instrument:future:{base}-{quote}:{expiry}"),
+                format!("{base}-{quote}-{expiry}"),
                 None,
-            ),
-            ExternalInstrumentKind::Margin => (
-                "margin",
-                "spot",
-                format!("instrument:spot:{base}"),
-                base.clone(),
-                None,
-            ),
-            ExternalInstrumentKind::Perpetual => (
-                "swap",
-                "perpetual",
-                format!("instrument:perpetual:{base}-{quote}"),
-                format!("{base}-{quote}"),
-                None,
-            ),
-            ExternalInstrumentKind::Future => {
-                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-                (
-                    "futures",
-                    "future",
-                    format!("instrument:future:{base}-{quote}:{expiry}"),
-                    format!("{base}-{quote}-{expiry}"),
-                    None,
-                )
-            },
-            ExternalInstrumentKind::Option => {
-                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-                let strike = value.strike.as_deref().ok_or_else(|| {
-                    ReferenceError::Provider("OKX option strike is missing".into())
-                })?;
-                let right = value.option_right.as_deref().ok_or_else(|| {
-                    ReferenceError::Provider("OKX option right is missing".into())
-                })?;
-                let canonical_right = right.to_ascii_uppercase();
-                let underlying =
-                    kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?;
-                if !catalog
-                    .instruments
-                    .iter()
-                    .any(|value| value.instrument_id == underlying)
-                {
-                    catalog.instruments.push(Instrument {
-                        instrument_id: underlying.clone(),
-                        symbol: kairos_primitives::Symbol::new(base.clone())?,
-                        instrument_type: InstrumentKind::Spot,
-                        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
-                            "asset:crypto:{base}"
-                        ))?),
-                        status: "active".into(),
-                        ..Instrument::default()
-                    });
-                }
-                (
-                    "options",
-                    "option",
-                    format!(
-                        "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
-                        canonical_right
-                    ),
-                    format!("{base}-{quote}-{expiry}-{strike}-{canonical_right}"),
-                    Some(underlying),
-                )
-            },
-        };
+            )
+        },
+        ExternalInstrumentKind::Option => {
+            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+            let strike = value
+                .strike
+                .as_deref()
+                .ok_or_else(|| ReferenceError::Provider("OKX option strike is missing".into()))?;
+            let right = value
+                .option_right
+                .as_deref()
+                .ok_or_else(|| ReferenceError::Provider("OKX option right is missing".into()))?;
+            let canonical_right = right.to_ascii_uppercase();
+            let underlying =
+                kairos_primitives::reference::InstrumentId::new(format!("instrument:spot:{base}"))?;
+            if !catalog
+                .instruments
+                .iter()
+                .any(|value| value.instrument_id == underlying)
+            {
+                catalog.instruments.push(Instrument {
+                    instrument_id: underlying.clone(),
+                    symbol: kairos_primitives::reference::Symbol::new(base.clone())?,
+                    instrument_type: InstrumentKind::Spot,
+                    primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(
+                        format!("asset:crypto:{base}"),
+                    )?),
+                    status: "active".into(),
+                    ..Instrument::default()
+                });
+            }
+            (
+                "options",
+                "option",
+                format!(
+                    "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
+                    canonical_right
+                ),
+                format!("{base}-{quote}-{expiry}-{strike}-{canonical_right}"),
+                Some(underlying),
+            )
+        },
+    };
     for code in [&base, &quote] {
         catalog.assets.push(Asset {
-            asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-            code: kairos_primitives::Symbol::new(code.clone())?,
+            asset_id: kairos_primitives::reference::AssetId::new(format!("asset:crypto:{code}"))?,
+            code: kairos_primitives::reference::Symbol::new(code.clone())?,
             asset_class: AssetClass::Crypto,
             status: "active".into(),
             ..Asset::default()
         });
     }
-    let instrument_id = kairos_primitives::InstrumentId::new(instrument_id)?;
-    let listing_id = kairos_primitives::ListingId::new(if canonical_family == "spot" {
+    let instrument_id = kairos_primitives::reference::InstrumentId::new(instrument_id)?;
+    let listing_id = kairos_primitives::reference::ListingId::new(if canonical_family == "spot" {
         format!("listing:okx:spot:{base}:{quote}")
     } else {
         format!("listing:okx:{canonical_family}:{source_symbol}")
     })?;
-    let exchange_id = kairos_primitives::Exchange::new("exchange:okx")?;
-    let market_id =
-        kairos_primitives::MarketId::new(format!("market:okx:{canonical_family}:{source_symbol}"))?;
+    let exchange_id = kairos_primitives::reference::Exchange::new("exchange:okx")?;
+    let market_id = kairos_primitives::reference::MarketId::new(format!(
+        "market:okx:{canonical_family}:{source_symbol}"
+    ))?;
     let instrument_kind = canonical_instrument_kind(value.kind)?;
-    let status: kairos_primitives::ReferenceStatus =
+    let status: kairos_primitives::reference::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_primitives::Symbol::new(canonical_symbol)?,
+        symbol: kairos_primitives::reference::Symbol::new(canonical_symbol)?,
         instrument_type: instrument_kind,
-        primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{}",
             if canonical_family == "spot" {
                 &base
@@ -224,7 +226,7 @@ fn append_okx_instrument(
         listing_id: listing_id.clone(),
         instrument_id: instrument_id.clone(),
         exchange_id: exchange_id.clone(),
-        exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
+        exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
@@ -237,11 +239,11 @@ fn append_okx_instrument(
         exchange_id,
         instrument_kind,
         asset_type: Some(AssetClass::Crypto),
-        venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
-        base_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        venue_symbol: Some(kairos_primitives::reference::Symbol::new(source_symbol)?),
+        base_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{base}"
         ))?),
-        quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
+        quote_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
             "asset:crypto:{quote}"
         ))?),
         status,

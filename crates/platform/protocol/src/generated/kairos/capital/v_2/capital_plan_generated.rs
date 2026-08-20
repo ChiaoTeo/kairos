@@ -41,8 +41,11 @@ impl<'a> CapitalPlan<'a> {
     pub const VT_REDEMPTION_OBSERVED_AVAILABLE: ::flatbuffers::VOffsetT = 40;
     pub const VT_EARN_PRINCIPAL_BEFORE: ::flatbuffers::VOffsetT = 42;
     pub const VT_STATUS: ::flatbuffers::VOffsetT = 44;
-    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 46;
-    pub const VT_EXPIRES_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 48;
+    pub const VT_RECOVERY_ACTION: ::flatbuffers::VOffsetT = 46;
+    pub const VT_RECOVERY_REASON: ::flatbuffers::VOffsetT = 48;
+    pub const VT_RECOVERY_DECIDED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 50;
+    pub const VT_CREATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 52;
+    pub const VT_EXPIRES_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 54;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -61,12 +64,18 @@ impl<'a> CapitalPlan<'a> {
         let mut builder = CapitalPlanBuilder::new(_fbb);
         builder.add_expires_at_unix_nanos(args.expires_at_unix_nanos);
         builder.add_created_at_unix_nanos(args.created_at_unix_nanos);
+        if let Some(x) = args.recovery_decided_at_unix_nanos {
+            builder.add_recovery_decided_at_unix_nanos(x);
+        }
         if let Some(x) = args.redemption_account_watermark {
             builder.add_redemption_account_watermark(x);
         }
         builder.add_destination_account_watermark(args.destination_account_watermark);
         builder.add_source_account_watermark(args.source_account_watermark);
         builder.add_route_version(args.route_version);
+        if let Some(x) = args.recovery_reason {
+            builder.add_recovery_reason(x);
+        }
         if let Some(x) = args.earn_principal_before {
             builder.add_earn_principal_before(x);
         }
@@ -112,6 +121,7 @@ impl<'a> CapitalPlan<'a> {
         if let Some(x) = args.plan_id {
             builder.add_plan_id(x);
         }
+        builder.add_recovery_action(args.recovery_action);
         builder.add_status(args.status);
         builder.add_route_kind(args.route_kind);
         builder.finish()
@@ -382,6 +392,40 @@ impl<'a> CapitalPlan<'a> {
         }
     }
     #[inline]
+    pub fn recovery_action(&self) -> CapitalRecoveryAction {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<CapitalRecoveryAction>(
+                    CapitalPlan::VT_RECOVERY_ACTION,
+                    Some(CapitalRecoveryAction::NONE),
+                )
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn recovery_reason(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(CapitalPlan::VT_RECOVERY_REASON, None)
+        }
+    }
+    #[inline]
+    pub fn recovery_decided_at_unix_nanos(&self) -> Option<u64> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(CapitalPlan::VT_RECOVERY_DECIDED_AT_UNIX_NANOS, None)
+        }
+    }
+    #[inline]
     pub fn created_at_unix_nanos(&self) -> u64 {
         // Safety:
         // Created from valid Table for this object
@@ -493,6 +537,21 @@ impl ::flatbuffers::Verifiable for CapitalPlan<'_> {
                 true,
             )?
             .visit_field::<CapitalPlanStatus>("status", Self::VT_STATUS, false)?
+            .visit_field::<CapitalRecoveryAction>(
+                "recovery_action",
+                Self::VT_RECOVERY_ACTION,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "recovery_reason",
+                Self::VT_RECOVERY_REASON,
+                false,
+            )?
+            .visit_field::<u64>(
+                "recovery_decided_at_unix_nanos",
+                Self::VT_RECOVERY_DECIDED_AT_UNIX_NANOS,
+                false,
+            )?
             .visit_field::<u64>(
                 "created_at_unix_nanos",
                 Self::VT_CREATED_AT_UNIX_NANOS,
@@ -537,6 +596,9 @@ pub struct CapitalPlanArgs<'a> {
     pub redemption_observed_available: Option<&'a super::super::common::v_2::Decimal64>,
     pub earn_principal_before: Option<&'a super::super::common::v_2::Decimal64>,
     pub status: CapitalPlanStatus,
+    pub recovery_action: CapitalRecoveryAction,
+    pub recovery_reason: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub recovery_decided_at_unix_nanos: Option<u64>,
     pub created_at_unix_nanos: u64,
     pub expires_at_unix_nanos: u64,
 }
@@ -565,6 +627,9 @@ impl<'a> Default for CapitalPlanArgs<'a> {
             redemption_observed_available: None,
             earn_principal_before: None, // required field
             status: CapitalPlanStatus::AUTHORIZED,
+            recovery_action: CapitalRecoveryAction::NONE,
+            recovery_reason: None,
+            recovery_decided_at_unix_nanos: None,
             created_at_unix_nanos: 0,
             expires_at_unix_nanos: 0,
         }
@@ -757,6 +822,28 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CapitalPlanBuilder<'a, 'b, A>
         );
     }
     #[inline]
+    pub fn add_recovery_action(&mut self, recovery_action: CapitalRecoveryAction) {
+        self.fbb_.push_slot::<CapitalRecoveryAction>(
+            CapitalPlan::VT_RECOVERY_ACTION,
+            recovery_action,
+            CapitalRecoveryAction::NONE,
+        );
+    }
+    #[inline]
+    pub fn add_recovery_reason(&mut self, recovery_reason: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            CapitalPlan::VT_RECOVERY_REASON,
+            recovery_reason,
+        );
+    }
+    #[inline]
+    pub fn add_recovery_decided_at_unix_nanos(&mut self, recovery_decided_at_unix_nanos: u64) {
+        self.fbb_.push_slot_always::<u64>(
+            CapitalPlan::VT_RECOVERY_DECIDED_AT_UNIX_NANOS,
+            recovery_decided_at_unix_nanos,
+        );
+    }
+    #[inline]
     pub fn add_created_at_unix_nanos(&mut self, created_at_unix_nanos: u64) {
         self.fbb_.push_slot::<u64>(
             CapitalPlan::VT_CREATED_AT_UNIX_NANOS,
@@ -862,6 +949,12 @@ impl ::core::fmt::Debug for CapitalPlan<'_> {
         );
         ds.field("earn_principal_before", &self.earn_principal_before());
         ds.field("status", &self.status());
+        ds.field("recovery_action", &self.recovery_action());
+        ds.field("recovery_reason", &self.recovery_reason());
+        ds.field(
+            "recovery_decided_at_unix_nanos",
+            &self.recovery_decided_at_unix_nanos(),
+        );
         ds.field("created_at_unix_nanos", &self.created_at_unix_nanos());
         ds.field("expires_at_unix_nanos", &self.expires_at_unix_nanos());
         ds.finish()

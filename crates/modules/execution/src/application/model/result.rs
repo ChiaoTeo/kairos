@@ -8,7 +8,7 @@ use super::*;
 /// error: recovery must be able to inspect and resolve it after a restart.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UnknownRemoteOrder {
-    pub remote_order_id: kairos_primitives::RemoteOrderId,
+    pub remote_order_id: kairos_primitives::integration::RemoteOrderId,
     pub symbol: Symbol,
     pub status: ExecutionOrderStatus,
     pub execution_id: Option<FillId>,

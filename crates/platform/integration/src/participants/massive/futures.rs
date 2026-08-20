@@ -1,6 +1,7 @@
 //! Massive Futures reference and historical market-data connection.
 
-use kairos_primitives::{ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::UnixNanos;
 use secrecy::ExposeSecret;
 
 use super::MassiveFuturesRestConfig;

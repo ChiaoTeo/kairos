@@ -27,8 +27,8 @@ pub(crate) enum PersistedEvent {
     DecisionEvaluated {
         sequence: u64,
         decision: crate::application::RiskDecision,
-        account_id: kairos_primitives::AccountId,
-        strategy_id: kairos_primitives::StrategyId,
+        account_id: kairos_primitives::account::AccountId,
+        strategy_id: kairos_primitives::runtime::StrategyId,
     },
 }
 
@@ -133,7 +133,7 @@ impl RiskStateStore for JournalRiskStore {
     }
 
     fn checkpoint(&mut self, snapshot: &RiskSnapshot) -> Result<(), String> {
-        if snapshot.event_sequence == kairos_primitives::Sequence::new(0)
+        if snapshot.event_sequence == kairos_primitives::time::Sequence::new(0)
             || !snapshot
                 .event_sequence
                 .is_multiple_of(self.checkpoint_every)
@@ -164,10 +164,10 @@ mod tests {
         let event = PersistedEvent::PolicyActivated {
             sequence: 1,
             policy: RiskPolicy {
-                policy_id: kairos_primitives::PolicyId::new("p").unwrap(),
+                policy_id: kairos_primitives::risk::PolicyId::new("p").unwrap(),
                 version: 1.into(),
                 scope: crate::domain::PolicyScope {
-                    account_id: Some(kairos_primitives::AccountId::new("a").unwrap()),
+                    account_id: Some(kairos_primitives::account::AccountId::new("a").unwrap()),
                     strategy_id: None,
                     instrument_id: None,
                     exchange_id: None,

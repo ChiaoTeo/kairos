@@ -1,6 +1,7 @@
 //! Binance Stocks Trading REST connection for `/sapi/v1/equity/*`.
 
-use kairos_primitives::{Currency, ParticipantSymbol};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::reference::Currency;
 use serde_json::Value;
 
 use crate::services::participants::binance::{execution, market};

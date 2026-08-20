@@ -141,7 +141,7 @@ pub fn load_execution_routes_from_reference_markets(
                 &configured.product,
                 provider_symbol,
             )?;
-            let route_id = kairos_primitives::ExecutionRouteId::new(format!(
+            let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
                 "{}:{}",
                 configured.route_id, market.market_id
             ))
@@ -150,22 +150,24 @@ pub fn load_execution_routes_from_reference_markets(
                 crate::application::ExecutionRouteCandidate {
                     route_id,
                     account_id: Some(
-                        kairos_primitives::AccountId::new(&configured.account_id)
+                        kairos_primitives::account::AccountId::new(&configured.account_id)
                             .map_err(|error| error.to_string())?,
                     ),
                     segment_key: Some(
-                        kairos_primitives::SegmentKey::new(&configured.segment_key)
+                        kairos_primitives::account::SegmentKey::new(&configured.segment_key)
                             .map_err(|error| error.to_string())?,
                     ),
                     instrument_id: Some(market.instrument_id.clone()),
                     market_id: Some(market.market_id.clone()),
                     participant_id: configured.participant_id.clone(),
-                    provider_product: kairos_primitives::ProviderProductCode::new(
+                    provider_product: kairos_primitives::integration::ProviderProductCode::new(
                         &configured.product,
                     )
                     .map_err(|error| error.to_string())?,
-                    provider_symbol: kairos_primitives::ProviderSymbol::new(provider_symbol)
-                        .map_err(|error| error.to_string())?,
+                    provider_symbol: kairos_primitives::integration::ProviderSymbol::new(
+                        provider_symbol,
+                    )
+                    .map_err(|error| error.to_string())?,
                     supported_order_types: vec![
                         crate::application::OrderType::Market,
                         crate::application::OrderType::Limit,
@@ -202,7 +204,7 @@ pub(super) fn candidate_for_address(
         &configured.product,
         provider_symbol,
     )?;
-    let route_id = kairos_primitives::ExecutionRouteId::new(format!(
+    let route_id = kairos_primitives::execution::ExecutionRouteId::new(format!(
         "{}:{}",
         configured.route_id, instrument_id
     ))
@@ -211,25 +213,27 @@ pub(super) fn candidate_for_address(
         crate::application::ExecutionRouteCandidate {
             route_id,
             account_id: Some(
-                kairos_primitives::AccountId::new(&configured.account_id)
+                kairos_primitives::account::AccountId::new(&configured.account_id)
                     .map_err(|error| error.to_string())?,
             ),
             segment_key: Some(
-                kairos_primitives::SegmentKey::new(&configured.segment_key)
+                kairos_primitives::account::SegmentKey::new(&configured.segment_key)
                     .map_err(|error| error.to_string())?,
             ),
             instrument_id: Some(
-                kairos_primitives::InstrumentId::new(instrument_id)
+                kairos_primitives::reference::InstrumentId::new(instrument_id)
                     .map_err(|error| error.to_string())?,
             ),
             market_id: destination_market_id
-                .map(kairos_primitives::MarketId::new)
+                .map(kairos_primitives::reference::MarketId::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
             participant_id: configured.participant_id.clone(),
-            provider_product: kairos_primitives::ProviderProductCode::new(&configured.product)
-                .map_err(|error| error.to_string())?,
-            provider_symbol: kairos_primitives::ProviderSymbol::new(provider_symbol)
+            provider_product: kairos_primitives::integration::ProviderProductCode::new(
+                &configured.product,
+            )
+            .map_err(|error| error.to_string())?,
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new(provider_symbol)
                 .map_err(|error| error.to_string())?,
             supported_order_types: vec![
                 crate::application::OrderType::Market,
@@ -271,9 +275,9 @@ fn canonical_venue_matches_participant(exchange_id: &str, participant_id: &str) 
 
 fn route_product_supports_instrument_kind(
     product: &str,
-    kind: kairos_primitives::InstrumentKind,
+    kind: kairos_primitives::reference::InstrumentKind,
 ) -> bool {
-    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+    use kairos_primitives::reference::InstrumentKind::{Future, Option, Perpetual, Spot};
     match product.trim().to_ascii_lowercase().as_str() {
         "spot" | "margin" => kind == Spot,
         "swap" | "perpetual" | "usd-m-futures" | "coin-m-futures" => {

@@ -6,10 +6,11 @@ use kairos_protocol::generated::kairos::common::v_2::Decimal64;
 
 use super::{CapitalViewKey, CapitalViewPublisher};
 use crate::{
-    CapitalAvailability, CapitalCurrentView, CapitalDemand, CapitalDemandLifecycleStatus,
-    CapitalEarnHolding, CapitalFacts, CapitalFundingHorizon, CapitalOperation,
-    CapitalOperationKind, CapitalOperationStatus, CapitalPlan, CapitalPlanStatus, CapitalPolicy,
-    CapitalReadiness, CapitalReservation, CapitalReservationStatus, CapitalRoute, CapitalRouteKind,
+    CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability, CapitalCurrentView,
+    CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding, CapitalFacts,
+    CapitalFundingHorizon, CapitalOperation, CapitalOperationKind, CapitalOperationStatus,
+    CapitalPlan, CapitalPlanStatus, CapitalPolicy, CapitalReadiness, CapitalRecoveryAction,
+    CapitalReservation, CapitalReservationStatus, CapitalRoute, CapitalRouteKind,
     CapitalSettlementClass, ContractError, ContractResult, FundingLocation, FundingObjective,
     FundingObjectiveLifecycleStatus, FundingPriority,
 };
@@ -55,6 +56,11 @@ impl FlatbuffersCapitalViewWriter {
             .iter()
             .map(|value| operation(&mut builder, value))
             .collect::<Vec<_>>();
+        let alerts = view
+            .alerts
+            .iter()
+            .map(|value| alert(&mut builder, value))
+            .collect::<Vec<_>>();
         let objectives = view
             .objectives
             .iter()
@@ -94,6 +100,7 @@ impl FlatbuffersCapitalViewWriter {
         let plans = builder.create_vector(&plans);
         let reservations = builder.create_vector(&reservations);
         let operations = builder.create_vector(&operations);
+        let alerts = builder.create_vector(&alerts);
         let group_id = builder.create_string(view.capital_group_id.as_str());
         let strategy_id = builder.create_string(view.strategy_id.as_str());
         let environment = builder.create_string(&view.environment);
@@ -115,6 +122,7 @@ impl FlatbuffersCapitalViewWriter {
                 plans: Some(plans),
                 reservations: Some(reservations),
                 operations: Some(operations),
+                alerts: Some(alerts),
             },
         );
         let canonical_key = self.key.canonical_key();
@@ -203,7 +211,7 @@ pub(crate) fn location<'a>(
     )
 }
 
-fn decimal(value: kairos_primitives::Quantity) -> Decimal64 {
+fn decimal(value: kairos_primitives::decimal::Quantity) -> Decimal64 {
     Decimal64::new(value.mantissa(), value.scale())
 }
 
@@ -324,9 +332,9 @@ pub(crate) fn policy<'a>(
             stress_buffer: Some(&stress_buffer),
             minimum_movement: Some(&minimum_movement),
             hysteresis: Some(&hysteresis),
-            deficit_dwell_nanos: value.deficit_dwell_nanos,
-            cooldown_nanos: value.cooldown_nanos,
-            max_fact_age_nanos: value.max_fact_age_nanos,
+            deficit_dwell_nanos: value.deficit_dwell_nanos.into(),
+            cooldown_nanos: value.cooldown_nanos.into(),
+            max_fact_age_nanos: value.max_fact_age_nanos.into(),
         },
     )
 }
@@ -421,7 +429,7 @@ pub(crate) fn route<'a>(
             },
             enabled: value.enabled,
             earn_product_id,
-            demand_guard_nanos: value.demand_guard_nanos,
+            demand_guard_nanos: value.demand_guard_nanos.into(),
             allow_unknown_redemption_quota: value.allow_unknown_redemption_quota,
         },
     )
@@ -482,6 +490,7 @@ pub(crate) fn availability<'a>(
             destination: Some(destination),
             readiness: match value.readiness {
                 CapitalReadiness::WaitingForFacts => fb::CapitalReadiness::WAITING_FOR_FACTS,
+                CapitalReadiness::WaitingForAccounts => fb::CapitalReadiness::WAITING_FOR_ACCOUNTS,
                 CapitalReadiness::Degraded => fb::CapitalReadiness::DEGRADED,
                 CapitalReadiness::Ready => fb::CapitalReadiness::READY,
             },
@@ -546,6 +555,10 @@ pub(crate) fn plan<'a>(
     let destination_observed_available = decimal(value.destination_observed_available);
     let redemption_observed_available = value.redemption_observed_available.map(decimal);
     let earn_principal_before = decimal(value.earn_principal_before);
+    let recovery_reason = value
+        .recovery_reason
+        .as_deref()
+        .map(|value| builder.create_string(value));
     fb::CapitalPlan::create(
         builder,
         &fb::CapitalPlanArgs {
@@ -596,6 +609,18 @@ pub(crate) fn plan<'a>(
                 CapitalPlanStatus::Expired => fb::CapitalPlanStatus::EXPIRED,
                 CapitalPlanStatus::Failed => fb::CapitalPlanStatus::FAILED,
             },
+            recovery_action: match value.recovery_action {
+                CapitalRecoveryAction::None => fb::CapitalRecoveryAction::NONE,
+                CapitalRecoveryAction::NoCompensationRequired => {
+                    fb::CapitalRecoveryAction::NO_COMPENSATION_REQUIRED
+                },
+                CapitalRecoveryAction::ReconcileOriginalOperation => {
+                    fb::CapitalRecoveryAction::RECONCILE_ORIGINAL_OPERATION
+                },
+                CapitalRecoveryAction::HoldAndReview => fb::CapitalRecoveryAction::HOLD_AND_REVIEW,
+            },
+            recovery_reason,
+            recovery_decided_at_unix_nanos: value.recovery_decided_at.map(|value| value.get()),
             created_at_unix_nanos: value.created_at.get(),
             expires_at_unix_nanos: value.expires_at.get(),
         },
@@ -663,12 +688,56 @@ pub(crate) fn operation<'a>(
     )
 }
 
+fn alert<'a>(
+    builder: &mut FlatBufferBuilder<'a>,
+    value: &CapitalAlert,
+) -> WIPOffset<fb::CapitalAlert<'a>> {
+    let alert_id = builder.create_string(&value.alert_id);
+    let plan_id = builder.create_string(value.plan_id.as_str());
+    let operation_id = value
+        .operation_id
+        .as_ref()
+        .map(|value| builder.create_string(value.as_str()));
+    let message = builder.create_string(&value.message);
+    fb::CapitalAlert::create(
+        builder,
+        &fb::CapitalAlertArgs {
+            alert_id: Some(alert_id),
+            plan_id: Some(plan_id),
+            operation_id,
+            kind: match value.kind {
+                CapitalAlertKind::ReconciliationRequired => {
+                    fb::CapitalAlertKind::RECONCILIATION_REQUIRED
+                },
+                CapitalAlertKind::ManualReview => fb::CapitalAlertKind::MANUAL_REVIEW,
+            },
+            severity: match value.severity {
+                CapitalAlertSeverity::Warning => fb::CapitalAlertSeverity::WARNING,
+                CapitalAlertSeverity::Critical => fb::CapitalAlertSeverity::CRITICAL,
+            },
+            recovery_action: match value.recovery_action {
+                CapitalRecoveryAction::None => fb::CapitalRecoveryAction::NONE,
+                CapitalRecoveryAction::NoCompensationRequired => {
+                    fb::CapitalRecoveryAction::NO_COMPENSATION_REQUIRED
+                },
+                CapitalRecoveryAction::ReconcileOriginalOperation => {
+                    fb::CapitalRecoveryAction::RECONCILE_ORIGINAL_OPERATION
+                },
+                CapitalRecoveryAction::HoldAndReview => fb::CapitalRecoveryAction::HOLD_AND_REVIEW,
+            },
+            message: Some(message),
+            opened_at_unix_nanos: value.opened_at.get(),
+        },
+    )
+}
+
 fn as_of(view: &CapitalCurrentView) -> u64 {
     view.availability
         .iter()
         .map(|value| value.evaluated_at.get())
         .chain(view.plans.iter().map(|value| value.created_at.get()))
         .chain(view.operations.iter().map(|value| value.updated_at.get()))
+        .chain(view.alerts.iter().map(|value| value.opened_at.get()))
         .max()
         .unwrap_or_default()
 }
@@ -683,9 +752,11 @@ pub(crate) fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{
-        AccountId, BrokerId, CapitalGroupId, Currency, Generation, SegmentKey, Sequence, StrategyId,
-    };
+    use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+    use kairos_primitives::capital::{CapitalGroupId, CapitalOperationId, CapitalPlanId};
+    use kairos_primitives::reference::Currency;
+    use kairos_primitives::runtime::StrategyId;
+    use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
     use super::*;
 
@@ -737,6 +808,17 @@ mod tests {
                 plans: vec![],
                 reservations: vec![],
                 operations: vec![],
+                alerts: vec![CapitalAlert {
+                    alert_id: kairos_primitives::runtime::EventId::new("capital-recovery:plan-1")
+                        .unwrap(),
+                    plan_id: CapitalPlanId::new("plan-1").unwrap(),
+                    operation_id: Some(CapitalOperationId::new("operation-1").unwrap()),
+                    kind: CapitalAlertKind::ReconciliationRequired,
+                    severity: CapitalAlertSeverity::Warning,
+                    recovery_action: CapitalRecoveryAction::ReconcileOriginalOperation,
+                    message: "query the original operation".into(),
+                    opened_at: UnixNanos::new(11),
+                }],
             })
             .unwrap();
         let payload = writer.last_payload.unwrap();
@@ -746,5 +828,11 @@ mod tests {
         assert_eq!(state.capital_group_id(), "group-1");
         assert_eq!(state.availability().len(), 1);
         assert_eq!(state.availability().get(0).deficit().mantissa(), 6);
+        assert_eq!(state.alerts().len(), 1);
+        assert_eq!(state.alerts().get(0).plan_id(), "plan-1");
+        assert_eq!(
+            state.alerts().get(0).recovery_action(),
+            fb::CapitalRecoveryAction::RECONCILE_ORIGINAL_OPERATION
+        );
     }
 }

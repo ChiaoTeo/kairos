@@ -2,7 +2,9 @@
 
 use std::task::{Context, Poll};
 
-use kairos_primitives::{ParticipantSymbol, Price, Quantity, Sequence};
+use kairos_primitives::decimal::{Price, Quantity};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::Sequence;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 

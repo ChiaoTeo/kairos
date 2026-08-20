@@ -10,9 +10,13 @@ import sys
 from typing import Any, cast
 
 from kairospy.application.capital.models import (
+    CapitalAlertKind,
+    CapitalAlertSeverity,
     CapitalAvailability,
     CapitalFundingHorizon,
     CapitalReadiness,
+    CapitalRecoveryAction,
+    CapitalRecoveryAlert,
     FundingLocation,
 )
 from kairospy.domain_types import AccountId, SegmentKey
@@ -105,6 +109,14 @@ class CapitalProjection:
             for index in range(int(state.AvailabilityLength()))
         )
 
+    def alerts(self) -> tuple[CapitalRecoveryAlert, ...]:
+        frame = self._reader.read()
+        state = cast(Any, frame.value.State())
+        return tuple(
+            _recovery_alert(state.Alerts(index))
+            for index in range(int(state.AlertsLength()))
+        )
+
     def availability(
         self,
         *,
@@ -147,6 +159,7 @@ def _availability(value: object | None, capital_group_id: str) -> CapitalAvailab
         0: CapitalReadiness.WAITING_FOR_FACTS,
         1: CapitalReadiness.DEGRADED,
         2: CapitalReadiness.READY,
+        3: CapitalReadiness.WAITING_FOR_ACCOUNTS,
     }.get(int(row.Readiness()))
     if readiness is None:
         raise ValueError(f"unknown Capital readiness: {row.Readiness()}")
@@ -189,6 +202,39 @@ def _funding_horizon(value: object | None) -> CapitalFundingHorizon:
         objective_ids=_strings(row, "ObjectiveIds"),
         demand_ids=_strings(row, "DemandIds"),
         desired_available=_decimal(row.DesiredAvailable()),
+    )
+
+
+def _recovery_alert(value: object | None) -> CapitalRecoveryAlert:
+    if value is None:
+        raise ValueError("Capital view contains an empty recovery alert")
+    row = cast(Any, value)
+    kind = {
+        0: CapitalAlertKind.RECONCILIATION_REQUIRED,
+        1: CapitalAlertKind.MANUAL_REVIEW,
+    }.get(int(row.Kind()))
+    severity = {
+        0: CapitalAlertSeverity.WARNING,
+        1: CapitalAlertSeverity.CRITICAL,
+    }.get(int(row.Severity()))
+    recovery_action = {
+        2: CapitalRecoveryAction.RECONCILE_ORIGINAL_OPERATION,
+        3: CapitalRecoveryAction.HOLD_AND_REVIEW,
+    }.get(int(row.RecoveryAction()))
+    if kind is None or severity is None or recovery_action is None:
+        raise ValueError("Capital recovery alert contains an unknown enum value")
+    return CapitalRecoveryAlert(
+        alert_id=_required_text(row.AlertId(), "alert_id"),
+        plan_id=_required_text(row.PlanId(), "plan_id"),
+        operation_id=_text(row.OperationId()),
+        kind=kind,
+        severity=severity,
+        recovery_action=recovery_action,
+        message=_required_text(row.Message(), "message"),
+        opened_at=datetime.fromtimestamp(
+            int(row.OpenedAtUnixNanos()) / 1_000_000_000,
+            tz=timezone.utc,
+        ),
     )
 
 

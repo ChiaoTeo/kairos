@@ -1,7 +1,9 @@
+use kairos_primitives::account::BrokerId;
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::reference::MarketId;
 use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{
-    BrokerId, Generation, MarketId, OrderId, RemoteOrderId, Sequence, UnixNanos,
-};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
 use crate::domain::{
     Account, AccountId, AccountModel, AccountStatus, AssetId, Balance, EarnHolding, InstrumentId,
@@ -198,7 +200,7 @@ pub enum AccountBusinessChange {
         segment_key: SegmentKey,
         instrument_id: InstrumentId,
         market_id: Option<MarketId>,
-        position_side: kairos_primitives::PositionSide,
+        position_side: kairos_primitives::account::PositionSide,
     },
     EarnHolding {
         segment_key: SegmentKey,

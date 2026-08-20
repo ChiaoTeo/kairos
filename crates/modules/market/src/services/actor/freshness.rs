@@ -32,7 +32,7 @@ impl MarketActor {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{Sequence, UnixNanos};
+    use kairos_primitives::time::{Sequence, UnixNanos};
 
     use super::*;
     use crate::ObservationKind;
@@ -45,7 +45,7 @@ mod tests {
         actor.freshness.insert(
             "aapl".into(),
             MarketFreshness {
-                source_id: kairos_primitives::SourceId::new("source").unwrap(),
+                source_id: kairos_primitives::market::SourceId::new("source").unwrap(),
                 scope: crate::ObservationScope::market("market:exchange:nasdaq:equity:AAPL")
                     .unwrap(),
                 data_kind: ObservationKind::Quote,

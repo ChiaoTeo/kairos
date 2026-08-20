@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{DecisionId, Generation, RequestId, ReservationId, Sequence, UnixNanos};
+use kairos_primitives::risk::{DecisionId, ReservationId};
+use kairos_primitives::runtime::{ActorId, RequestId};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{
@@ -80,8 +81,8 @@ pub struct FundingRequirement {
     pub available_margin: crate::domain::Amount,
     pub shortfall: crate::domain::Amount,
     pub margin_rule_id: String,
-    pub account_segment: kairos_primitives::SegmentKey,
-    pub collateral_asset: kairos_primitives::Currency,
+    pub account_segment: kairos_primitives::account::SegmentKey,
+    pub collateral_asset: kairos_primitives::reference::Currency,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,9 +97,9 @@ pub enum RiskEvent {
     },
     DecisionEvaluated {
         decision: RiskDecision,
-        account_id: kairos_primitives::AccountId,
-        strategy_id: kairos_primitives::StrategyId,
-        instrument_id: kairos_primitives::InstrumentId,
+        account_id: kairos_primitives::account::AccountId,
+        strategy_id: kairos_primitives::runtime::StrategyId,
+        instrument_id: kairos_primitives::reference::InstrumentId,
         event_sequence: Sequence,
     },
     CircuitChanged {
@@ -173,6 +174,8 @@ pub struct RiskApplication {
     clock_mode: RiskClockMode,
     business_time_unix_nanos: Option<UnixNanos>,
     maintenance_interval: Duration,
+    pub(crate) publication_identity: kairos_primitives::runtime::InstanceIdentity,
+    pub(crate) producer_incarnation: u64,
 }
 
 impl RiskApplication {
@@ -182,7 +185,16 @@ impl RiskApplication {
             clock_mode: RiskClockMode::Wall,
             business_time_unix_nanos: None,
             maintenance_interval: Duration::from_secs(1),
+            publication_identity: Default::default(),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
         }
+    }
+
+    pub fn configure_publication_identity(
+        &mut self,
+        identity: kairos_primitives::runtime::InstanceIdentity,
+    ) {
+        self.publication_identity = identity;
     }
 
     pub fn set_clock_mode(&mut self, mode: RiskClockMode) {

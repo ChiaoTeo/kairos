@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use kairos_primitives::{Quantity, SegmentKey, UnixNanos};
+use kairos_primitives::account::SegmentKey;
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::time::UnixNanos;
 use serde_json::Value;
 
 use crate::{
@@ -370,7 +372,9 @@ fn scalar_string(value: Option<&Value>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{AccountId, Currency, IdempotencyKey};
+    use kairos_primitives::account::AccountId;
+    use kairos_primitives::reference::Currency;
+    use kairos_primitives::runtime::IdempotencyKey;
 
     use super::*;
     use crate::{ExternalAccountIdentity, ExternalAccountSegment};

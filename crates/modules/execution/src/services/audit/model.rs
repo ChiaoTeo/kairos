@@ -1,4 +1,6 @@
-use kairos_primitives::{OrderId, RemoteOrderId, Sequence, UnixNanos};
+use kairos_primitives::execution::OrderId;
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 
 use crate::application::IntentAdmissionEvidence;

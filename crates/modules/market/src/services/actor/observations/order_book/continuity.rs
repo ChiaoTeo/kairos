@@ -9,7 +9,7 @@ impl MarketActor {
         &mut self,
         source_id: &SourceId,
         epoch: SourceEpoch,
-        market_id: &kairos_primitives::MarketId,
+        market_id: &kairos_primitives::reference::MarketId,
         reason: String,
     ) -> Result<bool, String> {
         let source = self
@@ -45,7 +45,7 @@ impl MarketActor {
                 .get(&format!("{source_id}:{market_id}"))
                 .map(|book| book.instrument_id.clone())
                 .unwrap_or_else(|| {
-                    kairos_primitives::InstrumentId::new(market_id.as_str())
+                    kairos_primitives::reference::InstrumentId::new(market_id.as_str())
                         .expect("validated market id is a valid fallback instrument id")
                 });
             self.event_sequence += 1;

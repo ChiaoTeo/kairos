@@ -75,15 +75,17 @@ fn rejects_non_reference_v2_payloads() {
 #[test]
 fn encoder_emits_typed_market_upsert_without_json_adapter() {
     let market = kairos_reference_contract::Market {
-        market_id: kairos_primitives::MarketId::new("market:binance:spot:BTCUSDT").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:spot:BTC").unwrap(),
+        market_id: kairos_primitives::reference::MarketId::new("market:binance:spot:BTCUSDT")
+            .unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:spot:BTC")
+            .unwrap(),
         listing_id: Some(
-            kairos_primitives::ListingId::new("listing:binance:spot:BTCUSDT").unwrap(),
+            kairos_primitives::reference::ListingId::new("listing:binance:spot:BTCUSDT").unwrap(),
         ),
-        exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
-        instrument_kind: kairos_primitives::InstrumentKind::Spot,
-        venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
-        status: kairos_primitives::ReferenceStatus::Active,
+        exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance").unwrap(),
+        instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+        venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
+        status: kairos_primitives::reference::ReferenceStatus::Active,
         price_tick: Some("0.01".parse().unwrap()),
         quantity_tick: Some("0.00001".parse().unwrap()),
         ..Market::default()
@@ -113,36 +115,42 @@ fn encoder_emits_typed_market_upsert_without_json_adapter() {
 #[test]
 fn consumer_projections_are_active_bounded_and_keep_one_watermark() {
     let active_market = Market {
-        market_id: kairos_primitives::MarketId::new("market:active").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:active").unwrap(),
-        status: kairos_primitives::ReferenceStatus::Active,
+        market_id: kairos_primitives::reference::MarketId::new("market:active").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:active")
+            .unwrap(),
+        status: kairos_primitives::reference::ReferenceStatus::Active,
         ..Default::default()
     };
     let inactive_market = Market {
-        market_id: kairos_primitives::MarketId::new("market:inactive").unwrap(),
-        instrument_id: kairos_primitives::InstrumentId::new("instrument:inactive").unwrap(),
-        status: kairos_primitives::ReferenceStatus::Inactive,
+        market_id: kairos_primitives::reference::MarketId::new("market:inactive").unwrap(),
+        instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:inactive")
+            .unwrap(),
+        status: kairos_primitives::reference::ReferenceStatus::Inactive,
         ..Default::default()
     };
     let snapshot = kairos_reference_contract::ReferenceProjectionSnapshot {
-        actor_id: "reference-actor".into(),
+        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor").unwrap(),
         generation: 9.into(),
         event_sequence: 14.into(),
         instruments: vec![
             kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:active").unwrap(),
-                status: kairos_primitives::ReferenceStatus::Active,
+                instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:active")
+                    .unwrap(),
+                status: kairos_primitives::reference::ReferenceStatus::Active,
                 ..Default::default()
             },
             kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:inactive").unwrap(),
-                status: kairos_primitives::ReferenceStatus::Inactive,
+                instrument_id: kairos_primitives::reference::InstrumentId::new(
+                    "instrument:inactive",
+                )
+                .unwrap(),
+                status: kairos_primitives::reference::ReferenceStatus::Inactive,
                 ..Default::default()
             },
         ],
         markets: vec![active_market, inactive_market],
         provider_health: vec![kairos_reference_contract::ProviderHealthState::default()],
-        option_underlyings: vec!["SPY".into()],
+        option_underlyings: vec![kairos_primitives::reference::InstrumentId::new("SPY").unwrap()],
         lifecycle_events: vec![kairos_reference_contract::LifecycleEntry::default()],
         ..Default::default()
     };

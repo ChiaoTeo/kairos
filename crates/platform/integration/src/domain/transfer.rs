@@ -1,6 +1,9 @@
 //! Participant-neutral asset-transfer requests and external facts.
 
-use kairos_primitives::{Currency, IdempotencyKey, Quantity, UnixNanos};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::time::UnixNanos;
 
 use crate::domain::account::ExternalAccountSegment;
 
@@ -77,7 +80,7 @@ pub struct AssetTransferStatus {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{AccountId, SegmentKey};
+    use kairos_primitives::account::{AccountId, SegmentKey};
 
     use super::*;
     use crate::{ExternalAccountIdentity, ExternalAccountSegment};

@@ -1,4 +1,7 @@
-use kairos_primitives::{AccountId, Currency, Price, UnixNanos};
+use kairos_primitives::account::AccountId;
+use kairos_primitives::decimal::Price;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::time::UnixNanos;
 
 use crate::domain::{InstrumentId, SegmentKey};
 

@@ -88,7 +88,7 @@ impl MassiveRestConnection {
 
     pub async fn fetch_option_snapshot(
         &mut self,
-        symbol: &kairos_primitives::ParticipantSymbol,
+        symbol: &kairos_primitives::integration::ParticipantSymbol,
     ) -> Result<MassiveOptionSnapshot, IntegrationError> {
         if self.instrument_query.instrument_type != InstrumentType::Option {
             return Err(IntegrationError::InvalidRequest(
@@ -149,7 +149,7 @@ impl MassiveRestConnection {
 impl MarketGreeksQuery for MassiveRestConnection {
     async fn fetch_greeks(
         &mut self,
-        symbols: &[kairos_primitives::ParticipantSymbol],
+        symbols: &[kairos_primitives::integration::ParticipantSymbol],
     ) -> Result<Vec<MarketGreeks>, IntegrationError> {
         let mut values = Vec::with_capacity(symbols.len());
         for symbol in symbols {
@@ -178,7 +178,7 @@ where
         .transpose()
 }
 
-fn parse_expiry(value: &str) -> Result<kairos_primitives::UnixNanos, IntegrationError> {
+fn parse_expiry(value: &str) -> Result<kairos_primitives::time::UnixNanos, IntegrationError> {
     let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?;
     let timestamp = date
@@ -408,7 +408,8 @@ mod error_tests {
             },
         )
         .unwrap();
-        let symbol = kairos_primitives::ParticipantSymbol::new("O:SPY260821C00500000").unwrap();
+        let symbol =
+            kairos_primitives::integration::ParticipantSymbol::new("O:SPY260821C00500000").unwrap();
 
         let snapshot = connection.fetch_option_snapshot(&symbol).await.unwrap();
 

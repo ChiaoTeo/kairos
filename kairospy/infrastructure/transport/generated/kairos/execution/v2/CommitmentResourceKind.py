@@ -7,3 +7,4 @@ class CommitmentResourceKind(object):
     ASSET = 1
     INSTRUMENT = 2
     MARGIN_NOTIONAL = 3
+    CLOSEABLE_POSITION = 4

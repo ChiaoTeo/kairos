@@ -149,6 +149,27 @@ impl AccountRuntime {
         Ok(ApplyOutcome::Applied)
     }
 
+    pub(crate) fn apply_simulated_capital_mutation(
+        &mut self,
+        mutation: crate::domain::SimulatedCapitalMutation,
+    ) -> Result<ApplyOutcome, String> {
+        let applied = self.apply_event(AccountEvent::SimulatedCapitalMutation(mutation))?;
+        Ok(if applied == 0 {
+            ApplyOutcome::Duplicate
+        } else {
+            ApplyOutcome::Applied
+        })
+    }
+
+    pub(crate) fn simulated_capital_mutation_applied(
+        &self,
+        segment_key: &crate::domain::SegmentKey,
+        mutation_id: &kairos_primitives::runtime::IdempotencyKey,
+    ) -> Result<bool, String> {
+        self.actor
+            .has_simulated_capital_mutation(segment_key, mutation_id)
+    }
+
     pub(crate) fn mark_to_market(&mut self, request: MarkToMarket) -> Result<(), String> {
         let segment_key = request.segment_key.clone();
         let projection = self
@@ -349,7 +370,7 @@ impl AccountRuntime {
             self.commit_candidate(candidate)?;
         }
         Ok(AccountRefreshReport {
-            account_id: kairos_primitives::AccountId::new(account_id)
+            account_id: kairos_primitives::account::AccountId::new(account_id)
                 .map_err(|error| error.to_string())?,
             refreshed_segments: refreshed,
             issues,
@@ -488,8 +509,8 @@ impl AccountRuntime {
 
 fn acknowledge_outbox_event(
     events: &mut VecDeque<crate::application::AccountBusinessEvent>,
-    sequence: kairos_primitives::Sequence,
-    account_id: &kairos_primitives::AccountId,
+    sequence: kairos_primitives::time::Sequence,
+    account_id: &kairos_primitives::account::AccountId,
 ) {
     if let Some(position) = events
         .iter()
@@ -542,7 +563,9 @@ fn calculate_equity(
 
 fn event_requires_durability(event: &AccountEvent) -> bool {
     match event {
-        AccountEvent::Fill(_) | AccountEvent::ObservedFill(_) => true,
+        AccountEvent::Fill(_)
+        | AccountEvent::ObservedFill(_)
+        | AccountEvent::SimulatedCapitalMutation(_) => true,
         AccountEvent::Batch(events) => events.iter().any(event_requires_durability),
         AccountEvent::Snapshot(_)
         | AccountEvent::EarnHoldings(_)

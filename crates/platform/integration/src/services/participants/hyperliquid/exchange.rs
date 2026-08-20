@@ -3,7 +3,8 @@ use hyperliquid_rust_sdk::{
     BaseUrl, ClientCancelRequest, ClientLimit, ClientModifyRequest, ClientOrder,
     ClientOrderRequest, ExchangeClient, ExchangeDataStatus, ExchangeResponseStatus,
 };
-use kairos_primitives::{RemoteOrderId, UnixNanos};
+use kairos_primitives::integration::RemoteOrderId;
+use kairos_primitives::time::UnixNanos;
 
 use crate::{
     CommandOutcome, CommandResult, DecimalValue, IndeterminateCommand, IntegrationError,

@@ -1,4 +1,4 @@
-use kairos_primitives::InstrumentKind;
+use kairos_primitives::reference::InstrumentKind;
 
 use super::ObservationKind;
 use crate::domain::subscription::ObservationSelector;
@@ -68,7 +68,7 @@ fn supports_observation(instrument_kind: InstrumentKind, kind: ObservationKind) 
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::InstrumentKind;
+    use kairos_primitives::reference::InstrumentKind;
 
     use super::validate_observation_selectors;
     use crate::domain::subscription::ObservationSelector;

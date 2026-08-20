@@ -1,4 +1,6 @@
-use kairos_primitives::{BrokerId, Currency, Exchange, Money, SegmentKey};
+use kairos_primitives::account::{BrokerId, SegmentKey};
+use kairos_primitives::decimal::Money;
+use kairos_primitives::reference::{Currency, Exchange};
 
 use super::SnapshotWatermark;
 

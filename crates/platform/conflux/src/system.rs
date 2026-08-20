@@ -4,12 +4,9 @@ use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kairos_account_contract::view::AccountViewReader;
-use kairos_account_contract::{
-    AccountClient, AccountEventPublisher, AccountEventStream, AccountViewPublisher,
-};
+use kairos_account_contract::{AccountClient, AccountEventStream};
 use kairos_execution_contract::{
-    ExecutionClient, ExecutionEventPublisher, ExecutionEventStream, ExecutionViewPublisher,
-    ExecutionViewReader,
+    ExecutionClient, ExecutionEventStream, ExecutionViewReader,
 };
 use kairos_integration::ConnectionKey;
 use kairos_integration::participants::binance::advanced::stocks::{
@@ -17,7 +14,8 @@ use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksWebSocketConnection,
 };
 use kairos_integration::participants::binance::capital::{
-    BinanceCapitalRestConfig, BinanceCapitalRestConnection,
+    BinanceCapitalRestConfig, BinanceCapitalRestConnection, BinanceSubAccountCapitalRestConfig,
+    BinanceSubAccountCapitalRestConnection,
 };
 use kairos_integration::participants::binance::coinm::{
     BinanceCoinMRestConnection, BinanceCoinMUserWebSocketConnection,
@@ -61,14 +59,12 @@ use kairos_integration::participants::okx::private::{
 use kairos_integration::participants::okx::public::{
     OkxPublicRestConnection, OkxPublicWebSocketConnection,
 };
-use kairos_market_contract::{
-    MarketClient, MarketEventPublisher, MarketEventStream, MarketViewPublisher, MarketViewReader,
+use kairos_market_contract::{MarketClient, MarketEventStream, MarketViewReader};
+use kairos_reference_contract::{ReferenceClient, ReferenceEventStream};
+use kairos_risk_contract::{RiskClient, RiskEventStream, RiskViewReader};
+use kairos_transport::{
+    AeronBytePublisher, AtomicFileSnapshotStorage, SharedSnapshotReader, SharedSnapshotWriter,
 };
-use kairos_reference_contract::{ReferenceClient, ReferenceEventPublisher, ReferenceEventStream};
-use kairos_risk_contract::{
-    MmapRiskSnapshotPublisher, RiskAeronEventPublisher, RiskClient, RiskEventStream, RiskViewReader,
-};
-use kairos_transport::{AeronBytePublisher, SharedSnapshotReader, SharedSnapshotWriter};
 use thiserror::Error;
 use tokio::time::Instant;
 
@@ -423,6 +419,11 @@ impl TypedConnectionCollection<'_, MassiveRestConnection, MassiveRestConfig> {
 pub struct ConnectionCollections<'a> {
     pub binance_capital_rest:
         TypedConnectionCollection<'a, BinanceCapitalRestConnection, BinanceCapitalRestConfig>,
+    pub binance_subaccount_capital_rest: TypedConnectionCollection<
+        'a,
+        BinanceSubAccountCapitalRestConnection,
+        BinanceSubAccountCapitalRestConfig,
+    >,
     pub binance_spot_rest:
         TypedConnectionCollection<'a, BinanceSpotRestConnection, BinanceRestConfig>,
     pub binance_funding_rest:
@@ -531,35 +532,29 @@ pub struct ConfluxSystem {
     pub risk_clients: ManagedClients<String, RiskClient>,
 
     pub account_event_streams: NamedResources<String, AccountEventStream>,
-    pub account_event_publishers: NamedResources<String, AccountEventPublisher>,
     pub execution_event_streams: NamedResources<String, ExecutionEventStream>,
-    pub execution_event_publishers: NamedResources<String, ExecutionEventPublisher>,
     pub market_event_streams: NamedResources<String, MarketEventStream>,
-    pub market_event_publishers: NamedResources<String, MarketEventPublisher>,
     pub reference_event_streams: NamedResources<String, ReferenceEventStream>,
-    pub reference_event_publishers: NamedResources<String, ReferenceEventPublisher>,
     pub risk_event_streams: NamedResources<String, RiskEventStream>,
 
     pub account_view_readers: NamedResources<String, AccountViewReader>,
-    pub account_view_publishers: NamedResources<String, AccountViewPublisher>,
     pub execution_view_readers: NamedResources<String, ExecutionViewReader>,
-    pub execution_view_publishers: NamedResources<String, ExecutionViewPublisher>,
     pub market_view_readers: NamedResources<String, MarketViewReader>,
-    pub market_view_publishers: NamedResources<String, MarketViewPublisher>,
     pub risk_view_readers: NamedResources<String, RiskViewReader>,
-    pub risk_snapshot_publishers: NamedResources<String, MmapRiskSnapshotPublisher>,
-    pub risk_event_publishers: NamedResources<String, RiskAeronEventPublisher>,
 
     /// Process-owned transport resources. These collections manage concrete
     /// Aeron and mmap handles without pretending that their byte APIs are a
     /// business Contract. Contract codecs remain owned by each module.
-    pub aeron_publishers: NamedResources<String, AeronBytePublisher>,
+    aeron_publishers: NamedResources<String, AeronBytePublisher>,
     pub mmap_readers: NamedResources<String, SharedSnapshotReader>,
-    pub mmap_writers: NamedResources<String, SharedSnapshotWriter>,
+    mmap_writers: NamedResources<String, SharedSnapshotWriter>,
+    file_writers: NamedResources<String, AtomicFileSnapshotStorage>,
 
     pub(crate) binance_spot_rest_connections: ManagedConnections<String, BinanceSpotRestConnection>,
     pub(crate) binance_capital_rest_connections:
         ManagedConnections<String, BinanceCapitalRestConnection>,
+    pub(crate) binance_subaccount_capital_rest_connections:
+        ManagedConnections<String, BinanceSubAccountCapitalRestConnection>,
     pub(crate) binance_spot_websocket_connections:
         ManagedConnections<String, BinanceSpotWebSocketConnection>,
     pub(crate) binance_spot_user_websocket_connections:
@@ -636,28 +631,21 @@ impl ConfluxSystem {
             reference_clients: ManagedClients::new(),
             risk_clients: ManagedClients::new(),
             account_event_streams: NamedResources::new(),
-            account_event_publishers: NamedResources::new(),
             execution_event_streams: NamedResources::new(),
-            execution_event_publishers: NamedResources::new(),
             market_event_streams: NamedResources::new(),
-            market_event_publishers: NamedResources::new(),
             reference_event_streams: NamedResources::new(),
-            reference_event_publishers: NamedResources::new(),
             risk_event_streams: NamedResources::new(),
             account_view_readers: NamedResources::new(),
-            account_view_publishers: NamedResources::new(),
             execution_view_readers: NamedResources::new(),
-            execution_view_publishers: NamedResources::new(),
             market_view_readers: NamedResources::new(),
-            market_view_publishers: NamedResources::new(),
             risk_view_readers: NamedResources::new(),
-            risk_snapshot_publishers: NamedResources::new(),
-            risk_event_publishers: NamedResources::new(),
             aeron_publishers: NamedResources::new(),
             mmap_readers: NamedResources::new(),
             mmap_writers: NamedResources::new(),
+            file_writers: NamedResources::new(),
             binance_spot_rest_connections: ManagedConnections::new(),
             binance_capital_rest_connections: ManagedConnections::new(),
+            binance_subaccount_capital_rest_connections: ManagedConnections::new(),
             binance_spot_websocket_connections: ManagedConnections::new(),
             binance_spot_user_websocket_connections: ManagedConnections::new(),
             binance_funding_rest_connections: ManagedConnections::new(),
@@ -699,6 +687,11 @@ impl ConfluxSystem {
             binance_capital_rest: TypedConnectionCollection::new(
                 &mut self.binance_capital_rest_connections,
                 BinanceCapitalRestConnection::new,
+                false,
+            ),
+            binance_subaccount_capital_rest: TypedConnectionCollection::new(
+                &mut self.binance_subaccount_capital_rest_connections,
+                BinanceSubAccountCapitalRestConnection::new,
                 false,
             ),
             binance_spot_rest: TypedConnectionCollection::new(
@@ -866,6 +859,28 @@ impl ConfluxSystem {
                 OkxPrivateWebSocketConnection::new,
                 true,
             ),
+        }
+    }
+
+    /// Borrows the process-owned output pipes. Callers can declare and publish
+    /// through these capabilities but cannot take ownership of a transport.
+    pub fn outputs(&mut self) -> crate::OutputCollections<'_> {
+        crate::OutputCollections::new(
+            &mut self.aeron_publishers,
+            &mut self.mmap_writers,
+            &mut self.file_writers,
+        )
+    }
+
+    pub(crate) fn stop_outputs(&mut self) {
+        for (_, output) in self.aeron_publishers.iter_mut() {
+            output.set_state(ResourceState::Stopped);
+        }
+        for (_, output) in self.mmap_writers.iter_mut() {
+            output.set_state(ResourceState::Stopped);
+        }
+        for (_, output) in self.file_writers.iter_mut() {
+            output.set_state(ResourceState::Stopped);
         }
     }
 
@@ -1839,7 +1854,8 @@ impl Default for ConfluxSystem {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{ParticipantSymbol, UnixNanos};
+    use kairos_primitives::integration::ParticipantSymbol;
+    use kairos_primitives::time::UnixNanos;
     use kairos_transport::SnapshotEnvelopeMetadata;
 
     use super::*;
@@ -2137,11 +2153,11 @@ mod tests {
         let key = ConnectionKey::new("capital-main").unwrap();
         let mut segment_accounts = BTreeMap::new();
         segment_accounts.insert(
-            kairos_primitives::SegmentKey::new("funding").unwrap(),
+            kairos_primitives::account::SegmentKey::new("funding").unwrap(),
             kairos_integration::participants::binance::capital::BinanceTransferAccount::Funding,
         );
         segment_accounts.insert(
-            kairos_primitives::SegmentKey::new("usd-m").unwrap(),
+            kairos_primitives::account::SegmentKey::new("usd-m").unwrap(),
             kairos_integration::participants::binance::capital::BinanceTransferAccount::UsdMFutures,
         );
         system

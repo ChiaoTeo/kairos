@@ -100,14 +100,13 @@ impl OrderAdmissionContext {
         } else {
             None
         };
-        let balances = self
-            .account_projection(request.account_id.as_str())?
-            .balances;
+        let account_projection = self.account_projection(request.account_id.as_str())?;
+        let balances = &account_projection.balances;
         let configured_quote_asset = request
             .options
             .quote_asset
             .as_deref()
-            .map(kairos_primitives::Currency::new)
+            .map(kairos_primitives::reference::Currency::new)
             .transpose()
             .map_err(|error| error.to_string())?;
         let asset = match request.side {
@@ -129,7 +128,19 @@ impl OrderAdmissionContext {
             .map(reference_asset_currency)
             .transpose()?
             .or(configured_quote_asset.clone());
-        let mut commitment = if !self.allow_backtest_balance_without_projection {
+        let derivative_reduce = reference_market.as_ref().is_some_and(|market| {
+            matches!(
+                market.instrument_kind,
+                InstrumentKind::Perpetual | InstrumentKind::Future | InstrumentKind::Option
+            ) && request.options.reduce_only == Some(true)
+        });
+        let mut commitment = if derivative_reduce {
+            closeable_position_commitment(
+                request,
+                &account_projection.positions,
+                active_commitments,
+            )?
+        } else if !self.allow_backtest_balance_without_projection {
             let asset = asset.ok_or_else(|| {
                 "Reference must define the order commitment asset; symbol suffix inference is forbidden"
                     .to_string()
@@ -177,7 +188,7 @@ impl OrderAdmissionContext {
                         .checked_add(decimal_money(commitment.amount)?)
                         .ok_or_else(|| "order commitment total overflow".to_string())
                 })?;
-            let available = find_available(&balances, &asset)?
+            let available = find_available(balances, &asset)?
                 .ok_or_else(|| format!("no available balance for {asset}"))?;
             ensure_available_capacity(available, committed, needed, &asset)?;
             OrderCommitment::new(
@@ -220,11 +231,11 @@ impl OrderAdmissionContext {
         commitment.settlement_asset = settlement_asset;
         if let Some(policy) = request.options.maker.as_ref() {
             if let Some(max_inventory) = policy.max_inventory_abs {
-                let positions = self
-                    .account_projection(request.account_id.as_str())?
-                    .positions;
-                let current = find_position(&positions, request.instrument_id.as_str())?
-                    .unwrap_or(Decimal::ZERO);
+                let current = find_position(
+                    &account_projection.positions,
+                    request.instrument_id.as_str(),
+                )?
+                .unwrap_or(Decimal::ZERO);
                 let reserved = active_commitments
                     .iter()
                     .filter(|value| {
@@ -312,7 +323,7 @@ impl OrderAdmissionContext {
             margin_rule_id: route.margin_rule_id.clone(),
             exchange_id: Some(reference_market.exchange_id),
             funding_broker: Some(
-                kairos_primitives::BrokerId::new(route.participant_id.clone())
+                kairos_primitives::account::BrokerId::new(route.participant_id.clone())
                     .map_err(|error| error.to_string())?,
             ),
             funding_segment: Some(request.segment_key.clone()),
@@ -320,21 +331,206 @@ impl OrderAdmissionContext {
                 .options
                 .quote_asset
                 .as_deref()
-                .map(kairos_primitives::Currency::new)
+                .map(kairos_primitives::reference::Currency::new)
                 .transpose()
                 .map_err(|error| error.to_string())?,
         })
     }
 }
 
+fn closeable_position_commitment(
+    request: &SubmitOrder,
+    positions: &[ProjectedPosition],
+    active_commitments: &[OrderCommitment],
+) -> Result<OrderCommitment, String> {
+    let position_side = request
+        .options
+        .position_side
+        .as_deref()
+        .unwrap_or("net")
+        .parse::<PositionSide>()
+        .map_err(|error| error.to_string())?;
+    let position = positions
+        .iter()
+        .find(|position| {
+            position.segment_key == request.segment_key.as_str()
+                && position
+                    .instrument_id
+                    .eq_ignore_ascii_case(request.instrument_id.as_str())
+                && position.position_side == position_side
+        })
+        .ok_or_else(|| {
+            format!(
+                "no closeable {} position for {} on segment {}",
+                position_side.as_str(),
+                request.instrument_id,
+                request.segment_key
+            )
+        })?;
+    let signed_position = Decimal::try_new(
+        position.quantity.mantissa(),
+        u32::from(position.quantity.scale()),
+    )
+    .map_err(|_| "position quantity cannot be represented as a decimal".to_string())?;
+    let closeable = match position_side {
+        PositionSide::Net if request.side == OrderSide::Sell && signed_position > Decimal::ZERO => {
+            signed_position
+        },
+        PositionSide::Net if request.side == OrderSide::Buy && signed_position < Decimal::ZERO => {
+            signed_position.abs()
+        },
+        PositionSide::Long if request.side == OrderSide::Sell => signed_position.abs(),
+        PositionSide::Short if request.side == OrderSide::Buy => signed_position.abs(),
+        _ => {
+            return Err(format!(
+                "{} order cannot reduce the observed {} position",
+                match request.side {
+                    OrderSide::Buy => "buy",
+                    OrderSide::Sell => "sell",
+                },
+                position_side.as_str()
+            ));
+        },
+    };
+    if closeable <= Decimal::ZERO {
+        return Err(format!(
+            "observed {} position for {} has no closeable quantity",
+            position_side.as_str(),
+            request.instrument_id
+        ));
+    }
+    let resource = CommitmentResource::CloseablePosition {
+        instrument_id: request.instrument_id.clone(),
+        position_side,
+    };
+    let committed = active_commitments
+        .iter()
+        .filter(|commitment| {
+            commitment.status.consumes_capacity()
+                && commitment.account_id == request.account_id
+                && commitment.segment_key == request.segment_key
+                && commitment.resource == resource
+        })
+        .try_fold(Decimal::ZERO, |total, commitment| {
+            total
+                .checked_add(decimal_quantity(commitment.remaining_quantity)?)
+                .ok_or_else(|| "closeable-position commitment total overflow".to_string())
+        })?;
+    let requested = decimal_quantity(request.quantity)?;
+    let required = committed
+        .checked_add(requested)
+        .ok_or_else(|| "closeable-position requirement overflow".to_string())?;
+    if required > closeable {
+        return Err(format!(
+            "insufficient closeable {} position for {}: observed={}, committed={}, requested={}",
+            position_side.as_str(),
+            request.instrument_id,
+            closeable,
+            committed,
+            requested
+        ));
+    }
+    OrderCommitment::new(
+        request.order_id.clone(),
+        request.account_id.clone(),
+        request.segment_key.clone(),
+        request.instrument_id.clone(),
+        request.side,
+        resource,
+        Money::new(request.quantity.mantissa(), request.quantity.scale())
+            .map_err(|error| error.to_string())?,
+        request.quantity,
+        CommitmentBasis::CloseablePositionQuantity,
+        request
+            .submitted_at_unix_nanos
+            .unwrap_or_else(|| UnixNanos::new(0)),
+    )
+}
+
 fn reference_asset_currency(
-    asset_id: &kairos_primitives::AssetId,
-) -> Result<kairos_primitives::Currency, String> {
+    asset_id: &kairos_primitives::reference::AssetId,
+) -> Result<kairos_primitives::reference::Currency, String> {
     let code = asset_id
         .as_str()
         .rsplit(':')
         .next()
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("Reference asset {} has no currency code", asset_id))?;
-    kairos_primitives::Currency::new(code).map_err(|error| error.to_string())
+    kairos_primitives::reference::Currency::new(code).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::ExecutionOrderOptions;
+
+    fn reduce_order(order_id: &str, side: OrderSide, quantity: i64) -> SubmitOrder {
+        SubmitOrder {
+            order_id: OrderId::new(order_id).unwrap(),
+            intent_id: None,
+            strategy_id: None,
+            account_id: kairos_primitives::account::AccountId::new("main").unwrap(),
+            segment_key: kairos_primitives::account::SegmentKey::new("usd-m").unwrap(),
+            instrument_id: InstrumentId::new("instrument:btcusdt-perp").unwrap(),
+            market_id: None,
+            execution_route_id: None,
+            side,
+            order_type: OrderType::Market,
+            quantity: kairos_primitives::decimal::Quantity::new(quantity, 0).unwrap(),
+            limit_price: None,
+            options: ExecutionOrderOptions {
+                reduce_only: Some(true),
+                position_side: Some("net".into()),
+                ..ExecutionOrderOptions::default()
+            },
+            submitted_at_unix_nanos: Some(UnixNanos::new(10)),
+        }
+    }
+
+    fn net_position(quantity: i64) -> ProjectedPosition {
+        ProjectedPosition {
+            segment_key: "usd-m".into(),
+            instrument_id: "instrument:btcusdt-perp".into(),
+            position_side: PositionSide::Net,
+            quantity: kairos_account_contract::DecimalValue::new(quantity, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn derivative_reduce_commitments_prevent_double_close() {
+        let first = closeable_position_commitment(
+            &reduce_order("close-1", OrderSide::Sell, 6),
+            &[net_position(10)],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            first.resource,
+            CommitmentResource::CloseablePosition {
+                instrument_id: InstrumentId::new("instrument:btcusdt-perp").unwrap(),
+                position_side: PositionSide::Net,
+            }
+        );
+        assert_eq!(first.basis, CommitmentBasis::CloseablePositionQuantity);
+
+        let error = closeable_position_commitment(
+            &reduce_order("close-2", OrderSide::Sell, 5),
+            &[net_position(10)],
+            &[first],
+        )
+        .unwrap_err();
+        assert!(error.contains("insufficient closeable net position"));
+    }
+
+    #[test]
+    fn derivative_reduce_side_must_actually_reduce_the_observed_position() {
+        let error = closeable_position_commitment(
+            &reduce_order("wrong-side", OrderSide::Buy, 1),
+            &[net_position(10)],
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("cannot reduce the observed net position"));
+    }
 }

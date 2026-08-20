@@ -1,30 +1,17 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use axum::body::to_bytes;
-use axum::extract::{Request, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
 use clap::Parser;
 use kairos_conflux::{
-    Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, ShutdownMode,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig,
 };
 use kairos_reference::ReferenceApplication;
-use kairos_reference::application::control;
 use kairos_reference::composition::{
     ReferenceCompositionConfig, build_application, ensure_database_parent,
 };
-use kairos_reference_contract::{
-    AeronEndpoint, ReferenceControlError, ReferenceEventPublisher, ReferenceOptionCoverageRequest,
-    ReferenceRestRequest, ReferenceRestResponse, ReferenceSourceControlRequest,
-};
+use kairos_reference_contract::{AeronEndpoint, ReferenceHttpControl};
 use kairos_workspace::workspace::Workspace;
-use serde::Serialize;
-use serde_json::json;
-use tokio::net::UnixListener;
 use tokio::task::LocalSet;
-use tracing::Instrument as _;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
@@ -74,7 +61,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .health_file
         .or_else(|| workspace.health_file("reference").ok());
     let composition = build_application(&config, false).await?;
-    let (mut application, mut system, _) = composition.into_conflux();
+    let (mut application, system, _) = composition.into_conflux();
     application.configure_conflux(args.refresh_interval, true);
 
     let event_endpoint = AeronEndpoint::from_parts(
@@ -82,10 +69,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.aeron_channel.clone(),
         config.reference_changes_stream,
     )?;
-    let publisher = ReferenceEventPublisher::connect(&event_endpoint)?;
-    system
-        .reference_event_publishers
-        .ensure_with("reference-changes".to_owned(), 1, || publisher)?;
+    let mut system = system;
+    system.outputs().aeron.declare(
+        "reference-changes".to_owned(),
+        AeronOutputDeclaration {
+            endpoint: event_endpoint,
+            revision: 1,
+        },
+    )?;
 
     run_process(application, system, socket, health_file).await
 }
@@ -125,11 +116,6 @@ async fn run_process(
     socket: PathBuf,
     health_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    remove_socket(&socket)?;
-    if let Some(parent) = socket.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let listener = UnixListener::bind(&socket)?;
     let (conflux, handle) = Conflux::new(
         application,
         system,
@@ -138,30 +124,14 @@ async fn run_process(
             ..ConfluxConfig::default()
         },
     )?;
-    let process = tokio::task::spawn_local(conflux.run());
-    let router = Router::new()
-        .fallback(reference_http_handler)
-        .with_state(ReferenceHost {
-            handle: handle.clone(),
-        });
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-
-    let startup = handle
-        .handle(ConfluxEvent::Rest(ReferenceRestRequest::Health))
-        .await
-        .map_err(|_| "Reference Conflux startup health failed")?;
-    let status = match startup {
-        Some(ReferenceRestResponse::Health(Ok(health))) => health.status,
-        _ => return Err("Reference Actor omitted its startup health response".into()),
-    };
-    write_health(health_file.as_deref(), &status).await?;
-    kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
-
-    let outcome = process.await.map_err(|error| error.to_string())??;
-    server.abort();
-    let _ = server.await;
-    remove_socket(&socket)?;
-    write_health(health_file.as_deref(), "stopped").await?;
+    let outcome = conflux
+        .with_http_control(
+            handle,
+            ReferenceHttpControl,
+            HttpControlConfig::uds(socket).with_health_file(health_file),
+        )
+        .run()
+        .await?;
     tracing::info!(
         event = "process_stopped",
         component = "reference",
@@ -170,200 +140,6 @@ async fn run_process(
         "Reference Conflux process stopped"
     );
     Ok(())
-}
-
-#[derive(Clone)]
-struct ReferenceHost {
-    handle: ConfluxHandle<ReferenceApplication>,
-}
-
-async fn reference_http_handler(State(host): State<ReferenceHost>, request: Request) -> Response {
-    let started = Instant::now();
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let span = tracing::info_span!(
-        "reference.control_request",
-        component = "reference",
-        method = %method,
-        path = %path,
-        status = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-    );
-    kairos_workspace::logging::set_remote_parent(&span, request.headers());
-    let response = reference_http_handler_inner(host, request)
-        .instrument(span.clone())
-        .await;
-    span.record("status", response.status().as_u16());
-    span.record("duration_ms", started.elapsed().as_secs_f64() * 1_000.0);
-    response
-}
-
-async fn reference_http_handler_inner(host: ReferenceHost, request: Request) -> Response {
-    let method = request.method().as_str().to_owned();
-    let target = request
-        .uri()
-        .path_and_query()
-        .map(|value| value.as_str().to_owned())
-        .unwrap_or_else(|| request.uri().path().to_owned());
-    let body = match to_bytes(
-        request.into_body(),
-        kairos_workspace::control::MAX_HTTP_BODY_BYTES,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(_) => return json_error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
-    };
-    let request = match decode_request(&method, &target, &body) {
-        Ok(request) => request,
-        Err(response) => return response,
-    };
-    match request {
-        HostRequest::Stop => {
-            host.handle.shutdown(ShutdownMode::Drain);
-            (StatusCode::ACCEPTED, Json(json!({"status":"stopping"}))).into_response()
-        },
-        HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
-            Ok(Some(response)) => encode_response(response),
-            Ok(None) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Reference Actor omitted its REST response",
-            ),
-            Err(_) => json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "reference process is stopping",
-            ),
-        },
-    }
-}
-
-enum HostRequest {
-    Rest(ReferenceRestRequest),
-    Stop,
-}
-
-fn decode_request(method: &str, target: &str, body: &[u8]) -> Result<HostRequest, Response> {
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    if path == control::STOP {
-        return if method == "POST" {
-            Ok(HostRequest::Stop)
-        } else {
-            Err(json_error(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "stop accepts only POST",
-            ))
-        };
-    }
-    if path == control::HEALTH {
-        return if method == "GET" {
-            Ok(HostRequest::Rest(ReferenceRestRequest::Health))
-        } else {
-            Err(json_error(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "health accepts only GET",
-            ))
-        };
-    }
-    if method != "POST" {
-        return Err(json_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "Reference business queries use the contract-owned SQLite client",
-        ));
-    }
-    let request = match path {
-        control::REFRESH => ReferenceRestRequest::Refresh {
-            source_id: query_value(target, "source").map(str::to_owned),
-        },
-        control::PUBLISH => ReferenceRestRequest::Publish,
-        control::SOURCE_PAUSE => ReferenceRestRequest::PauseSource(ReferenceSourceControlRequest {
-            source_id: required_query(target, "source")?,
-        }),
-        control::SOURCE_RESUME => {
-            ReferenceRestRequest::ResumeSource(ReferenceSourceControlRequest {
-                source_id: required_query(target, "source")?,
-            })
-        },
-        control::OPTIONS_COVERAGE_ADD => {
-            ReferenceRestRequest::AddOptionCoverage(ReferenceOptionCoverageRequest {
-                underlying: required_query(target, "underlying")?,
-            })
-        },
-        control::OPTIONS_COVERAGE_REMOVE => {
-            ReferenceRestRequest::RemoveOptionCoverage(ReferenceOptionCoverageRequest {
-                underlying: required_query(target, "underlying")?,
-            })
-        },
-        control::ASSETS => ReferenceRestRequest::UpsertAsset(decode(body)?),
-        control::INSTRUMENTS => ReferenceRestRequest::UpsertInstrument(decode(body)?),
-        control::LISTINGS => ReferenceRestRequest::UpsertListing(decode(body)?),
-        _ => {
-            return Err(json_error(
-                StatusCode::NOT_FOUND,
-                "unknown Reference control path",
-            ));
-        },
-    };
-    Ok(HostRequest::Rest(request))
-}
-
-fn decode<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, Response> {
-    serde_json::from_slice(body).map_err(|error| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error":"invalid Reference request", "details":error.to_string()})),
-        )
-            .into_response()
-    })
-}
-
-fn encode_response(response: ReferenceRestResponse) -> Response {
-    match response {
-        ReferenceRestResponse::Health(result) => result_response(result),
-        ReferenceRestResponse::Refresh(result) => result_response(result),
-        ReferenceRestResponse::Publish(result) => result_response(result),
-        ReferenceRestResponse::PauseSource(result) => result_response(result),
-        ReferenceRestResponse::ResumeSource(result) => result_response(result),
-        ReferenceRestResponse::AddOptionCoverage(result) => result_response(result),
-        ReferenceRestResponse::RemoveOptionCoverage(result) => result_response(result),
-        ReferenceRestResponse::UpsertAsset(result) => result_response(result),
-        ReferenceRestResponse::UpsertInstrument(result) => result_response(result),
-        ReferenceRestResponse::UpsertListing(result) => result_response(result),
-    }
-}
-
-fn result_response<T: Serialize>(result: Result<T, ReferenceControlError>) -> Response {
-    match result {
-        Ok(value) => (StatusCode::OK, Json(json!(value))).into_response(),
-        Err(error) => {
-            let status = if error.retryable {
-                StatusCode::SERVICE_UNAVAILABLE
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            (status, Json(json!({"error": error}))).into_response()
-        },
-    }
-}
-
-fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
-    let (_, query) = target.split_once('?')?;
-    query.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        (key == name).then_some(value)
-    })
-}
-
-fn required_query(target: &str, name: &str) -> Result<String, Response> {
-    query_value(target, name).map(str::to_owned).ok_or_else(|| {
-        json_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &format!("{name} is required"),
-        )
-    })
-}
-
-fn json_error(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({"error":message}))).into_response()
 }
 
 fn validate_workspace_path(
@@ -375,29 +151,6 @@ fn validate_workspace_path(
         return Err(format!("reference {label} must be inside workspace").into());
     }
     Ok(())
-}
-
-fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-async fn write_health(path: Option<&Path>, status: &str) -> Result<(), std::io::Error> {
-    let Some(path) = path else {
-        return Ok(());
-    };
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(
-        path,
-        serde_json::to_vec(&json!({"status":status, "pid":std::process::id()}))
-            .map_err(std::io::Error::other)?,
-    )
-    .await
 }
 
 fn parse_refresh_interval(value: &str) -> Result<Duration, String> {

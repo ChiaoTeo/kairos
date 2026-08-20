@@ -109,32 +109,34 @@ pub(super) fn hyperliquid_provider_catalog(
             .unwrap_or_else(|| "USDC".into());
         for code in [&base, &quote] {
             catalog.assets.push(Asset {
-                asset_id: kairos_primitives::AssetId::new(format!("asset:crypto:{code}"))?,
-                code: kairos_primitives::Symbol::new(code.clone())?,
+                asset_id: kairos_primitives::reference::AssetId::new(format!(
+                    "asset:crypto:{code}"
+                ))?,
+                code: kairos_primitives::reference::Symbol::new(code.clone())?,
                 asset_class: AssetClass::Crypto,
                 status: "active".into(),
                 ..Asset::default()
             });
         }
         let instrument_id = match product {
-            HyperliquidProduct::Perpetual => kairos_primitives::InstrumentId::new(format!(
-                "instrument:perpetual:{base}-{quote}"
-            ))?,
+            HyperliquidProduct::Perpetual => kairos_primitives::reference::InstrumentId::new(
+                format!("instrument:perpetual:{base}-{quote}"),
+            )?,
             HyperliquidProduct::Spot => {
-                kairos_primitives::InstrumentId::new(format!("instrument:spot:{base}"))?
+                kairos_primitives::reference::InstrumentId::new(format!("instrument:spot:{base}"))?
             },
         };
-        let listing_id = kairos_primitives::ListingId::new(format!(
+        let listing_id = kairos_primitives::reference::ListingId::new(format!(
             "listing:hyperliquid:{family}:{base}:{quote}"
         ))?;
-        let exchange_id = kairos_primitives::Exchange::new("exchange:hyperliquid")?;
-        let status: kairos_primitives::ReferenceStatus =
+        let exchange_id = kairos_primitives::reference::Exchange::new("exchange:hyperliquid")?;
+        let status: kairos_primitives::reference::ReferenceStatus =
             if value.active { "active" } else { "inactive" }.into();
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
-            symbol: kairos_primitives::Symbol::new(format!("{base}-{quote}"))?,
+            symbol: kairos_primitives::reference::Symbol::new(format!("{base}-{quote}"))?,
             instrument_type: instrument_kind,
-            primary_currency_asset_id: Some(kairos_primitives::AssetId::new(format!(
+            primary_currency_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),
             status,
@@ -144,13 +146,13 @@ pub(super) fn hyperliquid_provider_catalog(
             listing_id: listing_id.clone(),
             instrument_id: instrument_id.clone(),
             exchange_id: exchange_id.clone(),
-            exchange_symbol: kairos_primitives::Symbol::new(source_symbol.clone())?,
+            exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol.clone())?,
             status,
             effective_from_unix_nanos: 0.into(),
             ..Listing::default()
         });
         catalog.markets.push(Market {
-            market_id: kairos_primitives::MarketId::new(format!(
+            market_id: kairos_primitives::reference::MarketId::new(format!(
                 "market:hyperliquid:{family}:{source_symbol}"
             ))?,
             instrument_id: instrument_id.clone(),
@@ -158,11 +160,11 @@ pub(super) fn hyperliquid_provider_catalog(
             exchange_id,
             instrument_kind,
             asset_type: Some(AssetClass::Crypto),
-            venue_symbol: Some(kairos_primitives::Symbol::new(source_symbol)?),
-            base_asset_id: Some(kairos_primitives::AssetId::new(format!(
+            venue_symbol: Some(kairos_primitives::reference::Symbol::new(source_symbol)?),
+            base_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
                 "asset:crypto:{base}"
             ))?),
-            quote_asset_id: Some(kairos_primitives::AssetId::new(format!(
+            quote_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
                 "asset:crypto:{quote}"
             ))?),
             status,

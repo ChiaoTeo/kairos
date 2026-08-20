@@ -1,6 +1,6 @@
 //! Binance-native ordinary-order extensions kept off the shared capability surface.
 
-use kairos_primitives::ParticipantSymbol;
+use kairos_primitives::integration::ParticipantSymbol;
 
 use crate::OrderEntryRequest;
 

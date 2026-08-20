@@ -27,8 +27,10 @@ use crate::domain::{
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
     client: Option<Arc<kairos_reference_contract::ReferenceClient>>,
-    cache: Arc<Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::MarketId>)>>>,
-    cache_generation: Arc<Mutex<Option<kairos_primitives::Generation>>>,
+    cache: Arc<
+        Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::reference::MarketId>)>>,
+    >,
+    cache_generation: Arc<Mutex<Option<kairos_primitives::time::Generation>>>,
     #[cfg(test)]
     fixture_markets: Arc<Vec<kairos_reference_contract::ReferenceMarket>>,
     #[cfg(test)]
@@ -62,7 +64,7 @@ impl AccountInstrumentResolver {
     fn resolve(
         &self,
         provider: &ParticipantInstrumentRef,
-    ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
+    ) -> Result<(InstrumentId, Option<kairos_primitives::reference::MarketId>), String> {
         let key = format!(
             "{}|{}|{}",
             provider.participant.id.to_ascii_lowercase(),
@@ -114,7 +116,7 @@ impl AccountInstrumentResolver {
     fn resolve_uncached(
         &self,
         provider: &ParticipantInstrumentRef,
-    ) -> Result<(InstrumentId, Option<kairos_primitives::MarketId>), String> {
+    ) -> Result<(InstrumentId, Option<kairos_primitives::reference::MarketId>), String> {
         let symbol = provider.source_symbol.as_str();
         let (markets, instruments) = self.identity_snapshot()?;
         if provider.participant.id.eq_ignore_ascii_case("ibkr") {
@@ -122,7 +124,8 @@ impl AccountInstrumentResolver {
                 .iter()
                 .filter(|value| {
                     value.symbol.eq_ignore_ascii_case(symbol)
-                        && value.instrument_type == kairos_primitives::InstrumentKind::Equity
+                        && value.instrument_type
+                            == kairos_primitives::reference::InstrumentKind::Equity
                         && matches!(value.status.as_str(), "active" | "trading")
                 })
                 .collect::<Vec<_>>();
@@ -148,8 +151,8 @@ impl AccountInstrumentResolver {
                         .is_some_and(|value| value.eq_ignore_ascii_case(symbol))
                     && matches!(
                         value.status,
-                        kairos_primitives::ReferenceStatus::Active
-                            | kairos_primitives::ReferenceStatus::Trading
+                        kairos_primitives::reference::ReferenceStatus::Active
+                            | kairos_primitives::reference::ReferenceStatus::Trading
                     )
                     && provider_domain_matches_market(domain, value.instrument_kind)
             })
@@ -203,20 +206,20 @@ impl AccountInstrumentResolver {
 
 fn provider_domain_matches_market(
     domain: &str,
-    market_type: kairos_primitives::InstrumentKind,
+    market_type: kairos_primitives::reference::InstrumentKind,
 ) -> bool {
     let domain = domain.to_ascii_lowercase();
     if domain.contains("spot") || domain.contains("margin") {
-        return market_type == kairos_primitives::InstrumentKind::Spot;
+        return market_type == kairos_primitives::reference::InstrumentKind::Spot;
     }
     if domain.contains("option") {
-        return market_type == kairos_primitives::InstrumentKind::Option;
+        return market_type == kairos_primitives::reference::InstrumentKind::Option;
     }
     if domain.contains("future") || domain.contains("swap") {
         return matches!(
             market_type,
-            kairos_primitives::InstrumentKind::Future
-                | kairos_primitives::InstrumentKind::Perpetual
+            kairos_primitives::reference::InstrumentKind::Future
+                | kairos_primitives::reference::InstrumentKind::Perpetual
         );
     }
     true
@@ -411,7 +414,7 @@ pub(crate) fn external_segment(segment: &AccountSegment) -> ExternalAccountSegme
             broker: segment.identity.broker.to_string(),
             account_id: segment.identity.account_id.clone(),
         },
-        segment_key: kairos_primitives::SegmentKey::new(segment.segment_key.to_string())
+        segment_key: kairos_primitives::account::SegmentKey::new(segment.segment_key.to_string())
             .expect("validated account segment key"),
         environment: segment.environment.clone(),
         account_model: segment.account_model.clone(),
@@ -422,12 +425,14 @@ fn signed_quantity(value: ExternalDecimal) -> Result<SignedQuantity, String> {
     SignedQuantity::new(value.mantissa, value.scale).map_err(Into::into)
 }
 
-fn quantity(value: ExternalDecimal) -> Result<kairos_primitives::Quantity, String> {
-    kairos_primitives::Quantity::new(value.mantissa, value.scale).map_err(|error| error.to_string())
+fn quantity(value: ExternalDecimal) -> Result<kairos_primitives::decimal::Quantity, String> {
+    kairos_primitives::decimal::Quantity::new(value.mantissa, value.scale)
+        .map_err(|error| error.to_string())
 }
 
-fn price(value: ExternalDecimal) -> Result<kairos_primitives::Price, String> {
-    kairos_primitives::Price::new(value.mantissa, value.scale).map_err(|error| error.to_string())
+fn price(value: ExternalDecimal) -> Result<kairos_primitives::decimal::Price, String> {
+    kairos_primitives::decimal::Price::new(value.mantissa, value.scale)
+        .map_err(|error| error.to_string())
 }
 
 fn money(value: ExternalDecimal) -> Result<Money, String> {
@@ -510,7 +515,7 @@ pub(crate) fn map_snapshot(
 pub(crate) fn map_earn_positions(
     segment_key: SegmentKey,
     positions: Vec<EarnPosition>,
-    observed_at_unix_nanos: kairos_primitives::UnixNanos,
+    observed_at_unix_nanos: kairos_primitives::time::UnixNanos,
     complete: bool,
 ) -> EarnHoldingsSnapshot {
     EarnHoldingsSnapshot {
@@ -643,13 +648,15 @@ pub(crate) fn map_event(
             AccountEvent::OrderObserved(AccountOrderObservation {
                 order_id: value.order_id,
                 status: match status {
-                    "acknowledged" => kairos_primitives::OrderStatus::Acknowledged,
-                    "partially_filled" => kairos_primitives::OrderStatus::PartiallyFilled,
-                    "filled" => kairos_primitives::OrderStatus::Filled,
-                    "canceled" => kairos_primitives::OrderStatus::Canceled,
-                    "rejected" => kairos_primitives::OrderStatus::Rejected,
-                    "expired" => kairos_primitives::OrderStatus::Expired,
-                    _ => kairos_primitives::OrderStatus::Unknown,
+                    "acknowledged" => kairos_primitives::integration::OrderStatus::Acknowledged,
+                    "partially_filled" => {
+                        kairos_primitives::integration::OrderStatus::PartiallyFilled
+                    },
+                    "filled" => kairos_primitives::integration::OrderStatus::Filled,
+                    "canceled" => kairos_primitives::integration::OrderStatus::Canceled,
+                    "rejected" => kairos_primitives::integration::OrderStatus::Rejected,
+                    "expired" => kairos_primitives::integration::OrderStatus::Expired,
+                    _ => kairos_primitives::integration::OrderStatus::Unknown,
                 },
                 active,
                 remote_order_id: value.remote_order_id,
@@ -691,14 +698,22 @@ mod identity_tests {
     fn resolves_exchange_symbol_only_through_reference_market() {
         let resolver = AccountInstrumentResolver::fixture(
             vec![kairos_reference_contract::ReferenceMarket {
-                market_id: kairos_primitives::MarketId::new("market:binance:spot:BTCUSDT").unwrap(),
-                instrument_id: kairos_primitives::InstrumentId::new("instrument:spot:BTC").unwrap(),
+                market_id: kairos_primitives::reference::MarketId::new(
+                    "market:binance:spot:BTCUSDT",
+                )
+                .unwrap(),
+                instrument_id: kairos_primitives::reference::InstrumentId::new(
+                    "instrument:spot:BTC",
+                )
+                .unwrap(),
                 listing_id: Some(
-                    kairos_primitives::ListingId::new("listing:binance:spot:BTCUSDT").unwrap(),
+                    kairos_primitives::reference::ListingId::new("listing:binance:spot:BTCUSDT")
+                        .unwrap(),
                 ),
-                exchange_id: kairos_primitives::Exchange::new("exchange:binance").unwrap(),
-                instrument_kind: kairos_primitives::InstrumentKind::Spot,
-                venue_symbol: Some(kairos_primitives::Symbol::new("BTCUSDT").unwrap()),
+                exchange_id: kairos_primitives::reference::Exchange::new("exchange:binance")
+                    .unwrap(),
+                instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new("BTCUSDT").unwrap()),
                 status: "active".into(),
                 asset_type: None,
                 base_asset_id: None,
@@ -726,7 +741,9 @@ mod identity_tests {
         let (instrument, market) = resolver.resolve(&provider).unwrap();
         assert_eq!(instrument.as_str(), "instrument:spot:BTC");
         assert_eq!(
-            market.as_ref().map(kairos_primitives::MarketId::as_str),
+            market
+                .as_ref()
+                .map(kairos_primitives::reference::MarketId::as_str),
             Some("market:binance:spot:BTCUSDT")
         );
     }
@@ -736,12 +753,12 @@ mod identity_tests {
         let resolver = AccountInstrumentResolver::fixture(
             Vec::new(),
             vec![kairos_reference_contract::Instrument {
-                instrument_id: kairos_primitives::InstrumentId::new(
+                instrument_id: kairos_primitives::reference::InstrumentId::new(
                     "instrument:equity:US:AAPL:common",
                 )
                 .unwrap(),
-                symbol: kairos_primitives::Symbol::new("AAPL").unwrap(),
-                instrument_type: kairos_primitives::InstrumentKind::Equity,
+                symbol: kairos_primitives::reference::Symbol::new("AAPL").unwrap(),
+                instrument_type: kairos_primitives::reference::InstrumentKind::Equity,
                 status: "active".into(),
                 ..Default::default()
             }],
@@ -773,17 +790,17 @@ mod identity_tests {
 
     #[test]
     fn maps_earn_positions_into_a_separate_account_fact_set() {
-        let observed_at = kairos_primitives::UnixNanos::new(100);
+        let observed_at = kairos_primitives::time::UnixNanos::new(100);
         let snapshot = map_earn_positions(
-            kairos_primitives::SegmentKey::new("funding").unwrap(),
+            kairos_primitives::account::SegmentKey::new("funding").unwrap(),
             vec![kairos_conflux::EarnPosition {
                 participant_position_id: Some("position-1".into()),
                 product_id: "USDT001".into(),
-                asset: kairos_primitives::Currency::new("USDT").unwrap(),
+                asset: kairos_primitives::reference::Currency::new("USDT").unwrap(),
                 family: kairos_conflux::EarnProductFamily::Flexible,
-                principal: kairos_primitives::Quantity::new(100, 0).unwrap(),
+                principal: kairos_primitives::decimal::Quantity::new(100, 0).unwrap(),
                 accrued_rewards: Vec::new(),
-                redeemable_amount: Some(kairos_primitives::Quantity::new(80, 0).unwrap()),
+                redeemable_amount: Some(kairos_primitives::decimal::Quantity::new(80, 0).unwrap()),
                 subscribed_at_unix_nanos: None,
                 matures_at_unix_nanos: None,
                 state: kairos_conflux::EarnPositionState::Redeeming,

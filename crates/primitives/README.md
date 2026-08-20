@@ -13,8 +13,8 @@ mechanics such as decimal and time remain separate groups. The former broad
 owner namespaces without changing their meaning or wire representations. The
 target public paths are namespaced,
 for example `kairos_primitives::account::AccountId` and
-`kairos_primitives::execution::OrderId`; broad root wildcard re-exports should
-be removed as callers migrate. These groups make ownership visible; they are
+`kairos_primitives::execution::OrderId`; the crate root intentionally exposes
+no business wildcard re-exports. These groups make ownership visible; they are
 not miniature domain modules and do not transfer workflows or mutable state
 into this crate.
 

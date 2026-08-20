@@ -630,6 +630,21 @@ class LaunchConfig:
                     value = capital.get(field)
                     if not isinstance(value, str) or not value.strip():
                         issues.append(f"capital.{field} is required when Capital is enabled")
+                member_readiness = capital.get("member_readiness", {})
+                if not isinstance(member_readiness, Mapping):
+                    issues.append("capital.member_readiness must be a table")
+                else:
+                    known_accounts = set(account_refs)
+                    for account_id, role in member_readiness.items():
+                        if account_id not in known_accounts:
+                            issues.append(
+                                "capital.member_readiness references an Account outside "
+                                f"the launch: {account_id}"
+                            )
+                        if role not in {"critical", "optional"}:
+                            issues.append(
+                                "capital.member_readiness values must be critical or optional"
+                            )
                 policies = capital.get("policies")
                 if not isinstance(policies, list) or not policies:
                     issues.append(

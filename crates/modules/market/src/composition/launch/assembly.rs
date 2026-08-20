@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kairos_conflux::AeronOutputDeclaration;
 use kairos_primitives::runtime::InstanceIdentity;
 use kairos_workspace::Workspace;
 
@@ -422,13 +423,14 @@ pub async fn build_market_host(
             profile.freshness_check_interval,
             profile.freshness_max_age,
             profile.shutdown_timeout,
-            view_root,
-            VIEW_SLOT_SIZE,
             identity,
             source_plans,
             history,
             reference_projection,
         )
+        .map_err(MarketStartupError::new)?;
+    application
+        .configure_view_publication(view_root, VIEW_SLOT_SIZE)
         .map_err(MarketStartupError::new)?;
     let event_endpoint = kairos_market_contract::AeronEndpoint::new(
         request.aeron_dir,
@@ -436,12 +438,14 @@ pub async fn build_market_host(
         kairos_transport::stream_ids::MARKET_EVENTS,
     )
     .map_err(MarketStartupError::new)?;
-    let publisher = kairos_market_contract::MarketEventPublisher::connect(&event_endpoint)
-        .map_err(MarketStartupError::new)?;
-    system
-        .market_event_publishers
-        .ensure_with("market-events".to_owned(), 1, || publisher)
-        .map_err(MarketStartupError::new)?;
+    system.outputs().aeron.declare(
+        "market-events".to_owned(),
+        AeronOutputDeclaration {
+            endpoint: event_endpoint,
+            revision: 1,
+        },
+    )
+    .map_err(MarketStartupError::new)?;
     let _ = event_socket_path;
     Ok(MarketHost::new(
         application,

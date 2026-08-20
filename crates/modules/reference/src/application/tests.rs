@@ -1,4 +1,4 @@
-use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
+use kairos_primitives::reference::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 
 use crate::composition::{ReferenceCompositionConfig, build_application};
 use crate::domain::{Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceResult};
@@ -99,14 +99,14 @@ fn provider_catalog() -> ProviderCatalog {
                 asset_id: asset_id("asset:BTC"),
                 code: symbol("BTC"),
                 name: Some("Bitcoin".into()),
-                asset_class: kairos_primitives::AssetClass::Crypto,
+                asset_class: kairos_primitives::reference::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             },
             Asset {
                 asset_id: asset_id("asset:USDT"),
                 code: symbol("USDT"),
-                asset_class: kairos_primitives::AssetClass::Crypto,
+                asset_class: kairos_primitives::reference::AssetClass::Crypto,
                 status: "active".into(),
                 ..Default::default()
             },
@@ -115,7 +115,7 @@ fn provider_catalog() -> ProviderCatalog {
             instrument_id: instrument_id("instrument:spot:BTC"),
             symbol: symbol("BTC"),
             name: Some("BTC spot instrument".into()),
-            instrument_type: kairos_primitives::InstrumentKind::Spot,
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
             status: "active".into(),
             ..Default::default()
         }],
@@ -133,8 +133,8 @@ fn provider_catalog() -> ProviderCatalog {
             instrument_id: instrument_id("instrument:spot:BTC"),
             listing_id: Some(listing_id("listing:binance:spot:BTC:USDT")),
             exchange_id: Exchange::new("exchange:binance").unwrap(),
-            instrument_kind: kairos_primitives::InstrumentKind::Spot,
-            asset_type: Some(kairos_primitives::AssetClass::Crypto),
+            instrument_kind: kairos_primitives::reference::InstrumentKind::Spot,
+            asset_type: Some(kairos_primitives::reference::AssetClass::Crypto),
             venue_symbol: Some(symbol("BTCUSDT")),
             base_asset_id: Some(asset_id("asset:BTC")),
             quote_asset_id: Some(asset_id("asset:USDT")),
@@ -184,9 +184,9 @@ async fn application_exposes_read_only_market_queries() {
 
     let query = MarketQuery {
         exchange_id: Some(Exchange::new("exchange:binance").unwrap()),
-        instrument_kind: Some(kairos_primitives::InstrumentKind::Spot),
+        instrument_kind: Some(kairos_primitives::reference::InstrumentKind::Spot),
         asset_type: Some("crypto".into()),
-        venue_symbol: Some(kairos_primitives::Symbol::new("btcusdt").unwrap()),
+        venue_symbol: Some(kairos_primitives::reference::Symbol::new("btcusdt").unwrap()),
         active_only: true,
         ..MarketQuery::default()
     };
@@ -239,7 +239,7 @@ async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() 
         .upsert_asset(UpsertAssetCommand {
             asset_id: asset_id("asset:sol"),
             code: symbol("SOL"),
-            asset_class: kairos_primitives::AssetClass::Crypto,
+            asset_class: kairos_primitives::reference::AssetClass::Crypto,
             status: "active".into(),
             name: None,
         })
@@ -265,7 +265,7 @@ async fn administrative_instrument_and_listing_upserts_share_commit_path() {
         .upsert_instrument(UpsertInstrumentCommand {
             instrument_id: instrument_id("instrument:spot:ETH"),
             symbol: symbol("ETH/USDT"),
-            instrument_type: kairos_primitives::InstrumentKind::Spot,
+            instrument_type: kairos_primitives::reference::InstrumentKind::Spot,
             status: "active".into(),
             name: None,
             issuer_id: None,
@@ -340,7 +340,7 @@ async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id("instrument:equity:SPY"),
         symbol: symbol("SPY"),
-        instrument_type: kairos_primitives::InstrumentKind::Equity,
+        instrument_type: kairos_primitives::reference::InstrumentKind::Equity,
         status: "active".into(),
         ..Default::default()
     });

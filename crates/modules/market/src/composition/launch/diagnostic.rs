@@ -37,13 +37,12 @@ pub async fn run_diagnostic_once(
         Duration::from_secs(1),
         Duration::from_secs(5),
         Duration::from_secs(5),
-        view_root.clone(),
-        4 * 1024 * 1024,
         InstanceIdentity::new("diagnostic", "diagnostic", "market-cli")?,
         vec![plan],
         None,
         None,
     )?;
+    application.configure_view_publication(view_root.clone(), 4 * 1024 * 1024)?;
 
     let (process, handle) = Conflux::new(
         application,
@@ -70,7 +69,7 @@ pub async fn run_diagnostic_once(
                 else {
                     return Err("Market diagnostic returned an invalid health response".into());
                 };
-                if health.event_sequence > baseline_sequence {
+                if health.event_sequence > baseline_sequence.into() {
                     handle.shutdown(ShutdownMode::Drain);
                 }
             }
@@ -167,7 +166,8 @@ fn descriptor(
 ) -> Result<SourceDescriptor, String> {
     Ok(SourceDescriptor::new(
         SourceId::new(source_id)?,
-        kairos_primitives::Exchange::new("binance").map_err(|error| error.to_string())?,
+        kairos_primitives::reference::Exchange::new("binance")
+            .map_err(|error| error.to_string())?,
         market_type,
         Some("crypto".into()),
     )?

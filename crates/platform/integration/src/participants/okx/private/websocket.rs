@@ -384,10 +384,10 @@ impl ParticipantEventStream for OkxPrivateWebSocketConnection {
     }
 }
 
-fn now_nanos() -> kairos_primitives::UnixNanos {
+fn now_nanos() -> kairos_primitives::time::UnixNanos {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    kairos_primitives::UnixNanos::from(u64::try_from(nanos).unwrap_or(u64::MAX))
+    kairos_primitives::time::UnixNanos::from(u64::try_from(nanos).unwrap_or(u64::MAX))
 }

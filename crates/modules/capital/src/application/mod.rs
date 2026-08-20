@@ -8,6 +8,7 @@ pub use service::{
     CapitalSnapshot, CapitalYieldCandidate, EvaluateCapitalGroup, ExpireCapitalDemands,
     ExpireCapitalPlans, ExpireFundingObjectives, FundingObjectiveReceipt,
     MarkCapitalDeliveryStarted, ObserveCapitalDemand, ObserveCapitalFacts,
-    ObserveCapitalSettlement, PublishFundingObjective, RecordCapitalParticipantStatus,
-    RecordCapitalSubmission, UpdateCapitalPolicy, UpdateCapitalRoute,
+    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PublishFundingObjective,
+    RecordCapitalParticipantStatus, RecordCapitalRecoveryRequired, RecordCapitalSubmission,
+    UpdateCapitalPolicy, UpdateCapitalRoute,
 };

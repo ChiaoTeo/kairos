@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
-use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, ResourceOperationError, RestContract,
-    SystemEvent,
-};
+use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SystemEvent};
 use kairos_risk_contract::{
-    AdvanceRiskTimeResponse, Health, RiskCommandStatus, RiskControlError, RiskRestRequest,
-    RiskRestResponse,
+    AdvanceRiskTimeResponse, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, Health,
+    RiskCommandStatus, RiskControlError, RiskRestRequest, RiskRestResponse,
 };
+use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{
     CloseCircuit, ConsumeReservation, OpenCircuit, PublishPolicy, ReleaseReservation,
@@ -65,57 +63,43 @@ impl ConfluxActor for RiskApplication {
 impl RiskApplication {
     fn publish_contract_outputs(&mut self, context: &mut Context<'_, Self>) {
         let view = super::contract::current_view(&self.current_view());
-        let snapshot_keys = context
-            .system()
-            .risk_snapshot_publishers
-            .iter()
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-        for key in snapshot_keys {
-            if let Err(error) = context
-                .system()
-                .risk_snapshot_publishers
-                .try_with(&key, |publisher| publisher.publish(&view))
-            {
-                if let ResourceOperationError::Operation(error) = error {
-                    tracing::error!(
-                        event = "snapshot_publish_failed",
-                        component = "risk",
-                        error = %error,
-                        "Risk Conflux view publication failed"
-                    );
-                }
+        let mut snapshot_encoder = FlatbuffersRiskSnapshotWriter::new(view.actor_id.to_string());
+        if snapshot_encoder.publish(&view).is_ok()
+            && context.outputs().mmap.contains("risk-latest")
+        {
+            let result = context.outputs().mmap.publish(
+                "risk-latest",
+                SnapshotEnvelopeMetadata {
+                    resource_epoch: 1,
+                    producer_incarnation: self.producer_incarnation,
+                    generation: view.generation.get(),
+                    applied_event_sequence: view.event_sequence.get(),
+                    published_at_unix_nanos: now_unix_nanos(),
+                },
+                snapshot_encoder.last_payload.as_deref().unwrap_or_default(),
+            );
+            if let Err(error) = result {
+                tracing::error!(event = "snapshot_publish_failed", component = "risk", error = %error);
             }
         }
 
         while let Some(event) = self.pending_event().cloned() {
             let event = super::contract::event(&event);
-            let publishers = &mut context.system().risk_event_publishers;
-            if publishers.is_empty() {
+            if !context.outputs().aeron.contains("risk-events") {
                 break;
             }
-            let publisher_keys = publishers
-                .iter()
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            let mut published_to_all = true;
-            for key in publisher_keys {
-                match publishers.try_with(&key, |publisher| publisher.publish(&event)) {
-                    Ok(()) => {},
-                    Err(error) => {
-                        published_to_all = false;
-                        if let ResourceOperationError::Operation(error) = error {
-                            tracing::error!(
-                                event = "event_publish_failed",
-                                component = "risk",
-                                error = %error,
-                                "Risk Conflux ordered event publication failed"
-                            );
-                        }
-                    },
-                }
+            let mut encoder = FlatbuffersRiskEventWriter::new_with_identity(
+                view.actor_id.to_string(),
+                self.publication_identity.clone(),
+            );
+            if encoder.publish(&event).is_err() {
+                break;
             }
-            if !published_to_all {
+            if let Err(error) = context.outputs().aeron.publish(
+                "risk-events",
+                encoder.last_payload.as_deref().unwrap_or_default(),
+            ) {
+                tracing::error!(event = "event_publish_failed", component = "risk", error = %error);
                 break;
             }
             self.acknowledge_event();
@@ -285,6 +269,14 @@ impl RiskApplication {
     }
 }
 
+fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64
+}
+
 fn control_error(error: RiskError) -> RiskControlError {
     let (code, retryable) = match error {
         RiskError::Invalid(_) => ("risk.invalid", false),
@@ -327,24 +319,42 @@ mod tests {
                 let response = handle
                     .handle(ConfluxEvent::Rest(RiskRestRequest::AuthorizeAndReserve(
                         AuthorizeRequest {
-                            request_id: kairos_primitives::RequestId::new("request-1").unwrap(),
-                            idempotency_key: kairos_primitives::IdempotencyKey::new("key-1")
+                            request_id: kairos_primitives::runtime::RequestId::new("request-1")
                                 .unwrap(),
-                            reservation_id: kairos_primitives::ReservationId::new("reservation-1")
+                            idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(
+                                "key-1",
+                            )
+                            .unwrap(),
+                            reservation_id: kairos_primitives::risk::ReservationId::new(
+                                "reservation-1",
+                            )
+                            .unwrap(),
+                            account_id: kairos_primitives::account::AccountId::new("account-1")
                                 .unwrap(),
-                            account_id: kairos_primitives::AccountId::new("account-1").unwrap(),
-                            strategy_id: kairos_primitives::StrategyId::new("strategy-1").unwrap(),
-                            instrument_id: kairos_primitives::InstrumentId::new("instrument-1")
+                            strategy_id: kairos_primitives::runtime::StrategyId::new("strategy-1")
                                 .unwrap(),
-                            exchange_id: kairos_primitives::Exchange::new("exchange-1").unwrap(),
+                            instrument_id: kairos_primitives::reference::InstrumentId::new(
+                                "instrument-1",
+                            )
+                            .unwrap(),
+                            exchange_id: kairos_primitives::reference::Exchange::new("exchange-1")
+                                .unwrap(),
                             proposal: kairos_risk_contract::TradeRiskProposal {
                                 notional: Amount::new(10, 0).unwrap(),
                                 initial_margin_rate_bps: 10_000.into(),
-                                account_segment: kairos_primitives::SegmentKey::new("usd-m")
-                                    .unwrap(),
-                                collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
+                                account_segment: kairos_primitives::account::SegmentKey::new(
+                                    "usd-m",
+                                )
+                                .unwrap(),
+                                collateral_asset: kairos_primitives::reference::Currency::new(
+                                    "USDT",
+                                )
+                                .unwrap(),
                                 reduce_only: false,
-                                margin_rule_id: "test:fully-funded".into(),
+                                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                                    "test:fully-funded",
+                                )
+                                .unwrap(),
                             },
                             at_unix_nanos: 1.into(),
                             reservation_ttl_nanos: 10.into(),

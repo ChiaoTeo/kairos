@@ -247,9 +247,9 @@ fn event_metadata<'a>(
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::{
-        AccountId, BrokerId, Currency, Generation, SegmentKey, Sequence, UnixNanos,
-    };
+    use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
+    use kairos_primitives::reference::Currency;
+    use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
     use super::*;
     use crate::{CapitalPolicy, FundingLocation};
@@ -276,9 +276,9 @@ mod tests {
                     stress_buffer: "2".parse().unwrap(),
                     minimum_movement: "1".parse().unwrap(),
                     hysteresis: "1".parse().unwrap(),
-                    deficit_dwell_nanos: 5,
-                    cooldown_nanos: 6,
-                    max_fact_age_nanos: 7,
+                    deficit_dwell_nanos: 5.into(),
+                    cooldown_nanos: 6.into(),
+                    max_fact_age_nanos: 7.into(),
                 },
                 event_sequence: Sequence::new(11),
                 occurred_at: UnixNanos::new(12),

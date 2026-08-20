@@ -23,10 +23,13 @@ use kairos_execution::{
     ExecutionApplication, ExecutionError, ExecutionEvent, ExecutionOrderStatus, HedgePolicy,
     MarketObservation, OrderSide, OrderType, Quote, UnknownRemoteOrderResolution,
 };
-use kairos_primitives::{
-    AccountId, ClientOrderId, Currency, ExecutionRouteId, FillId, InstrumentId, IntentId, LegId,
-    MarketId, Money, OrderId, Price, Quantity, SegmentKey, Symbol, UnixNanos,
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::{Money, Price, Quantity};
+use kairos_primitives::execution::{
+    ClientOrderId, ExecutionRouteId, FillId, IntentId, LegId, OrderId,
 };
+use kairos_primitives::reference::{Currency, InstrumentId, MarketId, Symbol};
+use kairos_primitives::time::UnixNanos;
 
 fn fill_report(
     fill_id: impl Into<String>,
@@ -39,9 +42,9 @@ fn fill_report(
     ExecutionFillReport {
         fill_id: FillId::new(fill_id.into()).unwrap(),
         order_id: OrderId::new(order_id.into()).unwrap(),
-        quantity: kairos_primitives::Quantity::new(quantity, 0).unwrap(),
+        quantity: kairos_primitives::decimal::Quantity::new(quantity, 0).unwrap(),
         price: Price::new(price, 0).unwrap(),
-        fee: kairos_primitives::Money::new(fee, 0).unwrap(),
+        fee: kairos_primitives::decimal::Money::new(fee, 0).unwrap(),
         fee_currency: None,
         occurred_at_unix_nanos: occurred_at_unix_nanos.map(Into::into),
         execution_market_id: None,
@@ -67,7 +70,7 @@ fn submit_order(
     SubmitOrder {
         order_id: OrderId::new(order_id).unwrap(),
         intent_id: intent_id.map(|value| IntentId::new(value).unwrap()),
-        strategy_id: Some(kairos_primitives::StrategyId::new("strategy").unwrap()),
+        strategy_id: Some(kairos_primitives::runtime::StrategyId::new("strategy").unwrap()),
         account_id: AccountId::new(account_id).unwrap(),
         segment_key: SegmentKey::new("spot").unwrap(),
         instrument_id: InstrumentId::new(instrument_id).unwrap(),
@@ -247,8 +250,10 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
             instrument_id: None,
             market_id: None,
             participant_id: "simulated".into(),
-            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+                .unwrap(),
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+                .unwrap(),
             supported_order_types: vec![
                 crate::application::OrderType::Market,
                 crate::application::OrderType::Limit,
@@ -287,8 +292,10 @@ fn configure_test_access(application: &mut ExecutionApplication) {
             instrument_id: None,
             market_id: None,
             participant_id: "simulated".into(),
-            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+                .unwrap(),
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+                .unwrap(),
             supported_order_types: vec![
                 crate::application::OrderType::Market,
                 crate::application::OrderType::Limit,
@@ -328,8 +335,10 @@ fn route_selection_rejects_an_instrument_mismatch_before_creating_order_state() 
             instrument_id: Some(InstrumentId::new("BTCUSDT").unwrap()),
             market_id: None,
             participant_id: "simulated".into(),
-            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+                .unwrap(),
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+                .unwrap(),
             supported_order_types: vec![OrderType::Market, OrderType::Limit],
             supported_options: Vec::new(),
             ready: true,
@@ -376,8 +385,10 @@ fn route_selection_rejects_an_unsupported_order_type_before_creating_order_state
             instrument_id: None,
             market_id: None,
             participant_id: "simulated".into(),
-            provider_product: kairos_primitives::ProviderProductCode::new("spot").unwrap(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new("BTCUSDT").unwrap(),
+            provider_product: kairos_primitives::integration::ProviderProductCode::new("spot")
+                .unwrap(),
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTCUSDT")
+                .unwrap(),
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
             ready: true,
@@ -488,13 +499,13 @@ fn insufficient_funding_risk() -> SimulatedRiskBehavior {
                 available_margin: Money::new(40, 0).unwrap(),
                 shortfall: Money::new(60, 0).unwrap(),
                 margin_rule_id: "binance-usdm-initial-margin:v1".into(),
-                risk_decision_id: kairos_primitives::DecisionId::new("risk-decision:funding")
+                risk_decision_id: kairos_primitives::risk::DecisionId::new("risk-decision:funding")
                     .unwrap(),
                 risk_policy_version: 7.into(),
                 account_snapshot_watermark: 11.into(),
-                broker: kairos_primitives::BrokerId::new("binance").unwrap(),
-                segment: kairos_primitives::SegmentKey::new("usd-m").unwrap(),
-                collateral_asset: kairos_primitives::Currency::new("USDT").unwrap(),
+                broker: kairos_primitives::account::BrokerId::new("binance").unwrap(),
+                segment: kairos_primitives::account::SegmentKey::new("usd-m").unwrap(),
+                collateral_asset: kairos_primitives::reference::Currency::new("USDT").unwrap(),
             },
         }),
         ..SimulatedRiskBehavior::default()
@@ -577,11 +588,11 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
-fn quantity(value: &str) -> kairos_primitives::Quantity {
+fn quantity(value: &str) -> kairos_primitives::decimal::Quantity {
     value.parse().unwrap()
 }
 
-fn price(value: &str) -> kairos_primitives::Price {
+fn price(value: &str) -> kairos_primitives::decimal::Price {
     value.parse().unwrap()
 }
 
@@ -593,7 +604,7 @@ fn currency(value: &str) -> Currency {
     Currency::new(value).unwrap()
 }
 
-fn money(value: &str) -> kairos_primitives::Money {
+fn money(value: &str) -> kairos_primitives::decimal::Money {
     value.parse().unwrap()
 }
 
@@ -680,7 +691,7 @@ fn remote_query_reconciliation_persists_unknown_order_once() {
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_conflux::OrderSide::Buy,
         order_type: kairos_conflux::OrderType::Limit,
-        status: kairos_primitives::OrderStatus::Filled,
+        status: kairos_primitives::integration::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
@@ -714,7 +725,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         symbol: Symbol::new("BTCUSDT").unwrap(),
         side: kairos_conflux::OrderSide::Buy,
         order_type: kairos_conflux::OrderType::Limit,
-        status: kairos_primitives::OrderStatus::Filled,
+        status: kairos_primitives::integration::OrderStatus::Filled,
         quantity: decimal("1"),
         filled_quantity: decimal("1"),
         average_fill_price: Some(decimal("100")),
@@ -1843,8 +1854,8 @@ fn pair_fills_create_compensation_from_actual_leader_quantity() {
             intent.hedge_policy = Some(HedgePolicy {
                 leader_leg_id: LegId::new("leader").unwrap(),
                 hedge_leg_id: LegId::new("hedge").unwrap(),
-                ratio: kairos_primitives::Ratio::new(2, 1).unwrap(),
-                contract_multiplier: kairos_primitives::Ratio::new(1, 1).unwrap(),
+                ratio: kairos_primitives::decimal::Ratio::new(2, 1).unwrap(),
+                contract_multiplier: kairos_primitives::decimal::Ratio::new(1, 1).unwrap(),
                 max_unhedged_quantity: Quantity::new(0, 0).unwrap(),
                 compensate_on_failure: true,
                 max_compensation_attempts: 3,
@@ -2300,12 +2311,14 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
     let mut audit = SqlxExecutionAudit::new(&path).unwrap();
     audit
         .publish(&ExecutionEvent {
-            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new("exchange-1").unwrap(),
+            ),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
@@ -2315,12 +2328,14 @@ fn execution_audit_publisher_writes_immutable_event_rows() {
         .unwrap();
     audit
         .publish(&ExecutionEvent {
-            order_id: kairos_primitives::OrderId::new("order-1").unwrap(),
+            order_id: kairos_primitives::execution::OrderId::new("order-1").unwrap(),
             intent_id: None,
             plan_id: None,
             leg_id: None,
             status: ExecutionOrderStatus::Accepted,
-            remote_order_id: Some(kairos_primitives::RemoteOrderId::new("exchange-1").unwrap()),
+            remote_order_id: Some(
+                kairos_primitives::integration::RemoteOrderId::new("exchange-1").unwrap(),
+            ),
             occurred_at_unix_nanos: 42.into(),
             reason: String::new(),
             fill_id: None,
@@ -2418,8 +2433,9 @@ fn reported_execution_market_does_not_overwrite_the_selected_destination() {
             instrument_id: None,
             market_id: Some(selected_market.clone()),
             participant_id: "broker".into(),
-            provider_product: kairos_primitives::ProviderProductCode::new("smart").unwrap(),
-            provider_symbol: kairos_primitives::ProviderSymbol::new("BTC").unwrap(),
+            provider_product: kairos_primitives::integration::ProviderProductCode::new("smart")
+                .unwrap(),
+            provider_symbol: kairos_primitives::integration::ProviderSymbol::new("BTC").unwrap(),
             supported_order_types: vec![OrderType::Market],
             supported_options: Vec::new(),
             ready: true,

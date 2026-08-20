@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
+use kairos_primitives::market::SourceId;
 use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{Generation, SourceId};
+use kairos_primitives::time::Generation;
 use serde::{Deserialize, Serialize};
 
 use super::freshness::{DataFreshnessStatus, FeedStatus};
@@ -15,8 +16,8 @@ pub struct MarketViewFreshness {
     pub source_id: SourceId,
     pub scope: ObservationScope,
     pub data_kind: ObservationKind,
-    pub last_event_time_unix_nanos: kairos_primitives::UnixNanos,
-    pub last_received_time_unix_nanos: kairos_primitives::UnixNanos,
+    pub last_event_time_unix_nanos: kairos_primitives::time::UnixNanos,
+    pub last_received_time_unix_nanos: kairos_primitives::time::UnixNanos,
     pub status: DataFreshnessStatus,
 }
 

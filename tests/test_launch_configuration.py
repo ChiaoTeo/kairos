@@ -102,6 +102,9 @@ enabled = true
 capital_group_id = "strategy-capital"
 strategy_id = "strategy-a"
 
+[capital.member_readiness]
+paper-account = "optional"
+
 [[capital.policies]]
 minimum = "100"
 default_target = "200"
@@ -127,6 +130,7 @@ asset = "USDT"
     assert plan.capital["enabled"] is True
     assert plan.capital["capital_group_id"] == "strategy-capital"
     assert plan.capital["strategy_id"] == "strategy-a"
+    assert plan.capital["member_readiness"] == {"paper-account": "optional"}
     assert plan.capital["policies"][0]["maximum"] == "500"
 
     automatic = tmp_path / "capital-automatic.toml"
@@ -148,6 +152,17 @@ asset = "USDT"
     report = LaunchConfigurationApplication().validate(enabled)
     assert report["valid"] is False
     assert "capital.capital_group_id" in " ".join(report["issues"])
+
+    invalid_role = tmp_path / "capital-invalid-member-role.toml"
+    invalid_role.write_text(
+        automatic.read_text(encoding="utf-8")
+        .replace("automatic_execution = true", "automatic_execution = false")
+        .replace('paper-account = "optional"', 'paper-account = "best_effort"'),
+        encoding="utf-8",
+    )
+    role_report = LaunchConfigurationApplication().validate(invalid_role)
+    assert role_report["valid"] is False
+    assert "critical or optional" in " ".join(role_report["issues"])
 
 
 def test_launch_config_preserves_required_segments_per_account(tmp_path: Path) -> None:

@@ -1,6 +1,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[test]
+fn account_control_transport_is_framework_owned() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs")).unwrap();
+    assert!(!manifest.contains("axum.workspace"));
+    assert!(server.contains("with_http_control"));
+    for forbidden in ["axum::", "UnixListener", "TcpListener"] {
+        assert!(!server.contains(forbidden));
+    }
+}
+
 fn rust_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root).expect("read source directory") {

@@ -19,6 +19,17 @@ pub struct MmapRiskSnapshotPublisher {
     producer_incarnation: u64,
 }
 
+pub struct FileRiskSnapshotPublisher {
+    publisher: kairos_transport::AtomicFileSnapshotStorage,
+    encoder: FlatbuffersRiskSnapshotWriter,
+    producer_incarnation: u64,
+}
+
+pub enum RiskSnapshotPublisher {
+    Mmap(MmapRiskSnapshotPublisher),
+    File(FileRiskSnapshotPublisher),
+}
+
 impl MmapRiskSnapshotPublisher {
     pub fn create(
         path: impl AsRef<std::path::Path>,
@@ -40,15 +51,60 @@ impl MmapRiskSnapshotPublisher {
             .publish(snapshot)
             .map_err(crate::ContractError::Invalid)?;
         self.publisher.publish(
-            kairos_transport::SnapshotEnvelopeMetadata {
-                resource_epoch: 1,
-                producer_incarnation: self.producer_incarnation,
-                generation: snapshot.generation.get(),
-                applied_event_sequence: snapshot.event_sequence.get(),
-                published_at_unix_nanos: now_unix_nanos(),
-            },
+            snapshot_metadata(snapshot, self.producer_incarnation),
             self.encoder.last_payload.as_deref().unwrap_or_default(),
         )
+    }
+}
+
+impl FileRiskSnapshotPublisher {
+    pub fn create(
+        path: impl AsRef<std::path::Path>,
+        max_payload_len: usize,
+        actor_id: impl Into<String>,
+    ) -> crate::ContractResult<Self> {
+        let actor_id = actor_id.into();
+        Ok(Self {
+            publisher: kairos_transport::AtomicFileSnapshotStorage::create(path, max_payload_len)
+                .map_err(|error| crate::ContractError::Transport(error.to_string()))?,
+            encoder: FlatbuffersRiskSnapshotWriter::new(actor_id),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+        })
+    }
+
+    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
+        self.encoder
+            .publish(snapshot)
+            .map_err(crate::ContractError::Invalid)?;
+        self.publisher
+            .publish(
+                snapshot_metadata(snapshot, self.producer_incarnation),
+                self.encoder.last_payload.as_deref().unwrap_or_default(),
+            )
+            .map(|_| ())
+            .map_err(|error| crate::ContractError::Transport(error.to_string()))
+    }
+}
+
+impl RiskSnapshotPublisher {
+    pub fn publish(&mut self, snapshot: &RiskCurrentView) -> crate::ContractResult<()> {
+        match self {
+            Self::Mmap(publisher) => publisher.publish(snapshot),
+            Self::File(publisher) => publisher.publish(snapshot),
+        }
+    }
+}
+
+fn snapshot_metadata(
+    snapshot: &RiskCurrentView,
+    producer_incarnation: u64,
+) -> kairos_transport::SnapshotEnvelopeMetadata {
+    kairos_transport::SnapshotEnvelopeMetadata {
+        resource_epoch: 1,
+        producer_incarnation,
+        generation: snapshot.generation.get(),
+        applied_event_sequence: snapshot.event_sequence.get(),
+        published_at_unix_nanos: now_unix_nanos(),
     }
 }
 
@@ -309,6 +365,36 @@ impl FlatbuffersRiskEventWriter {
         };
         self.last_payload = Some(b.finished_data().to_vec());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod file_view_tests {
+    use kairos_primitives::runtime::ActorId;
+
+    use super::*;
+
+    #[test]
+    fn typed_risk_view_is_published_as_an_atomic_file_envelope() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("risk.latest.view");
+        let mut publisher = FileRiskSnapshotPublisher::create(&path, 64 * 1024, "risk").unwrap();
+        let view = RiskCurrentView {
+            actor_id: ActorId::new("risk").unwrap(),
+            generation: 3.into(),
+            event_sequence: 9.into(),
+            policy_version: 2.into(),
+            limits: Vec::new(),
+            reservations: Vec::new(),
+            circuits: Vec::new(),
+        };
+
+        publisher.publish(&view).unwrap();
+
+        let frame = kairos_transport::read_atomic_file_snapshot(path).unwrap();
+        assert_eq!(frame.metadata.generation, 3);
+        assert_eq!(frame.metadata.applied_event_sequence, 9);
+        assert!(fb::risk_latest_view_buffer_has_identifier(&frame.payload));
     }
 }
 

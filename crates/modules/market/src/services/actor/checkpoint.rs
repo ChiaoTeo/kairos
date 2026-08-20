@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{Generation, Sequence};
+use kairos_primitives::time::{Generation, Sequence};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::freshness::MarketFreshness;

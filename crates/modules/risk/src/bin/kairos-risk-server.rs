@@ -54,7 +54,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         event_stream_id: args.risk_events_stream_id,
         identity: transport_identity,
     })?;
-    tokio::task::LocalSet::new().run_until(host.run()).await
+    tokio::task::LocalSet::new().run_until(host.run()).await?;
+    Ok(())
 }
 
 fn load_risk_policies(
@@ -73,7 +74,7 @@ fn load_risk_policies(
             return Err("simulation-default Risk profile is forbidden for a live launch".into());
         }
         vec![RiskPolicy {
-            policy_id: kairos_primitives::PolicyId::new("simulation-default-notional")?,
+            policy_id: kairos_primitives::risk::PolicyId::new("simulation-default-notional")?,
             version: 1.into(),
             scope: PolicyScope {
                 account_id: None,

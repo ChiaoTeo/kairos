@@ -135,6 +135,17 @@ Integration types internally; Integration re-exports must not leak through the
 rail signature consumed by Capital. Capital composition supplies only
 non-secret account metadata and receives a Conflux-owned dispatcher; no Capital
 source file constructs or imports a provider connection or provider DTO.
+The dispatcher implements the Conflux Capital rails directly; it does not gain
+those business capabilities by implementing an Integration command trait.
+
+In `paper` and `backtest`, Conflux selects an instance-local simulated rail
+before loading credentials or constructing participant connections. That rail
+translates each transfer or Earn action into an idempotent, explicitly
+simulation-only Account contract command. Account remains the sole owner of
+balances and Earn holdings and rejects the command in live mode. Capital still
+runs the same reservation, delivery fence, operation journal, reconciliation,
+and settlement state machine; it neither calls the Account mutation endpoint
+nor contains a separate paper business path.
 
 Cross-Account connectivity is explicit account metadata, not a Capital-owned
 global registry. `capital_controller_account_id` names the Account whose
@@ -258,6 +269,16 @@ are complete, fresh, identity-matched, and at acceptable watermarks. Missing
 optional members produce `Degraded`; missing critical members block new
 writes.
 
+Launch config assigns each member a `critical` or `optional` readiness role;
+the safe default is `critical`. Capital observes Account-current metadata for
+every member independently of whether that Account currently appears in a
+policy or route. This liveness evidence is intentionally not recovered from
+the Capital snapshot: after restart, the write barrier stays closed until the
+current Account views have been observed again. An unavailable optional member
+marks the group `Degraded` and freezes routes touching it, while unrelated
+ready routes may continue. An unavailable critical member closes the global
+new-operation barrier.
+
 If Account becomes stale or unavailable:
 
 - Capital freezes new plans that debit or credit the affected location;
@@ -280,6 +301,26 @@ Execution unavailable and releases any newly acquired leases; the Strategy
 must not start with a silently smaller capital group. Shutdown first closes
 new order admission, then drains or reconciles active Execution and Capital
 commitments, persists both owners, and finally releases member leases.
+
+Capital shutdown has an explicit no-automatic-return policy. It closes new
+objective/demand admission and automatic plan creation first, then spends a
+bounded interval querying only participant operations that have already
+crossed their durable delivery fence. It never creates the next operation,
+resubmits, or issues a reverse transfer during shutdown. Any delivered effect
+that is still awaiting participant or Account evidence retains its
+reservation and is durably marked `ReconcileOriginalOperation`; a restarted
+instance must continue with the same operation and idempotency key.
+
+A definite pre-delivery expiry or participant rejection records
+`NoCompensationRequired`. A participant-reported terminal failure records
+`HoldAndReview`; Capital does not guess that an inverse movement is safe.
+Operators may invoke `/v1/plans/reconcile` to query an existing fenced
+operation, but that command rejects `Prepared` operations and contains no
+amount, route, or idempotency-key override. Open `ReconcileOriginalOperation`
+and `HoldAndReview` decisions are projected as warning or critical Capital
+alerts with the plan, operation, reason, and durable decision timestamp. The
+alert closes after Account-observed settlement; the transition remains in the
+journal and typed event audit.
 
 ## Risk capacity and no-double-spend rules
 
@@ -394,6 +435,17 @@ strategy_decision_id
 It never names a source Account, transfer route, Earn product, participant API,
 or retry plan. Those are Capital decisions. Publishing an objective therefore
 does not authorize a movement.
+
+Schedule, market-session, and historical-peak forecasting remain Strategy-side
+analytics. The Strategy API represents their output as a typed
+`FundingForecastObservation` with source, observation time, deadline,
+confidence, and evidence references, then deterministically converts it into a
+versioned `FundingObjective`. Historical-peak forecasting uses the maximum
+observed requirement plus an explicit safety buffer; it does not introduce a
+generic optimizer. Capital intentionally does not persist the forecasting
+algorithm or consume Strategy clocks and market calendars: it aggregates the
+resulting objectives by location and horizon, and still selects every source,
+route, product, and operation itself.
 
 Capital evaluates each objective inside a versioned policy envelope. The
 envelope may define `minimum < default target < maximum`, a stress buffer,

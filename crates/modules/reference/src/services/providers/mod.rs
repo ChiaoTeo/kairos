@@ -11,7 +11,7 @@ use kairos_conflux::{
     ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind, InstrumentCatalogQuery,
     MassiveInstrumentQuery, MassiveRestConfig, ParticipantKind,
 };
-use kairos_primitives::{AssetClass, InstrumentKind};
+use kairos_primitives::reference::{AssetClass, InstrumentKind};
 
 struct ConnectionRef(kairos_conflux::ConnectionKey);
 
@@ -94,7 +94,7 @@ fn normalize_option_underlying(value: &str) -> ReferenceResult<String> {
     Ok(value)
 }
 
-fn canonical_expiry(value: Option<kairos_primitives::UnixNanos>) -> ReferenceResult<String> {
+fn canonical_expiry(value: Option<kairos_primitives::time::UnixNanos>) -> ReferenceResult<String> {
     let value = value
         .ok_or_else(|| ReferenceError::Provider("expiring instrument expiry is missing".into()))?;
     let seconds = i64::try_from(value.get() / 1_000_000_000)

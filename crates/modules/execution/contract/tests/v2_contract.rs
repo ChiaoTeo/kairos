@@ -2,10 +2,10 @@ use kairos_execution_contract::event::decode_event;
 use kairos_execution_contract::{
     ExecutionRouteCandidateResponse, ExecutionViewKey, ExecutionViewKind, execution_view_path,
 };
-use kairos_primitives::{
-    AccountId, ExecutionRouteId, InstrumentId, MarketId, OrderOptionCode, OrderType, ParticipantId,
-    ProviderProductCode, ProviderSymbol, SegmentKey,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::execution::{ExecutionRouteId, OrderOptionCode, OrderType};
+use kairos_primitives::integration::{ParticipantId, ProviderProductCode, ProviderSymbol};
+use kairos_primitives::reference::{InstrumentId, MarketId};
 
 #[test]
 fn active_view_resources_are_partitioned_by_workspace_and_kind() {

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use kairos_account_contract::{AccountContractClient, SimulatedSettlement};
-use kairos_primitives::SignedQuantity;
+use kairos_primitives::decimal::SignedQuantity;
 use rust_decimal::Decimal;
 use serde_json::Value;
 

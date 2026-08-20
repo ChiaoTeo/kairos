@@ -51,9 +51,9 @@ pub(crate) fn binding_provider_product(
 pub(crate) fn binding_supports_canonical_market(
     binding: &MarketSourceBinding,
     exchange_id: &str,
-    kind: kairos_primitives::InstrumentKind,
+    kind: kairos_primitives::reference::InstrumentKind,
 ) -> bool {
-    use kairos_primitives::InstrumentKind::{Future, Option, Perpetual, Spot};
+    use kairos_primitives::reference::InstrumentKind::{Future, Option, Perpetual, Spot};
     match binding {
         MarketSourceBinding::BinanceSpot { .. } => {
             exchange_id.eq_ignore_ascii_case("exchange:binance") && kind == Spot

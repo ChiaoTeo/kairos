@@ -4,7 +4,8 @@
 //! query contract without knowing whether the catalog came from SQLite, an
 //! in-memory test store, or a running reference process.
 
-use kairos_primitives::{Exchange, InstrumentKind, MarketId, Sequence, Symbol, UnixNanos};
+use kairos_primitives::reference::{Exchange, InstrumentKind, MarketId, Symbol};
+use kairos_primitives::time::{Sequence, UnixNanos};
 use serde::Serialize;
 
 use crate::domain::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market};

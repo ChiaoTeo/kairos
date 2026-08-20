@@ -1,9 +1,8 @@
-use kairos_primitives::runtime::ActorId;
-use kairos_primitives::{
-    AccountId, BasisPoints, Currency, DecisionId, DurationNanos, Exchange, Generation,
-    IdempotencyKey, InstrumentId, PolicyId, RequestId, ReservationId, SegmentKey, Sequence,
-    StrategyId, UnixNanos,
-};
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+use kairos_primitives::risk::{DecisionId, PolicyId, ReservationId};
+use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId};
+use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RiskControlResponse {
@@ -31,7 +30,7 @@ pub struct RiskControlError {
 /// Signed fixed-decimal representation used by the Risk process contract.
 /// Domain mappings decide whether a particular field is an amount, money,
 /// rate, or another semantic value.
-pub type DecimalValue = kairos_primitives::DecimalParts;
+pub type DecimalValue = kairos_primitives::decimal::DecimalParts;
 
 /// Compatibility name retained for existing Risk contract callers.
 pub type Amount = DecimalValue;
@@ -49,13 +48,13 @@ mod amount_tests {
         assert_eq!(serde_json::to_string(&amount).unwrap(), "\"-12.50\"");
         assert!(serde_json::from_str::<Amount>(r#"{"mantissa":-1250,"scale":2}"#).is_err());
         assert!(serde_json::from_str::<Amount>("\"0.0000000000000000001\"").is_err());
-        assert!(Amount::new(1, kairos_primitives::MAX_DECIMAL_SCALE + 1).is_err());
+        assert!(Amount::new(1, kairos_primitives::decimal::MAX_DECIMAL_SCALE + 1).is_err());
     }
 
     #[test]
     fn mutation_controls_have_typed_contract_shapes() {
         let resize = ResizeReservationRequest {
-            reservation_id: kairos_primitives::ReservationId::new("reservation-1").unwrap(),
+            reservation_id: kairos_primitives::risk::ReservationId::new("reservation-1").unwrap(),
             amount: Amount::new(125, 2).unwrap(),
             at_unix_nanos: 10.into(),
         };
@@ -69,7 +68,7 @@ mod amount_tests {
         );
 
         let consume = ConsumeReservationRequest {
-            reservation_id: kairos_primitives::ReservationId::new("reservation-1").unwrap(),
+            reservation_id: kairos_primitives::risk::ReservationId::new("reservation-1").unwrap(),
             at_unix_nanos: 11.into(),
         };
         assert_eq!(
@@ -202,7 +201,7 @@ pub struct TradeRiskProposal {
     pub collateral_asset: Currency,
     #[serde(default)]
     pub reduce_only: bool,
-    pub margin_rule_id: String,
+    pub margin_rule_id: kairos_primitives::risk::MarginRuleCode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -398,7 +397,7 @@ pub struct FundingRequirement {
     pub required_margin: Amount,
     pub available_margin: Amount,
     pub shortfall: Amount,
-    pub margin_rule_id: String,
+    pub margin_rule_id: kairos_primitives::risk::MarginRuleCode,
     pub account_segment: SegmentKey,
     pub collateral_asset: Currency,
 }

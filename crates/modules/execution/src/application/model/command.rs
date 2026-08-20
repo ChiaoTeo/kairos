@@ -7,7 +7,7 @@ pub struct SubmitOrder {
     pub order_id: OrderId,
     pub intent_id: Option<IntentId>,
     #[serde(default)]
-    pub strategy_id: Option<kairos_primitives::StrategyId>,
+    pub strategy_id: Option<kairos_primitives::runtime::StrategyId>,
     pub account_id: AccountId,
     pub segment_key: SegmentKey,
     pub instrument_id: InstrumentId,
@@ -104,9 +104,9 @@ pub struct ExecutionFillReport {
     #[serde(default)]
     pub reported_provider_id: Option<String>,
     #[serde(default)]
-    pub provider_product: Option<kairos_primitives::ProviderProductCode>,
+    pub provider_product: Option<kairos_primitives::integration::ProviderProductCode>,
     #[serde(default)]
-    pub provider_symbol: Option<kairos_primitives::ProviderSymbol>,
+    pub provider_symbol: Option<kairos_primitives::integration::ProviderSymbol>,
     #[serde(default)]
     pub remote_order_id: Option<RemoteOrderId>,
 }

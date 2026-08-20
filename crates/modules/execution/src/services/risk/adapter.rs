@@ -2,9 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use kairos_primitives::{
-    Generation, IdempotencyKey, Money, RequestId, ReservationId, Sequence, StrategyId, UnixNanos,
-};
+use kairos_primitives::decimal::Money;
+use kairos_primitives::risk::ReservationId;
+use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
+use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_protocol::generated::kairos::risk::v_2::ReservationStatus as RiskViewReservationStatus;
 use kairos_risk_contract::{
@@ -135,11 +136,14 @@ impl SocketExecutionRiskReservations {
                         )
                     })?,
                     reduce_only: request.options.reduce_only.unwrap_or(false),
-                    margin_rule_id: context.margin_rule_id.clone().ok_or_else(|| {
-                        RiskCommandFailure::NotSent(
-                            "execution route is missing a margin rule identity".into(),
-                        )
-                    })?,
+                    margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                        context.margin_rule_id.clone().ok_or_else(|| {
+                            RiskCommandFailure::NotSent(
+                                "execution route is missing a margin rule identity".into(),
+                            )
+                        })?,
+                    )
+                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
                 },
                 at_unix_nanos: now,
                 reservation_ttl_nanos: reservation_ttl_nanos.into(),
@@ -189,7 +193,7 @@ impl SocketExecutionRiskReservations {
                             requirement.shortfall.scale(),
                         )
                         .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-                        margin_rule_id: requirement.margin_rule_id.clone(),
+                        margin_rule_id: requirement.margin_rule_id.to_string(),
                         risk_decision_id: decision.decision_id.clone(),
                         risk_policy_version: decision.policy_version,
                         account_snapshot_watermark: decision
@@ -318,7 +322,7 @@ fn notional_amount(request: &SubmitOrder) -> Result<Amount, String> {
         .checked_mul(price)
         .ok_or_else(|| "risk notional overflow".to_string())?
         .normalize();
-    if value.scale() > u32::from(kairos_primitives::MAX_DECIMAL_SCALE) {
+    if value.scale() > u32::from(kairos_primitives::decimal::MAX_DECIMAL_SCALE) {
         return Err("risk amount exceeds 18 fractional digits".into());
     }
     Amount::new(
@@ -436,7 +440,7 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::StrategyId;
+    use kairos_primitives::runtime::StrategyId;
 
     use super::risk_strategy_id;
 

@@ -295,8 +295,33 @@ class CapitalCurrentState(object):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
         return o == 0
 
+    # CapitalCurrentState
+    def Alerts(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.capital.v2.CapitalAlert import CapitalAlert
+            obj = CapitalAlert()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # CapitalCurrentState
+    def AlertsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # CapitalCurrentState
+    def AlertsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        return o == 0
+
 def CapitalCurrentStateStart(builder):
-    builder.StartObject(15)
+    builder.StartObject(16)
 
 def Start(builder):
     CapitalCurrentStateStart(builder)
@@ -444,6 +469,18 @@ def CapitalCurrentStateStartOperationsVector(builder, numElems):
 
 def StartOperationsVector(builder, numElems):
     return CapitalCurrentStateStartOperationsVector(builder, numElems)
+
+def CapitalCurrentStateAddAlerts(builder, alerts):
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(alerts), 0)
+
+def AddAlerts(builder, alerts):
+    CapitalCurrentStateAddAlerts(builder, alerts)
+
+def CapitalCurrentStateStartAlertsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartAlertsVector(builder, numElems):
+    return CapitalCurrentStateStartAlertsVector(builder, numElems)
 
 def CapitalCurrentStateEnd(builder):
     return builder.EndObject()

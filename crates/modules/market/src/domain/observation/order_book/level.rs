@@ -1,4 +1,4 @@
-use kairos_primitives::{Price, Quantity};
+use kairos_primitives::decimal::{Price, Quantity};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

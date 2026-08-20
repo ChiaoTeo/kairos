@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kairos_primitives::{ParticipantSymbol, UnixNanos};
+use kairos_primitives::integration::ParticipantSymbol;
+use kairos_primitives::time::UnixNanos;
 use serde_json::{Value, json};
 
 use crate::{Bar, IntegrationError, MarketDataKind, MarketEvent, MarketEventKind, MarketFeed};
@@ -135,7 +136,13 @@ pub(crate) fn now() -> UnixNanos {
 
 fn levels(
     value: Option<&Value>,
-) -> Result<Vec<(kairos_primitives::Price, kairos_primitives::Quantity)>, IntegrationError> {
+) -> Result<
+    Vec<(
+        kairos_primitives::decimal::Price,
+        kairos_primitives::decimal::Quantity,
+    )>,
+    IntegrationError,
+> {
     value
         .and_then(Value::as_array)
         .into_iter()
@@ -172,7 +179,7 @@ fn payload(error: impl std::fmt::Display) -> IntegrationError {
 
 #[cfg(test)]
 mod tests {
-    use kairos_primitives::ParticipantSymbol;
+    use kairos_primitives::integration::ParticipantSymbol;
     use serde_json::json;
 
     use super::*;

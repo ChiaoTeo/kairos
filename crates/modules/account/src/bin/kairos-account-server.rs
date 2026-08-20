@@ -3,11 +3,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use axum::body::to_bytes;
-use axum::extract::{Request, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
 use clap::Parser;
 use kairos_account::AccountApplication;
 use kairos_account::composition::account::{
@@ -17,18 +12,20 @@ use kairos_account::composition::account::{
 };
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
 use kairos_account_contract::{
-    AccountEventPublisher, AccountRestRequest, AccountRestResponse, AccountSegmentsRequest,
-    AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
+    AccountRestRequest, AccountRestResponse, AccountSegmentsRequest, AccountViewKey,
+    AccountViewKind, AccountViewPublisher, AeronEndpoint,
 };
 use kairos_conflux::{
-    Conflux, ConfluxConfig, ConfluxEvent, ConfluxHandle, ConfluxSystem, CredentialStore,
-    ShutdownMode,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, CredentialStore,
+    HttpControlConfig, MmapOutputDeclaration,
 };
 use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::control::{
+    ControlAction, HttpControlCodec, HttpControlRequest, HttpControlResponse,
+};
 use kairos_workspace::Workspace;
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use tokio::net::UnixListener;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -223,10 +220,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .expect("validated account lease path")
     });
     let refresh_interval = Duration::from_millis(args.refresh_ms);
-    let (mut application, mut system) = composition.into_conflux(refresh_interval)?;
+    let (mut application, system) = composition.into_conflux(refresh_interval)?;
     application.configure_publication_identity(transport_identity);
-    configure_publication(
-        &mut system,
+    let system = configure_publication(
+        system,
         &args.account_id,
         &view_root,
         args.aeron_dir.as_deref(),
@@ -245,31 +242,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn configure_publication(
-    system: &mut ConfluxSystem,
+    system: ConfluxSystem,
     account_id: &str,
     view_root: &Path,
     aeron_dir: Option<&str>,
     aeron_channel: &str,
     event_stream_id: i32,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<ConfluxSystem, Box<dyn std::error::Error>> {
     const SLOT_SIZE: usize = 1024 * 1024;
     let runtime_id = format!("account:{account_id}");
-    for (resource, kind) in [
+    let endpoint = AeronEndpoint::from_parts(aeron_dir, aeron_channel, event_stream_id)?;
+    let mut system = system;
+    for (resource_key, kind) in [
         ("account-current", AccountViewKind::Current),
         ("account-observed-orders", AccountViewKind::ObservedOrders),
     ] {
         let key = AccountViewKey::new(&runtime_id, account_id, kind)?;
-        let publisher = AccountViewPublisher::create(view_root, key, SLOT_SIZE)?;
-        system
-            .account_view_publishers
-            .ensure_with(resource.to_owned(), 1, || publisher)?;
+        let path = AccountViewPublisher::resolved_path(view_root, &key)?;
+        system.outputs().mmap.declare(
+            resource_key.to_owned(),
+            MmapOutputDeclaration {
+                path,
+                slot_capacity: SLOT_SIZE,
+                revision: 1,
+            },
+        )?;
     }
-    let endpoint = AeronEndpoint::from_parts(aeron_dir, aeron_channel, event_stream_id)?;
-    let publisher = AccountEventPublisher::connect(&endpoint)?;
-    system
-        .account_event_publishers
-        .ensure_with("account-events".to_owned(), 1, || publisher)?;
-    Ok(())
+    system.outputs().aeron.declare(
+        "account-events".to_owned(),
+        AeronOutputDeclaration {
+            endpoint,
+            revision: 1,
+        },
+    )?;
+    Ok(system)
 }
 
 async fn run_process(
@@ -280,11 +286,6 @@ async fn run_process(
     lease_file: Option<PathBuf>,
     instance_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    remove_socket(&socket)?;
-    if let Some(parent) = socket.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let listener = UnixListener::bind(&socket)?;
     let (conflux, handle) = Conflux::new(
         application,
         system,
@@ -293,118 +294,87 @@ async fn run_process(
             ..ConfluxConfig::default()
         },
     )?;
-    let actor = tokio::task::spawn_local(conflux.run());
-    let router = Router::new()
-        .fallback(account_http_handler)
-        .with_state(AccountHost {
-            handle: handle.clone(),
-            lease_file,
-            instance_id,
-        });
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-
-    let startup = handle
-        .handle(ConfluxEvent::Rest(AccountRestRequest::Health))
-        .await
-        .map_err(|_| "Account Conflux startup health failed")?;
-    let status = match startup {
-        Some(AccountRestResponse::Health(Ok(health))) => health.status,
-        _ => return Err("Account Actor omitted its startup health response".into()),
-    };
-    write_health(&health_file, &status).await?;
-    kairos_workspace::logging::record_gauge("kairos.process.ready", u64::from(status == "ready"));
-
-    let outcome = actor.await.map_err(|error| error.to_string())??;
-    server.abort();
-    let _ = server.await;
-    remove_socket(&socket)?;
-    write_health(&health_file, "stopped").await?;
+    let outcome = conflux
+        .with_http_control(
+            handle,
+            AccountHttpControl {
+                lease_file,
+                instance_id,
+            },
+            HttpControlConfig::uds(socket).with_health_file(Some(health_file)),
+        )
+        .run()
+        .await?;
     tracing::info!(event = "process_stopped", component = "account", phase = ?outcome.phase, discarded_inputs = outcome.discarded_inputs, "Account Conflux process stopped");
     Ok(())
 }
 
-#[derive(Clone)]
-struct AccountHost {
-    handle: ConfluxHandle<AccountApplication>,
+struct AccountHttpControl {
     lease_file: Option<PathBuf>,
     instance_id: String,
 }
 
-async fn account_http_handler(State(host): State<AccountHost>, request: Request) -> Response {
-    let method = request.method().as_str().to_owned();
-    let path = request.uri().path().to_owned();
-    let body = match to_bytes(
-        request.into_body(),
-        kairos_workspace::control::MAX_HTTP_BODY_BYTES,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(_) => return json_error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
-    };
-    let request = match decode_request(&method, &path, &body) {
-        Ok(request) => request,
-        Err(response) => return response,
-    };
-    match request {
-        HostRequest::Stop => {
-            host.handle.shutdown(ShutdownMode::Drain);
-            (StatusCode::ACCEPTED, Json(json!({"status":"stopping"}))).into_response()
-        },
-        HostRequest::Rest(request) => match host.handle.handle(ConfluxEvent::Rest(request)).await {
-            Ok(Some(response)) => encode_response(response, lease_valid(&host)),
-            Ok(None) => json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Account Actor omitted its REST response",
-            ),
-            Err(_) => json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "account process is stopping",
-            ),
-        },
+impl HttpControlCodec for AccountHttpControl {
+    type Request = AccountRestRequest;
+    type Response = AccountRestResponse;
+
+    fn component(&self) -> &'static str {
+        "account"
+    }
+
+    fn decode(
+        &self,
+        request: HttpControlRequest<'_>,
+    ) -> Result<ControlAction<Self::Request>, HttpControlResponse> {
+        decode_request(request.method, request.target, request.body)
+    }
+
+    fn encode(&self, response: Self::Response) -> HttpControlResponse {
+        encode_response(response, lease_valid(&self.lease_file, &self.instance_id))
+    }
+
+    fn readiness_request(&self) -> Self::Request {
+        AccountRestRequest::Health
     }
 }
 
-enum HostRequest {
-    Rest(AccountRestRequest),
-    Stop,
-}
-
-fn decode_request(method: &str, path: &str, body: &[u8]) -> Result<HostRequest, Response> {
+fn decode_request(
+    method: &str,
+    target: &str,
+    body: &[u8],
+) -> Result<ControlAction<AccountRestRequest>, HttpControlResponse> {
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
     match (method, path) {
-        ("POST", "/v1/stop") => Ok(HostRequest::Stop),
-        ("GET", "/v1/health") => Ok(HostRequest::Rest(AccountRestRequest::Health)),
-        ("POST", "/v1/simulation/settlements") => Ok(HostRequest::Rest(
+        ("POST", "/v1/stop") => Ok(ControlAction::Stop),
+        ("GET", "/v1/health") => Ok(ControlAction::Request(AccountRestRequest::Health)),
+        ("POST", "/v1/simulation/settlements") => Ok(ControlAction::Request(
             AccountRestRequest::ApplySimulatedSettlement(decode(body)?),
         )),
-        ("POST", "/v1/mark-to-market") => Ok(HostRequest::Rest(AccountRestRequest::MarkToMarket(
-            decode(body)?,
-        ))),
-        ("POST", "/v1/time/advance") => Ok(HostRequest::Rest(AccountRestRequest::AdvanceTime(
-            decode(body)?,
-        ))),
-        ("POST", "/v1/refresh") => Ok(HostRequest::Rest(AccountRestRequest::Refresh(
+        ("POST", "/v1/simulation/capital-mutations") => Ok(ControlAction::Request(
+            AccountRestRequest::ApplySimulatedCapitalMutation(decode(body)?),
+        )),
+        ("POST", "/v1/simulation/capital-mutations/status") => Ok(ControlAction::Request(
+            AccountRestRequest::QuerySimulatedCapitalMutation(decode(body)?),
+        )),
+        ("POST", "/v1/mark-to-market") => Ok(ControlAction::Request(
+            AccountRestRequest::MarkToMarket(decode(body)?),
+        )),
+        ("POST", "/v1/time/advance") => Ok(ControlAction::Request(
+            AccountRestRequest::AdvanceTime(decode(body)?),
+        )),
+        ("POST", "/v1/refresh") => Ok(ControlAction::Request(AccountRestRequest::Refresh(
             decode_segments(body)?,
         ))),
-        ("POST", "/v1/reconcile") => Ok(HostRequest::Rest(AccountRestRequest::Reconcile(
+        ("POST", "/v1/reconcile") => Ok(ControlAction::Request(AccountRestRequest::Reconcile(
             decode_segments(body)?,
         ))),
-        (_, "/v1/health") => Err(json_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "health accepts only GET",
-        )),
-        (_, "/v1/stop") => Err(json_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "stop accepts only POST",
-        )),
-        _ => Err(json_error(
-            StatusCode::NOT_FOUND,
-            "unknown Account endpoint",
-        )),
+        (_, "/v1/health") => Err(json_error(405, "health accepts only GET")),
+        (_, "/v1/stop") => Err(json_error(405, "stop accepts only POST")),
+        _ => Err(json_error(404, "unknown Account endpoint")),
     }
 }
 
-fn decode_segments(body: &[u8]) -> Result<AccountSegmentsRequest, Response> {
+fn decode_segments(body: &[u8]) -> Result<AccountSegmentsRequest, HttpControlResponse> {
     if body.is_empty() {
         Ok(AccountSegmentsRequest::default())
     } else {
@@ -412,40 +382,39 @@ fn decode_segments(body: &[u8]) -> Result<AccountSegmentsRequest, Response> {
     }
 }
 
-fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, Response> {
-    serde_json::from_slice(body)
-        .map_err(|error| json_error(StatusCode::BAD_REQUEST, &error.to_string()))
+fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, HttpControlResponse> {
+    serde_json::from_slice(body).map_err(|cause| json_error(400, &cause.to_string()))
 }
 
-fn encode_response(response: AccountRestResponse, lease_valid: bool) -> Response {
+fn encode_response(response: AccountRestResponse, lease_valid: bool) -> HttpControlResponse {
     match response {
         AccountRestResponse::Health(Ok(mut value)) => {
             value.lease_valid = Some(lease_valid);
-            (StatusCode::OK, Json(json!(value))).into_response()
+            json_response(200, &value)
         },
         AccountRestResponse::Health(Err(error))
         | AccountRestResponse::ApplySimulatedSettlement(Err(error))
+        | AccountRestResponse::ApplySimulatedCapitalMutation(Err(error))
+        | AccountRestResponse::QuerySimulatedCapitalMutation(Err(error))
         | AccountRestResponse::MarkToMarket(Err(error))
         | AccountRestResponse::AdvanceTime(Err(error))
         | AccountRestResponse::Refresh(Err(error))
         | AccountRestResponse::Reconcile(Err(error)) => {
-            (StatusCode::CONFLICT, Json(json!({"error": error}))).into_response()
+            json_response(409, &json!({"error": error}))
         },
         AccountRestResponse::ApplySimulatedSettlement(Ok(value))
-        | AccountRestResponse::MarkToMarket(Ok(value)) => {
-            (StatusCode::OK, Json(json!(value))).into_response()
-        },
-        AccountRestResponse::AdvanceTime(Ok(value)) => {
-            (StatusCode::OK, Json(json!(value))).into_response()
-        },
+        | AccountRestResponse::ApplySimulatedCapitalMutation(Ok(value))
+        | AccountRestResponse::MarkToMarket(Ok(value)) => json_response(200, &value),
+        AccountRestResponse::QuerySimulatedCapitalMutation(Ok(value)) => json_response(200, &value),
+        AccountRestResponse::AdvanceTime(Ok(value)) => json_response(200, &value),
         AccountRestResponse::Refresh(Ok(value)) | AccountRestResponse::Reconcile(Ok(value)) => {
-            (StatusCode::OK, Json(json!(value))).into_response()
+            json_response(200, &value)
         },
     }
 }
 
-fn lease_valid(host: &AccountHost) -> bool {
-    let Some(path) = &host.lease_file else {
+fn lease_valid(lease_file: &Option<PathBuf>, instance_id: &str) -> bool {
+    let Some(path) = lease_file else {
         return true;
     };
     let Ok(value) = std::fs::read(path).and_then(|bytes| {
@@ -456,7 +425,7 @@ fn lease_valid(host: &AccountHost) -> bool {
     value
         .get("launch_instance_id")
         .and_then(serde_json::Value::as_str)
-        == Some(host.instance_id.as_str())
+        == Some(instance_id)
         && std::fs::metadata(path)
             .and_then(|metadata| metadata.modified())
             .and_then(|modified| {
@@ -467,25 +436,16 @@ fn lease_valid(host: &AccountHost) -> bool {
             .is_ok_and(|age| age <= Duration::from_secs(60))
 }
 
-fn json_error(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({"error": message}))).into_response()
+fn json_response<T: serde::Serialize>(status: u16, value: &T) -> HttpControlResponse {
+    HttpControlResponse::json(
+        status,
+        serde_json::to_vec(value)
+            .unwrap_or_else(|_| br#"{"error":"Account response encoding failed"}"#.to_vec()),
+    )
 }
 
-fn remove_socket(path: &Path) -> Result<(), std::io::Error> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-async fn write_health(path: &Path, status: &str) -> Result<(), std::io::Error> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let temporary = path.with_extension("tmp");
-    tokio::fs::write(&temporary, serde_json::to_vec(&json!({"status": status}))?).await?;
-    tokio::fs::rename(temporary, path).await
+fn json_error(status: u16, message: &str) -> HttpControlResponse {
+    json_response(status, &json!({"error": message}))
 }
 
 #[derive(Debug, Parser)]

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use kairos_primitives::{
-    InstrumentId, MarketId, Money, Price, PriceDelta, Quantity, Rate, SourceId,
-};
+use kairos_primitives::decimal::{Money, Price, PriceDelta, Quantity, Rate};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::{InstrumentId, MarketId};
 
 use crate::domain::freshness::DataFreshnessStatus;
 use crate::domain::observation::{MarketObservation, MarketViewKey, ObservationKind};

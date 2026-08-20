@@ -6,7 +6,8 @@
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
-use kairos_primitives::{AssetId, Exchange, InstrumentId, ListingId, Symbol, UnixNanos};
+use kairos_primitives::reference::{AssetId, Exchange, InstrumentId, ListingId, Symbol};
+use kairos_primitives::time::UnixNanos;
 use kairos_reference::application::{
     ReferenceKind, ReferenceQuery, UpsertAssetCommand, UpsertInstrumentCommand,
     UpsertListingCommand,
@@ -506,7 +507,7 @@ impl QueryArgs {
             instrument_kind: self.instrument_kind.as_deref().map(|value| {
                 value
                     .parse()
-                    .unwrap_or(kairos_primitives::InstrumentKind::Unknown)
+                    .unwrap_or(kairos_primitives::reference::InstrumentKind::Unknown)
             }),
             underlying_instrument_id: self.underlying_instrument_id,
             status: self.status,

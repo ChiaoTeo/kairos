@@ -13,7 +13,8 @@ use kairos_market::composition::{
 use kairos_market::{
     MarketApplication, MarketDataRoute, ResolvedMarket, SubscriptionId, load_replay_events_many,
 };
-use kairos_primitives::{InstrumentId, SourceId};
+use kairos_primitives::market::SourceId;
+use kairos_primitives::reference::InstrumentId;
 use kairos_workspace::Workspace;
 use kairos_workspace::cli::{OutputFormat, render};
 use serde_json::{Value, json};
@@ -77,7 +78,7 @@ async fn download(
     let start_time_unix_nanos = millis_to_nanos(command.start)?;
     let end_time_unix_nanos = millis_to_nanos(command.end)?;
     let window = HistoricalWindow {
-        symbol: kairos_primitives::ParticipantSymbol::new(command.symbol.clone())
+        symbol: kairos_primitives::integration::ParticipantSymbol::new(command.symbol.clone())
             .map_err(|error| error.to_string())?,
         start_time_unix_nanos,
         end_time_unix_nanos,
@@ -356,11 +357,11 @@ where
     }
 }
 
-fn millis_to_nanos(value: i64) -> Result<kairos_primitives::UnixNanos, String> {
+fn millis_to_nanos(value: i64) -> Result<kairos_primitives::time::UnixNanos, String> {
     let value = u64::try_from(value).map_err(|_| "historical time must be non-negative")?;
     value
         .checked_mul(1_000_000)
-        .map(kairos_primitives::UnixNanos::new)
+        .map(kairos_primitives::time::UnixNanos::new)
         .ok_or_else(|| "historical time is out of range".into())
 }
 
@@ -499,12 +500,12 @@ fn descriptor_from_values(
     source_symbol: String,
 ) -> Result<ResolvedMarket, String> {
     let instrument_kind = match market_type.as_str() {
-        "equity" => kairos_primitives::InstrumentKind::Equity,
-        "spot" => kairos_primitives::InstrumentKind::Spot,
-        "perpetual" | "swap" => kairos_primitives::InstrumentKind::Perpetual,
-        "future" | "futures" => kairos_primitives::InstrumentKind::Future,
-        "option" | "options" => kairos_primitives::InstrumentKind::Option,
-        "index" => kairos_primitives::InstrumentKind::Index,
+        "equity" => kairos_primitives::reference::InstrumentKind::Equity,
+        "spot" => kairos_primitives::reference::InstrumentKind::Spot,
+        "perpetual" | "swap" => kairos_primitives::reference::InstrumentKind::Perpetual,
+        "future" | "futures" => kairos_primitives::reference::InstrumentKind::Future,
+        "option" | "options" => kairos_primitives::reference::InstrumentKind::Option,
+        "index" => kairos_primitives::reference::InstrumentKind::Index,
         _ => return Err(format!("unsupported market type {market_type}")),
     };
     let route = MarketDataRoute::new(

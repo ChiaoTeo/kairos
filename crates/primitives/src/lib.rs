@@ -5,7 +5,7 @@
 
 pub mod account;
 pub mod capital;
-mod decimal;
+pub mod decimal;
 mod error;
 pub mod execution;
 pub mod integration;
@@ -16,23 +16,16 @@ pub mod runtime;
 mod text;
 pub mod time;
 
-// Transitional root exports keep current callers compiling while imports move
-// to owner-qualified paths. They are not a second definition of these types.
-pub use account::*;
-pub use capital::*;
-pub use decimal::*;
-pub use error::*;
-pub use execution::*;
-pub use integration::*;
-pub use market::*;
-pub use reference::*;
-pub use risk::*;
-pub use runtime::*;
-pub use time::*;
+// The validation error is the only crate-wide support type. Business values
+// remain available exclusively through their owner namespaces above.
+pub use error::DomainTypeError;
 
 #[cfg(test)]
 mod tests {
-    use super::{BrokerId, Exchange, InstrumentId, ListingId, MarketId, OrderId, ProviderId};
+    use crate::account::BrokerId;
+    use crate::execution::OrderId;
+    use crate::integration::ProviderId;
+    use crate::reference::{Exchange, InstrumentId, ListingId, MarketId};
 
     #[test]
     fn spot_identity_keeps_asset_and_market_context_separate() {
@@ -87,7 +80,8 @@ mod tests {
 
 #[cfg(test)]
 mod more_tests {
-    use super::*;
+    use super::decimal::*;
+    use super::reference::*;
 
     #[test]
     fn text_types_reject_ambiguous_whitespace() {

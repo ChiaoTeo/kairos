@@ -7,7 +7,7 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
     let descriptor = ResolvedMarket::new(
         "market:btc",
         "instrument:btc",
-        kairos_primitives::InstrumentKind::Spot,
+        kairos_primitives::reference::InstrumentKind::Spot,
         "binance",
         MarketDataRoute::new("test:btc", "binance", "spot", "BTCUSDT").unwrap(),
     )
@@ -19,15 +19,15 @@ fn fixture() -> (ResolvedMarket, Vec<MarketObservation>) {
                     descriptor.market_id().unwrap().clone(),
                 ),
                 instrument_id: descriptor.instrument_id.clone(),
-                bid_price: Some(kairos_primitives::Price::new(time as i64, 0).unwrap()),
+                bid_price: Some(kairos_primitives::decimal::Price::new(time as i64, 0).unwrap()),
                 bid_quantity: None,
                 ask_price: None,
                 ask_quantity: None,
                 bid_venue_code: None,
                 ask_venue_code: None,
                 tape: None,
-                observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-                source_id: kairos_primitives::SourceId::new("recorded").unwrap(),
+                observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
+                source_id: kairos_primitives::market::SourceId::new("recorded").unwrap(),
             })
         })
         .collect();

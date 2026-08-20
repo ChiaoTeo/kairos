@@ -292,7 +292,8 @@ mod tests {
     fn quote(time: u64) -> MarketObservation {
         MarketObservation::Quote(Quote {
             scope: crate::ObservationScope::market("market:btc").unwrap(),
-            instrument_id: kairos_primitives::InstrumentId::new("instrument:btc").unwrap(),
+            instrument_id: kairos_primitives::reference::InstrumentId::new("instrument:btc")
+                .unwrap(),
             bid_price: Some("100".parse().unwrap()),
             bid_quantity: None,
             ask_price: None,
@@ -300,8 +301,8 @@ mod tests {
             bid_venue_code: None,
             ask_venue_code: None,
             tape: None,
-            observed_at_unix_nanos: kairos_primitives::UnixNanos::new(time),
-            source_id: kairos_primitives::SourceId::new("binance").unwrap(),
+            observed_at_unix_nanos: kairos_primitives::time::UnixNanos::new(time),
+            source_id: kairos_primitives::market::SourceId::new("binance").unwrap(),
         })
     }
 

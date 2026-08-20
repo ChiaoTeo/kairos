@@ -8,7 +8,7 @@ fn amount(value: crate::Amount) -> kairos_risk_contract::Amount {
         .expect("Risk domain amount satisfies contract decimal bounds")
 }
 
-fn money(value: kairos_primitives::Money) -> kairos_risk_contract::Amount {
+fn money(value: kairos_primitives::decimal::Money) -> kairos_risk_contract::Amount {
     kairos_risk_contract::Amount::new(value.mantissa(), value.scale())
         .expect("Money satisfies contract decimal bounds")
 }
@@ -138,9 +138,9 @@ fn reason(value: &crate::ReasonCode) -> kairos_risk_contract::ReasonCode {
 
 pub(crate) fn decision(
     value: &crate::RiskDecision,
-    account_id: &kairos_primitives::AccountId,
-    strategy_id: &kairos_primitives::StrategyId,
-    instrument_id: &kairos_primitives::InstrumentId,
+    account_id: &kairos_primitives::account::AccountId,
+    strategy_id: &kairos_primitives::runtime::StrategyId,
+    instrument_id: &kairos_primitives::reference::InstrumentId,
 ) -> kairos_risk_contract::RiskDecision {
     kairos_risk_contract::RiskDecision {
         decision_id: value.decision_id.clone(),
@@ -165,7 +165,10 @@ pub(crate) fn decision(
                 required_margin: amount(requirement.required_margin),
                 available_margin: amount(requirement.available_margin),
                 shortfall: amount(requirement.shortfall),
-                margin_rule_id: requirement.margin_rule_id.clone(),
+                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                    requirement.margin_rule_id.clone(),
+                )
+                .expect("risk margin rule identity is validated"),
                 account_segment: requirement.account_segment.clone(),
                 collateral_asset: requirement.collateral_asset.clone(),
             }
@@ -217,7 +220,7 @@ pub(crate) fn authorize_from(
             account_segment: value.proposal.account_segment,
             collateral_asset: value.proposal.collateral_asset,
             reduce_only: value.proposal.reduce_only,
-            margin_rule_id: value.proposal.margin_rule_id,
+            margin_rule_id: value.proposal.margin_rule_id.to_string(),
         },
         at_unix_nanos: value.at_unix_nanos,
         reservation_ttl_nanos: value.reservation_ttl_nanos,
@@ -265,7 +268,7 @@ fn context_from(value: kairos_risk_contract::RiskContext) -> Result<crate::RiskC
         current_exposure: amount_from(value.current_exposure)?,
         current_margin: amount_from(value.current_margin)?,
         available_margin: amount_from(value.available_margin)?,
-        current_pnl: kairos_primitives::Money::new(
+        current_pnl: kairos_primitives::decimal::Money::new(
             value.current_pnl.mantissa(),
             value.current_pnl.scale(),
         )

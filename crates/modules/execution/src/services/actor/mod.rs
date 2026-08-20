@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use kairos_conflux::OrderEntryEvent;
+use kairos_primitives::time::Sequence;
 
 use crate::application::{
     ExecutionEvent, ExecutionFillReport, IntentEvent, IntentState, SubmitOrder, UnknownRemoteOrder,
@@ -17,7 +18,6 @@ use crate::domain::{
     LegLifecycle, Money, OrderCommitment, OrderId, Quantity, RiskReservationEvidence,
     RiskReservationSagaStatus, UnixNanos,
 };
-use kairos_primitives::Sequence;
 
 mod events;
 mod fills;
@@ -237,11 +237,12 @@ fn order_event(order: &ExecutionOrder, occurred_at: u64, reason: String) -> Exec
 
 #[cfg(test)]
 mod tests {
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::decimal::{Money, Price, Quantity};
+    use kairos_primitives::reference::{Currency, InstrumentId};
+
     use super::*;
     use crate::domain::{CommitmentBasis, CommitmentResource, OrderSide};
-    use kairos_primitives::{
-        AccountId, Currency, InstrumentId, Money, Price, Quantity, SegmentKey,
-    };
 
     fn commitment() -> OrderCommitment {
         OrderCommitment::new(

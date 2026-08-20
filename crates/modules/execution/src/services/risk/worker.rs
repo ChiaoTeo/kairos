@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use kairos_primitives::{Money, UnixNanos};
+use kairos_primitives::decimal::Money;
+use kairos_primitives::time::UnixNanos;
 
 use super::simulated::SimulatedRiskReservations;
 use super::{SimulatedRiskBehavior, SocketExecutionRiskReservations};

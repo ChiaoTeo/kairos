@@ -158,7 +158,9 @@ impl ExecutionActor {
                     "contract commitment resizing requires product-specific semantics".into(),
                 );
             },
-            CommitmentBasis::BaseQuantity | CommitmentBasis::SimulationQuantity => {
+            CommitmentBasis::BaseQuantity
+            | CommitmentBasis::CloseablePositionQuantity
+            | CommitmentBasis::SimulationQuantity => {
                 Money::new(remaining.mantissa(), remaining.scale())
                     .map_err(|error| error.to_string())?
             },
