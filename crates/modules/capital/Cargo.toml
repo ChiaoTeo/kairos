@@ -11,7 +11,6 @@ name = "kairos_capital"
 path = "src/lib.rs"
 
 [dependencies]
-axum.workspace = true
 clap.workspace = true
 kairos-account-contract.workspace = true
 kairos-capital-contract.workspace = true
@@ -27,6 +26,7 @@ tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync", "ti
 tracing.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 

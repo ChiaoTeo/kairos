@@ -34,13 +34,13 @@ transport
   -> transport response
 ```
 
-`kairos-protocol` 定义 Contract control 的通用请求/服务协议、规范用法、便捷函数和便捷宏。它可以提供 `ControlService`/`ControlOperation`、request/response envelope、path/query/body 解码 helper、统一错误构造、service/operation 定义宏、runtime adapter trait 和测试辅助。Conflux 只实现并消费该协议的 runtime adapter，将 protocol service 接到 `ConfluxHandle` 和 Actor callback；它不拥有业务入口定义。`kairos-protocol` 不得定义 Account、Risk、Execution、Market、Reference 或 Capital 的具体业务 endpoint，也不得引入会绕过 typed Contract 的开放式 registry、`Any`/downcast 或 `serde_json::Value` 业务 envelope。
+Control 服务协议直接采用 `jsonrpsee`。`kairos-protocol` 只提供项目级适配封装：重导出 jsonrpsee 的 service/client/server 宏与核心类型，定义 runtime error code、Conflux adapter 约束和测试辅助。Conflux 只实现并消费该协议的 runtime adapter，将 jsonrpsee service 接到 `ConfluxHandle` 和 Actor callback；它不拥有业务入口定义。`kairos-protocol` 不得定义 Account、Risk、Execution、Market、Reference 或 Capital 的具体业务 method，也不得引入会绕过 typed Contract 的开放式 registry、`Any`/downcast 或 `serde_json::Value` 业务 envelope。
 
 业务模块的 `contract/` crate 定义自己的具体对外接口。一个模块的 operation 是否存在、如何命名、请求字段如何验证、成功和业务拒绝如何表达，都由该模块 Contract 拥有。跨业务调用者只能依赖 owner Contract；不得导入另一个业务模块主 crate 的 application、services、domain 或 server 细节。
 
 ## Required Shape
 
-后续 control API 应收敛到 operation-first 的形态：每个 operation 只定义一次，并派生或驱动 server adapter、client facade、typed request/response enum 和 contract tests。宏可以用于减少重复，但宏不是边界本身；边界是 Contract-owned operation definition。
+后续 control API 应收敛到 jsonrpsee service-first 的形态：每个 RPC method 只在 owner contract 中定义一次，并由 jsonrpsee 派生 client facade 与 server trait。Conflux adapter 实现生成的 server trait，将调用提交给 Actor。边界是 Contract-owned service definition，不是 Conflux route 或手写 HTTP codec。
 
 迁移期间允许保留现有 `RestContract`、`ConfluxEvent::Rest`、`handle_rest` 等名称，但新增设计和重构应朝 `ControlContract`、`ConfluxEvent::Control`、`handle_control`、`submit_control` 的语义收敛。新增业务 control surface 不得复制旧的手写 HTTP server 模式。
 
@@ -59,5 +59,5 @@ transport
 - Conflux 继续保持平台 runtime 身份，不变成业务 HTTP 框架。
 - 服务端业务逻辑保留在 Actor/Application 的 typed callback 内，mutable state 仍只有一个所有者。
 - Client 和 server 使用同一份 Contract 定义，减少路径、status 和 payload shape 漂移。
-- `kairos-protocol` 可以沉淀 route/operation 宏和 helper，但不能拥有业务 endpoint。
+- `kairos-protocol` 可以沉淀 jsonrpsee 适配 helper 和 runtime error 映射，但不能拥有业务 method。
 - Architecture tests 应逐步增加检查，阻止业务层重新出现私有 control server。

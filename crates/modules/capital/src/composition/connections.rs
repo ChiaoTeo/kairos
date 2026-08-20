@@ -6,12 +6,6 @@ use kairos_account_contract::{
     AccountContractClient, ContractError as AccountContractError, SimulatedCapitalMutation,
     SimulatedCapitalMutationKind, SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus,
 };
-use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::decimal::Quantity;
-use kairos_primitives::reference::Currency;
-use kairos_primitives::runtime::IdempotencyKey;
-use kairos_primitives::time::UnixNanos;
-
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
     AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission,
@@ -26,8 +20,13 @@ use kairos_conflux::{
     EarnSubscriptionEligibility, EarnSubscriptionPreviewRequest, ExternalAccountIdentity,
     IndeterminateCommand, IntegrationError, ParticipantRejection,
 };
+use kairos_primitives::account::{AccountId, SegmentKey};
+use kairos_primitives::decimal::Quantity;
+use kairos_primitives::reference::Currency;
+use kairos_primitives::runtime::IdempotencyKey;
+use kairos_primitives::time::UnixNanos;
 
-/// Non-secret account metadata used by Conflux to compose Capital transfer rails.
+/// Non-secret account metadata used by Capital composition to select transfer rails.
 #[derive(Clone, Debug)]
 pub struct CapitalConnectionAccount {
     pub account_id: String,
@@ -41,7 +40,7 @@ pub struct CapitalConnectionAccount {
     /// Provider-side non-secret identity within the controller's capital group.
     /// For Binance this is the subaccount email; the master leaves it empty.
     pub participant_account_ref: Option<String>,
-    /// Instance-local Account control socket. Conflux uses it only for the
+    /// Instance-local Account control socket. Capital composition uses it only for the
     /// explicit paper/backtest rail; live participant rails never write
     /// Account-owned state through this endpoint.
     pub account_socket: PathBuf,
@@ -56,7 +55,7 @@ struct SimulatedCapitalAccount {
 }
 
 /// Capital composition dispatcher over participant-neutral Integration capabilities.
-pub struct CapitalTransferConnections {
+pub struct CapitalIntegrationConnections {
     binance: BTreeMap<String, BinanceCapitalRestConnection>,
     binance_subaccounts: BTreeMap<String, BinanceSubAccountCapitalRestConnection>,
     binance_earn: BTreeMap<String, BinanceSimpleEarnRestConnection>,
@@ -64,7 +63,7 @@ pub struct CapitalTransferConnections {
     simulated_accounts: BTreeMap<String, SimulatedCapitalAccount>,
 }
 
-impl CapitalTransferConnections {
+impl CapitalIntegrationConnections {
     fn simulated_account(
         &self,
         identity: &ExternalAccountIdentity,
@@ -294,7 +293,7 @@ impl CapitalTransferConnections {
 // Capital consumes the Integration-owned capabilities re-exported by
 // Conflux; composition only selects their concrete live or simulated
 // implementation.
-impl EarnCommand for CapitalTransferConnections {
+impl EarnCommand for CapitalIntegrationConnections {
     async fn subscribe(&mut self, request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
         if !self.simulated_accounts.is_empty() {
             let outcome = self
@@ -350,7 +349,7 @@ impl EarnCommand for CapitalTransferConnections {
     }
 }
 
-impl EarnActionStatusQuery for CapitalTransferConnections {
+impl EarnActionStatusQuery for CapitalIntegrationConnections {
     async fn action_status(
         &mut self,
         query: &EarnActionQuery,
@@ -366,7 +365,7 @@ impl EarnActionStatusQuery for CapitalTransferConnections {
     }
 }
 
-impl EarnProductQuery for CapitalTransferConnections {
+impl EarnProductQuery for CapitalIntegrationConnections {
     async fn products(
         &mut self,
         request: &EarnProductsRequest,
@@ -451,7 +450,7 @@ impl EarnProductQuery for CapitalTransferConnections {
     }
 }
 
-impl AssetTransferCommand for CapitalTransferConnections {
+impl AssetTransferCommand for CapitalIntegrationConnections {
     async fn submit_transfer(
         &mut self,
         request: &AssetTransferRequest,
@@ -460,7 +459,8 @@ impl AssetTransferCommand for CapitalTransferConnections {
             return self.submit_simulated_transfer(request).await;
         }
         if request.source.identity.account_id == request.destination.identity.account_id {
-            return self.binance
+            return self
+                .binance
                 .get_mut(request.source.identity.account_id.as_str())
                 .ok_or(IntegrationError::UnsupportedOperation)?
                 .submit_transfer(request)
@@ -479,7 +479,7 @@ impl AssetTransferCommand for CapitalTransferConnections {
     }
 }
 
-impl AssetTransferStatusQuery for CapitalTransferConnections {
+impl AssetTransferStatusQuery for CapitalIntegrationConnections {
     async fn transfer_status(
         &mut self,
         query: &AssetTransferQuery,
@@ -489,7 +489,8 @@ impl AssetTransferStatusQuery for CapitalTransferConnections {
         }
         if query.request.source.identity.account_id == query.request.destination.identity.account_id
         {
-            return self.binance
+            return self
+                .binance
                 .get_mut(query.request.source.identity.account_id.as_str())
                 .ok_or(IntegrationError::UnsupportedOperation)?
                 .transfer_status(query)
@@ -508,19 +509,19 @@ impl AssetTransferStatusQuery for CapitalTransferConnections {
     }
 }
 
-/// Select and construct concrete participant connections behind Conflux.
-pub fn compose_capital_transfer_connections(
+/// Select and construct the concrete Integration capabilities exposed to Capital.
+pub fn compose_capital_integration_connections(
     credential_config: &Path,
     launch_mode: &str,
     accounts: impl IntoIterator<Item = CapitalConnectionAccount>,
-) -> Result<CapitalTransferConnections, String> {
+) -> Result<CapitalIntegrationConnections, String> {
     let accounts = accounts.into_iter().collect::<Vec<_>>();
     if is_simulation_launch_mode(launch_mode) {
         let simulated_accounts = accounts
             .iter()
             .map(simulated_capital_account)
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        return Ok(CapitalTransferConnections {
+        return Ok(CapitalIntegrationConnections {
             binance: BTreeMap::new(),
             binance_subaccounts: BTreeMap::new(),
             binance_earn: BTreeMap::new(),
@@ -752,7 +753,7 @@ pub fn compose_capital_transfer_connections(
         .map_err(|error| error.to_string())?;
         binance_subaccounts.insert(controller_id, connection);
     }
-    Ok(CapitalTransferConnections {
+    Ok(CapitalIntegrationConnections {
         binance,
         binance_subaccounts,
         binance_earn,
@@ -877,8 +878,9 @@ fn now_unix_nanos() -> Result<UnixNanos, IntegrationError> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| IntegrationError::Unavailable(error.to_string()))?
         .as_nanos();
-    let nanos = u64::try_from(nanos)
-        .map_err(|_| IntegrationError::Unavailable("current time exceeds UnixNanos range".into()))?;
+    let nanos = u64::try_from(nanos).map_err(|_| {
+        IntegrationError::Unavailable("current time exceeds UnixNanos range".into())
+    })?;
     Ok(UnixNanos::new(nanos))
 }
 
@@ -1013,7 +1015,7 @@ mod tests {
 
     #[test]
     fn paper_capital_rail_does_not_load_credentials_or_construct_live_connections() {
-        let connections = compose_capital_transfer_connections(
+        let connections = compose_capital_integration_connections(
             Path::new("/definitely/missing/credentials.toml"),
             "paper",
             [simulated_account()],
@@ -1028,7 +1030,7 @@ mod tests {
 
     #[test]
     fn live_capital_rail_still_requires_the_integration_credential_store() {
-        let error = compose_capital_transfer_connections(
+        let error = compose_capital_integration_connections(
             Path::new("/definitely/missing/credentials.toml"),
             "live",
             [simulated_account()],
@@ -1049,7 +1051,7 @@ mod tests {
         let source_server = serve_fake_account(&source_socket, source_state.clone()).await;
         let destination_server =
             serve_fake_account(&destination_socket, destination_state.clone()).await;
-        let mut connections = compose_capital_transfer_connections(
+        let mut connections = compose_capital_integration_connections(
             Path::new("/definitely/missing/credentials.toml"),
             "backtest",
             [

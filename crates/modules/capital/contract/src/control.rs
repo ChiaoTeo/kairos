@@ -188,3 +188,33 @@ pub struct ReconcileCapitalPlanResponse {
     pub status: CapitalPlanReconcileStatus,
     pub error: Option<CapitalControlError>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CapitalHealthResponse {
+    pub status: String,
+}
+
+/// Closed control operation set owned by the Capital process Contract.
+///
+/// HTTP paths and JSON framing are mapped by `CapitalHttpControl`; Conflux
+/// receives only these typed business operations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapitalRestRequest {
+    Health,
+    PublishFundingObjective(PublishFundingObjectiveRequest),
+    CancelFundingObjective(CancelFundingObjectiveRequest),
+    ObserveCapitalDemand(ObserveCapitalDemandRequest),
+    QueryCapitalAvailability(QueryCapitalAvailabilityRequest),
+    ReconcileCapitalPlan(ReconcileCapitalPlanRequest),
+}
+
+/// Typed response pair for [`CapitalRestRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapitalRestResponse {
+    Health(Result<CapitalHealthResponse, CapitalControlError>),
+    PublishFundingObjective(CapitalControlResponse),
+    CancelFundingObjective(CapitalControlResponse),
+    ObserveCapitalDemand(CapitalDemandResponse),
+    QueryCapitalAvailability(Result<CapitalAvailabilityResponse, CapitalControlError>),
+    ReconcileCapitalPlan(ReconcileCapitalPlanResponse),
+}

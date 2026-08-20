@@ -339,6 +339,7 @@ fn execution_uses_one_contract_actor_and_conflux_owned_control() {
     assert!(composition.contains("ExecutionHttpControl"));
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(!manifest.contains("axum.workspace"));
+    assert!(!manifest.contains("kairos-transport"));
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(
             !application.contains(forbidden),
@@ -379,9 +380,10 @@ fn execution_publication_is_owned_by_conflux_resources() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let actor = fs::read_to_string(root.join("src/application/conflux.rs")).expect("read actor");
     let services = rust_source(&root.join("src/services/publication"));
-    assert!(actor.contains("execution_event_publishers"));
-    assert!(actor.contains("execution_view_publishers"));
-    assert!(actor.contains("try_with"));
+    assert!(actor.contains("outputs()"));
+    assert!(actor.contains(".aeron"));
+    assert!(actor.contains(".mmap"));
+    assert!(!actor.contains("try_with"));
     assert!(actor.contains("flush_durable_events"));
     assert!(!services.contains("SharedExecutionSnapshotPublisher"));
     assert!(!services.contains("SharedIntentSnapshotPublisher"));

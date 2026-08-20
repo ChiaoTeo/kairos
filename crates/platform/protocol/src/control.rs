@@ -9,6 +9,79 @@ use std::collections::BTreeMap;
 
 use serde::{Serialize, de::DeserializeOwned};
 
+/// jsonrpsee-backed control service helpers.
+///
+/// Business contract crates should define new control services with
+/// `kairos_protocol::control::jsonrpc::rpc`. Runtimes such as Conflux then
+/// adapt the generated server trait into their own ingress instead of owning
+/// the protocol definition.
+pub mod jsonrpc {
+    pub use jsonrpsee::core::async_trait;
+    pub use jsonrpsee::core::RpcResult;
+    pub use jsonrpsee::proc_macros::rpc;
+    pub use jsonrpsee::types::ErrorObjectOwned;
+
+    pub const NOT_SENT_CODE: i32 = -32_001;
+    pub const RESULT_UNKNOWN_CODE: i32 = -32_002;
+    pub const ACTOR_STOPPED_CODE: i32 = -32_003;
+    pub const READINESS_REJECTED_CODE: i32 = -32_004;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ControlRuntimeFailure {
+        NotSent,
+        ResultUnknown,
+        ActorStopped,
+        ReadinessRejected,
+    }
+
+    impl ControlRuntimeFailure {
+        pub fn code(self) -> i32 {
+            match self {
+                Self::NotSent => NOT_SENT_CODE,
+                Self::ResultUnknown => RESULT_UNKNOWN_CODE,
+                Self::ActorStopped => ACTOR_STOPPED_CODE,
+                Self::ReadinessRejected => READINESS_REJECTED_CODE,
+            }
+        }
+
+        pub fn reason(self) -> &'static str {
+            match self {
+                Self::NotSent => "not_sent",
+                Self::ResultUnknown => "result_unknown",
+                Self::ActorStopped => "actor_stopped",
+                Self::ReadinessRejected => "readiness_rejected",
+            }
+        }
+
+        pub fn message(self) -> &'static str {
+            match self {
+                Self::NotSent => "control request was not submitted",
+                Self::ResultUnknown => "control request result is unknown",
+                Self::ActorStopped => "control actor stopped",
+                Self::ReadinessRejected => "control readiness was rejected",
+            }
+        }
+
+        pub fn into_error(self) -> ErrorObjectOwned {
+            ErrorObjectOwned::owned(self.code(), self.message(), Some(self.reason()))
+        }
+    }
+
+    pub fn runtime_error(failure: ControlRuntimeFailure) -> ErrorObjectOwned {
+        failure.into_error()
+    }
+
+    pub fn business_error(
+        code: i32,
+        message: impl Into<String>,
+        details: impl Serialize,
+    ) -> ErrorObjectOwned {
+        ErrorObjectOwned::owned(code, message.into(), Some(details))
+    }
+
+    use serde::Serialize;
+}
+
 /// One HTTP request after transport framing but before Contract decoding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HttpControlRequest<'a> {
@@ -600,5 +673,20 @@ mod tests {
                 .status,
             400
         );
+    }
+
+    #[test]
+    fn jsonrpc_runtime_failures_have_stable_error_codes() {
+        let error = super::jsonrpc::runtime_error(super::jsonrpc::ControlRuntimeFailure::NotSent);
+        assert_eq!(error.code(), super::jsonrpc::NOT_SENT_CODE);
+        assert_eq!(error.message(), "control request was not submitted");
+
+        let business = super::jsonrpc::business_error(
+            -31_000,
+            "business rejected request",
+            serde_json::json!({"reason":"invalid"}),
+        );
+        assert_eq!(business.code(), -31_000);
+        assert_eq!(business.message(), "business rejected request");
     }
 }

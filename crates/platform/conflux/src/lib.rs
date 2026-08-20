@@ -116,10 +116,14 @@ pub use kairos_integration::{
     ParticipantInstrumentRef, ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef,
     ParticipantRejection, TimeInForce,
 };
+pub use kairos_transport::{
+    AeronEndpoint, DEFAULT_CHANNEL as DEFAULT_AERON_CHANNEL, stream_ids as output_stream_ids,
+};
 pub use lifecycle::{ProcessPhase, ShutdownMode};
 pub use output::{
     AeronOutputDeclaration, AeronOutputs, FileOutputDeclaration, FileOutputs,
     MmapOutputDeclaration, MmapOutputs, OutputCollections, OutputCreateError, OutputPublishError,
+    SnapshotEnvelopeMetadata,
 };
 pub use process::{
     BuildError, Conflux, ConfluxConfig, ConfluxHandle, ConfluxOutcome, ConnectionControlError,

@@ -47,11 +47,12 @@ impl AccountInstrumentResolver {
                 kairos_reference_contract::ReferenceClient::connect(
                     kairos_reference_contract::ReferenceEndpoint {
                         database: database.as_ref().to_path_buf(),
-                        actor_id: actor_id.to_owned(),
-                        events: kairos_transport::AeronEndpoint::from_parts(
+                        actor_id: kairos_primitives::runtime::ActorId::new(actor_id)
+                            .map_err(|error| error.to_string())?,
+                        events: kairos_conflux::AeronEndpoint::from_parts(
                             None,
-                            kairos_transport::DEFAULT_CHANNEL,
-                            kairos_transport::stream_ids::REFERENCE_CHANGES,
+                            kairos_conflux::DEFAULT_AERON_CHANNEL,
+                            kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
                         )
                         .map_err(|error| error.to_string())?,
                     },

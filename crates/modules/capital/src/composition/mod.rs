@@ -3,15 +3,15 @@ use std::path::PathBuf;
 use crate::domain::CapitalGroupConfig;
 use crate::services::actor::CapitalActor;
 use crate::services::persistence::JournalCapitalStore;
-use crate::{CapitalApplication, CapitalTransferProcess};
+use crate::{CapitalApplication, CapitalProcess};
 
 mod connections;
-mod projection;
+mod host;
 pub use connections::{
-    CapitalConnectionAccount, CapitalTransferConnections, compose_capital_transfer_connections,
-    validate_capital_transfer_product,
+    CapitalConnectionAccount, CapitalIntegrationConnections,
+    compose_capital_integration_connections, validate_capital_transfer_product,
 };
-pub use projection::{capital_current_view, capital_event};
+pub use host::{CapitalHost, CapitalHostConfig, build_capital_host};
 
 pub fn compose_capital_application(config: CapitalGroupConfig) -> CapitalApplication {
     CapitalApplication::new(
@@ -27,31 +27,31 @@ pub fn compose_persistent_capital_application(
         .map(CapitalApplication::new)
 }
 
-pub fn compose_capital_transfer_process<C>(
+pub fn compose_capital_process<C>(
     config: CapitalGroupConfig,
     connection: C,
-) -> Result<CapitalTransferProcess<C>, String>
+) -> Result<CapitalProcess<C>, String>
 where
     C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();
     let application = compose_capital_application(config);
-    CapitalTransferProcess::new(application, connection, group_id, environment)
+    CapitalProcess::new(application, connection, group_id, environment)
         .map_err(|error| error.to_string())
 }
 
-pub fn compose_persistent_capital_transfer_process<C>(
+pub fn compose_persistent_capital_process<C>(
     config: CapitalGroupConfig,
     state_path: PathBuf,
     connection: C,
-) -> Result<CapitalTransferProcess<C>, String>
+) -> Result<CapitalProcess<C>, String>
 where
     C: kairos_conflux::AssetTransferCommand + kairos_conflux::AssetTransferStatusQuery,
 {
     let group_id = config.capital_group_id.clone();
     let environment = config.environment.clone();
     let application = compose_persistent_capital_application(config, state_path)?;
-    CapitalTransferProcess::new(application, connection, group_id, environment)
+    CapitalProcess::new(application, connection, group_id, environment)
         .map_err(|error| error.to_string())
 }

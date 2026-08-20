@@ -5,12 +5,11 @@ use std::time::{Duration, Instant};
 use kairos_conflux::{
     AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, EarnPositionsRequest,
     EarnProductFamily, EarnProductQuery, ExternalAccountEvent, ExternalAccountEventEnvelope,
-    ExternalParticipantEvent, ResourceOperationError, RestContract, SystemEvent,
+    ExternalParticipantEvent, RestContract, SnapshotEnvelopeMetadata, SystemEvent,
     TypedConnectionCollection,
 };
 use kairos_primitives::account::SegmentKey;
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{
     AccountApplication, AccountError, AccountFactProvenance, AccountSegmentCompleteness,
@@ -613,17 +612,14 @@ impl AccountApplication {
                     change,
                 )
                 .map_err(AccountError::Publication)?;
-                match context
-                    .system()
-                    .account_event_publishers
-                    .try_with(&event_key, |publisher| publisher.publish(&bytes))
-                {
-                    Ok(()) => {},
-                    Err(ResourceOperationError::NotFound) => return Ok(()),
-                    Err(ResourceOperationError::Operation(error)) => {
-                        return Err(AccountError::Publication(error.to_string()));
-                    },
+                if !context.outputs().aeron.contains(&event_key) {
+                    return Ok(());
                 }
+                context
+                    .outputs()
+                    .aeron
+                    .publish(&event_key, &bytes)
+                    .map_err(|error| AccountError::Publication(error.to_string()))?;
             }
             self.acknowledge_business_event()?;
         }
@@ -643,30 +639,23 @@ impl AccountApplication {
         let current_key = CURRENT.to_owned();
         let bytes = encode_account_current_view(self.actor_id(), &self.conflux.identity, &view)
             .map_err(AccountError::Publication)?;
-        match context
-            .system()
-            .account_view_publishers
-            .try_with(&current_key, |publisher| {
-                publisher.publish(metadata, &bytes)
-            }) {
-            Ok(()) | Err(ResourceOperationError::NotFound) => {},
-            Err(ResourceOperationError::Operation(error)) => {
-                return Err(AccountError::Publication(error.to_string()));
-            },
+        if context.outputs().mmap.contains(&current_key) {
+            context
+                .outputs()
+                .mmap
+                .publish(&current_key, metadata, &bytes)
+                .map_err(|error| AccountError::Publication(error.to_string()))?;
         }
         let orders_key = OBSERVED_ORDERS.to_owned();
         let bytes =
             encode_observed_orders_current_view(self.actor_id(), &self.conflux.identity, &view)
                 .map_err(AccountError::Publication)?;
-        match context
-            .system()
-            .account_view_publishers
-            .try_with(&orders_key, |publisher| publisher.publish(metadata, &bytes))
-        {
-            Ok(()) | Err(ResourceOperationError::NotFound) => {},
-            Err(ResourceOperationError::Operation(error)) => {
-                return Err(AccountError::Publication(error.to_string()));
-            },
+        if context.outputs().mmap.contains(&orders_key) {
+            context
+                .outputs()
+                .mmap
+                .publish(&orders_key, metadata, &bytes)
+                .map_err(|error| AccountError::Publication(error.to_string()))?;
         }
         self.conflux.published_generation = Some(view.generation.get());
         Ok(())

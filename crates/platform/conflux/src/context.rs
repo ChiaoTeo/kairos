@@ -255,20 +255,24 @@ mod tests {
             MarketViewKey::new("scope", "source", MarketViewKind::Quote, None::<String>).unwrap();
 
         let resource_key = key.canonical_key();
-        let root = directory.path().to_path_buf();
-        let resource_key = context
-            .declare_output(
-                |system| &mut system.market_view_publishers,
-                resource_key,
-                7,
-                move || {
-                    kairos_market_contract::MarketViewPublisher::create(root, key, 4_096)
-                        .map_err(|error| crate::OutputBindingError::Create(error.to_string()))
+        let path =
+            kairos_market_contract::MarketViewPublisher::resolved_path(directory.path(), &key)
+                .unwrap();
+        context
+            .outputs()
+            .mmap
+            .declare(
+                resource_key.clone(),
+                crate::MmapOutputDeclaration {
+                    path,
+                    slot_capacity: 4_096,
+                    revision: 7,
                 },
             )
             .unwrap();
+        drop(context);
 
-        let resource = system.market_view_publishers.get(&resource_key).unwrap();
+        let resource = system.mmap_writers.get(&resource_key).unwrap();
         assert_eq!(resource.revision(), 7);
         assert_eq!(resource.state(), crate::ResourceState::Ready);
         assert!(std::fs::read_dir(directory.path()).unwrap().any(|entry| {

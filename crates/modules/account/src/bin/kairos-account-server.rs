@@ -471,11 +471,11 @@ struct Args {
     refresh_ms: u64,
     #[arg(long, env = "AERON_DIR")]
     aeron_dir: Option<String>,
-    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    #[arg(long, default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
     aeron_channel: String,
     #[arg(
         long,
-        default_value_t = kairos_transport::stream_ids::ACCOUNT_EVENTS,
+        default_value_t = kairos_conflux::output_stream_ids::ACCOUNT_EVENTS,
         value_parser = clap::value_parser!(i32).range(1..)
     )]
     account_events_stream_id: i32,

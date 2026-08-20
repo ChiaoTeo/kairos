@@ -5,9 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use kairos_account_contract::view::AccountViewReader;
 use kairos_account_contract::{AccountClient, AccountEventStream};
-use kairos_execution_contract::{
-    ExecutionClient, ExecutionEventStream, ExecutionViewReader,
-};
+use kairos_execution_contract::{ExecutionClient, ExecutionEventStream, ExecutionViewReader};
 use kairos_integration::ConnectionKey;
 use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
@@ -547,7 +545,7 @@ pub struct ConfluxSystem {
     /// business Contract. Contract codecs remain owned by each module.
     aeron_publishers: NamedResources<String, AeronBytePublisher>,
     pub mmap_readers: NamedResources<String, SharedSnapshotReader>,
-    mmap_writers: NamedResources<String, SharedSnapshotWriter>,
+    pub(crate) mmap_writers: NamedResources<String, SharedSnapshotWriter>,
     file_writers: NamedResources<String, AtomicFileSnapshotStorage>,
 
     pub(crate) binance_spot_rest_connections: ManagedConnections<String, BinanceSpotRestConnection>,
@@ -873,15 +871,9 @@ impl ConfluxSystem {
     }
 
     pub(crate) fn stop_outputs(&mut self) {
-        for (_, output) in self.aeron_publishers.iter_mut() {
-            output.set_state(ResourceState::Stopped);
-        }
-        for (_, output) in self.mmap_writers.iter_mut() {
-            output.set_state(ResourceState::Stopped);
-        }
-        for (_, output) in self.file_writers.iter_mut() {
-            output.set_state(ResourceState::Stopped);
-        }
+        self.aeron_publishers.clear();
+        self.mmap_writers.clear();
+        self.file_writers.clear();
     }
 
     pub fn install_reference_contract(
@@ -2177,5 +2169,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(system.connections().binance_capital_rest.keys(), vec![key]);
+    }
+
+    #[test]
+    fn binance_subaccount_transfer_is_part_of_the_typed_connection_universe() {
+        let mut system = ConfluxSystem::new();
+        let key = ConnectionKey::new("capital-subaccounts").unwrap();
+        let master_account_id = kairos_primitives::account::AccountId::new("master").unwrap();
+        let subaccount_id = kairos_primitives::account::AccountId::new("subaccount-a").unwrap();
+        let spot = kairos_primitives::account::SegmentKey::new("spot").unwrap();
+        let usdm = kairos_primitives::account::SegmentKey::new("usd-m").unwrap();
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            master_account_id.clone(),
+            kairos_integration::participants::binance::capital::BinanceSubAccountIdentity {
+                email: None,
+            },
+        );
+        accounts.insert(
+            subaccount_id.clone(),
+            kairos_integration::participants::binance::capital::BinanceSubAccountIdentity {
+                email: Some("subaccount@example.com".into()),
+            },
+        );
+        let mut segment_accounts = BTreeMap::new();
+        segment_accounts.insert(
+            (master_account_id.clone(), spot.clone()),
+            kairos_integration::participants::binance::capital::BinanceTransferAccount::Spot,
+        );
+        segment_accounts.insert(
+            (subaccount_id, usdm),
+            kairos_integration::participants::binance::capital::BinanceTransferAccount::UsdMFutures,
+        );
+
+        system
+            .connections()
+            .binance_subaccount_capital_rest
+            .create(
+                key.clone(),
+                BinanceSubAccountCapitalRestConfig {
+                    rest: BinanceRestConfig {
+                        environment: "test".into(),
+                        endpoint: "https://api.binance.com".into(),
+                        credential: Some(
+                            kairos_integration::participants::binance::BinanceCredential {
+                                principal_id: master_account_id.to_string(),
+                                api_key: "test-key".into(),
+                                secret: "test-secret".into(),
+                            },
+                        ),
+                    },
+                    master_account_id,
+                    accounts,
+                    segment_accounts,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            system.connections().binance_subaccount_capital_rest.keys(),
+            vec![key]
+        );
     }
 }

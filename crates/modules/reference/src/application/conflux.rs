@@ -1,15 +1,10 @@
 use std::convert::Infallible;
 
-use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, ResourceOperationError, RestContract,
-    SystemEvent,
-};
+use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SystemEvent};
 use kairos_primitives::reference::InstrumentId;
 use kairos_reference_contract::{
     ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
-    ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferencePublishResponse,
-    ReferenceRefreshResponse, ReferenceRestRequest, ReferenceRestResponse,
-    ReferenceSourceStatusResponse,
+    ReferenceOptionCoverageResponse, ReferenceProviderHealth,
 };
 
 use super::ReferenceApplication;
@@ -20,8 +15,8 @@ const EVENT_BATCH_LIMIT: usize = 1_024;
 pub struct ReferenceRest;
 
 impl RestContract for ReferenceRest {
-    type Request = ReferenceRestRequest;
-    type Response = ReferenceRestResponse;
+    type Request = ();
+    type Response = ();
 }
 
 impl Contract for ReferenceApplication {
@@ -56,9 +51,8 @@ impl ConfluxActor for ReferenceApplication {
         &mut self,
         event: ConfluxEvent<Self, Self::LocalEvent>,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<ReferenceRestResponse>, Self::FatalError> {
+    ) -> Result<Option<()>, Self::FatalError> {
         let response = match event {
-            ConfluxEvent::Rest(request) => Some(self.handle_rest(request, context).await),
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
                 if let Err(error) = self
                     .refresh_with_connections(&mut context.connections())
@@ -82,112 +76,7 @@ impl ConfluxActor for ReferenceApplication {
 }
 
 impl ReferenceApplication {
-    async fn handle_rest(
-        &mut self,
-        request: ReferenceRestRequest,
-        context: &mut Context<'_, Self>,
-    ) -> ReferenceRestResponse {
-        match request {
-            ReferenceRestRequest::Health => {
-                ReferenceRestResponse::Health(Ok(self.contract_health().await))
-            },
-            ReferenceRestRequest::Refresh { source_id } => {
-                let result = match source_id.as_deref() {
-                    Some(source_id) => {
-                        self.refresh_source_with_connections(source_id, &mut context.connections())
-                            .await
-                    },
-                    None => {
-                        self.refresh_with_connections(&mut context.connections())
-                            .await
-                    },
-                };
-                let response = match result {
-                    Ok(result) => {
-                        let publication_pending = self.publish_pending(context).await.is_err();
-                        Ok(ReferenceRefreshResponse {
-                            generation: result.generation,
-                            event_sequence: result.event_sequence,
-                            changed: result.changed,
-                            change_count: result.change_count as u64,
-                            publication_pending,
-                        })
-                    },
-                    Err(error) => Err(control_error(error)),
-                };
-                ReferenceRestResponse::Refresh(response)
-            },
-            ReferenceRestRequest::Publish => {
-                let response =
-                    self.publish_pending(context)
-                        .await
-                        .map(|events| ReferencePublishResponse {
-                            generation: self.generation().into(),
-                            events: events as u64,
-                        });
-                ReferenceRestResponse::Publish(response)
-            },
-            ReferenceRestRequest::PauseSource(request) => {
-                let source_id = request.source_id;
-                let response = self
-                    .set_source_paused(&source_id, true)
-                    .await
-                    .map(|()| ReferenceSourceStatusResponse {
-                        source_id,
-                        status: kairos_reference_contract::ReferenceProviderStatus::Paused,
-                    })
-                    .map_err(control_error);
-                ReferenceRestResponse::PauseSource(response)
-            },
-            ReferenceRestRequest::ResumeSource(request) => {
-                let source_id = request.source_id;
-                let response = self
-                    .set_source_paused(&source_id, false)
-                    .await
-                    .map(|()| ReferenceSourceStatusResponse {
-                        source_id,
-                        status: kairos_reference_contract::ReferenceProviderStatus::Ready,
-                    })
-                    .map_err(control_error);
-                ReferenceRestResponse::ResumeSource(response)
-            },
-            ReferenceRestRequest::AddOptionCoverage(request) => {
-                ReferenceRestResponse::AddOptionCoverage(
-                    self.change_option_coverage(request.underlying, true, context)
-                        .await,
-                )
-            },
-            ReferenceRestRequest::RemoveOptionCoverage(request) => {
-                ReferenceRestResponse::RemoveOptionCoverage(
-                    self.change_option_coverage(request.underlying, false, context)
-                        .await,
-                )
-            },
-            ReferenceRestRequest::UpsertAsset(request) => {
-                let response = match self.upsert_asset(request).await {
-                    Ok(generation) => self.mutation_response(generation, context).await,
-                    Err(error) => Err(control_error(error)),
-                };
-                ReferenceRestResponse::UpsertAsset(response)
-            },
-            ReferenceRestRequest::UpsertInstrument(request) => {
-                let response = match self.upsert_instrument(request).await {
-                    Ok(generation) => self.mutation_response(generation, context).await,
-                    Err(error) => Err(control_error(error)),
-                };
-                ReferenceRestResponse::UpsertInstrument(response)
-            },
-            ReferenceRestRequest::UpsertListing(request) => {
-                let response = match self.upsert_listing(request).await {
-                    Ok(generation) => self.mutation_response(generation, context).await,
-                    Err(error) => Err(control_error(error)),
-                };
-                ReferenceRestResponse::UpsertListing(response)
-            },
-        }
-    }
-
-    async fn contract_health(&mut self) -> ReferenceHealthResponse {
+    pub(crate) async fn contract_health(&mut self) -> ReferenceHealthResponse {
         let model = self.read_model().await;
         let providers = model
             .provider_health()
@@ -321,32 +210,20 @@ impl ReferenceApplication {
         }
 
         let event_ids = {
-            let publisher_keys = context
-                .system()
-                .reference_event_publishers
-                .iter()
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            if publisher_keys.is_empty() {
+            const OUTPUT: &str = "reference-changes";
+            if !context.outputs().aeron.contains(OUTPUT) {
                 return Err(control_error(ReferenceError::Publication(
                     "reference Aeron publisher is not configured".into(),
                 )));
             }
-            for key in publisher_keys {
-                for publication in &publications {
-                    context
-                        .system()
-                        .reference_event_publishers
-                        .try_with(&key, |publisher| publisher.publish(publication.payload()))
-                        .map_err(|error| {
-                            control_error(ReferenceError::Publication(match error {
-                                ResourceOperationError::NotFound => {
-                                    "reference Aeron publisher disappeared".into()
-                                },
-                                ResourceOperationError::Operation(error) => error.to_string(),
-                            }))
-                        })?;
-                }
+            for publication in &publications {
+                context
+                    .outputs()
+                    .aeron
+                    .publish(OUTPUT, publication.payload())
+                    .map_err(|error| {
+                        control_error(ReferenceError::Publication(error.to_string()))
+                    })?;
             }
             publications
                 .iter()

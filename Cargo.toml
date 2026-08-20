@@ -50,6 +50,11 @@ hyperliquid_rust_sdk = "0.6"
 hyperlocal-next = "0.9"
 hyper-util = "0.1"
 ibapi = { version = "3.3", default-features = false, features = ["async"] }
+jsonrpsee = { version = "0.26", default-features = false, features = [
+    "client",
+    "macros",
+    "server",
+] }
 kairos-account = { path = "crates/modules/account" }
 kairos-account-contract = { path = "crates/modules/account/contract" }
 kairos-capital = { path = "crates/modules/capital" }

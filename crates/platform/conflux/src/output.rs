@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
+pub use kairos_transport::SnapshotEnvelopeMetadata;
 use kairos_transport::{
     AeronBytePublisher, AeronEndpoint, AtomicFileSnapshotStorage, SharedSnapshotWriter,
-    SnapshotEnvelopeMetadata,
 };
 
-use crate::{EnsureDisposition, NamedResources, ResourceError, ResourceOperationError, ResourceState};
+use crate::{
+    EnsureDisposition, NamedResources, ResourceError, ResourceOperationError, ResourceState,
+};
 
 #[derive(Clone, Debug)]
 pub struct AeronOutputDeclaration {
@@ -31,6 +33,14 @@ pub struct FileOutputDeclaration {
 pub enum OutputCreateError {
     #[error("create output: {0}")]
     Create(String),
+    #[error(
+        "output `{key}` already exists at revision {current}; received revision {received} requires retire-and-recreate"
+    )]
+    AlreadyExists {
+        key: String,
+        current: u64,
+        received: u64,
+    },
     #[error(transparent)]
     Resource(#[from] ResourceError),
 }
@@ -91,7 +101,10 @@ impl AeronOutputs<'_> {
 
     pub fn publish(&mut self, key: &str, payload: &[u8]) -> Result<(), OutputPublishError> {
         publish_with(self.resources, key, |publisher| {
-            publisher.publish(payload).map(|_| ()).map_err(|error| error.to_string())
+            publisher
+                .publish(payload)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
         })
     }
 
@@ -169,11 +182,22 @@ fn declare<R>(
     revision: u64,
     create: impl FnOnce() -> Result<R, OutputCreateError>,
 ) -> Result<EnsureDisposition, OutputCreateError> {
-    if resources
-        .get(&key)
-        .is_some_and(|resource| resource.revision() == revision)
-    {
-        return Ok(EnsureDisposition::Existing);
+    if let Some(resource) = resources.get(&key) {
+        if revision < resource.revision() {
+            return Err(ResourceError::StaleRevision {
+                current: resource.revision(),
+                received: revision,
+            }
+            .into());
+        }
+        if revision == resource.revision() {
+            return Ok(EnsureDisposition::Existing);
+        }
+        return Err(OutputCreateError::AlreadyExists {
+            key,
+            current: resource.revision(),
+            received: revision,
+        });
     }
     let resource = create()?;
     let disposition = resources.ensure_with(key.clone(), revision, || resource)?;
@@ -198,4 +222,58 @@ fn publish_with<R>(
                 error,
             },
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use kairos_transport::SharedSnapshotReader;
+
+    use super::*;
+
+    #[test]
+    fn mmap_pipe_is_created_owned_and_published_through_the_facade() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("view.mmap");
+        let mut resources = NamedResources::new();
+        let mut outputs = MmapOutputs {
+            resources: &mut resources,
+        };
+        let declaration = MmapOutputDeclaration {
+            path: path.clone(),
+            slot_capacity: 4_096,
+            revision: 1,
+        };
+
+        assert_eq!(
+            outputs.declare("view", declaration.clone()).unwrap(),
+            EnsureDisposition::Created
+        );
+        assert_eq!(
+            outputs.declare("view", declaration).unwrap(),
+            EnsureDisposition::Existing
+        );
+        outputs
+            .publish(
+                "view",
+                SnapshotEnvelopeMetadata {
+                    resource_epoch: 1,
+                    producer_incarnation: 2,
+                    generation: 3,
+                    applied_event_sequence: 3,
+                    published_at_unix_nanos: 4,
+                },
+                b"typed-payload",
+            )
+            .unwrap();
+
+        let snapshot = SharedSnapshotReader::open(path)
+            .unwrap()
+            .read_payload()
+            .unwrap();
+        assert_eq!(snapshot.payload, b"typed-payload");
+        assert_eq!(
+            resources.get(&"view".to_owned()).unwrap().state(),
+            ResourceState::Ready
+        );
+    }
 }

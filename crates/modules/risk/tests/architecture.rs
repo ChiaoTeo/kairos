@@ -63,6 +63,7 @@ fn risk_transport_is_owned_by_conflux_and_not_application() {
     assert!(!root.join("src/application/host.rs").exists());
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(!manifest.contains("axum.workspace"));
+    assert!(!manifest.contains("kairos-transport"));
 
     for path in rust_files(&root.join("src/application")) {
         let source = fs::read_to_string(path).unwrap();

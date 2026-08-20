@@ -47,23 +47,29 @@ pub fn build_risk_host(config: RiskHostConfig) -> Result<RiskHost, String> {
         .map_err(|error| error.to_string())?;
     application.configure_publication_identity(config.identity);
     let mut system = ConfluxSystem::new();
-    system.outputs().mmap.declare(
-        "risk-latest".to_owned(),
-        MmapOutputDeclaration {
-            path: snapshot_path,
-            slot_capacity: config.snapshot_slot_size,
-            revision: 1,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    system.outputs().aeron.declare(
-        "risk-events".to_owned(),
-        AeronOutputDeclaration {
-            endpoint: event_endpoint,
-            revision: 1,
-        },
-    )
-    .map_err(|error| error.to_string())?;
+    system
+        .outputs()
+        .mmap
+        .declare(
+            "risk-latest".to_owned(),
+            MmapOutputDeclaration {
+                path: snapshot_path,
+                slot_capacity: config.snapshot_slot_size,
+                revision: 1,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    system
+        .outputs()
+        .aeron
+        .declare(
+            "risk-events".to_owned(),
+            AeronOutputDeclaration {
+                endpoint: event_endpoint,
+                revision: 1,
+            },
+        )
+        .map_err(|error| error.to_string())?;
 
     application.set_clock_mode(if config.replay_clock {
         crate::RiskClockMode::Replay

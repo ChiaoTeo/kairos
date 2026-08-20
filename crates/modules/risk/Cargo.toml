@@ -17,7 +17,6 @@ kairos-conflux.workspace = true
 kairos-primitives.workspace = true
 kairos-protocol.workspace = true
 kairos-risk-contract.workspace = true
-kairos-transport.workspace = true
 kairos-workspace = { workspace = true, features = ["otel"] }
 rust_decimal.workspace = true
 serde.workspace = true

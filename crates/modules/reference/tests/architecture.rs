@@ -9,9 +9,20 @@ fn source(path: &str) -> String {
 fn reference_control_transport_is_framework_owned() {
     let manifest = source("Cargo.toml");
     let server = source("src/bin/kairos-reference-server.rs");
+    let contract = source("contract/src/control/mod.rs");
+    let service = source("contract/src/control/service.rs");
     assert!(!manifest.contains("axum.workspace"));
-    assert!(server.contains("with_http_control"));
-    assert!(server.contains("ReferenceHttpControl"));
+    assert!(!manifest.contains("kairos-transport"));
+    assert!(!server.contains("with_http_control"));
+    assert!(!server.contains("ReferenceHttpControl"));
+    assert!(
+        !PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("contract/src/control/http.rs")
+            .exists()
+    );
+    assert!(contract.contains("ReferenceControlRpcClient"));
+    assert!(contract.contains("ReferenceControlRpcServer"));
+    assert!(service.contains("#[rpc(client, server, namespace = \"reference\")]"));
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(!server.contains(forbidden));
     }
@@ -142,14 +153,18 @@ fn reference_domain_classification_is_not_unconstrained_text() {
 }
 
 #[test]
-fn reference_rest_exposes_health_as_its_only_get_query() {
+fn reference_control_is_jsonrpc_service_first() {
     let server = source("src/bin/kairos-reference-server.rs");
-    let codec = source("contract/src/control/http.rs");
-    assert!(server.contains("ReferenceHttpControl"));
-    assert!(codec.contains("runtime::HEALTH_PATH"));
-    assert!(codec.contains("Reference business queries use the contract-owned SQLite client"));
-    assert!(codec.contains("request.method == \"GET\""));
-    assert!(codec.contains("ControlAction::Request"));
+    let service = source("contract/src/control/service.rs");
+    let types = source("contract/src/control/types.rs");
+    assert!(!server.contains("ReferenceHttpControl"));
+    assert!(!server.contains("with_http_control"));
+    assert!(!types.contains("ReferenceRestRequest"));
+    assert!(!types.contains("ReferenceRestResponse"));
+    assert!(service.contains("async fn health"));
+    assert!(service.contains("async fn refresh"));
+    assert!(service.contains("async fn publish"));
+    assert!(service.contains("async fn upsert_asset"));
     assert!(!server.contains("mpsc::channel"));
     assert!(!server.contains("oneshot::channel"));
     let contract = source("contract/src/control/types.rs");

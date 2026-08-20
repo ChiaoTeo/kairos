@@ -12,13 +12,15 @@ pub mod transport;
 
 use std::path::PathBuf;
 
+use kairos_primitives::runtime::ActorId;
+
 pub use control::{
-    ReferenceControlClient, ReferenceControlError, ReferenceHealthResponse, ReferenceHealthStatus,
-    ReferenceHttpControl, ReferenceMutationResponse, ReferenceOptionCoverageRequest,
-    ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferenceProviderStatus,
-    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceRestRequest,
-    ReferenceRestResponse, ReferenceSourceControlRequest, ReferenceSourceStatusResponse,
-    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
+    ReferenceControlError, ReferenceControlRpcClient, ReferenceControlRpcServer,
+    ReferenceHealthResponse, ReferenceHealthStatus, ReferenceMutationResponse,
+    ReferenceOptionCoverageRequest, ReferenceOptionCoverageResponse, ReferenceProviderHealth,
+    ReferenceProviderStatus, ReferencePublishResponse, ReferenceRefreshResponse,
+    ReferenceSourceControlRequest, ReferenceSourceStatusResponse, UpsertAssetRequest,
+    UpsertInstrumentRequest, UpsertListingRequest,
 };
 pub use encode::{EncodeContext, ReferenceEncoder, event_metadata};
 pub use error::{ContractError, ContractResult};
@@ -37,13 +39,13 @@ pub use transport::{
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
 pub struct ReferenceClient {
     database: PathBuf,
-    actor_id: String,
+    actor_id: ActorId,
     events: AeronEndpoint,
 }
 
 pub struct ReferenceEndpoint {
     pub database: PathBuf,
-    pub actor_id: String,
+    pub actor_id: ActorId,
     pub events: AeronEndpoint,
 }
 
@@ -65,14 +67,14 @@ impl ReferenceClient {
     }
 
     pub fn market_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.market_snapshot(&self.actor_id)
+        ReferenceSqliteReader::open(&self.database)?.market_snapshot(self.actor_id.as_str())
     }
 
     pub fn execution_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.execution_snapshot(&self.actor_id)
+        ReferenceSqliteReader::open(&self.database)?.execution_snapshot(self.actor_id.as_str())
     }
 
     pub fn account_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
-        ReferenceSqliteReader::open(&self.database)?.account_snapshot(&self.actor_id)
+        ReferenceSqliteReader::open(&self.database)?.account_snapshot(self.actor_id.as_str())
     }
 }

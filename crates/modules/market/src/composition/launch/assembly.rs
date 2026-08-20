@@ -135,11 +135,12 @@ fn reference_endpoint(
         database: workspace
             .child(&["state", "reference", "reference.sqlite"])
             .map_err(MarketStartupError::new)?,
-        actor_id: "reference-actor".into(),
-        events: kairos_transport::AeronEndpoint::new(
+        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor")
+            .map_err(MarketStartupError::new)?,
+        events: kairos_conflux::AeronEndpoint::new(
             aeron_dir.map(std::path::Path::to_path_buf),
-            kairos_transport::DEFAULT_CHANNEL,
-            kairos_transport::stream_ids::REFERENCE_CHANGES,
+            kairos_conflux::DEFAULT_AERON_CHANNEL,
+            kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
         )
         .map_err(MarketStartupError::new)?,
     })
@@ -434,18 +435,21 @@ pub async fn build_market_host(
         .map_err(MarketStartupError::new)?;
     let event_endpoint = kairos_market_contract::AeronEndpoint::new(
         request.aeron_dir,
-        kairos_transport::DEFAULT_CHANNEL,
-        kairos_transport::stream_ids::MARKET_EVENTS,
+        kairos_conflux::DEFAULT_AERON_CHANNEL,
+        kairos_conflux::output_stream_ids::MARKET_EVENTS,
     )
     .map_err(MarketStartupError::new)?;
-    system.outputs().aeron.declare(
-        "market-events".to_owned(),
-        AeronOutputDeclaration {
-            endpoint: event_endpoint,
-            revision: 1,
-        },
-    )
-    .map_err(MarketStartupError::new)?;
+    system
+        .outputs()
+        .aeron
+        .declare(
+            "market-events".to_owned(),
+            AeronOutputDeclaration {
+                endpoint: event_endpoint,
+                revision: 1,
+            },
+        )
+        .map_err(MarketStartupError::new)?;
     let _ = event_socket_path;
     Ok(MarketHost::new(
         application,

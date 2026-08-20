@@ -4,7 +4,7 @@ use std::time::Duration;
 use kairos_conflux::{
     CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract,
     ExternalParticipantEvent, IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent,
-    OrderEntryRequest, ResourceOperationError, RestContract, SystemEvent,
+    OrderEntryRequest, RestContract, SnapshotEnvelopeMetadata, SystemEvent,
 };
 use kairos_execution_contract::{
     CompletionPolicy as ContractCompletionPolicy, ExecutionCommandStatus, ExecutionControlError,
@@ -15,7 +15,6 @@ use kairos_execution_contract::{
     IntentLegRequest as ContractIntentLegRequest, IntentType as ContractIntentType,
 };
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_transport::SnapshotEnvelopeMetadata;
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -813,17 +812,10 @@ impl ExecutionApplication {
                 .map_err(ExecutionError::Gateway)?
                 {
                     context
-                        .system()
-                        .execution_event_publishers
-                        .try_with(&resource_key, |publisher| publisher.publish(&bytes))
-                        .map_err(|error| match error {
-                            ResourceOperationError::NotFound => ExecutionError::Gateway(
-                                "missing execution-events Aeron publisher".into(),
-                            ),
-                            ResourceOperationError::Operation(error) => {
-                                ExecutionError::Gateway(error.to_string())
-                            },
-                        })?;
+                        .outputs()
+                        .aeron
+                        .publish(&resource_key, &bytes)
+                        .map_err(|error| ExecutionError::Gateway(error.to_string()))?;
                 }
             }
             self.acknowledge_business_event();
@@ -929,19 +921,10 @@ impl ExecutionApplication {
             .map_err(ExecutionError::Gateway)?;
             let resource_key = key.canonical_key();
             context
-                .system()
-                .execution_view_publishers
-                .try_with(&resource_key, |publisher| {
-                    publisher.publish(metadata, &bytes)
-                })
-                .map_err(|error| match error {
-                    ResourceOperationError::NotFound => {
-                        ExecutionError::Gateway("Execution view publisher disappeared".into())
-                    },
-                    ResourceOperationError::Operation(error) => {
-                        ExecutionError::Gateway(error.to_string())
-                    },
-                })?;
+                .outputs()
+                .mmap
+                .publish(&resource_key, metadata, &bytes)
+                .map_err(|error| ExecutionError::Gateway(error.to_string()))?;
         }
         Ok(())
     }

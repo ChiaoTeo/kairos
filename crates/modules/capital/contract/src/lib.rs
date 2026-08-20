@@ -7,6 +7,7 @@
 pub mod control;
 mod error;
 pub mod event;
+mod http;
 mod projection;
 pub mod view;
 
@@ -20,11 +21,13 @@ pub const CAPITAL_EVENTS_STREAM_ID: i32 = kairos_transport::stream_ids::CAPITAL_
 pub const DEFAULT_AERON_CHANNEL: &str = kairos_transport::DEFAULT_CHANNEL;
 pub use control::{
     CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalControlError,
-    CapitalControlResponse, CapitalDemandResponse, CapitalDemandStatus, CapitalPlanReconcileStatus,
-    CapitalReadinessStatus, FundingLocation, FundingObjectivePriority, FundingObjectiveStatus,
-    ObserveCapitalDemandRequest, PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
-    ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
+    CapitalControlResponse, CapitalDemandResponse, CapitalDemandStatus, CapitalHealthResponse,
+    CapitalPlanReconcileStatus, CapitalReadinessStatus, CapitalRestRequest, CapitalRestResponse,
+    FundingLocation, FundingObjectivePriority, FundingObjectiveStatus, ObserveCapitalDemandRequest,
+    PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest, ReconcileCapitalPlanRequest,
+    ReconcileCapitalPlanResponse,
 };
+pub use http::CapitalHttpControl;
 pub use projection::{
     CapitalAlert, CapitalAlertKind, CapitalAlertSeverity, CapitalAvailability, CapitalCurrentView,
     CapitalDemand, CapitalDemandLifecycleStatus, CapitalEarnHolding, CapitalFacts,

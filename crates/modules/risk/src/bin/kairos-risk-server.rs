@@ -129,12 +129,12 @@ struct Args {
     #[arg(long, env = "AERON_DIR")]
     aeron_dir: Option<String>,
 
-    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    #[arg(long, default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
     aeron_channel: String,
 
     #[arg(
         long,
-        default_value_t = kairos_transport::stream_ids::RISK_EVENTS
+        default_value_t = kairos_conflux::output_stream_ids::RISK_EVENTS
     )]
     risk_events_stream_id: i32,
 }

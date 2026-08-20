@@ -473,6 +473,10 @@ where
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 impl<K, C> Default for ManagedConnections<K, C> {

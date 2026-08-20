@@ -164,11 +164,11 @@ struct Args {
     confirm_live: bool,
     #[arg(long, env = "AERON_DIR")]
     aeron_dir: Option<String>,
-    #[arg(long, default_value = kairos_transport::DEFAULT_CHANNEL)]
+    #[arg(long, default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
     aeron_channel: String,
     #[arg(
         long,
-        default_value_t = kairos_transport::stream_ids::EXECUTION_EVENTS,
+        default_value_t = kairos_conflux::output_stream_ids::EXECUTION_EVENTS,
         value_parser = clap::value_parser!(i32).range(1..)
     )]
     execution_events_stream_id: i32,
@@ -446,8 +446,8 @@ mod tests {
             instance_id: "instance".into(),
             confirm_live: false,
             aeron_dir: None,
-            aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-            execution_events_stream_id: kairos_transport::stream_ids::EXECUTION_EVENTS,
+            aeron_channel: kairos_conflux::DEFAULT_AERON_CHANNEL.into(),
+            execution_events_stream_id: kairos_conflux::output_stream_ids::EXECUTION_EVENTS,
         };
         let routes = args.connection_options_list(&workspace).unwrap();
         assert_eq!(routes.len(), 1);

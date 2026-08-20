@@ -2,14 +2,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig,
-};
+use kairos_conflux::{AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem};
 use kairos_reference::ReferenceApplication;
 use kairos_reference::composition::{
     ReferenceCompositionConfig, build_application, ensure_database_parent,
 };
-use kairos_reference_contract::{AeronEndpoint, ReferenceHttpControl};
+use kairos_reference_contract::AeronEndpoint;
 use kairos_workspace::workspace::Workspace;
 use tokio::task::LocalSet;
 
@@ -85,7 +83,7 @@ async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std
     let mut composition = build_application(config, true).await?;
     composition.activate_sources().await?;
     let (mut application, mut system, event_writer) = composition.into_conflux();
-    let mut writer = event_writer.ok_or("reference publication is not configured")?;
+    let writer = event_writer.ok_or("reference publication is not configured")?;
     let refresh = application
         .refresh_with_connections(&mut system.connections())
         .await?;
@@ -94,7 +92,7 @@ async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std
         if publications.is_empty() {
             break;
         }
-        writer.publish(&publications)?;
+        writer.publish(&mut system, &publications)?;
         let event_ids = publications
             .iter()
             .map(|event| event.event_id().to_owned())
@@ -113,8 +111,8 @@ async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std
 async fn run_process(
     application: ReferenceApplication,
     system: ConfluxSystem,
-    socket: PathBuf,
-    health_file: Option<PathBuf>,
+    _socket: PathBuf,
+    _health_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conflux, handle) = Conflux::new(
         application,
@@ -124,14 +122,8 @@ async fn run_process(
             ..ConfluxConfig::default()
         },
     )?;
-    let outcome = conflux
-        .with_http_control(
-            handle,
-            ReferenceHttpControl,
-            HttpControlConfig::uds(socket).with_health_file(health_file),
-        )
-        .run()
-        .await?;
+    drop(handle);
+    let outcome = conflux.run().await?;
     tracing::info!(
         event = "process_stopped",
         component = "reference",
@@ -187,11 +179,11 @@ struct Args {
     socket: Option<PathBuf>,
     #[arg(long = "health-file")]
     health_file: Option<PathBuf>,
-    #[arg(long = "aeron-channel", default_value = kairos_transport::DEFAULT_CHANNEL)]
+    #[arg(long = "aeron-channel", default_value = kairos_conflux::DEFAULT_AERON_CHANNEL)]
     aeron_channel: String,
     #[arg(
         long = "reference-changes-stream",
-        default_value_t = kairos_transport::stream_ids::REFERENCE_CHANGES,
+        default_value_t = kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
         value_parser = clap::value_parser!(i32).range(1..)
     )]
     reference_changes_stream: i32,
@@ -243,7 +235,7 @@ mod tests {
         assert_eq!(canonical.aeron_channel, "aeron:ipc");
         assert_eq!(
             canonical.reference_changes_stream,
-            kairos_transport::stream_ids::REFERENCE_CHANGES
+            kairos_conflux::output_stream_ids::REFERENCE_CHANGES
         );
         assert!(
             Args::try_parse_from([

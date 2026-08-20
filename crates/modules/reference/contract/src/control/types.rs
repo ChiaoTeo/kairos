@@ -66,21 +66,6 @@ pub struct ReferenceControlError {
     pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// Closed REST command/query set exposed by the Reference process.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ReferenceRestRequest {
-    Health,
-    Refresh { source_id: Option<ProviderId> },
-    Publish,
-    PauseSource(ReferenceSourceControlRequest),
-    ResumeSource(ReferenceSourceControlRequest),
-    AddOptionCoverage(ReferenceOptionCoverageRequest),
-    RemoveOptionCoverage(ReferenceOptionCoverageRequest),
-    UpsertAsset(UpsertAssetRequest),
-    UpsertInstrument(UpsertInstrumentRequest),
-    UpsertListing(UpsertListingRequest),
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReferenceHealthResponse {
     pub status: ReferenceHealthStatus,
@@ -145,20 +130,6 @@ pub enum ReferenceProviderStatus {
     Syncing,
     Degraded,
     Paused,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum ReferenceRestResponse {
-    Health(Result<ReferenceHealthResponse, ReferenceControlError>),
-    Refresh(Result<ReferenceRefreshResponse, ReferenceControlError>),
-    Publish(Result<ReferencePublishResponse, ReferenceControlError>),
-    PauseSource(Result<ReferenceSourceStatusResponse, ReferenceControlError>),
-    ResumeSource(Result<ReferenceSourceStatusResponse, ReferenceControlError>),
-    AddOptionCoverage(Result<ReferenceOptionCoverageResponse, ReferenceControlError>),
-    RemoveOptionCoverage(Result<ReferenceOptionCoverageResponse, ReferenceControlError>),
-    UpsertAsset(Result<ReferenceMutationResponse, ReferenceControlError>),
-    UpsertInstrument(Result<ReferenceMutationResponse, ReferenceControlError>),
-    UpsertListing(Result<ReferenceMutationResponse, ReferenceControlError>),
 }
 
 #[cfg(test)]

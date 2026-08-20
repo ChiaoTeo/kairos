@@ -334,7 +334,7 @@ async fn execute(
             let result = application
                 .refresh_with_connections(&mut system.connections())
                 .await?;
-            publish_pending(writer, application).await?;
+            publish_pending(writer, application, system).await?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
@@ -342,14 +342,14 @@ async fn execute(
             })
         },
         Command::Publish => {
-            publish_pending(writer, application).await?;
+            publish_pending(writer, application, system).await?;
             json!({ "generation": application.generation() })
         },
         Command::Assets { command } => {
             let publishes = matches!(&command, AssetCommand::Add(_));
             let value = assets(application, command).await?;
             if publishes {
-                publish_pending(writer, application).await?;
+                publish_pending(writer, application, system).await?;
             }
             value
         },
@@ -374,7 +374,7 @@ async fn execute(
                         primary_currency_asset_id: None,
                     })
                     .await?;
-                publish_pending(writer, application).await?;
+                publish_pending(writer, application, system).await?;
                 json!({"generation": generation})
             },
         },
@@ -391,7 +391,7 @@ async fn execute(
                         effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
                     })
                     .await?;
-                publish_pending(writer, application).await?;
+                publish_pending(writer, application, system).await?;
                 json!({"generation": generation})
             },
         },
@@ -403,7 +403,7 @@ async fn execute(
                 let result = application
                     .refresh_with_connections(&mut system.connections())
                     .await?;
-                publish_pending(writer, application).await?;
+                publish_pending(writer, application, system).await?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result
                     .events
@@ -446,25 +446,27 @@ async fn execute(
 
 fn publish(
     writer: Option<&mut ReferenceEventWriter>,
+    system: &mut kairos_conflux::ConfluxSystem,
     publications: &[kairos_reference::ReferencePublication],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(writer) = writer else {
         return Err("reference publication is not configured for this command".into());
     };
-    writer.publish(publications)?;
+    writer.publish(system, publications)?;
     Ok(())
 }
 
 async fn publish_pending(
     mut writer: Option<&mut ReferenceEventWriter>,
     application: &mut ComposedReferenceApplication,
+    system: &mut kairos_conflux::ConfluxSystem,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let publications = application.pending_publications(256).await?;
         if publications.is_empty() {
             break;
         }
-        publish(writer.as_deref_mut(), &publications)?;
+        publish(writer.as_deref_mut(), system, &publications)?;
         let event_ids = publications
             .iter()
             .map(|event| event.event_id().to_owned())
@@ -565,13 +567,13 @@ struct Cli {
     #[arg(
         long = "aeron-channel",
         global = true,
-        default_value = kairos_transport::DEFAULT_CHANNEL
+        default_value = kairos_conflux::DEFAULT_AERON_CHANNEL
     )]
     aeron_channel: String,
     #[arg(
         long = "reference-changes-stream",
         global = true,
-        default_value_t = kairos_transport::stream_ids::REFERENCE_CHANGES,
+        default_value_t = kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
         value_parser = clap::value_parser!(i32).range(1..)
     )]
     reference_changes_stream: i32,

@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
     AssetTransferStatusQuery, CommandOutcome, EarnActionKind, EarnActionQuery, EarnActionState,
@@ -6,6 +9,7 @@ use kairos_conflux::{
     EarnSubscriptionPreviewRequest, ExternalAccountIdentity, ExternalAccountSegment,
     IntegrationError,
 };
+use kairos_primitives::runtime::InstanceIdentity;
 use kairos_primitives::time::UnixNanos;
 
 use crate::application::{
@@ -19,15 +23,37 @@ use crate::domain::{
 };
 
 /// Reusable runtime facade that drives one authoritative Capital application
-/// through one participant-owned transfer capability.
-pub struct CapitalTransferProcess<C> {
+/// through participant-neutral transfer and Earn capabilities.
+pub struct CapitalProcess<C> {
     application: CapitalApplication,
     connection: C,
     capital_group_id: CapitalGroupId,
     environment: String,
+    pub(super) conflux: Option<CapitalConfluxState>,
 }
 
-impl<C> CapitalTransferProcess<C>
+/// Runtime facts selected by Capital composition for the Conflux host.
+/// Business state remains owned by [`CapitalApplication`].
+pub struct CapitalConfluxConfig {
+    pub snapshot_root: PathBuf,
+    pub instance_id: String,
+    pub identity: InstanceIdentity,
+    pub account_lease_fences: BTreeMap<String, String>,
+    pub account_brokers: BTreeMap<String, String>,
+    pub account_controllers: BTreeMap<String, String>,
+    pub account_lease_root: PathBuf,
+    pub automatic_execution: bool,
+    pub plan_ttl_nanos: u64,
+}
+
+pub(super) struct CapitalConfluxState {
+    pub config: CapitalConfluxConfig,
+    pub accepting_writes: bool,
+    pub reconcile_after: BTreeMap<String, UnixNanos>,
+    pub producer_incarnation: u64,
+}
+
+impl<C> CapitalProcess<C>
 where
     C: AssetTransferCommand + AssetTransferStatusQuery,
 {
@@ -52,7 +78,31 @@ where
             connection,
             capital_group_id,
             environment,
+            conflux: None,
         })
+    }
+
+    pub fn configure_conflux(
+        &mut self,
+        config: CapitalConfluxConfig,
+    ) -> Result<(), CapitalProcessError> {
+        if config.instance_id.trim().is_empty() || config.instance_id.trim() != config.instance_id {
+            return Err(CapitalProcessError::Invalid(
+                "Capital Conflux instance_id must be non-empty and trimmed".into(),
+            ));
+        }
+        if config.plan_ttl_nanos == 0 {
+            return Err(CapitalProcessError::Invalid(
+                "Capital Conflux plan TTL must be positive".into(),
+            ));
+        }
+        self.conflux = Some(CapitalConfluxState {
+            config,
+            accepting_writes: true,
+            reconcile_after: BTreeMap::new(),
+            producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
+        });
+        Ok(())
     }
 
     pub fn application(&self) -> &CapitalApplication {
@@ -253,7 +303,7 @@ where
     }
 }
 
-impl<C> CapitalTransferProcess<C>
+impl<C> CapitalProcess<C>
 where
     C: AssetTransferCommand + AssetTransferStatusQuery + EarnCommand + EarnActionStatusQuery,
 {

@@ -7,6 +7,7 @@ fn account_control_transport_is_framework_owned() {
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs")).unwrap();
     assert!(!manifest.contains("axum.workspace"));
+    assert!(!manifest.contains("kairos-transport"));
     assert!(server.contains("with_http_control"));
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(!server.contains(forbidden));

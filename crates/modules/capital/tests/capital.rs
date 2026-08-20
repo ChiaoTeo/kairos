@@ -1,6 +1,7 @@
+use kairos_capital::application::contract::capital_current_view;
 use kairos_capital::composition::{
-    capital_current_view, compose_capital_application, compose_capital_transfer_process,
-    compose_persistent_capital_application, compose_persistent_capital_transfer_process,
+    compose_capital_application, compose_capital_process, compose_persistent_capital_application,
+    compose_persistent_capital_process,
 };
 use kairos_capital::{
     AuthorizeCapitalPlan, AuthorizeEarnSubscriptionPlan, BeginCapitalOperation,
@@ -22,9 +23,9 @@ use kairos_conflux::{
     AssetTransferStatus, AssetTransferStatusQuery, AssetTransferSubmission, CommandOutcome,
     CommandResult, EarnActionQuery, EarnActionState, EarnActionStatus, EarnActionStatusQuery,
     EarnCommand, EarnLiquidity, EarnPage, EarnPosition, EarnPositionsRequest, EarnProduct,
-    EarnProductQuery, EarnProductsRequest, EarnRateObservation, EarnRatesRequest, EarnRedeemRequest,
-    EarnRedemptionChannel, EarnRedemptionOption, EarnReward, EarnRewardsRequest, EarnSubmission,
-    EarnSubscribeRequest, EarnSubscriptionEligibility, EarnSubscriptionPreview,
+    EarnProductQuery, EarnProductsRequest, EarnRateObservation, EarnRatesRequest,
+    EarnRedeemRequest, EarnRedemptionChannel, EarnRedemptionOption, EarnReward, EarnRewardsRequest,
+    EarnSubmission, EarnSubscribeRequest, EarnSubscriptionEligibility, EarnSubscriptionPreview,
     EarnSubscriptionPreviewRequest, IntegrationError,
 };
 use kairos_primitives::account::{AccountId, BrokerId, SegmentKey};
@@ -1386,7 +1387,10 @@ impl AssetTransferStatusQuery for ConfirmedTransferConnection {
 }
 
 impl EarnCommand for ConfirmedTransferConnection {
-    async fn subscribe(&mut self, _request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
+    async fn subscribe(
+        &mut self,
+        _request: &EarnSubscribeRequest,
+    ) -> CommandResult<EarnSubmission> {
         unreachable!("this fixture only transfers")
     }
 
@@ -1434,7 +1438,10 @@ impl AssetTransferStatusQuery for ConfirmedEarnTransferConnection {
 }
 
 impl EarnCommand for ConfirmedEarnTransferConnection {
-    async fn subscribe(&mut self, _request: &EarnSubscribeRequest) -> CommandResult<EarnSubmission> {
+    async fn subscribe(
+        &mut self,
+        _request: &EarnSubscribeRequest,
+    ) -> CommandResult<EarnSubmission> {
         unreachable!("this fixture only redeems")
     }
 
@@ -1564,8 +1571,7 @@ async fn transfer_process_submits_once_and_reconciles_repeated_calls() {
     let connection = ConfirmedTransferConnection {
         submissions: submissions.clone(),
     };
-    let mut process =
-        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    let mut process = compose_capital_process(group_config(group_id.as_str()), connection).unwrap();
     configure_ready_planner(process.application_mut(), &group_id);
     process
         .application_mut()
@@ -1603,8 +1609,7 @@ async fn operator_reconcile_queries_existing_operation_without_resubmitting() {
     let connection = ConfirmedTransferConnection {
         submissions: submissions.clone(),
     };
-    let mut process =
-        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    let mut process = compose_capital_process(group_config(group_id.as_str()), connection).unwrap();
     configure_ready_planner(process.application_mut(), &group_id);
     process
         .application_mut()
@@ -1641,8 +1646,7 @@ async fn operator_reconcile_refuses_an_undelivered_prepared_operation() {
     let connection = ConfirmedTransferConnection {
         submissions: submissions.clone(),
     };
-    let mut process =
-        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    let mut process = compose_capital_process(group_config(group_id.as_str()), connection).unwrap();
     configure_ready_planner(process.application_mut(), &group_id);
     process
         .application_mut()
@@ -1764,8 +1768,7 @@ async fn idle_cash_subscription_waits_for_participant_and_account_principal() {
         submissions: submissions.clone(),
         redemption_quota: Some(Quantity::new(100, 0).unwrap()),
     };
-    let mut process =
-        compose_capital_transfer_process(group_config(group_id.as_str()), connection).unwrap();
+    let mut process = compose_capital_process(group_config(group_id.as_str()), connection).unwrap();
     let mut funding_policy = policy();
     funding_policy.destination = source_facts(1, 1).destination;
     process
@@ -1858,7 +1861,7 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
     };
 
     {
-        let mut process = compose_persistent_capital_transfer_process(
+        let mut process = compose_persistent_capital_process(
             group_config(group_id.as_str()),
             state_path.clone(),
             connection(),
@@ -1937,7 +1940,7 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
     }
 
     {
-        let mut process = compose_persistent_capital_transfer_process(
+        let mut process = compose_persistent_capital_process(
             group_config(group_id.as_str()),
             state_path.clone(),
             connection(),
@@ -1978,7 +1981,7 @@ async fn earn_redemption_then_transfer_survives_restart_without_duplicate_submis
         );
     }
 
-    let mut recovered = compose_persistent_capital_transfer_process(
+    let mut recovered = compose_persistent_capital_process(
         group_config(group_id.as_str()),
         state_path,
         connection(),

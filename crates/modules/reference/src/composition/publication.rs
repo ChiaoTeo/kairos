@@ -27,11 +27,12 @@ impl ReferenceEventPublisherRuntime {
         std::thread::Builder::new()
             .name("reference-event-publisher".into())
             .spawn(move || {
-                let mut writer = ReferenceEventWriter::connect(&config)
+                let mut system = kairos_conflux::ConfluxSystem::new();
+                let writer = ReferenceEventWriter::declare(&config, &mut system)
                     .expect("connect reference event publisher worker");
                 while let Ok(request) = receiver.recv() {
                     let result = writer
-                        .publish(&request.publications)
+                        .publish(&mut system, &request.publications)
                         .map_err(|error| error.to_string());
                     let _ = request.response.send(result);
                 }

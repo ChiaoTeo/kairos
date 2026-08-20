@@ -80,7 +80,7 @@ impl ReferenceComposition {
 pub type ComposedReferenceApplication = ReferenceApplication;
 
 pub struct ReferenceEventWriter {
-    publisher: kairos_reference_contract::ReferenceEventPublisher,
+    output_key: String,
 }
 
 pub struct ReferenceEventWriterConfig {
@@ -436,23 +436,41 @@ fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product:
 }
 
 impl ReferenceEventWriter {
-    pub fn connect(config: &ReferenceEventWriterConfig) -> ReferenceResult<Self> {
+    pub fn declare(
+        config: &ReferenceEventWriterConfig,
+        system: &mut kairos_conflux::ConfluxSystem,
+    ) -> ReferenceResult<Self> {
         let endpoint = kairos_reference_contract::AeronEndpoint::from_parts(
             config.aeron_dir.as_deref(),
             config.aeron_channel.clone(),
             config.reference_changes_stream,
         )
         .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
-        Ok(Self {
-            publisher: kairos_reference_contract::ReferenceEventPublisher::connect(&endpoint)
-                .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?,
-        })
+        let output_key = "reference-changes".to_owned();
+        system
+            .outputs()
+            .aeron
+            .declare(
+                output_key.clone(),
+                kairos_conflux::AeronOutputDeclaration {
+                    endpoint,
+                    revision: 1,
+                },
+            )
+            .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
+        Ok(Self { output_key })
     }
 
-    pub fn publish(&mut self, publications: &[crate::ReferencePublication]) -> ReferenceResult<()> {
+    pub fn publish(
+        &self,
+        system: &mut kairos_conflux::ConfluxSystem,
+        publications: &[crate::ReferencePublication],
+    ) -> ReferenceResult<()> {
         for publication in publications {
-            self.publisher
-                .publish(publication.payload())
+            system
+                .outputs()
+                .aeron
+                .publish(&self.output_key, publication.payload())
                 .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
         }
         Ok(())
@@ -463,10 +481,10 @@ pub async fn build_application(
     config: &ReferenceCompositionConfig,
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
-    if config.reference_changes_stream != kairos_transport::stream_ids::REFERENCE_CHANGES {
+    if config.reference_changes_stream != kairos_conflux::output_stream_ids::REFERENCE_CHANGES {
         return Err(crate::domain::ReferenceError::Invalid(format!(
             "reference changes stream must be the registered stream {}",
-            kairos_transport::stream_ids::REFERENCE_CHANGES
+            kairos_conflux::output_stream_ids::REFERENCE_CHANGES
         )));
     }
     let source_plan = build_source_plan(config).await?;
@@ -474,12 +492,13 @@ pub async fn build_application(
     source_plan.install(&mut system.connections())?;
     let store = SqlxCatalogStore::open(&config.database).await?;
     let event_writer = if publish {
-        Some(ReferenceEventWriter::connect(
+        Some(ReferenceEventWriter::declare(
             &ReferenceEventWriterConfig {
                 aeron_dir: config.aeron_dir.clone(),
                 aeron_channel: config.aeron_channel.clone(),
                 reference_changes_stream: config.reference_changes_stream,
             },
+            &mut system,
         )?)
     } else {
         None

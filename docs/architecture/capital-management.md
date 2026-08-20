@@ -114,6 +114,17 @@ Integration clients or vendor payloads. Cross-process snapshots and events
 use contract-owned FlatBuffers types; JSON is limited to an explicitly
 declared control/configuration boundary.
 
+The Rust runtime is a standard Conflux Actor and Contract host. The Capital
+contract owns the closed `CapitalRestRequest`/`CapitalRestResponse` operation
+set and its HTTP codec; Conflux owns the listener, bounded ingress, readiness,
+stop signal, timers, and typed output resources. The Actor handles control,
+periodic Account/Risk fact refresh, automatic plan execution, reconciliation,
+event publication, and snapshot publication on one serialized event loop.
+There is no parallel Axum state object, mutex-protected second application, or
+binary-owned facts task. During shutdown the Actor closes admission, queries
+already delivered participant operations, records unresolved recovery work,
+and never creates a reverse movement.
+
 The current projection contains the policy envelope, active and terminal
 objectives/demands, source facts and watermarks, availability, routes, plans,
 reservations, and participant operations. Capital publishes each durable
@@ -127,19 +138,21 @@ net total-liquidity target. Overlapping observations in one horizon are
 combined by maximum rather than summed, so duplicate or replacement trading
 signals cannot manufacture capital demand.
 
-Capital depends on Conflux, never on `kairos-integration`. Conflux owns the
-participant-neutral transfer and liquid-yield rail types as well as the
-construction of concrete Binance or future provider connections. Its adapter
-maps those Conflux-owned requests, outcomes, status facts, and errors to
-Integration types internally; Integration re-exports must not leak through the
-rail signature consumed by Capital. Capital composition supplies only
-non-secret account metadata and receives a Conflux-owned dispatcher; no Capital
-source file constructs or imports a provider connection or provider DTO.
-The dispatcher implements the Conflux Capital rails directly; it does not gain
-those business capabilities by implementing an Integration command trait.
+Capital depends on Conflux, never directly on `kairos-integration`. Integration
+owns the participant-neutral `AssetTransferCommand`,
+`AssetTransferStatusQuery`, `EarnCommand`, `EarnActionStatusQuery`, their
+requests/results, and every provider implementation. Conflux only re-exports
+that vocabulary; it defines no `Capital*Connection`, Capital request, or
+Capital status mirror. Capital application code consumes the Integration-owned
+capabilities through the Conflux root. Capital composition maps instance
+account metadata into concrete Binance or future-provider configuration and
+selects the live or simulated implementation. Conflux's generic typed resource
+collections may own those concrete connections without acquiring their
+transfer/Earn semantics.
 
-In `paper` and `backtest`, Conflux selects an instance-local simulated rail
-before loading credentials or constructing participant connections. That rail
+In `paper` and `backtest`, Capital composition selects an instance-local
+simulated implementation before loading credentials or constructing
+participant connections. That implementation
 translates each transfer or Earn action into an idempotent, explicitly
 simulation-only Account contract command. Account remains the sole owner of
 balances and Earn holdings and rejects the command in live mode. Capital still
@@ -591,12 +604,13 @@ The ownership boundary determines the operation owner:
 
 ## Integration primitives
 
-Capital does not depend on `kairos-integration` directly or through re-exported
-Integration DTOs. Its composition uses Conflux-owned typed rail requests,
-outcomes, status facts, and errors; Conflux alone maps them to a concrete
-Integration connection. This keeps participant construction, connection
-lifecycle, provider credentials, and provider capability vocabulary outside
-the Capital business package.
+Capital does not depend on the `kairos-integration` Cargo package directly.
+It consumes Integration-owned commands, queries, DTOs, outcomes, status facts,
+and errors through the Conflux re-export. Conflux does not redefine or map a
+second Capital-specific transfer/Earn vocabulary. Capital composition selects
+the concrete Integration implementation for the instance. Where the
+implementation is installed as a managed runtime resource, Conflux owns only
+its generic typed connection lifecycle.
 
 Behind that boundary, Integration exposes two separate axes:
 

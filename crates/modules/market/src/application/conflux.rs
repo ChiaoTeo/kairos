@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use kairos_conflux::{
     ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, ExternalParticipantEvent,
-    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, ResourceOperationError,
-    RestContract, SystemEvent,
+    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, MmapOutputDeclaration,
+    RestContract, SnapshotEnvelopeMetadata, SystemEvent,
 };
 use kairos_market_contract::{
     MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataSource,
@@ -15,7 +15,6 @@ use kairos_market_contract::{
     SubscriptionOwnerKey,
 };
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{MarketApplication, MarketError, resolve_market, resolve_option_markets};
 use crate::domain::source::{
@@ -730,15 +729,12 @@ impl MarketApplication {
         for (sequence, event) in &events {
             let bytes = encode_event(&actor_id, &self.conflux.identity, *sequence, event)
                 .map_err(MarketError::Recovery)?;
-            match context
-                .system()
-                .market_event_publishers
-                .try_with(&event_key, |publisher| publisher.publish(&bytes))
-            {
-                Ok(()) | Err(ResourceOperationError::NotFound) => {},
-                Err(ResourceOperationError::Operation(error)) => {
-                    return Err(MarketError::Recovery(error.to_string()));
-                },
+            if context.outputs().aeron.contains(&event_key) {
+                context
+                    .outputs()
+                    .aeron
+                    .publish(&event_key, &bytes)
+                    .map_err(|error| MarketError::Recovery(error.to_string()))?;
             }
         }
         for change in &changes {
@@ -753,44 +749,36 @@ impl MarketApplication {
                 )
             })?;
             let resource_key = encoded.key.canonical_key();
-            let root = publication.root.clone();
-            let slot_size = publication.slot_size;
             let key = encoded.key;
-            let resource_key = context
-                .declare_output(
-                    |system| &mut system.market_view_publishers,
-                    resource_key,
-                    publication.revision,
-                    move || {
-                        MarketViewPublisher::create(root, key, slot_size).map_err(|error| {
-                            kairos_conflux::OutputBindingError::Create(error.to_string())
-                        })
+            let path = MarketViewPublisher::resolved_path(&publication.root, &key)
+                .map_err(|error| MarketError::Recovery(error.to_string()))?;
+            context
+                .outputs()
+                .mmap
+                .declare(
+                    resource_key.clone(),
+                    MmapOutputDeclaration {
+                        path,
+                        slot_capacity: publication.slot_size,
+                        revision: publication.revision,
                     },
                 )
                 .map_err(|error| MarketError::Recovery(error.to_string()))?;
             context
-                .system()
-                .market_view_publishers
-                .try_with(&resource_key, |publisher| {
-                    publisher.publish(
-                        SnapshotEnvelopeMetadata {
-                            resource_epoch: 1,
-                            producer_incarnation: self.conflux.producer_incarnation,
-                            generation: change.sequence.get(),
-                            applied_event_sequence: change.sequence.get(),
-                            published_at_unix_nanos: now_unix_nanos(),
-                        },
-                        &encoded.bytes,
-                    )
-                })
-                .map_err(|error| match error {
-                    ResourceOperationError::NotFound => {
-                        MarketError::Recovery("Market view publisher disappeared".into())
+                .outputs()
+                .mmap
+                .publish(
+                    &resource_key,
+                    SnapshotEnvelopeMetadata {
+                        resource_epoch: 1,
+                        producer_incarnation: self.conflux.producer_incarnation,
+                        generation: change.sequence.get(),
+                        applied_event_sequence: change.sequence.get(),
+                        published_at_unix_nanos: now_unix_nanos(),
                     },
-                    ResourceOperationError::Operation(error) => {
-                        MarketError::Recovery(error.to_string())
-                    },
-                })?;
+                    &encoded.bytes,
+                )
+                .map_err(|error| MarketError::Recovery(error.to_string()))?;
         }
         Ok(())
     }

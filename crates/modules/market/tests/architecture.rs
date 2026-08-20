@@ -96,10 +96,12 @@ fn production_server_has_no_provider_or_transport_selection_surface() {
 fn live_market_events_use_only_aeron_while_replay_keeps_uds() {
     let process = source("src/composition/launch/assembly.rs");
     let conflux = source("src/application/conflux.rs");
-    assert!(process.contains("MarketEventPublisher::connect"));
-    assert!(process.contains("bind_output"));
-    assert!(conflux.contains("market_event_publishers"));
-    assert!(conflux.contains("try_with"));
+    assert!(process.contains("AeronOutputDeclaration"));
+    assert!(process.contains("system"));
+    assert!(process.contains("outputs()"));
+    assert!(process.contains(".aeron"));
+    assert!(conflux.contains("outputs()"));
+    assert!(conflux.contains(".aeron"));
     assert!(!conflux.contains("event_socket_path"));
 }
 
@@ -225,15 +227,17 @@ fn market_rest_keeps_only_bounded_capability_queries_off_mmap() {
     assert!(!host.contains("axum::"));
     assert!(actor.contains("MarketRestRequest::Health"));
     assert!(actor.contains("MarketRestRequest::DataSources"));
-    assert!(actor.contains("market_view_publishers"));
-    assert!(actor.contains("declare_output"));
-    assert!(actor.contains("MarketViewPublisher::create"));
+    assert!(actor.contains("outputs()"));
+    assert!(actor.contains("MmapOutputDeclaration"));
+    assert!(actor.contains("MarketViewPublisher::resolved_path"));
+    assert!(!actor.contains("MarketViewPublisher::create"));
 }
 
 #[test]
 fn market_transport_hosts_are_framework_owned() {
     let manifest = source("Cargo.toml");
     assert!(!manifest.contains("axum.workspace"));
+    assert!(!manifest.contains("kairos-transport"));
     for path in ["src/composition/host.rs", "src/bin/kairos-market-server.rs"] {
         let source = source(path);
         for forbidden in ["axum::", "UnixListener", "TcpListener"] {

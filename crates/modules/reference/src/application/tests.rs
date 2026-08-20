@@ -211,8 +211,8 @@ async fn default_reference_registry_composes_without_market_configuration() {
             workspace: Some(root.to_path_buf()),
             database: root.join("reference.sqlite"),
             aeron_dir: None,
-            aeron_channel: kairos_transport::DEFAULT_CHANNEL.into(),
-            reference_changes_stream: kairos_transport::stream_ids::REFERENCE_CHANGES,
+            aeron_channel: kairos_conflux::DEFAULT_AERON_CHANNEL.into(),
+            reference_changes_stream: kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
         },
         false,
     )

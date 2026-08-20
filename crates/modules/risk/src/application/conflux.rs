@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
-use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SystemEvent};
+use kairos_conflux::{
+    ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SnapshotEnvelopeMetadata,
+    SystemEvent,
+};
 use kairos_risk_contract::{
     AdvanceRiskTimeResponse, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, Health,
     RiskCommandStatus, RiskControlError, RiskRestRequest, RiskRestResponse,
 };
-use kairos_transport::SnapshotEnvelopeMetadata;
 
 use super::{
     CloseCircuit, ConsumeReservation, OpenCircuit, PublishPolicy, ReleaseReservation,
@@ -64,8 +66,7 @@ impl RiskApplication {
     fn publish_contract_outputs(&mut self, context: &mut Context<'_, Self>) {
         let view = super::contract::current_view(&self.current_view());
         let mut snapshot_encoder = FlatbuffersRiskSnapshotWriter::new(view.actor_id.to_string());
-        if snapshot_encoder.publish(&view).is_ok()
-            && context.outputs().mmap.contains("risk-latest")
+        if snapshot_encoder.publish(&view).is_ok() && context.outputs().mmap.contains("risk-latest")
         {
             let result = context.outputs().mmap.publish(
                 "risk-latest",
@@ -95,12 +96,11 @@ impl RiskApplication {
             if encoder.publish(&event).is_err() {
                 break;
             }
-            if let Err(error) = context.outputs().aeron.publish(
-                "risk-events",
-                encoder.last_payload.as_deref().unwrap_or_default(),
-            ) {
-                tracing::error!(event = "event_publish_failed", component = "risk", error = %error);
-                break;
+            if let Some(payload) = encoder.last_payload.as_deref() {
+                if let Err(error) = context.outputs().aeron.publish("risk-events", payload) {
+                    tracing::error!(event = "event_publish_failed", component = "risk", error = %error);
+                    break;
+                }
             }
             self.acknowledge_event();
         }

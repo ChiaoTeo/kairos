@@ -136,7 +136,12 @@ class CapitalContractClient:
     def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
         status, value = self._client.request("POST", path, body)
         if status >= 400:
-            raise RuntimeError(str(value.get("error", f"Capital HTTP {status}")))
+            error = value.get("error")
+            if isinstance(error, dict):
+                message = error.get("message", f"Capital HTTP {status}")
+            else:
+                message = error or value.get("message", f"Capital HTTP {status}")
+            raise RuntimeError(str(message))
         return value
 
 

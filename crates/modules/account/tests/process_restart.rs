@@ -9,7 +9,7 @@ use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistr
 use kairos_account_contract::{
     AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader, SimulatedSettlement,
 };
-use kairos_transport::SnapshotEnvelopeMetadata;
+use kairos_conflux::SnapshotEnvelopeMetadata;
 use kairos_workspace::Workspace;
 use rusteron_media_driver::{AeronDriver, AeronDriverContext, IntoCString};
 

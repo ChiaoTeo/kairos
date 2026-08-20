@@ -17,13 +17,15 @@ Conflux 按交互语义纳管三类平台能力：
 - View：mmap current view 与原子替换的普通文件 current view；
 - Control：HTTP over UDS、HTTP over TCP 与 WebSocket over TCP。
 
-Contract 定义 typed request/response/event/view、wire codec、sequence/generation 与一致性 metadata。业务 Composition 选择具体 Contract adapter，构造 publisher，并决定业务 key、view kind、路径和编码规则。Conflux 拥有 listener、session、connection、队列、resource state、revision、readiness、恢复和 shutdown；已构造的 typed publisher 交给 Conflux 的通用 resource collection 纳管。Actor 只接收或产生 typed 值，不接触 Axum、socket、HTTP method 或 WebSocket frame。
+Contract 定义 typed request/response/event/view、wire codec、业务 key 到安全路径的解析、sequence/generation 与一致性 metadata。业务 Composition 声明需要的输出及其配置，但不创建或持有 publisher/writer。Conflux 创建并独占 Aeron publication、mmap writer 与 file writer，同时拥有 listener、session、connection、队列、resource state、revision、readiness、失败状态和 shutdown。Actor 只接收或产生 typed 值，不接触 Axum、socket、HTTP method 或 WebSocket frame。
+
+依赖边界以 Cargo package 为准：业务主包（包括 `bin/` server、Composition、Application 与 Services）依赖 Conflux 和本模块 Contract，不直接依赖 `kairos-transport`；Contract 可以依赖 protocol/transport 来实现 wire codec、client、reader 与 stream adapter；Conflux 可以依赖 transport 来创建、持有和关闭具体 I/O 资源。Contract 对 transport 的依赖不授权业务主包绕过 Conflux 取得资源所有权。
 
 所有 Control transport 复用同一个 module-owned `HttpControlCodec`，解码后通过唯一的 `ConfluxHandle` typed ingress 进入 Actor。WebSocket 控制帧包含版本和 request id，用于 correlation；HTTP 与 WebSocket 的请求超时发生在提交后时返回 `result_unknown`，队列关闭且未提交时返回 `not_sent`。业务 Contract 继续负责明确拒绝与成功响应。
 
-固定输出由 Composition 构造后调用通用 `bind_output` 登记。Conflux 不提供 `AccountAeronEventOutput`、`RiskMmapViewOutput` 或 `enable_account_*` 这类了解业务名字和 Contract 构造规则的 API。
+固定输出由 Composition 通过 `system.outputs().aeron/mmap/file.declare(...)` 声明。声明只包含通用 transport 参数、resource key 与 revision；Conflux 根据声明创建并持有底层管道。Conflux 不提供 `AccountAeronEventOutput`、`RiskMmapViewOutput` 或 `enable_account_*` 这类了解业务名字的 API。
 
-运行时才出现的 key（例如 Market 动态订阅）由 Actor 在 `handle` 中调用通用 `Context::declare_output` 声明。业务模块传入 typed key、目标 typed collection 和构造闭包；Context 只应用 revision、去重和 resource state 规则。该接口只用于输出资源，并使用静态泛型，不使用类型擦除或开放注册表。
+运行时才出现的 key（例如 Market 动态订阅）由 Actor 在 `handle` 中借用 `context.outputs().mmap` 声明。业务 Contract 先把 typed key 解析为安全路径，业务再提交通用声明；不传 selector 或构造闭包，也不能访问 Conflux 内部 collection。发布时 Actor 同样只借用 `context.outputs()` 提交已经按 Contract 编码的 payload。Conflux 在发布成功或失败后更新资源状态，并在进程停止阶段统一终止输出资源。
 
 普通文件 View 使用带版本、checksum 和 `SnapshotEnvelopeMetadata` 的完整替换文件，并通过临时文件、flush 与 rename 原子发布。它是对外派生视图；journal、checkpoint 和权威恢复状态仍由模块私有 persistence 所有。
 
@@ -31,9 +33,10 @@ Contract 定义 typed request/response/event/view、wire codec、sequence/genera
 
 ## Consequences
 
-- Risk、Execution、Account、Market 与 Reference 不再直接拥有 Axum 或 UDS/TCP listener；Control 的 readiness、health file 和 shutdown 行为一致。
-- Risk 的 Aeron event、mmap view 与 file view，以及 Execution/Account/Market/Reference 的固定输出，由业务 Composition 创建、Conflux 通用 resource collection 持有。
-- Market 保留动态订阅语义；Market 决定 typed view 的 key 与构造方式，Context 负责动态登记和生命周期状态。
+- Risk、Execution、Account、Market、Reference 与 Capital 不再直接拥有 Axum 或 UDS/TCP listener；Control 的 readiness、health file 和 shutdown 行为一致。
+- Risk 的 Aeron event、mmap view 与 file view，以及 Execution/Account/Market/Reference/Capital 的固定输出，由业务 Composition 声明、Conflux 创建并持有。
+- Market 保留动态订阅语义；Market Contract 决定 typed view key 与路径，Conflux 在 Context 借用期内创建和管理动态 mmap 管道。
 - HTTP/TCP、WebSocket/TCP、mmap 与普通文件具有真实协议或文件端到端测试；UDS 由 Risk 的 Contract 端到端测试覆盖。
 - Provider WebSocket 继续使用各 provider 的具体 typed connection collection；在出现模块间 WebSocket event stream 的真实生产调用方前，不增加通用业务 stream envelope。
-- 新模块若需要进程边界能力，应先扩展所属 Contract；业务 Composition 通过 Conflux 通用资源 API 绑定 adapter，不得把业务命名的构造 API加入 Conflux，也不得在业务 crate 中重新建立 transport host。
+- 新模块若需要进程边界能力，应先扩展所属 Contract；业务 Composition 通过 Conflux 通用输出 API 声明管道，不得持有底层 publisher/writer，不得把业务命名的构造 API 加入 Conflux，也不得在业务 crate 中重新建立 transport host。
+- 业务主包及其 server 不直接依赖 `kairos-transport`；Contract 保留实现协议与 transport adapter 所需的依赖。
