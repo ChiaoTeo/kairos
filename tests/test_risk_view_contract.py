@@ -8,5 +8,5 @@ def test_risk_view_key_matches_rust_resource_identity() -> None:
 
     assert key.canonical_key() == "risk.latest"
     assert key.resource_path(Path("/runtime")) == Path(
-        "/runtime/risk/risk:instance-1/latest/current.snapshot"
+        "/runtime/risk/risk%3Ainstance-1/latest/current.snapshot"
     )

@@ -10,13 +10,17 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from ...account import AccountAdminApplication, TradeLeaseApplication
 from ...data import DatasetCatalogApplication, DatasetReaderApplication
 from ...market import materialize_replay_file, validate_replay_window
 from .strategy_process import StrategyProcessController
-from ...system import ComponentProcessApplication, ReferenceProcessConfig
+from ...system import (
+    ComponentProcessApplication,
+    MarketSystemClient,
+    ReferenceProcessConfig,
+)
 from ...workspace import Workspace
 from ..domain.identity import new_instance_id
 from ..composition import release_strategy_market_owner
@@ -474,10 +478,13 @@ class LaunchRuntimeApplication:
                 components.ensure_running(
                     "reference", reference_config=ReferenceProcessConfig(self.workspace)
                 )
-            market_control = components.ensure_running(
-                "market",
-                market_runtime_profile=market_runtime_profile,
-                instance_workspace=market_instance_workspace,
+            market_control = cast(
+                MarketSystemClient,
+                components.ensure_running(
+                    "market",
+                    market_runtime_profile=market_runtime_profile,
+                    instance_workspace=market_instance_workspace,
+                ),
             )
             account_connections: dict[str, dict[str, Any]] = {}
             capital_member_readiness = dict(
@@ -544,6 +551,7 @@ class LaunchRuntimeApplication:
                 "risk": {
                     "socket": str(instance_workspace.socket("risk")),
                     "health": str(instance_workspace.health("risk")),
+                    "view_root": str(instance_workspace.snapshot()),
                     "snapshot": str(
                         instance_workspace.snapshot("risk", "risk.snapshot")
                     ),
@@ -559,6 +567,11 @@ class LaunchRuntimeApplication:
                         str(instance_workspace.health("market"))
                         if market_instance_workspace is not None
                         else str(self.workspace.paths.health_file("market"))
+                    ),
+                    "view_root": (
+                        str(instance_workspace.snapshot())
+                        if market_instance_workspace is not None
+                        else str(self.workspace.paths.snapshots)
                     ),
                 },
                 "reference": (
@@ -596,6 +609,7 @@ class LaunchRuntimeApplication:
                 component_connections["execution"] = {
                     "socket": str(instance_workspace.socket("execution")),
                     "health": str(instance_workspace.health("execution")),
+                    "view_root": str(instance_workspace.snapshot()),
                 }
             write_instance_manifest(
                 instance_workspace,
@@ -619,9 +633,8 @@ class LaunchRuntimeApplication:
             if (
                 mode == "backtest"
                 and market_runtime_profile == "replay"
-                and hasattr(market_control, "request")
             ):
-                market_control.request("POST", "/v1/replay/resume")
+                market_control.resume_replay()
             started.update(
                 {
                     "launch_id": launch_id,

@@ -4,6 +4,7 @@ from io import StringIO
 import json
 from pathlib import Path
 import re
+import shlex
 
 from kairospy.application.launch.application import (
     LaunchControlApplication,
@@ -195,10 +196,18 @@ def test_generated_backtest_start_assembles_only_offline_runtime_components(
         project, workspace_id="demo", template="backtest"
     )
     started_components: list[tuple[str, dict[str, object]]] = []
+    resumed_replay: list[str] = []
+
+    class ComponentControl:
+        def __init__(self, component: str) -> None:
+            self.component = component
+
+        def resume_replay(self) -> None:
+            resumed_replay.append(self.component)
 
     def ensure_component(_self, component, **options):
         started_components.append((component, options))
-        return object()
+        return ComponentControl(component)
 
     monkeypatch.setattr(ComponentProcessApplication, "ensure_running", ensure_component)
     monkeypatch.setattr(
@@ -255,6 +264,7 @@ def test_generated_backtest_start_assembles_only_offline_runtime_components(
     instance = market_options["instance_workspace"]
     assert instance.market_state("replay.jsonl").is_file()
     assert "reference" not in names
+    assert resumed_replay == ["market"]
     assert json.loads(output.getvalue())["next_action"] == (
         "kairos launch wait demo-backtest"
     )
@@ -502,8 +512,209 @@ def test_cli_registers_legacy_product_groups() -> None:
     assert "Daily workflow" in text
     assert "Operations" in text
     assert "Advanced tools" in text
+    assert "quickstart" in text
     assert "Run strategies and inspect" in text
     assert "commands are owned by" not in text
+
+
+def test_quickstart_shows_first_run_path() -> None:
+    output = StringIO()
+
+    assert execute_argv(["quickstart"], output) == 0
+    text = output.getvalue()
+    assert "KairosPy quickstart" in text
+    assert "kairos project init my-project --id my-project --template backtest" in text
+    assert "kairos launch start demo-backtest" in text
+    assert "Command map" in text
+
+
+def test_quickstart_supports_json_output() -> None:
+    output = StringIO()
+
+    assert execute_argv(["quickstart", "--format", "json"], output) == 0
+    value = json.loads(output.getvalue())
+    assert value["first_run"][0]["command"].startswith("kairos project init")
+    assert value["command_map"]["launch"].startswith("Start")
+
+
+def test_cli_format_falls_back_to_text_without_workspace(monkeypatch, tmp_path) -> None:
+    from kairospy.surface.cli.app import _cli_format
+
+    monkeypatch.delenv("KAIROS_WORKSPACE", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert _cli_format(["reference", "health"]) == "text"
+
+
+def test_interactive_is_discoverable_from_top_level_help() -> None:
+    output = StringIO()
+
+    assert execute_argv(["--help"], output) == 0
+    text = output.getvalue()
+    assert "interactive" in text
+    assert "Kairos 交互式操作入口" in text
+
+
+def test_interactive_dry_run_guides_project_creation(monkeypatch) -> None:
+    output = StringIO()
+    answers = iter(["1", "demo", "demo", "backtest"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert execute_argv(["interactive", "--dry-run"], output) == 0
+    text = output.getvalue()
+    assert "Kairos 交互式操作" in text
+    assert "准备执行：kairos project init demo --id demo --template backtest" in text
+    assert "只展示命令，不执行" in text
+
+
+def test_interactive_dry_run_selects_launch_action(tmp_path, monkeypatch) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo", template="backtest"
+    )
+    output = StringIO()
+    answers = iter(["2", "1", "2"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    text = output.getvalue()
+    assert "Workspace：demo" in text
+    assert "可用 launch" in text
+    assert (
+        "准备执行：kairos launch status demo-backtest --workspace "
+        + shlex.quote(str(workspace.paths.root))
+    ) in text
+
+
+def test_interactive_short_alias_opens_command_map(monkeypatch) -> None:
+    output = StringIO()
+    answers = iter(["8"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert execute_argv(["i", "--dry-run"], output) == 0
+    assert "准备执行：kairos quickstart" in output.getvalue()
+
+
+def test_interactive_convenience_option_chain_uses_current_reference_option(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(tmp_path / "demo", workspace_id="demo")
+    output = StringIO()
+    answers = iter(["4", "7", "instrument:equity:US:AAPL:common"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert "--underlying-instrument-id instrument:equity:US:AAPL:common" in (
+        output.getvalue()
+    )
+    assert "--format table" in output.getvalue()
+
+
+def test_interactive_reference_menu_lists_markets_without_catalog(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    answers = iter(["4", "6", "1", "25"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    text = output.getvalue()
+    assert "你想查询 Reference 里的什么" in text
+    assert (
+        "准备执行：kairos reference markets --active-only --limit 25 --format table"
+        in text
+    )
+    assert "reference catalog" not in text
+
+
+def test_interactive_reference_menu_searches_market_by_symbol(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    answers = iter(["4", "6", "5", "BTCUSDT", "2"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert "准备执行：kairos reference markets --symbol BTCUSDT --format table" in (
+        output.getvalue()
+    )
+
+
+def test_interactive_reference_menu_filters_markets_by_asset_code(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    answers = iter(["4", "6", "2", "AAPL"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    assert (
+        "准备执行：kairos reference markets --asset-code AAPL --active-only --format table"
+        in output.getvalue()
+    )
 
 
 def test_readme_uses_the_current_golden_path_commands() -> None:

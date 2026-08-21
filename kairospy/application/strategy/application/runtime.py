@@ -35,6 +35,7 @@ from kairospy.application.notification import NotificationApplication
 from kairospy.application.portfolio import PortfolioApplication
 from kairospy.application.reference import ReferenceApplication
 from kairospy.application.risk import RiskApplication
+from kairospy.domain_types import SegmentKey
 from ..services.context import StrategyContext
 from ..services.callbacks import StrategyCallbackHost
 from ..services.ingress import StrategyEventIngress
@@ -539,8 +540,16 @@ class StrategyApplication:
                 order_id=str(event.data.id),
             )
             return
+        occurred_at_unix_nanos = event.metadata.occurred_at_unix_nanos
+        if occurred_at_unix_nanos is None:
+            self._log(
+                "capital demand omitted because event time is unavailable",
+                event="capital_demand_omitted",
+                order_id=str(event.data.id),
+            )
+            return
         observed_at = datetime.fromtimestamp(
-            event.metadata.occurred_at_unix_nanos / 1_000_000_000,
+            occurred_at_unix_nanos / 1_000_000_000,
             tz=timezone.utc,
         )
         demand_id = f"risk:{requirement.risk_decision_id}:{event.data.id}"
@@ -551,7 +560,7 @@ class StrategyApplication:
                     idempotency_key=demand_id,
                     destination=FundingLocation(
                         event.data.account_id,
-                        requirement.segment,
+                        SegmentKey(requirement.segment),
                         requirement.collateral_asset,
                         requirement.broker,
                     ),

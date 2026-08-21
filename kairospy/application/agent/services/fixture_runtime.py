@@ -87,9 +87,16 @@ def fixture_key(candidate: IntentCandidate) -> str:
     ).hexdigest()
     payload = {
         "candidate_hash": candidate_hash,
+        "workspace_id": candidate.workspace_id,
+        "strategy_id": candidate.strategy_id,
+        "launch_id": candidate.launch_id,
+        "instance_id": candidate.instance_id,
+        "operation": candidate.operation,
         "context_snapshot_hash": candidate.snapshot.context_snapshot_hash,
+        "context_watermark": candidate.snapshot.context_watermark,
         "profile_hash": candidate.profile_hash,
         "mode": candidate.snapshot.mode.value,
+        "mode_revision": candidate.snapshot.mode_revision,
         "runtime": candidate.runtime,
         "model": candidate.model,
         "tool_profiles": list(candidate.tool_profiles),

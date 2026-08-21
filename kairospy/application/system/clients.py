@@ -10,9 +10,26 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from kairospy.infrastructure.unix_http import request_sync
+
+if TYPE_CHECKING:
+    from kairospy.application.workspace import InstanceWorkspace
+    from kairospy.domain_types import AccountId
+    from kairospy.infrastructure.contracts.account.runtime import (
+        AccountContractClient,
+    )
+    from kairospy.infrastructure.contracts.capital.client import CapitalContractClient
+    from kairospy.infrastructure.contracts.execution.control import (
+        ExecutionControlClient,
+    )
+    from kairospy.infrastructure.contracts.market.control import MarketControlClient
+    from kairospy.infrastructure.contracts.reference.client import ReferenceClient
+    from kairospy.infrastructure.contracts.reference.control import (
+        ReferenceControlClient,
+    )
+    from kairospy.infrastructure.contracts.risk.control import RiskControlClient
 
 
 @dataclass(frozen=True)
@@ -87,6 +104,8 @@ class SystemRpcClient:
 
 
 class AccountSystemClient(SystemRpcClient):
+    control: AccountContractClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.account import AccountContractClient
@@ -114,13 +133,15 @@ class AccountSystemClient(SystemRpcClient):
         result = self.control.mark_to_market(request)
         return {"result": result, "segment_key": request["segment_key"]}
 
-    def current_projection(self, account_id: object):
+    def current_projection(self, account_id: AccountId):
         from kairospy.infrastructure.contracts.account import AccountCurrentProjection
 
         return AccountCurrentProjection(self.require_view_root(), account_id=account_id)
 
 
 class ExecutionSystemClient(SystemRpcClient):
+    control: ExecutionControlClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.execution import ExecutionControlClient
@@ -169,13 +190,15 @@ class ExecutionSystemClient(SystemRpcClient):
             return {"fills": []}
         return dict(self.control.backtest_market(payload))
 
-    def projection(self, instance: object):
+    def projection(self, instance: InstanceWorkspace):
         from kairospy.infrastructure.contracts.execution import ExecutionProjection
 
         return ExecutionProjection(instance)
 
 
 class MarketSystemClient(SystemRpcClient):
+    control: MarketControlClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.market import MarketControlClient
@@ -200,8 +223,13 @@ class MarketSystemClient(SystemRpcClient):
     def recover(self) -> dict[str, Any]:
         return dict(self.control.recover({}))
 
+    def resume_replay(self) -> dict[str, Any]:
+        return dict(self.control.resume_replay())
+
 
 class RiskSystemClient(SystemRpcClient):
+    control: RiskControlClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.risk import RiskControlClient
@@ -237,6 +265,8 @@ class RiskSystemClient(SystemRpcClient):
 
 
 class CapitalSystemClient(SystemRpcClient):
+    control: CapitalContractClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.capital import CapitalContractClient
@@ -290,6 +320,9 @@ class CapitalSystemClient(SystemRpcClient):
 
 
 class ReferenceSystemClient(SystemRpcClient):
+    control: ReferenceControlClient
+    reader: ReferenceClient
+
     def __post_init__(self) -> None:
         super().__post_init__()
         from kairospy.infrastructure.contracts.reference import (

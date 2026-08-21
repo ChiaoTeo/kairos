@@ -213,7 +213,7 @@ def test_revise_records_original_and_effective_in_execution_admission(
 def test_required_context_failure_fails_closed_but_reduce_bypasses(
     tmp_path: Path,
 ) -> None:
-    application, agent, commands, worker, _ = _assembled(
+    application, agent, commands, worker, records = _assembled(
         tmp_path / "closed",
         mode=AgentMode.GATE,
         result=DecisionResult(DecisionKind.APPROVE, 9000, (), (), "approved"),
@@ -225,6 +225,9 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
     assert rejected.status is SubmissionStatus.REJECTED
     assert rejected.delivery_certainty is DeliveryCertainty.NOT_SENT
     assert commands.calls == []
+    failed = _wait_any_terminal(records)
+    assert failed.status is DecisionStatus.FAILED
+    assert failed.delivery_certainty == "not_sent"
 
     agent.publish_context(
         AgentContextDocument(
@@ -240,7 +243,7 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
     assert pending.status is SubmissionStatus.PENDING
     worker.close(timeout=1)
 
-    reducing, _, reducing_commands, reducing_worker, _ = _assembled(
+    reducing, _, reducing_commands, reducing_worker, reducing_records = _assembled(
         tmp_path / "reduce",
         mode=AgentMode.GATE,
         result=DecisionResult(DecisionKind.APPROVE, 9000, (), (), "approved"),
@@ -252,8 +255,36 @@ def test_required_context_failure_fails_closed_but_reduce_bypasses(
     )
     assert bypassed.status is SubmissionStatus.ACCEPTED
     assert len(reducing_commands.calls) == 1
-    assert "admission_evidence" not in reducing_commands.calls[0][1]
+    assert reducing_commands.calls[0][1]["admission_evidence"] is None
+    reduced = _wait_any_terminal(reducing_records)
+    assert reduced.status is DecisionStatus.ABSTAINED
+    assert reduced.delivery_certainty == "sent"
     reducing_worker.close(timeout=1)
+
+
+def test_shadow_required_context_failure_submits_original_once_and_records_failure(
+    tmp_path: Path,
+) -> None:
+    application, _, commands, worker, records = _assembled(
+        tmp_path,
+        mode=AgentMode.SHADOW,
+        result=DecisionResult(DecisionKind.APPROVE, 9000, (), (), "unused"),
+        required_contexts=("signal",),
+    )
+
+    submitted = application.target_position(
+        InstrumentId("BTCUSDT"), Decimal("1"), account="main"
+    )
+
+    assert submitted.status is SubmissionStatus.ACCEPTED
+    assert len(commands.calls) == 1
+    assert commands.calls[0][1]["admission_evidence"] is None
+    terminal = _wait_any_terminal(records)
+    assert terminal.status is DecisionStatus.FAILED
+    assert terminal.delivery_certainty == "sent"
+    assert "missing or expired" in (terminal.reason or "")
+    assert worker.health()["rolling_error_rate"] == 1.0
+    worker.close(timeout=1)
 
 
 def test_runtime_failure_reduction_bypasses_without_agent_admission_evidence(

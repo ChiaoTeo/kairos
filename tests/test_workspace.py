@@ -11,7 +11,7 @@ def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> N
 
     assert workspace.workspace_id == "demo"
     assert 'workspace_id = "demo"' in workspace.paths.manifest.read_text()
-    assert workspace.cli_format == "json"
+    assert workspace.cli_format == "text"
     assert workspace.paths.run.is_dir()
     logical_reference_socket = (
         workspace.paths.root / "run" / "reference" / "control.sock"
@@ -233,6 +233,16 @@ def test_workspace_accepts_table_as_cli_format(tmp_path: Path) -> None:
     )
 
     assert WorkspaceApplication().open(workspace.paths.root).cli_format == "table"
+
+
+def test_workspace_accepts_json_as_explicit_cli_format(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
+    workspace.paths.manifest.write_text(
+        'version = 1\nworkspace_id = "demo"\n\n[cli]\nformat = "json"\n',
+        encoding="utf-8",
+    )
+
+    assert WorkspaceApplication().open(workspace.paths.root).cli_format == "json"
 
 
 def test_workspace_resolves_market_connection_from_manifest(tmp_path: Path) -> None:

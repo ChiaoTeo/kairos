@@ -97,6 +97,15 @@ def test_fixture_runtime_requires_exact_candidate_context_profile_and_mode(
     changed = replace(candidate, profile_hash="different-profile")
     with pytest.raises(LookupError, match="does not match"):
         runtime.decide(changed)
+    changed_snapshot = replace(
+        candidate,
+        snapshot=replace(candidate.snapshot, mode_revision=1),
+    )
+    with pytest.raises(LookupError, match="does not match"):
+        runtime.decide(changed_snapshot)
+    changed_strategy = replace(candidate, strategy_id="different-strategy")
+    with pytest.raises(LookupError, match="does not match"):
+        runtime.decide(changed_strategy)
 
 
 def test_openai_runtime_uses_structured_output_and_disables_sensitive_trace(

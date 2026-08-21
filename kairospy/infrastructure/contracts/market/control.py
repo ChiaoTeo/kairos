@@ -46,5 +46,8 @@ class MarketControlClient:
     def recover(self, request: Mapping[str, object] | None = None) -> Mapping[str, Any]:
         return self.call("market_recover", [dict(request or {})])
 
+    def resume_replay(self) -> Mapping[str, Any]:
+        return self.call("market_resume_replay")
+
 
 __all__ = ["MarketControlClient"]

@@ -113,6 +113,7 @@ class AgentDecisionWorker:
                 delivery_certainty="indeterminate",
                 reason=f"{type(error).__name__}: Execution submission failed",
             )
+            self._record_immediate_failure(receipt)
             self._emit_terminal(candidate, receipt)
             raise
         queued = self._enqueue(
@@ -122,6 +123,84 @@ class AgentDecisionWorker:
         )
         if queued.status is DecisionStatus.FAILED:
             return submitted
+        return submitted
+
+    def fail_admission(self, task: DecisionTask, *, reason: str) -> DecisionReceipt:
+        """Persist a local pre-run failure and apply the exposure policy."""
+
+        receipt, created = self._records.admit(task.candidate)
+        if not created:
+            return receipt
+        if task.candidate.snapshot.mode is AgentMode.SHADOW:
+            raise ValueError("Shadow pre-run failure requires submit_shadow_failure")
+        if task.candidate.exposure_effect == "reduce":
+            try:
+                submitted = self._submit_bypass(task)
+            except Exception as error:
+                receipt = self._records.finish(
+                    task.candidate.decision_id,
+                    DecisionStatus.SUBMISSION_INDETERMINATE,
+                    effective_request=task.candidate.request,
+                    delivery_certainty="indeterminate",
+                    reason=f"{type(error).__name__}: Execution submission failed",
+                )
+            else:
+                receipt = self._records.finish(
+                    task.candidate.decision_id,
+                    DecisionStatus.ABSTAINED,
+                    effective_request=task.candidate.request,
+                    final_submission_status=submitted.status,
+                    delivery_certainty="sent",
+                    reason=reason,
+                )
+        else:
+            receipt = self._records.finish(
+                task.candidate.decision_id,
+                DecisionStatus.FAILED,
+                delivery_certainty="not_sent",
+                reason=reason,
+            )
+        self._record_immediate_failure(receipt)
+        self._emit_terminal(task.candidate, receipt)
+        return receipt
+
+    def submit_shadow_failure(
+        self,
+        candidate: IntentCandidate,
+        submit_original: Callable[[object], CommandResult],
+        *,
+        reason: str,
+    ) -> CommandResult:
+        """Submit shadow original once and persist the unavailable review."""
+
+        receipt, created = self._records.admit(candidate)
+        if not created:
+            return CommandResult(
+                candidate.request_id,
+                "duplicate",
+                {"intent_id": candidate.intent_id, "decision_id": receipt.decision_id},
+            )
+        try:
+            submitted = submit_original(candidate.request)
+        except Exception as error:
+            receipt = self._records.finish(
+                candidate.decision_id,
+                DecisionStatus.SUBMISSION_INDETERMINATE,
+                delivery_certainty="indeterminate",
+                reason=f"{type(error).__name__}: Execution submission failed",
+            )
+            self._record_immediate_failure(receipt)
+            self._emit_terminal(candidate, receipt)
+            raise
+        receipt = self._records.finish(
+            candidate.decision_id,
+            DecisionStatus.FAILED,
+            final_submission_status=submitted.status,
+            delivery_certainty="sent",
+            reason=reason,
+        )
+        self._record_immediate_failure(receipt)
+        self._emit_terminal(candidate, receipt)
         return submitted
 
     def _enqueue(

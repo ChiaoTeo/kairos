@@ -4,6 +4,7 @@ import sys
 import os
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
+from pathlib import Path
 from typing import Sequence, TextIO
 
 import click
@@ -24,17 +25,18 @@ from .commands.root import (
     project_app,
     system_app,
 )
+from .interactive import run_interactive
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.system import ComponentProcessApplication
 from kairospy.surface.console import ObserveApp
 from kairospy.surface.console.data import SystemObserveReader
 from kairospy.surface.console.models import recommended_action
-from .options import OutputFormat, reset_command_output, set_command_output
+from .options import OutputFormat, render, reset_command_output, set_command_output
 
 
 app = typer.Typer(
     no_args_is_help=True,
-    help="Build, run, and diagnose reproducible trading strategies.",
+    help="Create a project, run strategies, and inspect the trading runtime.",
 )
 app.add_typer(
     launch_app,
@@ -139,6 +141,8 @@ def _cli_format(argv: Sequence[str]) -> str:
     # the caller's current directory.
     if list(argv[:2]) == ["project", "init"]:
         return "text"
+    if argv and argv[0] in {"interactive", "i"}:
+        return "text"
     workspace: str | None = None
     for index, item in enumerate(argv):
         if item == "--workspace" and index + 1 < len(argv):
@@ -148,7 +152,7 @@ def _cli_format(argv: Sequence[str]) -> str:
     try:
         return WorkspaceApplication().resolve(workspace).cli_format
     except (FileNotFoundError, ValueError):
-        return "json"
+        return "text"
 
 
 @app.command("observe", rich_help_panel="Daily workflow")
@@ -184,6 +188,49 @@ def observe(
     ObserveApp(reader, refresh_seconds=refresh).run()
 
 
+def _interactive_command(
+    workspace: str | None,
+    dry_run: bool,
+    no_exec: bool,
+    yes: bool,
+) -> None:
+    code = run_interactive(
+        workspace=Path(workspace) if workspace is not None else None,
+        dry_run=dry_run,
+        no_exec=no_exec,
+        yes=yes,
+        execute=lambda argv: execute_argv(argv, sys.stdout),
+    )
+    if code:
+        raise typer.Exit(code)
+
+
+@app.command("interactive", rich_help_panel="Daily workflow")
+def interactive(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="只展示选中的动作，不执行。"
+    ),
+    no_exec: bool = typer.Option(
+        False, "--no-exec", help="只展示选中的动作，不执行。"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认提示。"),
+) -> None:
+    """打开 Kairos 交互式操作入口。"""
+    _interactive_command(workspace, dry_run, no_exec, yes)
+
+
+@app.command("i", hidden=True)
+def interactive_short(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    no_exec: bool = typer.Option(False, "--no-exec"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """Short alias for ``interactive``."""
+    _interactive_command(workspace, dry_run, no_exec, yes)
+
+
 @app.command("tui", hidden=True)
 def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
     """Compatibility alias for ``observe``."""
@@ -196,6 +243,85 @@ def browse(workspace: str | None = typer.Option(None, "--workspace")) -> None:
     value = WorkspaceApplication().resolve(workspace)
     for path in sorted(value.paths.root.rglob("*")):
         typer.echo(str(path.relative_to(value.paths.root)))
+
+
+def _quickstart_payload() -> dict[str, object]:
+    return {
+        "purpose": "Get from an empty directory to a runnable backtest.",
+        "first_run": [
+            {
+                "step": "Create a project with the starter backtest",
+                "command": "kairos project init my-project --id my-project --template backtest",
+            },
+            {
+                "step": "Enter the project",
+                "command": "cd my-project",
+            },
+            {
+                "step": "Check what is ready and what to do next",
+                "command": "kairos project doctor",
+            },
+            {
+                "step": "Run the starter strategy",
+                "command": "kairos launch start demo-backtest",
+            },
+            {
+                "step": "Wait for the backtest report",
+                "command": "kairos launch wait demo-backtest",
+            },
+        ],
+        "command_map": {
+            "project": "Create or inspect a workspace.",
+            "launch": "Start, stop, watch, and diagnose strategy runs.",
+            "observe": "Open the runtime overview console.",
+            "data": "Plan, acquire, and inspect datasets.",
+            "research": "Lock research plans and publish trust gates.",
+            "account": "Configure accounts and inspect balances or positions.",
+            "market": "Validate market data and read snapshots.",
+            "system": "Control and diagnose runtime components.",
+            "reference": "Query instruments, listings, and markets.",
+        },
+        "next_help": [
+            "kairos project --help",
+            "kairos launch --help",
+            "kairos launch diagnose --help",
+        ],
+    }
+
+
+def _render_quickstart_text(payload: dict[str, object]) -> str:
+    lines = [
+        "KairosPy quickstart",
+        "",
+        str(payload["purpose"]),
+        "",
+        "First run:",
+    ]
+    for index, item in enumerate(payload["first_run"], start=1):  # type: ignore[index]
+        step = item["step"]  # type: ignore[index]
+        command = item["command"]  # type: ignore[index]
+        lines.append(f"{index}. {step}")
+        lines.append(f"   {command}")
+    lines.extend(["", "Command map:"])
+    command_map = payload["command_map"]  # type: ignore[assignment]
+    for name, description in command_map.items():  # type: ignore[union-attr]
+        lines.append(f"- {name}: {description}")
+    lines.extend(["", "Useful help:"])
+    for command in payload["next_help"]:  # type: ignore[index]
+        lines.append(f"- {command}")
+    return "\n".join(lines)
+
+
+@app.command("quickstart", rich_help_panel="Daily workflow")
+def quickstart(
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Show the shortest path from a new project to a runnable strategy."""
+    payload = _quickstart_payload()
+    if output is OutputFormat.TEXT:
+        typer.echo(_render_quickstart_text(payload))
+        return
+    typer.echo(render(payload, output))
 
 
 @app.command("version", rich_help_panel="Advanced tools")

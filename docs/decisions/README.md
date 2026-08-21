@@ -11,6 +11,7 @@ Decision 记录已经作出的、具有长期影响且无法只从代码或 sche
 | 0004 | [Conflux connection ownership](0004-conflux-connection-ownership.md) | Accepted |
 | 0005 | [Conflux typed Stream、View 与 Control 运行时纳管](0005-conflux-typed-io-ownership.md) | Accepted |
 | 0006 | [Contract Control 边界与 Conflux 回调入口](0006-contract-control-boundary.md) | Accepted |
+| 0007 | [Strategy Agent Runtime 与受治理 Intent](0007-strategy-agent-runtime.md) | Accepted |
 
 新增 Decision 时使用下一顺序编号，并至少写明 Status、Context、Decision 和 Consequences。Decision
 一旦失效，不修改历史结论；将状态改为 Superseded，并链接替代它的新 Decision。

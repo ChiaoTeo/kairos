@@ -45,7 +45,7 @@ class WorkspaceApplication:
             raise FileExistsError(f"workspace already exists: {manifest}")
         identity = WorkspaceIdentity(workspace_id or root_path.name)
         manifest.write_text(
-            f'version = 1\nworkspace_id = "{identity.workspace_id}"\n\n[cli]\nformat = "json"\n',
+            f'version = 1\nworkspace_id = "{identity.workspace_id}"\n\n[cli]\nformat = "text"\n',
             encoding="utf-8",
         )
         workspace = self.open(root_path)
@@ -107,7 +107,7 @@ class WorkspaceApplication:
             raise FileExistsError(f"workspace manifest already exists: {manifest}")
         identity = WorkspaceIdentity(workspace_id or project.name)
         manifest.write_text(
-            f'version = 1\nworkspace_id = "{identity.workspace_id}"\n\n[cli]\nformat = "json"\n',
+            f'version = 1\nworkspace_id = "{identity.workspace_id}"\n\n[cli]\nformat = "text"\n',
             encoding="utf-8",
         )
         # The legacy root-level manifest was rejected above, so open() will
@@ -168,7 +168,7 @@ class WorkspaceApplication:
             raise ValueError("workspace.toml version must be 1")
         identity = WorkspaceIdentity(values.get("workspace_id", ""))
         cli = values.get("cli", {})
-        cli_format = cli.get("format", "json") if isinstance(cli, dict) else "json"
+        cli_format = cli.get("format", "text") if isinstance(cli, dict) else "text"
         if cli_format not in {"text", "json", "table"}:
             raise ValueError("workspace cli.format must be text, json, or table")
         paths = WorkspacePaths(

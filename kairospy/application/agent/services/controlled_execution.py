@@ -16,7 +16,7 @@ from kairospy.application.execution.admission import IntentAdmissionEvidence
 from kairospy.strategy.results import CommandResult
 
 from ..application import AgentApplication
-from ..models import AgentMode, DecisionStatus, IntentCandidate
+from ..models import AgentMode, DecisionReceipt, DecisionStatus, IntentCandidate
 from .worker import AgentDecisionWorker, DecisionTask
 
 
@@ -107,6 +107,7 @@ class AgentControlledExecutionCommands:
         if exposure_effect not in {"increase", "reduce", "neutral", "unknown"}:
             raise ValueError("Exposure classifier returned an unsupported value")
         now = _candidate_time(self._runtime, original)
+        snapshot_error: str | None = None
         try:
             snapshot = self._agent._snapshot(
                 "execution.intent_review",
@@ -114,14 +115,10 @@ class AgentControlledExecutionCommands:
                 required_contexts=self._required_contexts,
             )
         except ValueError as error:
-            if exposure_effect == "reduce":
-                return submit(original, **identity)
-            return CommandResult(
-                request_id,
-                "rejected",
-                {"intent_id": intent_id},
-                error=str(error),
-                error_code="agent_context_unavailable",
+            snapshot_error = str(error)
+            snapshot = self._agent._snapshot(
+                "execution.intent_review",
+                now=now,
             )
         decision_id = _decision_id(strategy_id, instance_id, request_id)
         candidate = IntentCandidate(
@@ -176,39 +173,60 @@ class AgentControlledExecutionCommands:
             )
 
         if snapshot.mode is AgentMode.SHADOW:
+            if snapshot_error is not None:
+                return self._worker.submit_shadow_failure(
+                    candidate,
+                    submit_direct,
+                    reason=snapshot_error,
+                )
             return self._worker.submit_shadow(candidate, submit_direct)
+        if snapshot_error is not None:
+            receipt = self._worker.fail_admission(
+                DecisionTask(candidate, submit_effective, bypass=submit_direct),
+                reason=snapshot_error,
+            )
+            return _command_result(receipt, request_id=request_id, intent_id=intent_id)
         receipt = self._worker.submit(
             DecisionTask(candidate, submit_effective, bypass=submit_direct)
         )
-        if receipt.status in {DecisionStatus.PENDING, DecisionStatus.RUNNING}:
-            return CommandResult(
-                request_id,
-                "pending",
-                {"intent_id": intent_id, "decision_id": decision_id},
-            )
-        if receipt.status in {DecisionStatus.APPROVED, DecisionStatus.REVISED}:
-            return CommandResult(
-                request_id,
-                "duplicate",
-                {"intent_id": intent_id, "decision_id": decision_id},
-            )
-        if (
-            receipt.status is DecisionStatus.ABSTAINED
-            and receipt.delivery_certainty == "sent"
-        ):
-            return CommandResult(
-                request_id,
-                receipt.final_submission_status or "accepted",
-                {"intent_id": intent_id, "decision_id": decision_id},
-            )
+        return _command_result(receipt, request_id=request_id, intent_id=intent_id)
+
+
+def _command_result(
+    receipt: DecisionReceipt,
+    *,
+    request_id: str,
+    intent_id: str,
+) -> CommandResult:
+    decision_id = receipt.decision_id
+    if receipt.status in {DecisionStatus.PENDING, DecisionStatus.RUNNING}:
         return CommandResult(
             request_id,
-            "rejected",
+            "pending",
             {"intent_id": intent_id, "decision_id": decision_id},
-            error=receipt.reason
-            or f"Decision admission failed: {receipt.status.value}",
-            error_code="agent_decision_not_sent",
         )
+    if receipt.status in {DecisionStatus.APPROVED, DecisionStatus.REVISED}:
+        return CommandResult(
+            request_id,
+            "duplicate",
+            {"intent_id": intent_id, "decision_id": decision_id},
+        )
+    if (
+        receipt.status is DecisionStatus.ABSTAINED
+        and receipt.delivery_certainty == "sent"
+    ):
+        return CommandResult(
+            request_id,
+            receipt.final_submission_status or "accepted",
+            {"intent_id": intent_id, "decision_id": decision_id},
+        )
+    return CommandResult(
+        request_id,
+        "rejected",
+        {"intent_id": intent_id, "decision_id": decision_id},
+        error=receipt.reason or f"Decision admission failed: {receipt.status.value}",
+        error_code="agent_decision_not_sent",
+    )
 
 
 class UnavailableAgentExecutionCommands:

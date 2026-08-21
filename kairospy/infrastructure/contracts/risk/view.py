@@ -31,9 +31,13 @@ class RiskViewKey:
         return "risk.latest"
 
     def resource_path(self, root: str | Path) -> Path:
-        # Rust's RiskViewKey uses the actor id directly as the resource
-        # component; keep the Python path byte-for-byte identical.
-        return Path(root) / "risk" / self.actor_id / "latest" / "current.snapshot"
+        return (
+            Path(root)
+            / "risk"
+            / _component(self.actor_id)
+            / "latest"
+            / "current.snapshot"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +199,15 @@ def _policy_id(policy: object | None) -> str:
 
 def _text(value: bytes | None) -> str | None:
     return None if value is None else value.decode("utf-8")
+
+
+def _component(value: str) -> str:
+    return "".join(
+        chr(byte)
+        if (byte < 128 and chr(byte).isalnum()) or byte in b"-_."
+        else f"%{byte:02X}"
+        for byte in value.encode("utf-8")
+    )
 
 
 def _decimal64(value: object | None) -> Decimal | None:

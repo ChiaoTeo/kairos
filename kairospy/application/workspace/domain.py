@@ -203,7 +203,7 @@ class WorkspacePaths(ResourceScopePaths):
 class Workspace:
     identity: WorkspaceIdentity
     paths: WorkspacePaths
-    cli_format: str = "json"
+    cli_format: str = "text"
 
     @property
     def workspace_id(self) -> str:

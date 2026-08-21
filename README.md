@@ -47,8 +47,9 @@ uv run kairos launch wait demo-backtest
 uv run kairos observe --workspace my-project
 ```
 
-详细的 Launch、Data、Research、账户、行情和日志操作见
-[`docs/guides/operations.md`](docs/guides/operations.md)。
+不知道从哪个命令开始时，先看
+[`CLI 场景导览`](docs/guides/cli-scenarios.md)；详细的 Launch、Data、Research、账户、
+行情和日志操作见 [`操作指南`](docs/guides/operations.md)。
 
 ## 架构速览
 
@@ -68,6 +69,7 @@ flowchart LR
 ## 文档
 
 - [文档导航](docs/README.md)
+- [CLI 场景导览](docs/guides/cli-scenarios.md)
 - [详细操作指南](docs/guides/operations.md)
 - [策略通知](docs/guides/strategy-notifications.md)
 - [当前架构](docs/architecture/README.md)

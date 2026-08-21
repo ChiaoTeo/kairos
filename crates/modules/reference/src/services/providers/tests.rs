@@ -752,6 +752,7 @@ fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
     .unwrap();
 
     assert_eq!(catalog.listings.len(), 2);
+    assert_eq!(catalog.markets.len(), 2);
     let ids = catalog
         .listings
         .iter()
@@ -760,7 +761,19 @@ fn massive_same_ticker_on_distinct_primary_venues_has_distinct_listings() {
     assert_eq!(ids.len(), 2);
     assert!(ids.contains("listing:exchange:nasdaq:equity:BCPC:USD"));
     assert!(ids.contains("listing:exchange:nyse:equity:BCPC:USD"));
-    assert!(catalog.markets.is_empty());
+    let market_ids = catalog
+        .markets
+        .iter()
+        .map(|market| market.market_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(market_ids.len(), 2);
+    assert!(market_ids.contains("market:exchange:nasdaq:equity:BCPC"));
+    assert!(market_ids.contains("market:exchange:nyse:equity:BCPC"));
+    assert!(catalog.markets.iter().all(|market| {
+        market.instrument_kind == InstrumentKind::Equity
+            && market.listing_id.is_some()
+            && market.asset_type == Some(AssetClass::Equity)
+    }));
 }
 
 #[test]

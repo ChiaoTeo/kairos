@@ -8,6 +8,7 @@
 面向使用者，回答“如何完成一项操作”。
 
 - [项目与运行操作](guides/operations.md)
+- [CLI 场景导览](guides/cli-scenarios.md)
 - [策略通知](guides/strategy-notifications.md)
 
 ## Architecture
@@ -58,4 +59,3 @@
 - 代码或 schema 已能完整表达的事实不再复制成 Markdown。
 - 操作、现状或决定变化时，同一变更必须更新对应 Guide、Architecture、Integration 或 Decision。
 - 可重复生成的 HTML、索引和报告输出到 `target/`，由 CI 按需发布 artifact。
-

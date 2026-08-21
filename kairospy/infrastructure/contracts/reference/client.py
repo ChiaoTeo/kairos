@@ -248,6 +248,7 @@ class ReferenceReadSession:
         *,
         market_ids: Sequence[str] | None = None,
         symbol: str | None = None,
+        asset_code: str | None = None,
         exchange_id: str | None = None,
         instrument_kind: str | None = None,
         asset_type: str | None = None,
@@ -259,6 +260,33 @@ class ReferenceReadSession:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        extra_clauses: list[str] = []
+        extra_values: list[object] = []
+        if asset_code is not None:
+            normalized_asset_code = asset_code.strip().upper()
+            extra_clauses.append(
+                "("
+                "instrument_id IN ("
+                "SELECT instrument_id FROM reference_instruments_current "
+                "WHERE symbol = ?"
+                ") OR underlying_instrument_id IN ("
+                "SELECT instrument_id FROM reference_instruments_current "
+                "WHERE symbol = ?"
+                ") OR json_extract(payload, '$.base_asset_id') IN ("
+                "SELECT asset_id FROM reference_assets_current WHERE code = ?"
+                ") OR json_extract(payload, '$.quote_asset_id') IN ("
+                "SELECT asset_id FROM reference_assets_current WHERE code = ?"
+                ")"
+                ")"
+            )
+            extra_values.extend(
+                (
+                    normalized_asset_code,
+                    normalized_asset_code,
+                    normalized_asset_code,
+                    normalized_asset_code,
+                )
+            )
         rows = self._query_rows(
             table="reference_markets_current",
             key="market_id",
@@ -274,6 +302,8 @@ class ReferenceReadSession:
             },
             ids=market_ids,
             active_only=active_only,
+            extra_clauses=extra_clauses,
+            extra_values=extra_values,
             limit=limit,
             offset=offset,
         )

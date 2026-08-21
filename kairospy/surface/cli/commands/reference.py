@@ -288,6 +288,7 @@ def reference_options_remove(
 def reference_markets(
     market_id: list[str] | None = typer.Option(None, "--market-id"),
     symbol: str | None = typer.Option(None, "--symbol"),
+    asset_code: str | None = typer.Option(None, "--asset-code", "--asset"),
     exchange_id: str | None = typer.Option(None, "--exchange-id", "--exchange"),
     instrument_kind: str | None = typer.Option(None, "--instrument-kind"),
     asset_type: str | None = typer.Option(None, "--asset-type"),
@@ -301,13 +302,14 @@ def reference_markets(
     limit: int | None = typer.Option(None, "--limit", min=1, max=10_000),
     offset: int = typer.Option(0, "--offset", min=0),
     workspace: Path | None = typer.Option(None, "--workspace"),
-    output: str = typer.Option("text", "--output", "--format"),
+    output: str = typer.Option("table", "--output", "--format"),
 ) -> None:
     from kairospy.surface.cli.options import OutputFormat, render
 
     value = _client(workspace).markets(
         market_ids=market_id,
         symbol=symbol,
+        asset_code=asset_code,
         exchange_id=exchange_id,
         instrument_kind=instrument_kind,
         asset_type=asset_type,

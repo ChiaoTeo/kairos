@@ -202,6 +202,7 @@ def test_reference_sqlite_client_reads_watermark_and_scoped_markets(tmp_path) ->
         )
         == 1
     )
+    assert len(client.markets(asset_code="BTC", active_only=True)) == 1
     assert len(client.assets(code="BTC", asset_class="crypto")) == 1
     assert len(client.entities(entity_type="exchange", active_only=True)) == 1
     assert (
@@ -449,6 +450,8 @@ def test_reference_query_cli_exposes_filtered_markets_and_option_chain(
                 "markets",
                 "--market-id",
                 "market:binance:spot:BTCUSDT",
+                "--asset-code",
+                "BTC",
                 "--active-only",
                 "--limit",
                 "1",

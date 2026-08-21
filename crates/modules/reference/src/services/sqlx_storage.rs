@@ -14,7 +14,7 @@ use crate::domain::{
 };
 
 const LIFECYCLE_LIMIT: i64 = 4096;
-pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 4;
+pub(crate) const PROVIDER_PROJECTION_VERSION: i64 = 5;
 
 #[derive(Clone, Copy, Default)]
 #[cfg_attr(test, allow(dead_code))]

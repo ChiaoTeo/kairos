@@ -783,16 +783,60 @@ fn append_massive_instrument(
         } else {
             format!("listing:{exchange_id}:option:{symbol}")
         };
+        let listing_id = kairos_primitives::reference::ListingId::new(listing_id)?;
+        let exchange = kairos_primitives::reference::Exchange::new(exchange_id.clone())?;
         catalog.listings.push(Listing {
-            listing_id: kairos_primitives::reference::ListingId::new(listing_id)?,
-            instrument_id,
-            exchange_id: kairos_primitives::reference::Exchange::new(exchange_id)?,
-            exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol)?,
+            listing_id: listing_id.clone(),
+            instrument_id: instrument_id.clone(),
+            exchange_id: exchange.clone(),
+            exchange_symbol: kairos_primitives::reference::Symbol::new(source_symbol.clone())?,
             status,
             effective_from_unix_nanos: 0.into(),
             effective_to_unix_nanos: value.expiry_unix_nanos,
             ..Listing::default()
         });
+        if family == "equity" {
+            catalog.markets.push(Market {
+                market_id: kairos_primitives::reference::MarketId::new(format!(
+                    "market:{exchange_id}:equity:{source_symbol}"
+                ))?,
+                instrument_id,
+                listing_id: Some(listing_id),
+                exchange_id: exchange,
+                instrument_kind: InstrumentKind::Equity,
+                asset_type: Some(AssetClass::Equity),
+                venue_symbol: Some(kairos_primitives::reference::Symbol::new(source_symbol)?),
+                base_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
+                    "asset:equity:{symbol}"
+                ))?),
+                quote_asset_id: Some(kairos_primitives::reference::AssetId::new(format!(
+                    "asset:fiat:{quote}"
+                ))?),
+                status,
+                price_tick: super::optional_decimal(value.price_tick, "Massive price tick")?,
+                quantity_tick: super::optional_decimal(
+                    value.quantity_tick,
+                    "Massive quantity tick",
+                )?,
+                price_precision: value.price_precision.unwrap_or_default() as i32,
+                quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
+                minimum_quantity: super::optional_decimal(
+                    value.minimum_quantity,
+                    "Massive minimum quantity",
+                )?,
+                minimum_notional: super::optional_decimal(
+                    value.minimum_notional,
+                    "Massive minimum notional",
+                )?,
+                contract_size: super::optional_decimal(
+                    value.contract_value,
+                    "Massive contract size",
+                )?,
+                effective_from_unix_nanos: 0.into(),
+                effective_to_unix_nanos: None,
+                ..Market::default()
+            });
+        }
     }
     Ok(())
 }
