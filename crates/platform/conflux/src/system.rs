@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use kairos_account_contract::view::AccountViewReader;
 use kairos_account_contract::{AccountClient, AccountEventStream};
-use kairos_execution_contract::{ExecutionClient, ExecutionEventStream, ExecutionViewReader};
+use kairos_capital_contract::{CapitalClient, CapitalEventStream};
+use kairos_execution_contract::{ExecutionClient, ExecutionEventStream};
 use kairos_integration::ConnectionKey;
 use kairos_integration::participants::binance::advanced::stocks::{
     BinanceStocksRestConnection, BinanceStocksUserWebSocketConnection,
@@ -57,9 +58,9 @@ use kairos_integration::participants::okx::private::{
 use kairos_integration::participants::okx::public::{
     OkxPublicRestConnection, OkxPublicWebSocketConnection,
 };
-use kairos_market_contract::{MarketClient, MarketEventStream, MarketViewReader};
+use kairos_market_contract::{MarketClient, MarketEventStream};
 use kairos_reference_contract::{ReferenceClient, ReferenceEventStream};
-use kairos_risk_contract::{RiskClient, RiskEventStream, RiskViewReader};
+use kairos_risk_contract::{RiskClient, RiskEventStream};
 use kairos_transport::{
     AeronBytePublisher, AtomicFileSnapshotStorage, SharedSnapshotReader, SharedSnapshotWriter,
 };
@@ -72,12 +73,43 @@ use crate::{
     SystemEvent,
 };
 
+pub fn reference_connection_from_workspace(
+    workspace: &kairos_workspace::Workspace,
+    aeron_dir: Option<&Path>,
+) -> Result<kairos_reference_contract::ReferenceConnection, String> {
+    Ok(kairos_reference_contract::ReferenceConnection {
+        contract: kairos_protocol::ContractClient::new(
+            workspace
+                .control_socket("reference")
+                .map_err(|error| error.to_string())?,
+            None::<std::path::PathBuf>,
+            Some(
+                kairos_transport::AeronEndpoint::new(
+                    aeron_dir.map(Path::to_path_buf),
+                    kairos_transport::DEFAULT_CHANNEL,
+                    kairos_transport::stream_ids::REFERENCE_CHANGES,
+                )
+                .map_err(|error| error.to_string())?,
+            ),
+        ),
+        database: workspace
+            .child(&["state", "reference", "reference.sqlite"])
+            .map_err(|error| error.to_string())?,
+        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor")
+            .map_err(|error| error.to_string())?,
+    })
+}
+
 pub(crate) enum ConnectionDriverOutput {
     Integration(IntegrationEvent),
     System(SystemEvent),
     Account {
         client: String,
         frame: kairos_account_contract::AccountEventFrame,
+    },
+    Capital {
+        client: String,
+        frame: kairos_capital_contract::CapitalEventFrame,
     },
     Execution {
         client: String,
@@ -524,21 +556,18 @@ pub struct ConfluxSystem {
     pending_system_events: VecDeque<(String, SystemEvent)>,
 
     pub account_clients: ManagedClients<String, AccountClient>,
+    pub capital_clients: ManagedClients<String, CapitalClient>,
     pub execution_clients: ManagedClients<String, ExecutionClient>,
     pub market_clients: ManagedClients<String, MarketClient>,
     pub reference_clients: ManagedClients<String, ReferenceClient>,
     pub risk_clients: ManagedClients<String, RiskClient>,
 
     pub account_event_streams: NamedResources<String, AccountEventStream>,
+    pub capital_event_streams: NamedResources<String, CapitalEventStream>,
     pub execution_event_streams: NamedResources<String, ExecutionEventStream>,
     pub market_event_streams: NamedResources<String, MarketEventStream>,
     pub reference_event_streams: NamedResources<String, ReferenceEventStream>,
     pub risk_event_streams: NamedResources<String, RiskEventStream>,
-
-    pub account_view_readers: NamedResources<String, AccountViewReader>,
-    pub execution_view_readers: NamedResources<String, ExecutionViewReader>,
-    pub market_view_readers: NamedResources<String, MarketViewReader>,
-    pub risk_view_readers: NamedResources<String, RiskViewReader>,
 
     /// Process-owned transport resources. These collections manage concrete
     /// Aeron and mmap handles without pretending that their byte APIs are a
@@ -624,19 +653,17 @@ impl ConfluxSystem {
             timers: BTreeMap::new(),
             pending_system_events: VecDeque::new(),
             account_clients: ManagedClients::new(),
+            capital_clients: ManagedClients::new(),
             execution_clients: ManagedClients::new(),
             market_clients: ManagedClients::new(),
             reference_clients: ManagedClients::new(),
             risk_clients: ManagedClients::new(),
             account_event_streams: NamedResources::new(),
+            capital_event_streams: NamedResources::new(),
             execution_event_streams: NamedResources::new(),
             market_event_streams: NamedResources::new(),
             reference_event_streams: NamedResources::new(),
             risk_event_streams: NamedResources::new(),
-            account_view_readers: NamedResources::new(),
-            execution_view_readers: NamedResources::new(),
-            market_view_readers: NamedResources::new(),
-            risk_view_readers: NamedResources::new(),
             aeron_publishers: NamedResources::new(),
             mmap_readers: NamedResources::new(),
             mmap_writers: NamedResources::new(),
@@ -876,6 +903,126 @@ impl ConfluxSystem {
         self.file_writers.clear();
     }
 
+    pub fn install_account_contract(
+        &mut self,
+        key: impl Into<String>,
+        client: AccountClient,
+    ) -> Result<(), crate::ResourceError> {
+        let key = key.into();
+        self.account_clients
+            .ensure_with(key.clone(), 1, || client)?;
+        self.account_clients
+            .get_mut(&key)
+            .expect("Account client inserted")
+            .set_state(ResourceState::Ready);
+        Ok(())
+    }
+
+    pub fn install_account_connection(
+        &mut self,
+        key: impl Into<String>,
+        control_socket: impl Into<PathBuf>,
+        view_root: Option<PathBuf>,
+    ) -> Result<(), crate::ResourceError> {
+        let connection = kairos_account_contract::AccountConnection::control_only(control_socket);
+        let connection = if let Some(view_root) = view_root {
+            connection.with_view_root(view_root)
+        } else {
+            connection
+        };
+        self.install_account_contract(key, AccountClient::connect(connection))
+    }
+
+    pub fn install_capital_contract(
+        &mut self,
+        key: impl Into<String>,
+        client: CapitalClient,
+    ) -> Result<(), crate::ResourceError> {
+        let key = key.into();
+        self.capital_clients
+            .ensure_with(key.clone(), 1, || client)?;
+        self.capital_clients
+            .get_mut(&key)
+            .expect("Capital client inserted")
+            .set_state(ResourceState::Ready);
+        Ok(())
+    }
+
+    pub fn install_capital_connection(
+        &mut self,
+        key: impl Into<String>,
+        control_socket: impl Into<PathBuf>,
+        view_root: Option<PathBuf>,
+    ) -> Result<(), crate::ResourceError> {
+        let connection = kairos_capital_contract::CapitalConnection::control_only(control_socket);
+        let connection = if let Some(view_root) = view_root {
+            connection.with_view_root(view_root)
+        } else {
+            connection
+        };
+        self.install_capital_contract(key, CapitalClient::connect(connection))
+    }
+
+    pub fn install_execution_contract(
+        &mut self,
+        key: impl Into<String>,
+        client: ExecutionClient,
+    ) -> Result<(), crate::ResourceError> {
+        let key = key.into();
+        self.execution_clients
+            .ensure_with(key.clone(), 1, || client)?;
+        self.execution_clients
+            .get_mut(&key)
+            .expect("Execution client inserted")
+            .set_state(ResourceState::Ready);
+        Ok(())
+    }
+
+    pub fn install_execution_connection(
+        &mut self,
+        key: impl Into<String>,
+        control_socket: impl Into<PathBuf>,
+        view_root: Option<PathBuf>,
+    ) -> Result<(), crate::ResourceError> {
+        let connection =
+            kairos_execution_contract::ExecutionConnection::control_only(control_socket);
+        let connection = if let Some(view_root) = view_root {
+            connection.with_view_root(view_root)
+        } else {
+            connection
+        };
+        self.install_execution_contract(key, ExecutionClient::connect(connection))
+    }
+
+    pub fn install_market_contract(
+        &mut self,
+        key: impl Into<String>,
+        client: MarketClient,
+    ) -> Result<(), crate::ResourceError> {
+        let key = key.into();
+        self.market_clients.ensure_with(key.clone(), 1, || client)?;
+        self.market_clients
+            .get_mut(&key)
+            .expect("Market client inserted")
+            .set_state(ResourceState::Ready);
+        Ok(())
+    }
+
+    pub fn install_market_connection(
+        &mut self,
+        key: impl Into<String>,
+        control_socket: impl Into<PathBuf>,
+        view_root: Option<PathBuf>,
+    ) -> Result<(), crate::ResourceError> {
+        let connection = kairos_market_contract::MarketConnection::control_only(control_socket);
+        let connection = if let Some(view_root) = view_root {
+            connection.with_view_root(view_root)
+        } else {
+            connection
+        };
+        self.install_market_contract(key, MarketClient::connect(connection))
+    }
+
     pub fn install_reference_contract(
         &mut self,
         key: impl Into<String>,
@@ -898,10 +1045,151 @@ impl ConfluxSystem {
         Ok(())
     }
 
+    pub fn install_reference_connection(
+        &mut self,
+        key: impl Into<String>,
+        connection: kairos_reference_contract::ReferenceConnection,
+        event_capacity: usize,
+    ) -> Result<(), String> {
+        let client = ReferenceClient::connect(connection);
+        let stream = client
+            .events(event_capacity)
+            .map_err(|error| error.to_string())?;
+        self.install_reference_contract(key, client, stream)
+            .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn reference_client_mut(&mut self, key: &str) -> Option<&mut ReferenceClient> {
         self.reference_clients
             .get_mut(&key.to_owned())
             .map(|managed| managed.client_mut())
+    }
+
+    pub fn reference_client(&self, key: &str) -> Option<ReferenceClient> {
+        self.reference_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
+    }
+
+    pub fn reference_market_snapshot(
+        &mut self,
+        key: &str,
+    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+        self.reference_client_mut(key)
+            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
+            .market_snapshot()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn reference_execution_snapshot(
+        &mut self,
+        key: &str,
+    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+        self.reference_client_mut(key)
+            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
+            .execution_snapshot()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn reference_account_snapshot(
+        &mut self,
+        key: &str,
+    ) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, String> {
+        self.reference_client_mut(key)
+            .ok_or_else(|| format!("managed Reference client is missing: {key}"))?
+            .account_snapshot()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn install_risk_contract(
+        &mut self,
+        key: impl Into<String>,
+        client: RiskClient,
+    ) -> Result<(), crate::ResourceError> {
+        let key = key.into();
+        self.risk_clients.ensure_with(key.clone(), 1, || client)?;
+        self.risk_clients
+            .get_mut(&key)
+            .expect("Risk client inserted")
+            .set_state(ResourceState::Ready);
+        Ok(())
+    }
+
+    pub fn install_risk_connection(
+        &mut self,
+        key: impl Into<String>,
+        control_socket: impl Into<PathBuf>,
+        view_root: Option<PathBuf>,
+    ) -> Result<(), String> {
+        let connection = kairos_risk_contract::RiskConnection::control_only(control_socket);
+        let connection = if let Some(view_root) = view_root {
+            connection.with_view_root(view_root)
+        } else {
+            connection
+        };
+        let client = RiskClient::connect(connection).map_err(|error| error.to_string())?;
+        self.install_risk_contract(key, client)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn account_client_mut(&mut self, key: &str) -> Option<&mut AccountClient> {
+        self.account_clients
+            .get_mut(&key.to_owned())
+            .map(|managed| managed.client_mut())
+    }
+
+    pub fn account_client(&self, key: &str) -> Option<AccountClient> {
+        self.account_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
+    }
+
+    pub(crate) fn capital_client_mut(&mut self, key: &str) -> Option<&mut CapitalClient> {
+        self.capital_clients
+            .get_mut(&key.to_owned())
+            .map(|managed| managed.client_mut())
+    }
+
+    pub fn capital_client(&self, key: &str) -> Option<CapitalClient> {
+        self.capital_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
+    }
+
+    pub(crate) fn execution_client_mut(&mut self, key: &str) -> Option<&mut ExecutionClient> {
+        self.execution_clients
+            .get_mut(&key.to_owned())
+            .map(|managed| managed.client_mut())
+    }
+
+    pub fn execution_client(&self, key: &str) -> Option<ExecutionClient> {
+        self.execution_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
+    }
+
+    pub(crate) fn market_client_mut(&mut self, key: &str) -> Option<&mut MarketClient> {
+        self.market_clients
+            .get_mut(&key.to_owned())
+            .map(|managed| managed.client_mut())
+    }
+
+    pub fn market_client(&self, key: &str) -> Option<MarketClient> {
+        self.market_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
+    }
+
+    pub(crate) fn risk_client_mut(&mut self, key: &str) -> Option<&mut RiskClient> {
+        self.risk_clients
+            .get_mut(&key.to_owned())
+            .map(|managed| managed.client_mut())
+    }
+
+    pub fn risk_client(&self, key: &str) -> Option<RiskClient> {
+        self.risk_clients
+            .get(&key.to_owned())
+            .map(|managed| managed.client().clone())
     }
 
     pub(crate) fn register_timer(&mut self, name: String, period: Duration) {
@@ -1577,14 +1865,15 @@ impl ConfluxSystem {
             }};
         }
 
-        const FAMILIES: usize = 5;
+        const FAMILIES: usize = 6;
         for offset in 0..FAMILIES {
             match (state.contract_family_cursor + offset) % FAMILIES {
                 0 => poll_contract!(account_event_streams, Account, "account"),
-                1 => poll_contract!(execution_event_streams, Execution, "execution"),
-                2 => poll_contract!(market_event_streams, Market, "market"),
-                3 => poll_contract!(reference_event_streams, Reference, "reference"),
-                4 => poll_contract!(risk_event_streams, Risk, "risk"),
+                1 => poll_contract!(capital_event_streams, Capital, "capital"),
+                2 => poll_contract!(execution_event_streams, Execution, "execution"),
+                3 => poll_contract!(market_event_streams, Market, "market"),
+                4 => poll_contract!(reference_event_streams, Reference, "reference"),
+                5 => poll_contract!(risk_event_streams, Risk, "risk"),
                 _ => unreachable!(),
             }
         }

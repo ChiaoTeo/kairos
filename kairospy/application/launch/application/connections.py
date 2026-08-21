@@ -1,4 +1,4 @@
-"""Typed instance endpoint facts published by Launch runtime composition."""
+"""Typed instance connection facts published by Launch runtime composition."""
 
 from __future__ import annotations
 
@@ -12,25 +12,29 @@ from ....domain_types import AccountId
 
 
 @dataclass(frozen=True, slots=True)
-class ComponentEndpoint:
+class ComponentConnection:
     component: str
     socket: Path
     snapshot: Path | None = None
     view_root: Path | None = None
+    database: Path | None = None
+    actor_id: str | None = None
     required_segments: tuple[str, ...] = ()
     broker: str | None = None
     lease_fence: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class InstanceEndpoints:
-    accounts: Mapping[AccountId, ComponentEndpoint]
-    risk: ComponentEndpoint | None
-    execution: ComponentEndpoint | None
-    capital: ComponentEndpoint | None
+class InstanceConnections:
+    accounts: Mapping[AccountId, ComponentConnection]
+    market: ComponentConnection | None
+    reference: ComponentConnection | None
+    risk: ComponentConnection | None
+    execution: ComponentConnection | None
+    capital: ComponentConnection | None
 
 
-def resolve_instance_endpoints(instance: InstanceWorkspace) -> InstanceEndpoints:
+def resolve_instance_connections(instance: InstanceWorkspace) -> InstanceConnections:
     """Parse and validate the component manifest exactly once for a caller."""
 
     path = instance.component_manifest()
@@ -38,10 +42,10 @@ def resolve_instance_endpoints(instance: InstanceWorkspace) -> InstanceEndpoints
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as error:
         raise RuntimeError(
-            "strategy instance component endpoint manifest is incomplete"
+            "strategy instance component connection manifest is incomplete"
         ) from error
     if not isinstance(raw, Mapping):
-        raise RuntimeError("component endpoint manifest must be an object")
+        raise RuntimeError("component connection manifest must be an object")
     schema_version = raw.get("schema_version", 1)
     if schema_version != 1:
         raise RuntimeError(f"unsupported component manifest schema: {schema_version}")
@@ -49,14 +53,16 @@ def resolve_instance_endpoints(instance: InstanceWorkspace) -> InstanceEndpoints
     components = _mapping(raw.get("components"), "components")
     account_values = _mapping(raw.get("accounts"), "accounts")
     accounts = {
-        AccountId(str(account_id)): _endpoint(value, f"account:{account_id}")
+        AccountId(str(account_id)): _connection(value, f"account:{account_id}")
         for account_id, value in account_values.items()
     }
-    return InstanceEndpoints(
+    return InstanceConnections(
         accounts=accounts,
-        risk=_optional_endpoint(components.get("risk"), "risk"),
-        execution=_optional_endpoint(components.get("execution"), "execution"),
-        capital=_optional_endpoint(components.get("capital"), "capital"),
+        market=_optional_connection(components.get("market"), "market"),
+        reference=_optional_connection(components.get("reference"), "reference"),
+        risk=_optional_connection(components.get("risk"), "risk"),
+        execution=_optional_connection(components.get("execution"), "execution"),
+        capital=_optional_connection(components.get("capital"), "capital"),
     )
 
 
@@ -82,39 +88,49 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
     return value
 
 
-def _endpoint(value: object, component: str) -> ComponentEndpoint:
+def _connection(value: object, component: str) -> ComponentConnection:
     if not isinstance(value, Mapping):
-        raise RuntimeError(f"{component} endpoint must be an object")
+        raise RuntimeError(f"{component} connection must be an object")
     socket = value.get("socket")
     if not isinstance(socket, str) or not socket.strip():
-        raise RuntimeError(f"{component} endpoint is missing socket")
+        raise RuntimeError(f"{component} connection is missing socket")
     snapshot = value.get("snapshot")
     if snapshot is not None and (not isinstance(snapshot, str) or not snapshot.strip()):
-        raise RuntimeError(f"{component} endpoint has an invalid snapshot")
+        raise RuntimeError(f"{component} connection has an invalid snapshot")
     view_root = value.get("view_root")
     if view_root is not None and (
         not isinstance(view_root, str) or not view_root.strip()
     ):
-        raise RuntimeError(f"{component} endpoint has an invalid view_root")
+        raise RuntimeError(f"{component} connection has an invalid view_root")
+    database = value.get("database")
+    if database is not None and (
+        not isinstance(database, str) or not database.strip()
+    ):
+        raise RuntimeError(f"{component} connection has an invalid database")
+    actor_id = value.get("actor_id")
+    if actor_id is not None and (not isinstance(actor_id, str) or not actor_id.strip()):
+        raise RuntimeError(f"{component} connection has an invalid actor_id")
     required_segments = value.get("required_segments", [])
     if not isinstance(required_segments, list) or any(
         not isinstance(segment, str) or not segment.strip()
         for segment in required_segments
     ):
-        raise RuntimeError(f"{component} endpoint has invalid required_segments")
+        raise RuntimeError(f"{component} connection has invalid required_segments")
     broker = value.get("broker")
     if broker is not None and (not isinstance(broker, str) or not broker.strip()):
-        raise RuntimeError(f"{component} endpoint has an invalid broker")
+        raise RuntimeError(f"{component} connection has an invalid broker")
     lease_fence = value.get("lease_fence")
     if lease_fence is not None and (
         not isinstance(lease_fence, str) or not lease_fence.strip()
     ):
-        raise RuntimeError(f"{component} endpoint has an invalid lease_fence")
-    return ComponentEndpoint(
+        raise RuntimeError(f"{component} connection has an invalid lease_fence")
+    return ComponentConnection(
         component=component,
         socket=Path(socket),
         snapshot=None if snapshot is None else Path(snapshot),
         view_root=None if view_root is None else Path(view_root),
+        database=None if database is None else Path(database),
+        actor_id=None if actor_id is None else actor_id.strip(),
         required_segments=tuple(
             dict.fromkeys(segment.strip() for segment in required_segments)
         ),
@@ -123,5 +139,5 @@ def _endpoint(value: object, component: str) -> ComponentEndpoint:
     )
 
 
-def _optional_endpoint(value: object, component: str) -> ComponentEndpoint | None:
-    return None if value is None else _endpoint(value, component)
+def _optional_connection(value: object, component: str) -> ComponentConnection | None:
+    return None if value is None else _connection(value, component)

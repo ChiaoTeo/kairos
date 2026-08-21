@@ -1,27 +1,24 @@
 //! Closed, typed, single-writer runtime for long-running Kairos modules.
 //!
-//! A Conflux process exposes exactly one owning [`Contract`] and receives every
-//! source through one closed [`ConfluxEvent`] enum. [`ConfluxSystem`] contains
-//! the complete concrete client and connection universe. The runtime contains
-//! no open resource catalog and no erased dispatch path.
+//! A Conflux process receives every source through one closed [`ConfluxEvent`]
+//! enum. [`ConfluxSystem`] contains the complete concrete client and connection
+//! universe. The runtime contains no open resource catalog and no erased
+//! dispatch path.
 
 mod actor;
 mod context;
-mod contract;
 mod control;
 mod event;
 mod lifecycle;
 mod output;
 mod process;
 mod resource;
+mod rpc;
 mod system;
 
 pub use actor::ConfluxActor;
 pub use context::Context;
-pub use contract::{Contract, RestContract, RestRequestOf, RestResponseOf};
-pub use control::{
-    HttpControlConfig, HttpControlEndpoint, HttpControlRunError, HttpControlledConflux,
-};
+pub use control::{JsonRpcConfluxRuntime, JsonRpcRuntimeConfig, JsonRpcRuntimeError};
 pub use event::{
     ConfluxEvent, ContractEvent, IntegrationEvent, ManagedConnectionIdentity, SystemEvent,
 };
@@ -128,14 +125,15 @@ pub use output::{
 pub use process::{
     BuildError, Conflux, ConfluxConfig, ConfluxHandle, ConfluxOutcome, ConnectionControlError,
     HandleConnectionCollections, HandleError, OkxPrivateRestHandle, OkxPrivateWebSocketHandle,
-    OkxPublicRestHandle, OkxPublicWebSocketHandle, RunError,
+    OkxPublicRestHandle, OkxPublicWebSocketHandle, RpcActorInvocation, RunError,
 };
 pub use resource::{
     ConnectionCreateOptions, EnsureDisposition, ManagedClient, ManagedClients,
     ManagedConnectionPolicy, ManagedResource, NamedResources, RecoveryPolicy, ResourceError,
     ResourceOperationError, ResourceState,
 };
+pub use rpc::ConfluxJsonRpcService;
 pub use system::{
     ConfluxSystem, ConnectionAccessError, ConnectionCollections, ConnectionCreateError,
-    TypedConnectionCollection,
+    TypedConnectionCollection, reference_connection_from_workspace,
 };

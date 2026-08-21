@@ -163,7 +163,9 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
     .expect("read Execution-owned admission policy");
     let projection = fs::read_to_string(root.join("dependencies/projection/mod.rs"))
         .expect("read Execution typed projections");
-    assert!(projection.contains("AccountViewReader"));
+    assert!(projection.contains("AccountClient"));
+    assert!(projection.contains("account_current("));
+    assert!(projection.contains("observed_orders("));
     assert!(!projection.contains("SharedSnapshotReader"));
     assert!(projection.contains("metadata.applied_revision()"));
     assert!(projection.contains("ViewCompleteness::COMPLETE"));
@@ -199,15 +201,16 @@ fn execution_reads_account_business_state_from_the_typed_mmap_view() {
 }
 
 #[test]
-fn execution_reads_reference_business_state_through_the_contract_sqlite_client() {
+fn execution_does_not_create_reference_contract_clients_inside_the_module() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let projection =
         fs::read_to_string(root.join("src/services/dependencies/projection/mod.rs")).unwrap();
     let module = rust_source(&root.join("src/composition/connections"));
-    assert!(projection.contains("ReferenceClient::connect"));
-    assert!(module.contains("ReferenceClient::connect"));
-    assert!(projection.contains("execution_snapshot()"));
-    assert!(module.contains("execution_snapshot()"));
+    assert!(!projection.contains("ReferenceClient::connect"));
+    assert!(!module.contains("ReferenceClient::connect"));
+    assert!(!projection.contains("read_execution_snapshot"));
+    assert!(!module.contains("read_execution_snapshot"));
+    assert!(projection.contains("project_reference_snapshot"));
     assert!(!projection.contains("ReferenceViewReader"));
     assert!(!module.contains("ReferenceViewReader"));
     assert!(!projection.contains("ReferenceSqliteReader"));
@@ -223,10 +226,19 @@ fn execution_cli_reads_durable_business_state_from_mmap_and_routes_from_control(
     )
     .expect("read Execution CLI");
     assert!(source.contains("ExecutionViewKind::CurrentExecution"));
-    assert!(source.contains("frame.current_execution()?"));
+    assert!(source.contains("client.current_execution("));
+    assert!(source.contains("frame.view()?"));
     assert!(source.contains("query command routed to typed mmap"));
-    assert!(source.contains("RestControlClient::new"));
-    assert!(source.contains("/v1/routes"));
+    assert!(source.contains("ConfluxSystem::new()"));
+    assert!(source.contains("install_execution_connection("));
+    assert!(source.contains("execution_client("));
+    assert!(source.contains("ExecutionControlRpcClient::routes"));
+    assert!(!source.contains("ExecutionConnection::control_only"));
+    assert!(!source.contains("ExecutionClient::connect"));
+    assert!(!source.contains("ExecutionViewReader::open"));
+    assert!(!source.contains("\"execution_routes\""));
+    assert!(!source.contains("RestControlClient::new"));
+    assert!(!source.contains("/v1/routes"));
     assert!(!source.contains("compose_direct_execution_connections"));
     assert!(!source.contains("ExecutionApplication::with_dependencies"));
     assert!(!source.contains("Command::RemoteOpenOrders"));
@@ -329,14 +341,18 @@ fn execution_uses_one_contract_actor_and_conflux_owned_control() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let application = rust_source(&root.join("src/application"));
     let composition = rust_source(&root.join("src/composition"));
-    assert!(application.contains("impl Contract for ExecutionApplication"));
+    assert!(application.contains("execution_control_rpc_conflux_actor"));
     assert!(application.contains("impl ConfluxActor for ExecutionApplication"));
     assert!(application.contains("async fn handle("));
     assert!(!root.join("src/application/process").exists());
     assert!(!root.join("src/services/control").exists());
     assert!(!root.join("src/composition/host.rs").exists());
-    assert!(composition.contains("with_http_control"));
-    assert!(composition.contains("ExecutionHttpControl"));
+    assert!(application.contains("ExecutionRpcActor"));
+    assert!(application.contains("ExecutionRpcService"));
+    assert!(composition.contains("with_json_rpc"));
+    assert!(composition.contains("ExecutionControlRpcServer"));
+    assert!(!composition.contains("with_http_control"));
+    assert!(!composition.contains("ExecutionHttpControl"));
     let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(!manifest.contains("axum.workspace"));
     assert!(!manifest.contains("kairos-transport"));

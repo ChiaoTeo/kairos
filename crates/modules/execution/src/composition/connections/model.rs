@@ -58,7 +58,7 @@ pub struct ExecutionInstrumentRoute {
 /// canonical Reference identity. Provider product and symbol remain owned by
 /// the configured Execution route; Reference never supplies broker coverage.
 pub fn load_execution_routes_from_reference_markets(
-    database: &Path,
+    snapshot: &kairos_reference_contract::ReferenceProjectionSnapshot,
     configured_routes: &[ExecutionConnectionOptions],
 ) -> Result<
     Vec<(
@@ -67,20 +67,6 @@ pub fn load_execution_routes_from_reference_markets(
     )>,
     String,
 > {
-    let endpoint = kairos_reference_contract::ReferenceEndpoint {
-        database: database.to_path_buf(),
-        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor")
-            .map_err(|error| error.to_string())?,
-        events: kairos_conflux::AeronEndpoint::from_parts(
-            None,
-            kairos_conflux::DEFAULT_AERON_CHANNEL,
-            kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
-        )
-        .map_err(|error| error.to_string())?,
-    };
-    let snapshot = kairos_reference_contract::ReferenceClient::connect(endpoint)
-        .execution_snapshot()
-        .map_err(|error| error.to_string())?;
     let mut candidates = Vec::new();
     for configured in configured_routes {
         if !configured.instruments.is_empty() {

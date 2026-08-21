@@ -55,9 +55,14 @@ def test_component_process_application_starts_bin_and_waits_for_health(
             while True:
                 client, _ = server.accept()
                 request = client.recv(65536).decode()
-                stopping = '/v1/stop' in request
-                body = json.dumps({{'status': 'stopping' if stopping else 'ready'}}).encode()
-                client.sendall(b'HTTP/1.1 202 Accepted\\r\\nContent-Length: ' + str(len(body)).encode() + b'\\r\\n\\r\\n' + body)
+                payload = json.loads(request.split('\\r\\n\\r\\n', 1)[1])
+                stopping = payload.get('method') == 'system_stop'
+                body = json.dumps({{
+                    'jsonrpc': '2.0',
+                    'id': payload.get('id'),
+                    'result': {{'status': 'stopping' if stopping else 'ready'}},
+                }}).encode()
+                client.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: ' + str(len(body)).encode() + b'\\r\\n\\r\\n' + body)
                 client.close()
                 if stopping:
                     time.sleep(0.2)
@@ -213,7 +218,14 @@ def test_component_list_reports_all_system_components_without_starting_them(
 
     value = ComponentProcessApplication(workspace).list_status()
 
-    assert set(value) == {"reference", "market", "account", "risk", "execution"}
+    assert set(value) == {
+        "reference",
+        "market",
+        "account",
+        "risk",
+        "capital",
+        "execution",
+    }
     assert all(item["status"] == "not_running" for item in value.values())
     assert not any(workspace.paths.process_socket(name).exists() for name in value)
 

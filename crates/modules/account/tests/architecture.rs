@@ -8,7 +8,10 @@ fn account_control_transport_is_framework_owned() {
     let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs")).unwrap();
     assert!(!manifest.contains("axum.workspace"));
     assert!(!manifest.contains("kairos-transport"));
-    assert!(server.contains("with_http_control"));
+    assert!(server.contains("with_json_rpc"));
+    assert!(server.contains("AccountRpcService"));
+    assert!(server.contains("AccountControlRpcServer"));
+    assert!(!server.contains("with_http_control"));
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(!server.contains(forbidden));
     }
@@ -150,7 +153,8 @@ fn account_conflux_has_one_live_fact_source_and_mode_gated_paper_settlement() {
         .expect("read Account Conflux actor");
     assert!(!server.contains("\"/v1/fill\""));
     assert!(!server.contains("\"/v1/order-event\""));
-    assert!(server.contains("\"/v1/simulation/settlements\""));
+    assert!(!server.contains("\"/v1/simulation/settlements\""));
+    assert!(actor.contains("async fn apply_simulated_settlement"));
     assert!(actor.contains("self.apply_simulated_fill"));
     assert!(actor.contains("fn simulated_fill"));
     assert!(actor.contains("SimulatedSettlement"));
@@ -180,7 +184,7 @@ fn account_conflux_has_one_live_fact_source_and_mode_gated_paper_settlement() {
 #[test]
 fn account_contract_exposes_no_live_fact_mutation() {
     let contract = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contract/src/control/account.rs"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("contract/src/control/service.rs"),
     )
     .expect("read Account control contract");
     assert!(!contract.contains("publish_order_event"));
@@ -443,7 +447,9 @@ fn reference_is_the_only_owner_of_account_canonical_instrument_identity() {
 
     let adapter = fs::read_to_string(account_root.join("src/services/integration.rs"))
         .expect("read Account Integration adapter");
-    assert!(adapter.contains("ReferenceClient"));
+    assert!(adapter.contains("ReferenceProjectionSnapshot"));
+    assert!(adapter.contains("update_reference_snapshot"));
+    assert!(!adapter.contains("ReferenceClient"));
     assert!(!adapter.contains("ReferenceViewReader"));
     assert!(!adapter.contains("rusqlite"));
     assert!(!adapter.contains("reference_markets_current"));
@@ -464,7 +470,7 @@ fn account_server_bootstrap_selects_only_a_registered_account() {
     let args = server
         .split("struct Args {")
         .nth(1)
-        .and_then(|value| value.split("fn lease_component").next())
+        .and_then(|value| value.split("impl Args").next())
         .expect("Account server Args");
     for forbidden in [
         "api_key: String",
@@ -525,8 +531,13 @@ fn account_cli_business_state_queries_read_typed_mmap_without_composing_an_appli
     .expect("read account cli");
 
     assert!(cli.contains("fn read_mmap_query("));
-    assert!(cli.contains("AccountViewReader::open(view_root, key)"));
-    assert!(cli.contains("AccountViewKind::ObservedOrders"));
+    assert!(cli.contains("install_account_connection("));
+    assert!(cli.contains("account_client("));
+    assert!(cli.contains(".account_current("));
+    assert!(cli.contains(".observed_orders("));
+    assert!(!cli.contains("AccountConnection::control_only"));
+    assert!(!cli.contains("AccountClient::connect"));
+    assert!(!cli.contains("AccountViewReader::open"));
     assert!(cli.contains("if is_mmap_query(&command)"));
     for forbidden in [
         "composition.application.snapshot_query(",
@@ -571,17 +582,18 @@ fn account_application_has_no_synchronous_business_query_facade() {
 }
 
 #[test]
-fn account_rest_exposes_health_as_its_only_get_query() {
+fn account_json_rpc_exposes_health_as_typed_control() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = fs::read_to_string(root.join("src/bin/kairos-account-server.rs"))
         .expect("read Account server");
-    assert!(server.contains("(\"GET\", \"/v1/health\")"));
+    assert!(server.contains("AccountRpcService"));
+    assert!(!server.contains("(\"GET\", \"/v1/health\")"));
     assert!(!server.contains("(\"GET\", \"/v1/balances\")"));
 
-    let contract = fs::read_to_string(root.join("contract/src/control/client.rs"))
-        .expect("read Account control client");
-    assert_eq!(contract.matches("\"GET\"").count(), 1);
-    assert!(contract.contains("\"GET\", \"/v1/health\""));
+    let contract = fs::read_to_string(root.join("contract/src/control/service.rs"))
+        .expect("read Account control service");
+    assert!(contract.contains("#[conflux_rpc(namespace = \"account\")]"));
+    assert!(contract.contains("async fn health"));
 
     let types = fs::read_to_string(root.join("contract/src/control/account.rs"))
         .expect("read typed Account health contract");

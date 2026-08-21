@@ -6,7 +6,7 @@ from pathlib import Path
 import flatbuffers
 
 from kairospy.domain_types import AccountId
-from kairospy.infrastructure.contracts.account import AccountCurrentViewReader
+from kairospy.infrastructure.contracts.account import AccountCurrentProjection
 from kairospy.infrastructure.transport.native import native
 from kairospy.infrastructure.transport.generated.kairos.account.v2 import (
     AccountCurrentView,
@@ -111,7 +111,7 @@ def test_one_account_mmap_decodes_every_segment_at_one_generation(
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot())
 
-    snapshot = AccountCurrentViewReader(
+    snapshot = AccountCurrentProjection(
         tmp_path, account_id=AccountId("main")
     ).snapshot(AccountId("main"))
 
@@ -131,7 +131,7 @@ def test_account_projection_rejects_frame_metadata_generation_mismatch(
     _write_shared_snapshot(path, _account_snapshot(generation=8))
 
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+        AccountCurrentProjection(tmp_path, account_id=AccountId("main")).snapshot(
             AccountId("main")
         )
     except ValueError as error:
@@ -144,7 +144,7 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot(completeness=2))
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+        AccountCurrentProjection(tmp_path, account_id=AccountId("main")).snapshot(
             AccountId("main")
         )
     except ValueError as error:
@@ -154,7 +154,7 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
 
     path.write_bytes(b"not-a-shared-snapshot")
     try:
-        AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+        AccountCurrentProjection(tmp_path, account_id=AccountId("main")).snapshot(
             AccountId("main")
         )
     except native.CorruptSnapshotError as error:
@@ -166,12 +166,12 @@ def test_account_projection_rejects_incomplete_or_corrupt_mmap(tmp_path: Path) -
 def test_account_projection_reopens_after_publisher_restart(tmp_path: Path) -> None:
     path = _account_path(tmp_path)
     _write_shared_snapshot(path, _account_snapshot())
-    first = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+    first = AccountCurrentProjection(tmp_path, account_id=AccountId("main")).snapshot(
         AccountId("main")
     )
     path.unlink()
     _write_shared_snapshot(path, _account_snapshot())
-    second = AccountCurrentViewReader(tmp_path, account_id=AccountId("main")).snapshot(
+    second = AccountCurrentProjection(tmp_path, account_id=AccountId("main")).snapshot(
         AccountId("main")
     )
     assert second == first

@@ -2,16 +2,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig,
-    HttpControlledConflux, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcConfluxRuntime,
+    JsonRpcRuntimeConfig, MmapOutputDeclaration,
 };
-use kairos_risk_contract::{RiskHttpControl, RiskViewKey, RiskViewPublisher};
+use kairos_risk_contract::{RiskControlRpcServer, RiskViewKey, RiskViewPublisher};
 
 use crate::RiskApplication;
+use crate::application::RiskRpcService;
 use crate::domain::RiskPolicy;
 use crate::services::actor::RiskActor;
 
-pub type RiskHost = HttpControlledConflux<RiskApplication, RiskHttpControl>;
+pub type RiskHost = JsonRpcConfluxRuntime<RiskApplication>;
 
 pub struct RiskHostConfig {
     pub actor_id: String,
@@ -85,8 +86,11 @@ pub fn build_risk_host(config: RiskHostConfig) -> Result<RiskHost, String> {
         },
     )
     .map_err(|error| error.to_string())?;
-    let control = HttpControlConfig::uds(config.socket_path).with_health_file(config.health_file);
-    Ok(conflux.with_http_control(handle, RiskHttpControl, control))
+    let invocation = handle.rpc_actor_invocation(Duration::from_secs(30));
+    let methods = RiskRpcService::<RiskApplication>::new(invocation).into_rpc();
+    let control =
+        JsonRpcRuntimeConfig::uds(config.socket_path).with_health_file(config.health_file);
+    Ok(conflux.with_json_rpc(handle, methods, control))
 }
 
 pub fn compose_risk_application(
@@ -161,20 +165,34 @@ impl FlatbuffersRiskEventWriter {
 
 #[cfg(test)]
 mod tests {
-    use kairos_conflux::{Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig};
-    use kairos_risk_contract::RiskHttpControl;
-    use kairos_workspace::RestControlClient;
+    use std::time::Duration;
+
+    use kairos_conflux::{
+        Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig, ShutdownMode,
+    };
+    use kairos_primitives::account::{AccountId, SegmentKey};
+    use kairos_primitives::reference::{Currency, Exchange, InstrumentId};
+    use kairos_primitives::risk::{MarginRuleCode, PolicyId, ReservationId};
+    use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
+    use kairos_risk_contract::{
+        Amount, AuthorizeRequest, EnforcementMode, Health, Metric, PolicyScope,
+        PublishPolicyRequest, RiskCommandStatus, RiskControlRpcClient, RiskControlRpcServer,
+        RiskDecision, RiskPolicy, TradeRiskProposal,
+    };
 
     #[tokio::test(flavor = "current_thread")]
-    async fn framework_owned_uds_control_preserves_the_risk_contract() {
+    async fn framework_owned_uds_json_rpc_control_preserves_the_risk_contract() {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("risk.sock");
         let mut application = super::compose_risk_application("risk", Vec::new(), None).unwrap();
         application.set_clock_mode(crate::RiskClockMode::Replay);
         let (conflux, handle) =
             Conflux::new(application, ConfluxSystem::new(), ConfluxConfig::default()).unwrap();
+        let invocation = handle.rpc_actor_invocation(Duration::from_secs(3));
+        let methods = crate::application::RiskRpcService::<crate::RiskApplication>::new(invocation)
+            .into_rpc();
         let runtime =
-            conflux.with_http_control(handle, RiskHttpControl, HttpControlConfig::uds(&socket));
+            conflux.with_json_rpc(handle.clone(), methods, JsonRpcRuntimeConfig::uds(&socket));
 
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -185,38 +203,70 @@ mod tests {
                     }
                     tokio::task::yield_now().await;
                 }
-                let client = RestControlClient::new(&socket);
-                let health = client.health().await.unwrap();
-                assert_eq!(health["status"], "ready");
-
-                let policy = r#"{"policy":{"policy_id":"account-notional","version":1,"scope":{"account_id":"main","strategy_id":null,"instrument_id":null,"exchange_id":null},"metric":"notional","limit":"100","enforcement":"reject","valid_from_unix_nanos":0,"valid_until_unix_nanos":null}}"#;
-                let configured = client
-                    .request_json(
-                        "POST",
-                        "/v1/publish_policy",
-                        Some(policy.as_bytes()),
-                    )
+                let mut system = ConfluxSystem::new();
+                system
+                    .install_risk_connection("risk", socket.clone(), None)
+                    .unwrap();
+                let client = system.risk_client("risk").unwrap();
+                let health = RiskControlRpcClient::health(&client.control())
                     .await
                     .unwrap();
-                assert_eq!(configured["status"], "active");
+                assert_eq!(health.status, "ready");
 
-                let request = r#"{"request_id":"request-1","idempotency_key":"key-1","reservation_id":"reservation-1","account_id":"main","strategy_id":"strategy","instrument_id":"instrument","exchange_id":"exchange","proposal":{"notional":"40","initial_margin_rate_bps":10000,"account_segment":"usd_m_futures","collateral_asset":"USDT","reduce_only":false,"margin_rule_id":"test:fully-funded"},"at_unix_nanos":1,"reservation_ttl_nanos":100,"dependency_generation":1,"dependency_event_sequence":1}"#;
-                let decision = client
-                    .request_json(
-                        "POST",
-                        "/v1/authorizations",
-                        Some(request.as_bytes()),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(decision["allowed"], true);
-                assert_eq!(decision["instrument_id"], "instrument");
+                let policy = RiskPolicy {
+                    policy_id: PolicyId::new("account-notional").unwrap(),
+                    version: 1.into(),
+                    scope: PolicyScope {
+                        account_id: Some(AccountId::new("main").unwrap()),
+                        strategy_id: None,
+                        instrument_id: None,
+                        exchange_id: None,
+                    },
+                    metric: Metric::Notional,
+                    limit: Amount::new(100, 0).unwrap(),
+                    enforcement: EnforcementMode::Reject,
+                    valid_from_unix_nanos: 0.into(),
+                    valid_until_unix_nanos: None,
+                    window_nanos: None,
+                };
+                let configured = RiskControlRpcClient::publish_policy(
+                    &client.control(),
+                    PublishPolicyRequest { policy },
+                )
+                .await
+                .unwrap();
+                assert_eq!(configured.status, "active");
 
-                let stop = client
-                    .request_json("POST", "/v1/stop", None)
-                    .await
-                    .unwrap();
-                assert_eq!(stop["status"], "stopping");
+                let request = AuthorizeRequest {
+                    request_id: RequestId::new("request-1").unwrap(),
+                    idempotency_key: IdempotencyKey::new("key-1").unwrap(),
+                    reservation_id: ReservationId::new("reservation-1").unwrap(),
+                    account_id: AccountId::new("main").unwrap(),
+                    strategy_id: StrategyId::new("strategy").unwrap(),
+                    instrument_id: InstrumentId::new("instrument").unwrap(),
+                    exchange_id: Exchange::new("exchange").unwrap(),
+                    proposal: TradeRiskProposal {
+                        notional: Amount::new(40, 0).unwrap(),
+                        initial_margin_rate_bps: 10_000.into(),
+                        account_segment: SegmentKey::new("usd_m_futures").unwrap(),
+                        collateral_asset: Currency::new("USDT").unwrap(),
+                        reduce_only: false,
+                        margin_rule_id: MarginRuleCode::new("test:fully-funded").unwrap(),
+                    },
+                    at_unix_nanos: 1.into(),
+                    reservation_ttl_nanos: 100.into(),
+                    dependency_generation: 1.into(),
+                    dependency_event_sequence: 1.into(),
+                    context: None,
+                };
+                let decision =
+                    RiskControlRpcClient::authorize_and_reserve(&client.control(), request)
+                        .await
+                        .unwrap();
+                assert!(decision.allowed);
+                assert_eq!(decision.instrument_id.as_str(), "instrument");
+
+                handle.shutdown(ShutdownMode::Drain);
                 task.await.unwrap().unwrap();
                 assert!(!socket.exists());
             })

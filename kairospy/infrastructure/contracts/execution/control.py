@@ -4,48 +4,56 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import quote
 
-from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
+from kairospy.infrastructure.transport.commands import UnixJsonRpcClient
 
 
 class ExecutionControlClient:
-    """JSON-over-UDS client matching ``schemas/v2/execution/control.openapi.yaml``."""
+    """JSON-over-UDS client matching the Execution JSON-RPC control trait."""
 
     def __init__(self, socket_path: str | Path, *, timeout: float = 30.0) -> None:
-        self._client = UnixJsonCommandClient(socket_path, timeout=timeout)
+        self._client = UnixJsonRpcClient(socket_path, timeout=timeout)
 
     def health(self) -> Mapping[str, Any]:
-        return self.request("GET", "/v1/health")
+        return self.call("execution_health")
+
+    def routes(self, query: Mapping[str, object] | None = None) -> Mapping[str, Any]:
+        return self.call("execution_routes", [dict(query or {})])
 
     def submit_intent(self, request: Mapping[str, object]) -> Mapping[str, Any]:
-        return self.request("POST", "/v1/intents", request)
+        return self.call("execution_submit_intent", [request])
 
     def cancel_order(
         self, order_id: str, request: Mapping[str, object] | None = None
     ) -> Mapping[str, Any]:
-        return self.request("DELETE", f"/v1/orders/{quote(order_id, safe='')}", request)
+        return self.call("execution_cancel_order", [order_id, request or {}])
 
     def replace_order(
         self, order_id: str, request: Mapping[str, object]
     ) -> Mapping[str, Any]:
-        return self.request("PATCH", f"/v1/orders/{quote(order_id, safe='')}", request)
+        return self.call("execution_replace_order", [order_id, request])
 
     def reconcile(self, request: Mapping[str, object]) -> Mapping[str, Any]:
-        return self.request("POST", "/v1/reconciliation", request)
+        return self.call("execution_reconcile", [request])
 
-    def request(
+    def advance_time(self, event_time_unix_nanos: int) -> Mapping[str, Any]:
+        return self.call(
+            "execution_advance_time",
+            [{"event_time_unix_nanos": int(event_time_unix_nanos)}],
+        )
+
+    def backtest_run(self, request: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("execution_backtest_run", [request])
+
+    def backtest_market(self, event: Mapping[str, object]) -> Mapping[str, Any]:
+        return self.call("execution_backtest_market", [{"event": event}])
+
+    def call(
         self,
         method: str,
-        path: str,
-        body: Mapping[str, object] | None = None,
+        params: list[object] | None = None,
     ) -> Mapping[str, Any]:
-        status, value = self._client.request(method, path, body)
-        if status >= 400:
-            raise RuntimeError(
-                str(value.get("error", f"Execution request failed: HTTP {status}"))
-            )
-        return value
+        return self._client.call(method, params)
 
 
 __all__ = ["ExecutionControlClient"]

@@ -1,14 +1,62 @@
 use kairos_primitives::account::{AccountId, SegmentKey};
-use kairos_primitives::decimal::{Price, Quantity, Ratio, SignedQuantity};
+use kairos_primitives::decimal::{Money, Price, Quantity, Rate, Ratio, SignedQuantity};
 use kairos_primitives::execution::{
-    ExecutionRouteId, IntentId, LegId, OrderId, OrderOptionCode, OrderSide, OrderType,
+    ExecutionRouteId, FillId, IntentId, LegId, OrderId, OrderOptionCode, OrderSide, OrderType,
 };
 use kairos_primitives::integration::{ParticipantId, ProviderProductCode, ProviderSymbol};
-use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::reference::{Currency, InstrumentId, MarketId};
 use kairos_primitives::risk::DecisionId;
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId, WorkspaceId};
 use kairos_primitives::time::{DurationNanos, UnixNanos};
+use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 use serde::{Deserialize, Serialize};
+
+#[conflux_rpc(namespace = "execution")]
+pub trait ExecutionControlRpc {
+    async fn health(&self) -> RpcResult<kairos_execution_contract::ExecutionHealthResponse>;
+
+    async fn routes(
+        &self,
+        query: kairos_execution_contract::ExecutionRoutesQuery,
+    ) -> RpcResult<kairos_execution_contract::ExecutionRoutesResponse>;
+
+    async fn submit_intent(
+        &self,
+        request: kairos_execution_contract::SubmitIntentRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionCommandStatus>;
+
+    async fn cancel_order(
+        &self,
+        order_id: kairos_primitives::execution::OrderId,
+        request: kairos_execution_contract::CancelOrderRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionCommandStatus>;
+
+    async fn replace_order(
+        &self,
+        order_id: kairos_primitives::execution::OrderId,
+        request: kairos_execution_contract::ReplaceOrderRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionCommandStatus>;
+
+    async fn reconcile(
+        &self,
+        request: kairos_execution_contract::ReconcileExecutionRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionReconcileResponse>;
+
+    async fn advance_time(
+        &self,
+        request: kairos_execution_contract::AdvanceExecutionTimeRequest,
+    ) -> RpcResult<kairos_execution_contract::AdvanceExecutionTimeResponse>;
+
+    async fn backtest_run(
+        &self,
+        request: kairos_execution_contract::ExecutionBacktestRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionBacktestRunResponse>;
+
+    async fn backtest_market(
+        &self,
+        request: kairos_execution_contract::ExecutionBacktestMarketRequest,
+    ) -> RpcResult<kairos_execution_contract::ExecutionBacktestMarketResponse>;
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionControlResponse {
     pub status: Option<String>,
@@ -215,30 +263,213 @@ pub struct ReconcileExecutionRequest {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExecutionRestRequest {
-    Health,
-    Routes(ExecutionRoutesQuery),
-    SubmitIntent(SubmitIntentRequest),
-    CancelOrder {
-        order_id: OrderId,
-        request: CancelOrderRequest,
-    },
-    ReplaceOrder {
-        order_id: OrderId,
-        request: ReplaceOrderRequest,
-    },
-    Reconcile(ReconcileExecutionRequest),
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceExecutionTimeRequest {
+    pub event_time_unix_nanos: UnixNanos,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExecutionRestResponse {
-    Health(Result<ExecutionHealthResponse, ExecutionControlError>),
-    Routes(Result<ExecutionRoutesResponse, ExecutionControlError>),
-    SubmitIntent(Result<ExecutionCommandStatus, ExecutionControlError>),
-    CancelOrder(Result<ExecutionCommandStatus, ExecutionControlError>),
-    ReplaceOrder(Result<ExecutionCommandStatus, ExecutionControlError>),
-    Reconcile(Result<ExecutionReconcileResponse, ExecutionControlError>),
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AdvanceExecutionTimeResponse {
+    pub advanced_to_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestEquityPoint {
+    pub observed_at_unix_nanos: UnixNanos,
+    pub equity: Money,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestFill {
+    pub instrument_id: InstrumentId,
+    pub side: OrderSide,
+    pub quantity: Quantity,
+    pub price: Price,
+    #[serde(default)]
+    pub fee: Money,
+    pub occurred_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExecutionBacktestObservationScope {
+    Market {
+        market_id: String,
+    },
+    Consolidated {
+        instrument_id: String,
+        network_id: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestQuote {
+    pub scope: ExecutionBacktestObservationScope,
+    pub instrument_id: String,
+    pub bid_price: Option<String>,
+    pub bid_quantity: Option<String>,
+    pub ask_price: Option<String>,
+    pub ask_quantity: Option<String>,
+    pub observed_at_unix_nanos: u64,
+    pub source_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestBar {
+    pub scope: ExecutionBacktestObservationScope,
+    pub instrument_id: String,
+    pub timeframe: String,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: Option<String>,
+    pub observed_at_unix_nanos: u64,
+    pub source_id: String,
+    pub derivation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestTradeBar {
+    pub bar: ExecutionBacktestBar,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestQuoteBar {
+    pub bar: ExecutionBacktestBar,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ExecutionBacktestMarketObservation {
+    Quote(ExecutionBacktestQuote),
+    Bar(ExecutionBacktestBar),
+    TradeBar(ExecutionBacktestTradeBar),
+    QuoteBar(ExecutionBacktestQuoteBar),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestSimulationConfig {
+    #[serde(default)]
+    pub fee_bps: Rate,
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
+    #[serde(default)]
+    pub slippage_bps: Rate,
+    #[serde(default = "default_true")]
+    pub enforce_quote_quantity: bool,
+}
+
+impl Default for ExecutionBacktestSimulationConfig {
+    fn default() -> Self {
+        Self {
+            fee_bps: Rate::ZERO,
+            fee_currency: None,
+            slippage_bps: Rate::ZERO,
+            enforce_quote_quantity: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestOrderRequest {
+    pub order_id: OrderId,
+    pub instrument_id: InstrumentId,
+    #[serde(default)]
+    pub market_id: Option<MarketId>,
+    pub side: OrderSide,
+    pub order_type: OrderType,
+    pub quantity: Quantity,
+    #[serde(default)]
+    pub limit_price: Option<Price>,
+    pub submitted_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ExecutionBacktestOrderStatus {
+    Accepted,
+    PartiallyFilled,
+    Filled,
+    Canceled,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestOrder {
+    pub request: ExecutionBacktestOrderRequest,
+    pub status: ExecutionBacktestOrderStatus,
+    pub filled_quantity: Quantity,
+    pub remaining_quantity: Quantity,
+    pub updated_at_unix_nanos: UnixNanos,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestSimulationFill {
+    pub fill_id: FillId,
+    pub order_id: OrderId,
+    pub instrument_id: InstrumentId,
+    #[serde(default)]
+    pub execution_market_id: Option<MarketId>,
+    pub side: OrderSide,
+    pub quantity: Quantity,
+    pub price: Price,
+    pub fee: Money,
+    #[serde(default)]
+    pub fee_currency: Option<Currency>,
+    pub occurred_at_unix_nanos: UnixNanos,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestRequest {
+    pub initial_equity: Money,
+    #[serde(default)]
+    pub equity_curve: Vec<ExecutionBacktestEquityPoint>,
+    #[serde(default)]
+    pub fills: Vec<ExecutionBacktestFill>,
+    #[serde(default)]
+    pub risk_free_rate: Rate,
+    pub annualization_periods: Option<f64>,
+    #[serde(default)]
+    pub market_events: Vec<ExecutionBacktestMarketObservation>,
+    #[serde(default)]
+    pub orders: Vec<ExecutionBacktestOrderRequest>,
+    #[serde(default)]
+    pub simulation: ExecutionBacktestSimulationConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestMetrics {
+    pub trade_count: usize,
+    pub win_count: usize,
+    pub loss_count: usize,
+    pub win_rate: String,
+    pub gross_profit: String,
+    pub gross_loss: String,
+    pub net_profit: String,
+    pub max_drawdown: String,
+    pub max_drawdown_pct: String,
+    pub sharpe: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestRunResponse {
+    pub metrics: ExecutionBacktestMetrics,
+    pub orders: Vec<ExecutionBacktestOrder>,
+    pub fills: Vec<ExecutionBacktestSimulationFill>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestMarketRequest {
+    pub event: ExecutionBacktestMarketObservation,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionBacktestMarketResponse {
+    pub fills: Vec<ExecutionBacktestSimulationFill>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

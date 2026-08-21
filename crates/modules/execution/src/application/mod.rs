@@ -3,6 +3,11 @@ mod conflux;
 pub(crate) mod core;
 mod model;
 
+kairos_execution_contract::execution_control_rpc_conflux_actor! {
+    pub trait ExecutionRpcActor;
+    service ExecutionRpcService;
+}
+
 pub use core::ExecutionApplication;
 pub(crate) use core::apply_connection_event;
 

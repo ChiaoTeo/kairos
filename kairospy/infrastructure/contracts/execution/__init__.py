@@ -7,10 +7,7 @@ directly; application models remain in ``kairospy.application.execution``.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
-
-from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
 
 from .control import ExecutionControlClient
 from .events import decode_event
@@ -24,34 +21,8 @@ from .view import (
 )
 
 
-def advance_time(path: str | Path, event_time_unix_nanos: int) -> dict[str, Any]:
-    """Advance Execution's deterministic replay clock at an explicit barrier."""
-
-    status, value = UnixJsonCommandClient(path).request(
-        "POST",
-        "/v1/time/advance",
-        {"event_time_unix_nanos": int(event_time_unix_nanos)},
-    )
-    if status >= 400:
-        raise RuntimeError(
-            value.get("error", f"execution time advance failed with status {status}")
-        )
-    return value
-
-
-def backtest_run(path: str | Path, request: dict[str, Any]) -> dict[str, Any]:
-    status, value = UnixJsonCommandClient(path).request(
-        "POST", "/v1/backtest/run", request
-    )
-    if status >= 400:
-        raise RuntimeError(
-            value.get("error", f"execution backtest failed with status {status}")
-        )
-    return value
-
-
-def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
-    """Forward one strategy-visible Market event through Execution control."""
+def backtest_market_payload(event: object) -> dict[str, Any] | None:
+    """Map one strategy-visible Market event into Execution control payload."""
 
     from kairospy.application.market import BarEvent, QuoteEvent
 
@@ -64,7 +35,7 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
             )
         body: dict[str, object] = {
             "Quote": {
-                "market_id": str(quote.market_id),
+                "scope": {"kind": "market", "market_id": str(quote.market_id)},
                 "instrument_id": str(quote.instrument.id),
                 "bid_price": None
                 if quote.bid_price is None
@@ -91,7 +62,7 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
             )
         body = {
             "Bar": {
-                "market_id": str(bar.market_id),
+                "scope": {"kind": "market", "market_id": str(bar.market_id)},
                 "instrument_id": str(bar.instrument.id),
                 "timeframe": bar.timeframe,
                 "open": format(bar.open, "f"),
@@ -105,15 +76,8 @@ def backtest_market(path: str | Path, event: object) -> dict[str, Any]:
             }
         }
     else:
-        return {"fills": []}
-    status, value = UnixJsonCommandClient(path).request(
-        "POST", "/v1/backtest/market", body
-    )
-    if status >= 400:
-        raise RuntimeError(
-            value.get("error", f"execution market backtest failed with status {status}")
-        )
-    return value
+        return None
+    return body
 
 
 __all__ = [
@@ -125,7 +89,5 @@ __all__ = [
     "ExecutionProjection",
     "decode_event",
     "decode_view",
-    "advance_time",
-    "backtest_run",
-    "backtest_market",
+    "backtest_market_payload",
 ]

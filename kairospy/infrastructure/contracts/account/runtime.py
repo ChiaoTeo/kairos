@@ -32,7 +32,7 @@ from .view_contract import (
 )
 from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 from ..base import CommandEnvelope, QueryEnvelope
-from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
+from kairospy.infrastructure.transport.commands import UnixJsonRpcClient
 
 
 class AccountContractClient:
@@ -44,43 +44,33 @@ class AccountContractClient:
     """
 
     def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
-        self._client = UnixJsonCommandClient(socket_path, timeout=timeout)
+        self._client = UnixJsonRpcClient(socket_path, timeout=timeout)
 
     def health(self) -> Mapping[str, Any]:
-        return self._get("/v1/health")
+        return self._call("account_health")
+
+    def refresh(self, request: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        return self._call("account_refresh", [dict(request or {})])
+
+    def reconcile(self, request: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        return self._call("account_reconcile", [dict(request or {})])
 
     def mark_to_market(self, update: Mapping[str, Any]) -> Mapping[str, Any]:
-        return self._post("/v1/mark-to-market", update)
+        return self._call("account_mark_to_market", [update])
 
     def advance_time(self, event_time_unix_nanos: int) -> Mapping[str, Any]:
-        return self._post(
-            "/v1/time/advance",
-            {"event_time_unix_nanos": event_time_unix_nanos},
+        return self._call(
+            "account_advance_time",
+            [{"event_time_unix_nanos": event_time_unix_nanos}],
         )
 
-    def _get(self, path: str, **params: object) -> Mapping[str, Any]:
-        query = "&".join(
-            f"{key}={value}" for key, value in params.items() if value is not None
-        )
-        status, value = self._client.request(
-            "GET", f"{path}?{query}" if query else path
-        )
-        return _response(status, value)
-
-    def _post(self, path: str, body: Mapping[str, Any]) -> Mapping[str, Any]:
-        status, value = self._client.request("POST", path, body)
-        return _response(status, value)
+    def _call(
+        self, method: str, params: list[object] | None = None
+    ) -> Mapping[str, Any]:
+        return self._client.call(method, params)
 
 
-def _response(status: int, value: Mapping[str, Any]) -> Mapping[str, Any]:
-    if status >= 400:
-        raise RuntimeError(
-            str(value.get("error", f"Account request failed: HTTP {status}"))
-        )
-    return value
-
-
-class AccountCurrentViewReader:
+class AccountCurrentProjection:
     """Synchronous Account application projection over one v2 current view."""
 
     def __init__(self, view_root: str | Path, *, account_id: AccountId) -> None:
@@ -293,14 +283,13 @@ def _market_value(value: object) -> Decimal | None:
     return None if quantity is None or mark is None else quantity * mark
 
 
-def backtest_mark_to_market(
-    path: str | Path,
+def backtest_mark_to_market_request(
     event,
     *,
     segment_key: str = "spot",
     quote_asset: str = "USDT",
-) -> Mapping[str, Any] | None:
-    """Apply the latest strategy-visible quote to Account during replay."""
+) -> dict[str, Any] | None:
+    """Map the latest strategy-visible quote to Account mark-to-market control."""
     from kairospy.application.market import BarEvent, QuoteEvent
 
     if isinstance(event, BarEvent):
@@ -322,19 +311,12 @@ def backtest_mark_to_market(
         event_time = observation.occurred_at_unix_nanos
     else:
         return None
-    client = AccountContractClient(path)
-    result = client.mark_to_market(
-        {
-            "segment_key": segment_key,
-            "instrument_id": instrument_id,
-            "quote_asset": quote_asset,
-            "mark_price": _decimal_wire(mark),
-            "observed_at_unix_nanos": event_time,
-        }
-    )
     return {
-        "result": result,
         "segment_key": segment_key,
+        "instrument_id": instrument_id,
+        "quote_asset": quote_asset,
+        "mark_price": _decimal_wire(mark),
+        "observed_at_unix_nanos": event_time,
     }
 
 
@@ -346,8 +328,8 @@ def _decimal_wire(value) -> str:
 
 __all__ = [
     "AccountContractClient",
-    "AccountCurrentViewReader",
+    "AccountCurrentProjection",
     "CommandEnvelope",
     "QueryEnvelope",
-    "backtest_mark_to_market",
+    "backtest_mark_to_market_request",
 ]

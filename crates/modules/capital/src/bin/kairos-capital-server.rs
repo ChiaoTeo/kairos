@@ -368,6 +368,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = group_config(&normalized.capital, &manifest, args.launch_mode.clone())?;
     let capital_group_id = config.capital_group_id.clone();
     let snapshot_root = instance.snapshot(&[])?;
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    for (account_id, account) in &manifest.accounts {
+        system
+            .install_account_connection(
+                account_id.clone(),
+                account.socket.clone(),
+                Some(snapshot_root.clone()),
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    system
+        .install_risk_connection(
+            "risk",
+            instance.socket("risk")?,
+            Some(snapshot_root.clone()),
+        )
+        .map_err(|error| error.to_string())?;
     let connection_accounts = manifest
         .accounts
         .iter()
@@ -389,6 +406,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &["credentials", "credentials.toml"],
     )?;
     let connections = compose_capital_integration_connections(
+        &mut system,
         &credential_config,
         &args.launch_mode,
         connection_accounts,
@@ -424,6 +442,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let identity = InstanceIdentity::new(workspace.id(), &args.launch_id, &args.instance_id)?;
     let host = build_capital_host(CapitalHostConfig {
         runtime,
+        system,
         conflux: kairos_capital::CapitalConfluxConfig {
             snapshot_root,
             instance_id: args.instance_id,

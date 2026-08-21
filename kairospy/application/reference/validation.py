@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from kairospy.infrastructure.contracts.reference import ReferenceClient
-
 
 PUBLIC_REFERENCE_SOURCES = (
     "binance-spot",
@@ -24,7 +22,7 @@ MASSIVE_REFERENCE_SOURCES = ("massive-equity", "massive-options")
 
 
 def validate_reference_runtime(
-    client: ReferenceClient,
+    client: Any,
     *,
     required_sources: Iterable[str] | None = None,
     require_published: bool = True,

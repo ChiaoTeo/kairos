@@ -11,7 +11,7 @@ use crate::domain::observation::order_book::PriceLevel;
 use crate::domain::source::{SourceEpoch, SourceFailureKind, SourceStatus};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct SourceRequestId(u64);
+pub struct SourceRequestId(u64);
 
 impl SourceRequestId {
     pub(crate) const fn new(value: u64) -> Self {
@@ -20,7 +20,7 @@ impl SourceRequestId {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct ProviderSubscriptionId(String);
+pub struct ProviderSubscriptionId(String);
 
 impl ProviderSubscriptionId {
     pub(crate) fn new(value: impl Into<String>) -> Result<Self, String> {
@@ -57,7 +57,7 @@ pub(crate) enum SourceCommand {
 }
 
 #[derive(Debug)]
-pub(crate) enum SourceInput {
+pub enum SourceInput {
     StatusChanged {
         source_id: SourceId,
         epoch: SourceEpoch,
@@ -112,7 +112,7 @@ pub(crate) enum SourceInput {
 }
 
 #[derive(Debug)]
-pub(crate) struct SourceOrderBookUpdate {
+pub struct SourceOrderBookUpdate {
     pub(crate) market: Box<ResolvedMarket>,
     pub(crate) source_id: SourceId,
     pub(crate) market_id: MarketId,

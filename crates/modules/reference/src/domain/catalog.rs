@@ -1,9 +1,10 @@
 //! Reference catalog aggregate and lifecycle reconciliation.
 
+use std::collections::BTreeMap;
+
 use kairos_primitives::reference::{InstrumentId, ListingId, MarketId, ReferenceStatus};
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 use super::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ProviderCatalog};
 

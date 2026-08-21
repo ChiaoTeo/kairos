@@ -2,13 +2,19 @@ use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand};
 use kairos_execution::application::{
-    BacktestApplication, BacktestRequest, ExecutionFillReport, ExecutionOrderOptions, OrderSide,
-    OrderType, SubmitOrder,
+    BacktestApplication, BacktestRequest, ExecutionOrderOptions, OrderSide, OrderType, SubmitOrder,
 };
-use kairos_execution_contract::{ExecutionViewKey, ExecutionViewKind, ExecutionViewReader};
+use kairos_execution_contract::{
+    CancelOrderRequest, CommandEnvelope, CompletionPolicy, ExecutionCommandStatus,
+    ExecutionControlRpcClient, ExecutionIntentRequest, ExecutionOrderOptionsRequest,
+    ExecutionReconcileResponse, ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy,
+    IntentLegRequest, IntentType, ReconcileExecutionRequest, ReplaceOrderRequest,
+    SubmitIntentRequest,
+};
 use kairos_primitives::account::{AccountId, SegmentKey};
 use kairos_primitives::execution::{ExecutionRouteId, IntentId, OrderId};
 use kairos_primitives::reference::{InstrumentId, MarketId};
+use kairos_primitives::runtime::{InstanceId, InstanceIdentity, LaunchId, StrategyId};
 use kairos_workspace::cli::{OutputFormat, render};
 use kairos_workspace::workspace::Workspace;
 
@@ -90,18 +96,22 @@ fn read_current_execution_view(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     use kairos_protocol::generated::kairos::common::v_2 as common;
     use kairos_protocol::generated::kairos::execution::v_2 as fb;
-    let key = ExecutionViewKey::new(
-        workspace_id,
-        ExecutionViewKind::CurrentExecution,
-        Some(instance.launch_id()),
-        Some(instance.instance_id()),
+    let identity =
+        InstanceIdentity::new(workspace_id, instance.launch_id(), instance.instance_id())?;
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system.install_execution_connection(
+        "execution",
+        instance.socket("execution")?,
+        Some(instance.snapshot(&[])?),
     )?;
-    let frame = ExecutionViewReader::open(instance.snapshot(&[])?, key.clone())?.read()?;
+    let client = system
+        .execution_client("execution")
+        .ok_or("managed Execution client is missing: execution")?;
+    let frame = client.current_execution(&identity)?.read()?;
     let envelope = frame.envelope_metadata();
-    let view = frame.current_execution()?;
+    let view = frame.view()?;
     let metadata = view.metadata();
-    if metadata.view_key() != key.canonical_key()
-        || metadata.workspace_id() != workspace_id
+    if metadata.workspace_id() != workspace_id
         || metadata.launch_id() != Some(instance.launch_id())
         || metadata.instance_id() != Some(instance.instance_id())
     {
@@ -337,8 +347,12 @@ async fn execute_control_command(
     socket: &std::path::Path,
     command: Command,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let client = kairos_workspace::RestControlClient::new(socket);
-    let (method, path, body) = match command {
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system.install_execution_connection("execution", socket.to_path_buf(), None)?;
+    let client = system
+        .execution_client("execution")
+        .ok_or("managed Execution client is missing: execution")?;
+    match command {
         Command::Routes {
             account_id,
             segment_key,
@@ -347,102 +361,84 @@ async fn execute_control_command(
             order_type,
             option,
         } => {
-            let query = [
-                ("account_id", account_id),
-                ("segment_key", segment_key),
-                ("instrument_id", instrument_id),
-                ("market_id", market_id),
-                ("order_type", order_type),
-                ("options", (!option.is_empty()).then(|| option.join(","))),
-            ]
-            .into_iter()
-            .filter_map(|(key, value)| value.map(|value| format!("{key}={value}")))
-            .collect::<Vec<_>>()
-            .join("&");
-            (
-                "GET",
-                if query.is_empty() {
-                    "/v1/routes".into()
-                } else {
-                    format!("/v1/routes?{query}")
+            if order_type.is_some() || !option.is_empty() {
+                return Err(
+                    "route order-type and option filters are not part of ExecutionControlRpc yet"
+                        .into(),
+                );
+            }
+            let response: ExecutionRoutesResponse = ExecutionControlRpcClient::routes(
+                &client.control(),
+                ExecutionRoutesQuery {
+                    account_id: account_id.map(AccountId::new).transpose()?,
+                    segment_key: segment_key.map(SegmentKey::new).transpose()?,
+                    instrument_id: instrument_id.map(InstrumentId::new).transpose()?,
+                    market_id: market_id.map(MarketId::new).transpose()?,
+                    participant_id: None,
                 },
-                None,
             )
+            .await?;
+            Ok(serde_json::to_value(response)?)
         },
-        Command::Reconcile { order_id } => (
-            "POST",
-            "/v1/reconciliation".into(),
-            Some(serde_json::to_vec(&serde_json::json!({
-                "order_id": order_id,
-                "reason": "operator requested reconciliation",
-            }))?),
-        ),
+        Command::Reconcile { order_id } => {
+            let response: ExecutionReconcileResponse = ExecutionControlRpcClient::reconcile(
+                &client.control(),
+                ReconcileExecutionRequest {
+                    order_id: order_id.map(OrderId::new).transpose()?,
+                    ..ReconcileExecutionRequest::default()
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(response)?)
+        },
         Command::LinkUnknown {
-            remote_order_id,
-            local_order_id,
-        } => (
-            "POST",
-            format!(
-                "/v1/link-unknown-remote?remote_order_id={remote_order_id}&local_order_id={local_order_id}"
-            ),
-            None,
-        ),
-        Command::Fill(args) => {
-            let request = ExecutionFillReport {
-                fill_id: kairos_primitives::execution::FillId::new(args.fill_id)?,
-                order_id: kairos_primitives::execution::OrderId::new(args.order_id)?,
-                quantity: args.quantity.parse()?,
-                price: args.price.parse()?,
-                fee: args.fee.parse()?,
-                fee_currency: args
-                    .fee_currency
-                    .as_deref()
-                    .map(kairos_primitives::reference::Currency::new)
-                    .transpose()?,
-                occurred_at_unix_nanos: args.occurred_at_unix_nanos.map(Into::into),
-                execution_market_id: None,
-                reported_provider_id: None,
-                provider_product: None,
-                provider_symbol: None,
-                remote_order_id: None,
-            };
-            (
-                "POST",
-                "/v1/fill".into(),
-                Some(serde_json::to_vec(&request)?),
-            )
-        },
+            remote_order_id: _,
+            local_order_id: _,
+        } => Err("link-unknown is not part of ExecutionControlRpc yet".into()),
+        Command::Fill(_) => Err("fill reporting is not part of ExecutionControlRpc yet".into()),
         Command::Submit(args) => {
-            let dry_run = args.dry_run;
-            let request = submit_request(args)?;
-            (
-                "POST",
-                if dry_run {
-                    "/v1/preview-submit"
-                } else {
-                    "/v1/orders"
-                }
-                .into(),
-                Some(serde_json::to_vec(&request)?),
+            if args.dry_run {
+                return Err("dry-run submit is not part of ExecutionControlRpc yet".into());
+            }
+            let response: ExecutionCommandStatus = ExecutionControlRpcClient::submit_intent(
+                &client.control(),
+                submit_intent_request(submit_request(args)?)?,
             )
+            .await?;
+            Ok(serde_json::to_value(response)?)
         },
-        Command::Cancel { order_id, reason } => (
-            "DELETE",
-            format!("/v1/orders/{order_id}"),
-            Some(serde_json::to_vec(&serde_json::json!({"reason": reason}))?),
-        ),
+        Command::Cancel { order_id, reason } => {
+            let response: ExecutionCommandStatus = ExecutionControlRpcClient::cancel_order(
+                &client.control(),
+                OrderId::new(order_id)?,
+                CancelOrderRequest {
+                    reason: Some(reason),
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(response)?)
+        },
         Command::Replace {
             order_id,
             replacement,
-        } => (
-            "PATCH",
-            format!("/v1/orders/{order_id}"),
-            Some(serde_json::to_vec(&submit_request(replacement)?)?),
-        ),
+        } => {
+            let replacement = submit_request(replacement)?;
+            let response: ExecutionCommandStatus = ExecutionControlRpcClient::replace_order(
+                &client.control(),
+                OrderId::new(order_id)?,
+                ReplaceOrderRequest {
+                    quantity: Some(replacement.quantity),
+                    limit_price: replacement.limit_price,
+                    options: Some(control_options(replacement.options)),
+                    reason: None,
+                },
+            )
+            .await?;
+            Ok(serde_json::to_value(response)?)
+        },
         Command::Backtest { .. } => unreachable!("backtest handled locally"),
         _ => unreachable!("query command routed to typed mmap"),
-    };
-    Ok(client.request_json(method, &path, body.as_deref()).await?)
+    }
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -635,6 +631,92 @@ fn submit_request(args: SubmitArgs) -> Result<SubmitOrder, Box<dyn std::error::E
         },
         submitted_at_unix_nanos: None,
     })
+}
+
+fn submit_intent_request(
+    request: SubmitOrder,
+) -> Result<SubmitIntentRequest, Box<dyn std::error::Error>> {
+    let intent_id = request
+        .intent_id
+        .clone()
+        .unwrap_or_else(|| IntentId::new(format!("intent:{}", request.order_id)).unwrap());
+    let strategy_id = request
+        .strategy_id
+        .clone()
+        .unwrap_or_else(|| StrategyId::new("cli").unwrap());
+    let leg = IntentLegRequest {
+        leg_id: kairos_primitives::execution::LegId::new(format!("leg:{}", request.order_id))?,
+        account_id: request.account_id.clone(),
+        segment_key: request.segment_key.clone(),
+        instrument_id: request.instrument_id.clone(),
+        market_id: request.market_id.clone(),
+        execution_route_id: request.execution_route_id.clone(),
+        side: request.side,
+        quantity: request.quantity,
+        limit_price: request.limit_price,
+        target_position: false,
+        options: control_options(request.options.clone()),
+    };
+    Ok(SubmitIntentRequest {
+        envelope: CommandEnvelope {
+            command_id: Some(kairos_primitives::runtime::RequestId::new(format!(
+                "cli:{}",
+                request.order_id
+            ))?),
+            idempotency_key: Some(kairos_primitives::runtime::IdempotencyKey::new(format!(
+                "cli:{}",
+                request.order_id
+            ))?),
+            caller_id: Some(kairos_primitives::runtime::ActorId::new("cli")?),
+            workspace_id: None,
+        },
+        intent: ExecutionIntentRequest {
+            intent_id,
+            strategy_decision_id: None,
+            strategy_id,
+            launch_id: LaunchId::new("cli")?,
+            instance_id: InstanceId::new("cli")?,
+            instrument_id: request.instrument_id,
+            market_id: request.market_id,
+            execution_route_id: request.execution_route_id,
+            account_ids: vec![request.account_id],
+            segment_key: request.segment_key,
+            target_quantity: request.quantity,
+            limit_price: request.limit_price,
+            source_snapshot_id: None,
+            source_event_sequence: None,
+            source_event_time_unix_nanos: request.submitted_at_unix_nanos,
+            reason: "cli submit".into(),
+            intent_type: IntentType::SingleOrder,
+            completion_policy: CompletionPolicy::AllLegsSatisfied,
+            failure_policy: FailurePolicy::CancelRemaining,
+            legs: vec![leg],
+            deadline_unix_nanos: None,
+            min_edge_bps: None,
+            max_slippage_bps: None,
+            estimated_fee_bps: None,
+            minimum_net_credit: None,
+            maximum_loss: None,
+            hedge_policy: None,
+            order_options: control_options(request.options),
+        },
+        admission_evidence: None,
+    })
+}
+
+fn control_options(options: ExecutionOrderOptions) -> ExecutionOrderOptionsRequest {
+    ExecutionOrderOptionsRequest {
+        time_in_force: options.time_in_force,
+        reduce_only: options.reduce_only,
+        post_only: options.post_only,
+        position_side: options.position_side,
+        quote_asset: options.quote_asset,
+        wallet_type: options.wallet_type,
+        trading_session: options.trading_session,
+        tokenize: options.tokenize,
+        split: None,
+        maker: None,
+    }
 }
 
 fn parse_side(value: &str) -> Result<OrderSide, Box<dyn std::error::Error>> {

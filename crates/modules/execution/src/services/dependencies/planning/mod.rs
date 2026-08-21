@@ -22,9 +22,17 @@ impl std::ops::DerefMut for IntentPlanningContext {
 }
 
 impl IntentPlanningContext {
-    pub(super) fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub(super) fn from_manifest_with_reference_snapshot(
+        system: &mut kairos_conflux::ConfluxSystem,
+        path: impl AsRef<Path>,
+        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            dependencies: ExecutionDependencyAccess::from_manifest(path)?,
+            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
+                system,
+                path,
+                reference_snapshot,
+            )?,
             business_time_unix_nanos: None,
         })
     }

@@ -1,10 +1,8 @@
 # Execution v2 contracts
 
-Execution commands are defined by [`control.openapi.yaml`](./control.openapi.yaml)
-and are sent over the Execution UDS endpoint using HTTP-shaped JSON. The
-shared command envelope, admission response, and error response are defined by
-[`common/control.openapi.yaml`](../common/control.openapi.yaml).
-FlatBuffers is reserved for the Execution event stream and active mmap views.
+Execution commands are defined by the Execution Rust JSON-RPC contract trait
+and are sent over the Execution workspace Unix control socket. FlatBuffers is
+reserved for the Execution event stream and active mmap views.
 
 The command response acknowledges admission or rejection only. Exchange
 acknowledgements, cancellations, expirations, and fills are immutable facts on
@@ -32,7 +30,6 @@ independent. The public roots are organized by transport role:
 
 ```text
 v2/
-  control.openapi.yaml
   events/
     intent/
     plan/

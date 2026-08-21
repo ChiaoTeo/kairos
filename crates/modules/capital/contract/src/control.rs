@@ -10,7 +10,38 @@ use kairos_primitives::runtime::{
     IdempotencyKey, InstanceId, LaunchId, RequestId, StrategyDecisionId, StrategyId,
 };
 use kairos_primitives::time::{BasisPoints, Generation, Sequence, UnixNanos};
+use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 use serde::{Deserialize, Serialize};
+
+#[conflux_rpc(namespace = "capital")]
+pub trait CapitalControlRpc {
+    async fn health(&self) -> RpcResult<kairos_capital_contract::CapitalHealthResponse>;
+
+    async fn publish_funding_objective(
+        &self,
+        request: kairos_capital_contract::PublishFundingObjectiveRequest,
+    ) -> RpcResult<kairos_capital_contract::CapitalControlResponse>;
+
+    async fn cancel_funding_objective(
+        &self,
+        request: kairos_capital_contract::CancelFundingObjectiveRequest,
+    ) -> RpcResult<kairos_capital_contract::CapitalControlResponse>;
+
+    async fn observe_capital_demand(
+        &self,
+        request: kairos_capital_contract::ObserveCapitalDemandRequest,
+    ) -> RpcResult<kairos_capital_contract::CapitalDemandResponse>;
+
+    async fn query_capital_availability(
+        &self,
+        request: kairos_capital_contract::QueryCapitalAvailabilityRequest,
+    ) -> RpcResult<kairos_capital_contract::CapitalAvailabilityResponse>;
+
+    async fn reconcile_capital_plan(
+        &self,
+        request: kairos_capital_contract::ReconcileCapitalPlanRequest,
+    ) -> RpcResult<kairos_capital_contract::ReconcileCapitalPlanResponse>;
+}
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FundingLocation {
@@ -192,29 +223,4 @@ pub struct ReconcileCapitalPlanResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CapitalHealthResponse {
     pub status: String,
-}
-
-/// Closed control operation set owned by the Capital process Contract.
-///
-/// HTTP paths and JSON framing are mapped by `CapitalHttpControl`; Conflux
-/// receives only these typed business operations.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CapitalRestRequest {
-    Health,
-    PublishFundingObjective(PublishFundingObjectiveRequest),
-    CancelFundingObjective(CancelFundingObjectiveRequest),
-    ObserveCapitalDemand(ObserveCapitalDemandRequest),
-    QueryCapitalAvailability(QueryCapitalAvailabilityRequest),
-    ReconcileCapitalPlan(ReconcileCapitalPlanRequest),
-}
-
-/// Typed response pair for [`CapitalRestRequest`].
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CapitalRestResponse {
-    Health(Result<CapitalHealthResponse, CapitalControlError>),
-    PublishFundingObjective(CapitalControlResponse),
-    CancelFundingObjective(CapitalControlResponse),
-    ObserveCapitalDemand(CapitalDemandResponse),
-    QueryCapitalAvailability(Result<CapitalAvailabilityResponse, CapitalControlError>),
-    ReconcileCapitalPlan(ReconcileCapitalPlanResponse),
 }

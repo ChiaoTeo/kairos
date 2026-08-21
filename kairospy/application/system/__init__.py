@@ -16,11 +16,14 @@ from typing import Any, Callable, Mapping, cast
 from .supervisor import ProcessSpec, ProcessState, ProcessSupervisor, UnixRestClient
 from .clients import (
     AccountSystemClient,
+    CapitalSystemClient,
     ExecutionSystemClient,
+    InstanceSystemClients,
     MarketSystemClient,
     ReferenceSystemClient,
     RiskSystemClient,
-    SystemRestClient,
+    SystemRpcClient,
+    system_client,
 )
 from .reference import ReferenceProcessConfig
 from .binaries import reject_owned_options, resolve_binary
@@ -28,7 +31,7 @@ from .risk import RiskProcessConfig
 from .process_logging import start_logged_process
 
 
-SYSTEM_COMPONENTS = ("reference", "market", "account", "risk", "execution")
+SYSTEM_COMPONENTS = ("reference", "market", "account", "risk", "capital", "execution")
 
 
 def _lock_is_held(path: Path) -> bool:
@@ -112,16 +115,15 @@ def _process_details(value: object) -> dict[str, Any]:
 
 
 @dataclass(frozen=True, slots=True)
-class ComponentControlApplication(SystemRestClient):
+class ComponentControlApplication(SystemRpcClient):
     """Generic facade for system component control.
 
-    Typed ``*SystemClient`` classes own business endpoints. This generic
+    Typed ``*SystemClient`` classes own business connections. This generic
     facade is only for system-level component inspection and control commands.
     """
 
     def command(self, component: str, command: dict[str, Any]) -> dict[str, Any]:
-        payload = json.dumps(command, separators=(",", ":")).encode("utf-8")
-        return self.request("POST", f"/v1/components/{component}/commands", payload)
+        return self.call(f"{component}_command", [command])
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +150,7 @@ class ComponentProcessApplication:
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
-    ) -> SystemRestClient:
+    ) -> SystemRpcClient:
         # A static replay owns its observations locally and does not construct
         # a provider/reference Aeron source.  Keeping the driver out of this
         # path makes offline backtests independent from a live workspace
@@ -297,13 +299,14 @@ class ComponentProcessApplication:
     @staticmethod
     def client(
         component: str, socket: Path, *, timeout: float = 3.0
-    ) -> SystemRestClient:
+    ) -> SystemRpcClient:
         clients = {
             "account": AccountSystemClient,
             "execution": ExecutionSystemClient,
             "market": MarketSystemClient,
             "reference": ReferenceSystemClient,
             "risk": RiskSystemClient,
+            "capital": CapitalSystemClient,
         }
         return clients.get(component, ComponentControlApplication)(
             socket, timeout=timeout
@@ -339,7 +342,7 @@ class ComponentProcessApplication:
         account_id: str | None = None,
         stream_startup_logs: bool = False,
         progress: Callable[[str], None] | None = None,
-    ) -> SystemRestClient:
+    ) -> SystemRpcClient:
         """Stop a workspace component completely before starting its replacement."""
         report = progress or (lambda _message: None)
         report(f"Stopping {component}...")
@@ -657,14 +660,14 @@ class ComponentProcessApplication:
     def _wait_ready(
         self,
         component: str,
-        control: SystemRestClient,
+        control: SystemRpcClient,
         *,
         process: Any | None = None,
         log_path: Path | None = None,
         initial_log_offset: int | None = None,
         stream_logs: bool = False,
         recovery_command: str | None = None,
-    ) -> SystemRestClient:
+    ) -> SystemRpcClient:
         deadline = time.monotonic() + self.ready_timeout
         # Readiness polling must remain responsive to an early child exit.
         # The returned client keeps its normal control timeout once ready.
@@ -818,12 +821,15 @@ __all__ = [
     "ProcessState",
     "ProcessSupervisor",
     "UnixRestClient",
-    "SystemRestClient",
+    "SystemRpcClient",
     "AccountSystemClient",
     "ExecutionSystemClient",
+    "InstanceSystemClients",
     "MarketSystemClient",
+    "CapitalSystemClient",
     "ReferenceSystemClient",
     "RiskSystemClient",
+    "system_client",
     "ReferenceProcessConfig",
     "RiskProcessConfig",
     "ComponentControlApplication",

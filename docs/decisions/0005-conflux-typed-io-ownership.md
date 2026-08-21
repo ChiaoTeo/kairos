@@ -1,6 +1,7 @@
 # Decision 0005：Conflux 纳管 typed Stream、View 与 Control 的运行时
 
-- Status: Accepted
+- Status: Accepted, control transport superseded by
+  [Conflux JSON-RPC control boundary](../architecture/conflux-jsonrpc-control.md)
 - Scope: Conflux 驱动的业务进程及其进程边界资源
 
 ## Context
@@ -15,13 +16,16 @@ Conflux 按交互语义纳管三类平台能力：
 
 - Stream：Aeron 模块事件流，以及由 typed `ManagedConnections` 管理的 provider WebSocket 数据流；
 - View：mmap current view 与原子替换的普通文件 current view；
-- Control：HTTP over UDS、HTTP over TCP 与 WebSocket over TCP。
+- Control：进程控制由 Conflux 纳管；当前业务模块使用 Contract-owned
+  JSON-RPC over Conflux runtime。
 
 Contract 定义 typed request/response/event/view、wire codec、业务 key 到安全路径的解析、sequence/generation 与一致性 metadata。业务 Composition 声明需要的输出及其配置，但不创建或持有 publisher/writer。Conflux 创建并独占 Aeron publication、mmap writer 与 file writer，同时拥有 listener、session、connection、队列、resource state、revision、readiness、失败状态和 shutdown。Actor 只接收或产生 typed 值，不接触 Axum、socket、HTTP method 或 WebSocket frame。
 
 依赖边界以 Cargo package 为准：业务主包（包括 `bin/` server、Composition、Application 与 Services）依赖 Conflux 和本模块 Contract，不直接依赖 `kairos-transport`；Contract 可以依赖 protocol/transport 来实现 wire codec、client、reader 与 stream adapter；Conflux 可以依赖 transport 来创建、持有和关闭具体 I/O 资源。Contract 对 transport 的依赖不授权业务主包绕过 Conflux 取得资源所有权。
 
-所有 Control transport 复用同一个 module-owned `HttpControlCodec`，解码后通过唯一的 `ConfluxHandle` typed ingress 进入 Actor。WebSocket 控制帧包含版本和 request id，用于 correlation；HTTP 与 WebSocket 的请求超时发生在提交后时返回 `result_unknown`，队列关闭且未提交时返回 `not_sent`。业务 Contract 继续负责明确拒绝与成功响应。
+Control transport 已收敛到 module-owned JSON-RPC service trait。Conflux 将
+jsonrpsee service 调用序列化进唯一 Actor ingress；请求超时发生在提交后时返回
+`result_unknown`，队列关闭且未提交时返回 `not_sent`。业务 Contract 继续负责明确拒绝与成功响应。
 
 固定输出由 Composition 通过 `system.outputs().aeron/mmap/file.declare(...)` 声明。声明只包含通用 transport 参数、resource key 与 revision；Conflux 根据声明创建并持有底层管道。Conflux 不提供 `AccountAeronEventOutput`、`RiskMmapViewOutput` 或 `enable_account_*` 这类了解业务名字的 API。
 
@@ -36,7 +40,7 @@ Contract 定义 typed request/response/event/view、wire codec、业务 key 到�
 - Risk、Execution、Account、Market、Reference 与 Capital 不再直接拥有 Axum 或 UDS/TCP listener；Control 的 readiness、health file 和 shutdown 行为一致。
 - Risk 的 Aeron event、mmap view 与 file view，以及 Execution/Account/Market/Reference/Capital 的固定输出，由业务 Composition 声明、Conflux 创建并持有。
 - Market 保留动态订阅语义；Market Contract 决定 typed view key 与路径，Conflux 在 Context 借用期内创建和管理动态 mmap 管道。
-- HTTP/TCP、WebSocket/TCP、mmap 与普通文件具有真实协议或文件端到端测试；UDS 由 Risk 的 Contract 端到端测试覆盖。
+- JSON-RPC control、mmap 与普通文件具有真实协议或文件端到端测试；UDS 由模块 Contract 端到端测试覆盖。
 - Provider WebSocket 继续使用各 provider 的具体 typed connection collection；在出现模块间 WebSocket event stream 的真实生产调用方前，不增加通用业务 stream envelope。
 - 新模块若需要进程边界能力，应先扩展所属 Contract；业务 Composition 通过 Conflux 通用输出 API 声明管道，不得持有底层 publisher/writer，不得把业务命名的构造 API 加入 Conflux，也不得在业务 crate 中重新建立 transport host。
 - 业务主包及其 server 不直接依赖 `kairos-transport`；Contract 保留实现协议与 transport adapter 所需的依赖。

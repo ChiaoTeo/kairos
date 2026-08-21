@@ -15,3 +15,8 @@ pub use result::{
 pub use service::{AccountApplication, AccountRuntimeMode};
 
 pub use crate::domain::{AccountEvent, AccountObservedFill};
+
+kairos_account_contract::account_control_rpc_conflux_actor! {
+    pub trait AccountRpcActor;
+    service AccountRpcService;
+}

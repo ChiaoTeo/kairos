@@ -9,6 +9,7 @@ description = "Closed, typed, single-writer runtime for Kairos modules"
 axum = { workspace = true, features = ["ws"] }
 futures-util.workspace = true
 kairos-account-contract.workspace = true
+kairos-capital-contract.workspace = true
 kairos-execution-contract.workspace = true
 kairos-integration.workspace = true
 kairos-market-contract.workspace = true
@@ -18,9 +19,11 @@ kairos-reference-contract.workspace = true
 kairos-risk-contract.workspace = true
 kairos-transport.workspace = true
 kairos-workspace.workspace = true
+jsonrpsee.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync", "time"] }
+tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

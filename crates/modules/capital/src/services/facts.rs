@@ -1,30 +1,19 @@
-use std::path::Path;
-
-use kairos_account_contract::{AccountViewKey, AccountViewKind, AccountViewReader};
+use kairos_account_contract::AccountClient;
 use kairos_primitives::decimal::Quantity;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 
 use crate::{CapitalGroupMember, FundingLocation};
 
 pub(crate) fn read_member_account_observation(
-    snapshot_root: &Path,
+    account: &AccountClient,
     member: &CapitalGroupMember,
 ) -> Result<crate::CapitalMemberAccountObservation, String> {
     let account_id = member.account_id.as_str();
-    let account_reader = AccountViewReader::open(
-        snapshot_root,
-        AccountViewKey::new(
-            format!("account:{account_id}"),
-            account_id,
-            AccountViewKind::Current,
-        )
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let account_frame = account_reader.read().map_err(|error| error.to_string())?;
-    let account_root = account_frame
-        .account_current()
+    let account_current = account
+        .account_current(format!("account:{account_id}"), account_id)
         .map_err(|error| error.to_string())?;
+    let account_frame = account_current.read().map_err(|error| error.to_string())?;
+    let account_root = account_frame.view().map_err(|error| error.to_string())?;
     if account_root.account_id() != account_id {
         return Err(format!(
             "Account view identity '{}' does not match Capital member '{account_id}'",
@@ -48,7 +37,7 @@ pub(crate) fn read_member_account_observation(
 }
 
 pub(crate) fn read_location_facts(
-    snapshot_root: &Path,
+    account: &AccountClient,
     location: &FundingLocation,
     strategy_id: &str,
     risk_state: kairos_protocol::generated::kairos::risk::v_2::RiskLatestState<'_>,
@@ -56,20 +45,11 @@ pub(crate) fn read_location_facts(
     risk_watermark: Sequence,
 ) -> Result<crate::CapitalFacts, String> {
     let account_id = location.account_id.as_str();
-    let account_reader = AccountViewReader::open(
-        snapshot_root,
-        AccountViewKey::new(
-            format!("account:{account_id}"),
-            account_id,
-            AccountViewKind::Current,
-        )
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    let account_frame = account_reader.read().map_err(|error| error.to_string())?;
-    let account_root = account_frame
-        .account_current()
+    let account_current = account
+        .account_current(format!("account:{account_id}"), account_id)
         .map_err(|error| error.to_string())?;
+    let account_frame = account_current.read().map_err(|error| error.to_string())?;
+    let account_root = account_frame.view().map_err(|error| error.to_string())?;
     let segment = account_root
         .segments()
         .iter()

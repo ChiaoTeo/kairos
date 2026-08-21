@@ -1,14 +1,15 @@
 //! Infrastructure access shared by execution planning and order admission.
 
+use std::path::PathBuf;
+
 use super::*;
 
 pub(super) struct ExecutionDependencyAccess {
-    pub(super) accounts: BTreeMap<String, PathBuf>,
-    pub(super) account_snapshots: BTreeMap<String, PathBuf>,
+    pub(super) accounts: BTreeMap<String, kairos_account_contract::AccountClient>,
+    pub(super) market: Option<kairos_market_contract::MarketClient>,
     pub(super) market_snapshot: Option<PathBuf>,
     pub(super) market_source_id: String,
-    pub(super) risk: Option<PathBuf>,
-    pub(super) risk_snapshot: Option<PathBuf>,
+    pub(super) risk: Option<kairos_risk_contract::RiskClient>,
     pub(super) risk_actor_id: Option<String>,
     pub(super) dependency_watermarks: DependencyWatermarks,
     pub(super) projection: DependencyProjectionRuntime,
@@ -24,9 +25,6 @@ impl ExecutionDependencyAccess {
             self.risk
                 .clone()
                 .ok_or_else(|| "risk endpoint is not configured".to_string())?,
-            self.risk_snapshot
-                .clone()
-                .ok_or_else(|| "risk mmap snapshot is not configured".to_string())?,
             self.risk_actor_id
                 .clone()
                 .ok_or_else(|| "risk mmap actor_id is not configured".to_string())?,
@@ -39,10 +37,15 @@ impl ExecutionDependencyAccess {
     /// live quote projection must not reject an otherwise valid intent.
     pub(super) fn without_market_snapshot(mut self) -> Self {
         self.market_snapshot = None;
+        self.market = None;
         self
     }
 
-    pub(super) fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub(super) fn from_manifest_with_reference_snapshot(
+        system: &mut kairos_conflux::ConfluxSystem,
+        path: impl AsRef<Path>,
+        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+    ) -> Result<Self, String> {
         let manifest_path = path.as_ref().to_path_buf();
         let value: Value = serde_json::from_slice(
             &std::fs::read(&manifest_path)
@@ -50,7 +53,6 @@ impl ExecutionDependencyAccess {
         )
         .map_err(|error| format!("decode endpoint manifest: {error}"))?;
         let mut accounts = BTreeMap::new();
-        let mut account_snapshots = BTreeMap::new();
         for (account_id, endpoint) in value
             .get("accounts")
             .and_then(Value::as_object)
@@ -60,20 +62,28 @@ impl ExecutionDependencyAccess {
                 .get("socket")
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("account {account_id} has no socket"))?;
-            accounts.insert(account_id.clone(), PathBuf::from(socket));
             let snapshot = endpoint
                 .get("view_root")
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("account {account_id} has no view_root"))?;
-            account_snapshots.insert(account_id.clone(), PathBuf::from(snapshot));
+            system
+                .install_account_connection(
+                    account_id.clone(),
+                    PathBuf::from(socket),
+                    Some(PathBuf::from(snapshot)),
+                )
+                .map_err(|error| error.to_string())?;
+            let client = system
+                .account_client(account_id)
+                .ok_or_else(|| format!("managed Account client is missing: {account_id}"))?;
+            accounts.insert(account_id.clone(), client);
         }
         let components = value.get("components").and_then(Value::as_object);
-        let endpoint = |name: &str| {
+        let component_socket = |name: &str| {
             components
                 .and_then(|items| items.get(name))
                 .and_then(|item| item.get("socket"))
                 .and_then(Value::as_str)
-                .map(PathBuf::from)
         };
         let risk_snapshot = components
             .and_then(|items| items.get("risk"))
@@ -95,37 +105,37 @@ impl ExecutionDependencyAccess {
         let market_snapshot = instance_root
             .clone()
             .map(|root| root.join("snapshots").join("market").join("market-shared"));
+        if let Some(socket) = component_socket("market") {
+            system
+                .install_market_connection("market", PathBuf::from(socket), market_snapshot.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(socket) = component_socket("risk") {
+            system
+                .install_risk_connection("risk", PathBuf::from(socket), risk_snapshot.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        let market = system.market_client("market");
+        let risk = system.risk_client("risk");
         let market_source_id = components
             .and_then(|items| items.get("market"))
             .and_then(|item| item.get("source_id"))
             .and_then(Value::as_str)
             .unwrap_or("default")
             .to_owned();
-        let reference_database = components
-            .and_then(|items| items.get("reference"))
-            .and_then(|item| item.get("database"))
-            .and_then(Value::as_str)
-            .map(PathBuf::from);
-        let reference_actor_id = components
-            .and_then(|items| items.get("reference"))
-            .and_then(|item| item.get("actor_id"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        let reference_projection = reference_snapshot.map(super::project_reference_snapshot);
         let projection = DependencyProjectionRuntime::start(
             &accounts,
-            &account_snapshots,
             market_snapshot.as_deref(),
-            reference_database.clone(),
-            reference_actor_id.clone(),
-            endpoint("risk"),
+            reference_projection,
+            risk.clone(),
         );
         Ok(Self {
             accounts,
-            account_snapshots,
+            market,
             market_snapshot,
             market_source_id,
-            risk: endpoint("risk"),
-            risk_snapshot,
+            risk,
             risk_actor_id,
             dependency_watermarks: DependencyWatermarks::default(),
             projection,
@@ -145,24 +155,18 @@ impl ExecutionDependencyAccess {
         market_id: Option<&str>,
         instrument_id: &str,
     ) -> Result<Option<(MarketQuote, u64)>, String> {
-        let Some(root) = self.market_snapshot.as_ref() else {
+        let Some(client) = self.market.as_ref() else {
             return Ok(None);
         };
         let Some(market_id) = market_id else {
             return Ok(None);
         };
-        let key = kairos_market_contract::MarketViewKey::new(
-            market_id,
-            self.market_source_id.clone(),
-            kairos_market_contract::MarketViewKind::Quote,
-            None::<String>,
-        )
-        .map_err(|error| error.to_string())?;
-        let frame = kairos_market_contract::MarketViewReader::open(root, key)
-            .and_then(|reader| reader.read())
+        let frame = client
+            .quote(market_id, self.market_source_id.as_str(), None::<String>)
+            .and_then(|quote| quote.read())
             .map_err(|error| error.to_string())?;
         let quote = frame
-            .quote()
+            .view()
             .map_err(|error| error.to_string())?
             .quote()
             .value();
@@ -229,8 +233,7 @@ impl ExecutionDependencyAccess {
     /// account projection synchronously at that barrier so a fill settled by
     /// Account is visible to the very next target-position intent.
     pub(super) fn refresh_account_projections(&mut self) -> Result<(), String> {
-        self.projection
-            .refresh_accounts(&self.accounts, &self.account_snapshots)
+        self.projection.refresh_accounts(&self.accounts)
     }
 
     pub(super) fn reference_market(

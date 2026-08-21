@@ -14,7 +14,7 @@ the active v2 schema set.
 | Account balances, positions, equity, and observed orders | Account-owned events and current views |
 | Risk authorization and reservations | Typed authorization, reservation, decision, and circuit roots |
 | History, ledgers, journals, and audit records | Bounded query or dataset contracts |
-| REST control requests and responses | OpenAPI/JSON control-surface contracts |
+| JSON-RPC control requests and responses | Contract-owned Rust RPC traits and JSON serialization tests |
 
 ## Current v2 roots
 

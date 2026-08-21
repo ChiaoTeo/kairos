@@ -16,16 +16,10 @@ ownership and real cross-process use cases, not as a compatibility projection.
 Concrete roots are indexed in [`registry.md`](./registry.md). A root is active
 only when it has an admitted owner, publisher or caller, consumer, transport
 profile, and Rust/Python mapping tests.
-Market's user-facing UDS control surface is described separately by
-[`schemas/v2/market/control.openapi.yaml`](./market/control.openapi.yaml).
-OpenAPI/JSON is the control-plane contract; FlatBuffers roots remain the
+Control surfaces are owned by each module's Rust `#[conflux_rpc]` contract
+trait and exposed over workspace Unix JSON-RPC. FlatBuffers roots remain the
 stream and current-view payload contracts. Command is therefore a semantic
-operation, not a common FlatBuffers wire shape. Shared REST components live in
-[`schemas/v2/common/control.openapi.yaml`](./common/control.openapi.yaml).
-The shared control contract owns reusable request metadata, transport errors,
-command admission, and the health response envelope. Health status values and
-business metrics remain owner-specific until all processes expose one lifecycle
-vocabulary.
+operation, not a common FlatBuffers wire shape.
 The per-owner mmap files, resource discovery, sharding, capacity, publication,
 and file-epoch rules are defined in [`mmap-contract.md`](./mmap-contract.md).
 
@@ -387,8 +381,8 @@ usable only when its `synchronized` value is true. `MarketFreshnessLatestView`
 is also admitted because Execution and Strategy need an owner-provided
 freshness decision. Rate, ticker, mark/index price, funding, open interest,
 instrument status, and warm-up history are not automatically admitted merely because a provider exposes them. Subscription lifecycle is represented by the synchronous Market
-control response; it is not a Market data event.
-and the OpenAPI control surface; a subscription mmap view remains deferred.
+JSON-RPC control response; it is not a Market data event, and a subscription
+mmap view remains deferred.
 
 Market observation roots require canonical `market_id`, `instrument_id`,
 `source_id`, source observation time, and the values specific to that fact.
@@ -419,7 +413,7 @@ change was caused by execution.
 ### Risk
 
 - `AuthorizeAndReserve`, `ConsumeReservation`, and `ReleaseReservation`
-  commands in the Risk OpenAPI control contract; authorization returns one
+  commands in the Risk JSON-RPC control contract; authorization returns one
   atomic decision/reservation result synchronously
 - `RiskDecisionMade`, explicit reservation transition facts, and explicit
   circuit transition facts
@@ -434,8 +428,8 @@ and never selects the first allocation as a reservation summary.
 
 - `SubmitExecutionIntent`, `CancelOrder`, `ReplaceOrder`, and
   `ReconcileExecution` commands; command results describe admission only
-- commands use [`schemas/v2/execution/control.openapi.yaml`](./execution/control.openapi.yaml)
-  over UDS HTTP/JSON; FlatBuffers is reserved for events and active views
+- commands use the Execution JSON-RPC control contract over the workspace Unix
+  socket; FlatBuffers is reserved for events and active views
 - the accepted intent supports current single-leg and multi-leg semantics,
   including intent type, legs, completion policy, failure policy, deadline,
   execution options, and optional hedge policy

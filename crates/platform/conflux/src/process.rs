@@ -1,30 +1,96 @@
 use std::collections::{HashMap, VecDeque};
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
+use kairos_protocol::control::jsonrpc::{
+    ControlRuntimeFailure, ErrorObjectOwned, RpcResult, runtime_error,
+};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::system::{ConnectionDriverOutput, ConnectionDriverState};
 use crate::{
     ConfluxActor, ConfluxEvent, ConfluxSystem, ConnectionCreateError, ConnectionKey, Context,
-    ContractEvent, ProcessPhase, ResourceState, RestRequestOf, RestResponseOf, ShutdownMode,
+    ContractEvent, ProcessPhase, ResourceState, ShutdownMode,
 };
 
-type ActorEvent<A> = ConfluxEvent<A, <A as ConfluxActor>::LocalEvent>;
+type ActorLocalEvent<A> = ConfluxEvent<<A as ConfluxActor>::LocalEvent>;
 
 pub(crate) struct EventEnvelope<A: ConfluxActor> {
-    pub(crate) event: ActorEvent<A>,
-    pub(crate) completed: oneshot::Sender<Option<RestResponseOf<A>>>,
+    pub(crate) event: ActorLocalEvent<A>,
+    pub(crate) completed: oneshot::Sender<()>,
 }
 
-struct RestEnvelope<A: ConfluxActor> {
-    request: RestRequestOf<A>,
-    completed: oneshot::Sender<Option<RestResponseOf<A>>>,
+type ActorInvocationFuture<'a, E> = Pin<Box<dyn Future<Output = Result<(), E>> + 'a>>;
+type ActorInvocationFn<A> = Box<
+    dyn for<'a> FnOnce(
+            &'a mut A,
+            &'a mut Context<'a, A>,
+        ) -> ActorInvocationFuture<'a, <A as ConfluxActor>::FatalError>
+        + Send,
+>;
+
+struct ActorInvocationEnvelope<A: ConfluxActor> {
+    invocation: ActorInvocationFn<A>,
+}
+
+#[derive(Debug)]
+pub struct RpcActorInvocation<A: ConfluxActor> {
+    sender: mpsc::Sender<ActorInvocationEnvelope<A>>,
+    timeout: Duration,
+}
+
+impl<A: ConfluxActor> Clone for RpcActorInvocation<A> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            timeout: self.timeout,
+        }
+    }
+}
+
+impl<A: ConfluxActor> RpcActorInvocation<A> {
+    pub async fn call<R, F>(&self, invocation: F) -> RpcResult<R>
+    where
+        R: Send + 'static,
+        F: for<'a> FnOnce(
+                &'a mut A,
+                &'a mut Context<'a, A>,
+            ) -> Pin<Box<dyn Future<Output = RpcResult<R>> + 'a>>
+            + Send
+            + 'static,
+    {
+        let (completed, response) = oneshot::channel();
+        let envelope = ActorInvocationEnvelope {
+            invocation: Box::new(move |actor, context| {
+                Box::pin(async move {
+                    let result = invocation(actor, context).await;
+                    let _ = completed.send(result);
+                    Ok(())
+                })
+            }),
+        };
+        tokio::time::timeout(self.timeout, self.sender.send(envelope))
+            .await
+            .map_err(|_| runtime_error(ControlRuntimeFailure::NotSent))?
+            .map_err(|_| runtime_error(ControlRuntimeFailure::NotSent))?;
+        tokio::time::timeout(self.timeout, response)
+            .await
+            .map_err(|_| runtime_error(ControlRuntimeFailure::ResultUnknown))?
+            .map_err(|_| runtime_error(ControlRuntimeFailure::ActorStopped))?
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    pub fn runtime_error(failure: ControlRuntimeFailure) -> ErrorObjectOwned {
+        runtime_error(failure)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,10 +198,10 @@ for_each_handle_collection!(define_connection_control_command);
 pub struct Conflux<A: ConfluxActor> {
     actor: A,
     system: ConfluxSystem,
-    sender: mpsc::Sender<EventEnvelope<A>>,
+    event_sender: mpsc::Sender<EventEnvelope<A>>,
     events: mpsc::Receiver<EventEnvelope<A>>,
-    _rest_sender: mpsc::Sender<RestEnvelope<A>>,
-    rest_requests: mpsc::Receiver<RestEnvelope<A>>,
+    _actor_invocation_sender: mpsc::Sender<ActorInvocationEnvelope<A>>,
+    actor_invocations: mpsc::Receiver<ActorInvocationEnvelope<A>>,
     connection_controls: mpsc::Receiver<ConnectionControlCommand>,
     pending_connection_removals: HashMap<String, PendingConnectionRemoval>,
     shutdown: watch::Receiver<Option<ShutdownMode>>,
@@ -206,14 +272,14 @@ impl<A: ConfluxActor> Conflux<A> {
         }
 
         let (sender, events) = mpsc::channel(config.ingress_capacity);
-        let (rest_sender, rest_requests) = mpsc::channel(config.ingress_capacity);
+        let (actor_invocation_sender, actor_invocations) = mpsc::channel(config.ingress_capacity);
         let (connection_control_sender, connection_controls) =
             mpsc::channel(config.ingress_capacity);
         let (shutdown_sender, shutdown) = watch::channel(None);
         let phase = Arc::new(AtomicU8::new(ProcessPhase::Created as u8));
         let handle = ConfluxHandle {
             sender: sender.clone(),
-            rest_sender: rest_sender.clone(),
+            actor_invocation_sender: actor_invocation_sender.clone(),
             shutdown: shutdown_sender,
             phase: Arc::clone(&phase),
             connection_controls: connection_control_sender,
@@ -223,10 +289,10 @@ impl<A: ConfluxActor> Conflux<A> {
             Self {
                 actor,
                 system,
-                sender,
+                event_sender: sender,
                 events,
-                _rest_sender: rest_sender,
-                rest_requests,
+                _actor_invocation_sender: actor_invocation_sender,
+                actor_invocations,
                 connection_controls,
                 pending_connection_removals: HashMap::new(),
                 shutdown,
@@ -340,7 +406,7 @@ impl<A: ConfluxActor> Conflux<A> {
             enum LoopInput<A: ConfluxActor> {
                 Shutdown(Result<(), tokio::sync::watch::error::RecvError>),
                 Envelope(Option<EventEnvelope<A>>),
-                Rest(Option<RestEnvelope<A>>),
+                ActorInvocation(Option<ActorInvocationEnvelope<A>>),
                 Control(Option<ConnectionControlCommand>),
                 Connection(ConnectionDriverOutput),
                 Timer(tokio::time::Instant),
@@ -353,7 +419,7 @@ impl<A: ConfluxActor> Conflux<A> {
                 tokio::select! {
                     changed = self.shutdown.changed() => LoopInput::Shutdown(changed),
                     envelope = self.events.recv() => LoopInput::Envelope(envelope),
-                    request = self.rest_requests.recv() => LoopInput::Rest(request),
+                    invocation = self.actor_invocations.recv() => LoopInput::ActorInvocation(invocation),
                     control = self.connection_controls.recv() => LoopInput::Control(control),
                     connection = connections.next() => LoopInput::Connection(connection),
                     now = timer.next() => LoopInput::Timer(now),
@@ -382,11 +448,11 @@ impl<A: ConfluxActor> Conflux<A> {
                         },
                     }
                 },
-                LoopInput::Rest(request) => {
-                    let Some(request) = request else {
+                LoopInput::ActorInvocation(invocation) => {
+                    let Some(invocation) = invocation else {
                         continue;
                     };
-                    match self.run_rest(request).await {
+                    match self.run_actor_invocation(invocation).await {
                         Ok(Some(mode)) => return Ok(mode),
                         Ok(None) => {},
                         Err(error) => {
@@ -424,6 +490,10 @@ impl<A: ConfluxActor> Conflux<A> {
             },
             ConnectionDriverOutput::Account { client, frame } => {
                 self.run_contract_event(ConfluxEvent::Account(ContractEvent { client, frame }))
+                    .await
+            },
+            ConnectionDriverOutput::Capital { client, frame } => {
+                self.run_contract_event(ConfluxEvent::Capital(ContractEvent { client, frame }))
                     .await
             },
             ConnectionDriverOutput::Execution { client, frame } => {
@@ -617,8 +687,8 @@ impl<A: ConfluxActor> Conflux<A> {
         let mut context = Context::new(
             &mut self.system,
             &mut requested_shutdown,
-            self.sender.clone(),
             &mut self.source_tasks,
+            &self.event_sender,
         );
         self.actor.started(&mut context).await?;
         Ok(requested_shutdown)
@@ -628,47 +698,53 @@ impl<A: ConfluxActor> Conflux<A> {
         &mut self,
         envelope: EventEnvelope<A>,
     ) -> Result<Option<ShutdownMode>, A::FatalError> {
-        let response = self.run_actor_event(envelope.event).await?;
-        let _ = envelope.completed.send(response.1);
-        Ok(response.0)
+        let requested_shutdown = self.run_actor_event(envelope.event).await?;
+        let _ = envelope.completed.send(());
+        Ok(requested_shutdown)
     }
 
     async fn run_contract_event(
         &mut self,
-        event: ActorEvent<A>,
+        event: ActorLocalEvent<A>,
     ) -> Result<Option<ShutdownMode>, RunError<A::FatalError>> {
-        let (requested_shutdown, _) = self.run_actor_event(event).await.map_err(|error| {
+        let requested_shutdown = self.run_actor_event(event).await.map_err(|error| {
             self.set_phase(ProcessPhase::Failed);
             RunError::Actor(error)
         })?;
         Ok(requested_shutdown)
     }
 
-    async fn run_rest(
+    async fn run_actor_invocation(
         &mut self,
-        envelope: RestEnvelope<A>,
+        envelope: ActorInvocationEnvelope<A>,
     ) -> Result<Option<ShutdownMode>, A::FatalError> {
-        let response = self
-            .run_actor_event(ConfluxEvent::Rest(envelope.request))
-            .await?;
-        let _ = envelope.completed.send(response.1);
-        Ok(response.0)
+        let mut requested_shutdown = None;
+        {
+            let mut context = Context::new(
+                &mut self.system,
+                &mut requested_shutdown,
+                &mut self.source_tasks,
+                &self.event_sender,
+            );
+            (envelope.invocation)(&mut self.actor, &mut context).await?;
+        }
+        Ok(requested_shutdown)
     }
 
     async fn run_actor_event(
         &mut self,
-        event: ActorEvent<A>,
-    ) -> Result<(Option<ShutdownMode>, Option<RestResponseOf<A>>), A::FatalError> {
+        event: ActorLocalEvent<A>,
+    ) -> Result<Option<ShutdownMode>, A::FatalError> {
         let mut requested_shutdown = None;
         let mut context = Context::new(
             &mut self.system,
             &mut requested_shutdown,
-            self.sender.clone(),
             &mut self.source_tasks,
+            &self.event_sender,
         );
-        let response = self.actor.handle(event, &mut context).await?;
+        self.actor.handle(event, &mut context).await?;
         drop(context);
-        Ok((requested_shutdown, response))
+        Ok(requested_shutdown)
     }
 
     async fn finish_shutdown(
@@ -677,21 +753,21 @@ impl<A: ConfluxActor> Conflux<A> {
     ) -> Result<ConfluxOutcome<A>, RunError<A::FatalError>> {
         let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
         self.events.close();
-        self.rest_requests.close();
+        self.actor_invocations.close();
 
         let mut discarded_inputs = 0;
         if mode == ShutdownMode::Drain {
             enum DrainInput<A: ConfluxActor> {
                 Event(Option<EventEnvelope<A>>),
-                Rest(Option<RestEnvelope<A>>),
+                ActorInvocation(Option<ActorInvocationEnvelope<A>>),
             }
             let mut events_open = true;
-            let mut rest_open = true;
-            while events_open || rest_open {
+            let mut invocations_open = true;
+            while events_open || invocations_open {
                 let input = match tokio::time::timeout_at(deadline, async {
                     tokio::select! {
                         envelope = self.events.recv(), if events_open => DrainInput::Event(envelope),
-                        request = self.rest_requests.recv(), if rest_open => DrainInput::Rest(request),
+                        invocation = self.actor_invocations.recv(), if invocations_open => DrainInput::ActorInvocation(invocation),
                     }
                 })
                 .await
@@ -706,15 +782,16 @@ impl<A: ConfluxActor> Conflux<A> {
                     DrainInput::Event(Some(envelope)) => {
                         tokio::time::timeout_at(deadline, self.run_event(envelope)).await
                     },
-                    DrainInput::Rest(Some(request)) => {
-                        tokio::time::timeout_at(deadline, self.run_rest(request)).await
+                    DrainInput::ActorInvocation(Some(invocation)) => {
+                        tokio::time::timeout_at(deadline, self.run_actor_invocation(invocation))
+                            .await
                     },
                     DrainInput::Event(None) => {
                         events_open = false;
                         continue;
                     },
-                    DrainInput::Rest(None) => {
-                        rest_open = false;
+                    DrainInput::ActorInvocation(None) => {
+                        invocations_open = false;
                         continue;
                     },
                 };
@@ -740,7 +817,7 @@ impl<A: ConfluxActor> Conflux<A> {
             while self.events.try_recv().is_ok() {
                 discarded_inputs += 1;
             }
-            while self.rest_requests.try_recv().is_ok() {
+            while self.actor_invocations.try_recv().is_ok() {
                 discarded_inputs += 1;
             }
         }
@@ -750,8 +827,8 @@ impl<A: ConfluxActor> Conflux<A> {
         let mut context = Context::new(
             &mut self.system,
             &mut ignored_shutdown,
-            self.sender.clone(),
             &mut self.source_tasks,
+            &self.event_sender,
         );
         match tokio::time::timeout_at(deadline, self.actor.stopping(&mut context)).await {
             Ok(Ok(())) => {},
@@ -795,7 +872,7 @@ impl<A: ConfluxActor> Conflux<A> {
 
 pub struct ConfluxHandle<A: ConfluxActor> {
     sender: mpsc::Sender<EventEnvelope<A>>,
-    rest_sender: mpsc::Sender<RestEnvelope<A>>,
+    actor_invocation_sender: mpsc::Sender<ActorInvocationEnvelope<A>>,
     shutdown: watch::Sender<Option<ShutdownMode>>,
     phase: Arc<AtomicU8>,
     connection_controls: mpsc::Sender<ConnectionControlCommand>,
@@ -806,7 +883,7 @@ impl<A: ConfluxActor> Clone for ConfluxHandle<A> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
-            rest_sender: self.rest_sender.clone(),
+            actor_invocation_sender: self.actor_invocation_sender.clone(),
             shutdown: self.shutdown.clone(),
             phase: Arc::clone(&self.phase),
             connection_controls: self.connection_controls.clone(),
@@ -883,26 +960,11 @@ macro_rules! define_handle_connection_collections {
 }
 
 impl<A: ConfluxActor> ConfluxHandle<A> {
-    /// Routes REST requests to the dedicated REST ingress and all other
-    /// externally submitted events to the local ingress.
+    /// Routes externally submitted events to the Actor event ingress.
     pub async fn handle(
         &self,
-        event: ActorEvent<A>,
-    ) -> Result<Option<RestResponseOf<A>>, HandleError<ActorEvent<A>>> {
-        let event = match event {
-            ConfluxEvent::Rest(request) => {
-                return self
-                    .handle_rest(request)
-                    .await
-                    .map_err(|error| match error {
-                        HandleError::Closed(request) => {
-                            HandleError::Closed(ConfluxEvent::Rest(request))
-                        },
-                        HandleError::ActorStopped => HandleError::ActorStopped,
-                    });
-            },
-            event => event,
-        };
+        event: ActorLocalEvent<A>,
+    ) -> Result<(), HandleError<ActorLocalEvent<A>>> {
         let (completed, response) = oneshot::channel();
         self.sender
             .send(EventEnvelope { event, completed })
@@ -911,26 +973,11 @@ impl<A: ConfluxActor> ConfluxHandle<A> {
         response.await.map_err(|_| HandleError::ActorStopped)
     }
 
-    pub async fn handle_rest(
-        &self,
-        request: RestRequestOf<A>,
-    ) -> Result<Option<RestResponseOf<A>>, HandleError<RestRequestOf<A>>> {
-        self.submit_rest(request)
-            .await?
-            .await
-            .map_err(|_| HandleError::ActorStopped)
-    }
-
-    pub(crate) async fn submit_rest(
-        &self,
-        request: RestRequestOf<A>,
-    ) -> Result<oneshot::Receiver<Option<RestResponseOf<A>>>, HandleError<RestRequestOf<A>>> {
-        let (completed, response) = oneshot::channel();
-        self.rest_sender
-            .send(RestEnvelope { request, completed })
-            .await
-            .map_err(|error| HandleError::Closed(error.0.request))?;
-        Ok(response)
+    pub fn rpc_actor_invocation(&self, timeout: Duration) -> RpcActorInvocation<A> {
+        RpcActorInvocation {
+            sender: self.actor_invocation_sender.clone(),
+            timeout,
+        }
     }
 
     pub fn shutdown(&self, mode: ShutdownMode) {
@@ -1012,14 +1059,7 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
 
     use super::*;
-    use crate::{Contract, RestContract, SystemEvent};
-
-    struct TestRest;
-
-    impl RestContract for TestRest {
-        type Request = i64;
-        type Response = i64;
-    }
+    use crate::SystemEvent;
 
     #[derive(Default)]
     struct TestActor {
@@ -1043,59 +1083,43 @@ mod tests {
         ready: usize,
     }
 
-    impl Contract for TestActor {
-        type Rest = TestRest;
-    }
-
     impl ConfluxActor for TestActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn handle(
             &mut self,
-            event: ConfluxEvent<Self, Self::LocalEvent>,
+            event: ConfluxEvent,
             _context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
-            match event {
-                ConfluxEvent::Rest(value) => Ok(Some(self.total + value)),
-                ConfluxEvent::Local(value) => {
-                    self.total += value;
-                    Ok(None)
-                },
-                _ => Ok(None),
+        ) -> Result<(), Self::FatalError> {
+            if matches!(event, ConfluxEvent::System(SystemEvent::SourceReady { .. })) {
+                self.total += 7;
             }
+            Ok(())
         }
-    }
-
-    impl Contract for SourceReadyActor {
-        type Rest = TestRest;
     }
 
     impl ConfluxActor for SourceReadyActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn handle(
             &mut self,
-            event: ConfluxEvent<Self, Self::LocalEvent>,
+            event: ConfluxEvent,
             _context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
+        ) -> Result<(), Self::FatalError> {
             if matches!(event, ConfluxEvent::System(SystemEvent::SourceReady { .. })) {
                 if let Some(ready) = self.ready.take() {
                     let _ = ready.send(());
                 }
             }
-            Ok(None)
+            Ok(())
         }
-    }
-
-    impl Contract for StartupReadyActor {
-        type Rest = TestRest;
     }
 
     impl ConfluxActor for StartupReadyActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn started(
             &mut self,
@@ -1114,26 +1138,22 @@ mod tests {
 
         async fn handle(
             &mut self,
-            _event: ConfluxEvent<Self, Self::LocalEvent>,
+            _event: ConfluxEvent,
             _context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
-            Ok(None)
+        ) -> Result<(), Self::FatalError> {
+            Ok(())
         }
-    }
-
-    impl Contract for IntegrationKeysActor {
-        type Rest = TestRest;
     }
 
     impl ConfluxActor for IntegrationKeysActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn handle(
             &mut self,
-            event: ConfluxEvent<Self, Self::LocalEvent>,
+            event: ConfluxEvent,
             context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
+        ) -> Result<(), Self::FatalError> {
             if let ConfluxEvent::Integration(event) = event {
                 self.keys
                     .insert(event.identity.descriptor.connection_key.clone());
@@ -1141,35 +1161,31 @@ mod tests {
                     context.request_shutdown(ShutdownMode::Drain);
                 }
             }
-            Ok(None)
+            Ok(())
         }
-    }
-
-    impl Contract for ReadyCountActor {
-        type Rest = TestRest;
     }
 
     impl ConfluxActor for ReadyCountActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn handle(
             &mut self,
-            event: ConfluxEvent<Self, Self::LocalEvent>,
+            event: ConfluxEvent,
             context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
+        ) -> Result<(), Self::FatalError> {
             if matches!(event, ConfluxEvent::System(SystemEvent::SourceReady { .. })) {
                 self.ready += 1;
                 if self.ready == 2 {
                     context.request_shutdown(ShutdownMode::Drain);
                 }
             }
-            Ok(None)
+            Ok(())
         }
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn one_handle_serializes_rest_and_event_inputs() {
+    async fn one_handle_serializes_rpc_actor_invocations_and_event_inputs() {
         let (conflux, handle) = Conflux::new(
             TestActor::default(),
             ConfluxSystem::new(),
@@ -1183,10 +1199,19 @@ mod tests {
             .run_until(async move {
                 let process = tokio::task::spawn_local(conflux.run());
 
-                assert_eq!(handle.handle(ConfluxEvent::Local(7)).await.unwrap(), None);
+                handle
+                    .handle(ConfluxEvent::System(SystemEvent::SourceReady {
+                        source: "test".to_owned(),
+                    }))
+                    .await
+                    .unwrap();
                 assert_eq!(
-                    handle.handle(ConfluxEvent::Rest(5)).await.unwrap(),
-                    Some(12)
+                    handle
+                        .rpc_actor_invocation(Duration::from_secs(1))
+                        .call(|actor, _context| Box::pin(async move { Ok(actor.total + 5) }))
+                        .await
+                        .unwrap(),
+                    12
                 );
 
                 handle.shutdown(ShutdownMode::Drain);
@@ -1339,13 +1364,15 @@ mod tests {
                     .expect("Conflux must begin the stream handshake")
                     .unwrap();
 
-                assert_eq!(
-                    tokio::time::timeout(Duration::from_millis(100), handle.handle_rest(7))
-                        .await
-                        .expect("pending connect must not block REST")
-                        .unwrap(),
-                    Some(7)
-                );
+                tokio::time::timeout(
+                    Duration::from_millis(100),
+                    handle
+                        .rpc_actor_invocation(Duration::from_secs(1))
+                        .call(|_actor, _context| Box::pin(async move { Ok(7) })),
+                )
+                .await
+                .expect("pending connect must not block RPC actor invocation")
+                .unwrap();
                 tokio::time::timeout(
                     Duration::from_millis(100),
                     handle.connections().binance_spot_websocket.remove(key),
@@ -1790,13 +1817,9 @@ mod tests {
         ticks: usize,
     }
 
-    impl Contract for TimerActor {
-        type Rest = TestRest;
-    }
-
     impl ConfluxActor for TimerActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn started(
             &mut self,
@@ -1808,15 +1831,15 @@ mod tests {
 
         async fn handle(
             &mut self,
-            event: ConfluxEvent<Self, Self::LocalEvent>,
+            event: ConfluxEvent,
             context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
+        ) -> Result<(), Self::FatalError> {
             if let ConfluxEvent::System(SystemEvent::Timer { name, .. }) = event {
                 assert_eq!(name, "tick");
                 self.ticks += 1;
                 context.request_shutdown(ShutdownMode::Drain);
             }
-            Ok(None)
+            Ok(())
         }
     }
 
@@ -1885,7 +1908,7 @@ mod tests {
         for required in [
             "self.shutdown.changed()",
             "self.events.recv()",
-            "self.rest_requests.recv()",
+            "self.actor_invocations.recv()",
             "self.connection_controls.recv()",
             "connections.next()",
             "timer.next()",
@@ -1913,20 +1936,16 @@ mod tests {
 
     struct StuckStoppingActor;
 
-    impl Contract for StuckStoppingActor {
-        type Rest = TestRest;
-    }
-
     impl ConfluxActor for StuckStoppingActor {
         type FatalError = Infallible;
-        type LocalEvent = i64;
+        type LocalEvent = Infallible;
 
         async fn handle(
             &mut self,
-            _event: ConfluxEvent<Self, Self::LocalEvent>,
+            _event: ConfluxEvent,
             _context: &mut Context<'_, Self>,
-        ) -> Result<Option<i64>, Self::FatalError> {
-            Ok(None)
+        ) -> Result<(), Self::FatalError> {
+            Ok(())
         }
 
         async fn stopping(

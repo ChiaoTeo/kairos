@@ -3,25 +3,25 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use kairos_capital_contract::{
-    CapitalAvailabilityResponse, CapitalControlError, CapitalControlResponse,
-    CapitalDemandResponse, CapitalDemandStatus, CapitalHealthResponse, CapitalPlanReconcileStatus,
-    CapitalReadinessStatus, CapitalRestRequest, CapitalRestResponse, FundingObjectiveStatus,
-    ReconcileCapitalPlanResponse,
+    CancelFundingObjectiveRequest, CapitalAvailabilityResponse, CapitalControlError,
+    CapitalControlResponse, CapitalDemandResponse, CapitalDemandStatus, CapitalHealthResponse,
+    CapitalPlanReconcileStatus, CapitalReadinessStatus, FundingObjectiveStatus,
+    ObserveCapitalDemandRequest, PublishFundingObjectiveRequest, QueryCapitalAvailabilityRequest,
+    ReconcileCapitalPlanRequest, ReconcileCapitalPlanResponse,
 };
 use kairos_conflux::{
-    AssetTransferCommand, AssetTransferStatusQuery, ConfluxActor, ConfluxEvent, Context, Contract,
-    EarnActionStatusQuery, EarnCommand, EarnProductQuery, RestContract, SnapshotEnvelopeMetadata,
-    SystemEvent,
+    AssetTransferCommand, AssetTransferStatusQuery, ConfluxActor, ConfluxEvent, Context,
+    EarnActionStatusQuery, EarnCommand, EarnProductQuery, SnapshotEnvelopeMetadata, SystemEvent,
 };
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-use kairos_risk_contract::{RiskViewKey, RiskViewReader};
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 
 use super::{
     AuthorizeCapitalPlan, CancelFundingObjective, CapitalDemandReceipt, CapitalProcess,
-    CapitalProcessError, EvaluateCapitalGroup, ExpireCapitalDemands, ExpireCapitalPlans,
-    ExpireFundingObjectives, FundingObjectiveReceipt, ObserveCapitalDemand, ObserveCapitalFacts,
-    ObserveCapitalMemberAccount, ObserveCapitalSettlement, PublishFundingObjective,
-    RecordCapitalRecoveryRequired,
+    CapitalProcessError, CapitalRpcActor, EvaluateCapitalGroup, ExpireCapitalDemands,
+    ExpireCapitalPlans, ExpireFundingObjectives, FundingObjectiveReceipt, ObserveCapitalDemand,
+    ObserveCapitalFacts, ObserveCapitalMemberAccount, ObserveCapitalSettlement,
+    PublishFundingObjective, RecordCapitalRecoveryRequired,
 };
 use crate::application::contract::{capital_current_view, capital_event};
 use crate::services::facts::{read_location_facts, read_member_account_observation};
@@ -31,19 +31,7 @@ use crate::{
     FundingPriority,
 };
 
-pub struct CapitalRest;
-
-impl RestContract for CapitalRest {
-    type Request = CapitalRestRequest;
-    type Response = CapitalRestResponse;
-}
-
-impl<C> Contract for CapitalProcess<C>
-where
-    C: Send + 'static,
-{
-    type Rest = CapitalRest;
-}
+const CAPITAL_BUSINESS_ERROR_CODE: i32 = -31_003;
 
 impl<C> ConfluxActor for CapitalProcess<C>
 where
@@ -70,13 +58,12 @@ where
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<CapitalRestResponse>, Self::FatalError> {
-        let response = match event {
-            ConfluxEvent::Rest(request) => Some(self.handle_rest(request).await),
+    ) -> Result<(), Self::FatalError> {
+        match event {
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "capital-facts" => {
-                if let Err(error) = self.refresh_facts().await {
+                if let Err(error) = self.refresh_facts(context).await {
                     tracing::warn!(event = "capital_facts_refresh_failed", error = %error);
                     let evaluated_at = UnixNanos::new(now_unix_nanos());
                     if let Err(evaluation_error) = self
@@ -86,13 +73,11 @@ where
                         tracing::warn!(event = "capital_degraded_evaluation_failed", error = %evaluation_error);
                     }
                 }
-                None
             },
-            ConfluxEvent::Local(value) => match value {},
-            _ => None,
+            _ => {},
         };
         self.publish_contract_outputs(context)?;
-        Ok(response)
+        Ok(())
     }
 
     async fn stopping(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
@@ -169,6 +154,85 @@ where
     }
 }
 
+impl<C> CapitalRpcActor for CapitalProcess<C>
+where
+    C: AssetTransferCommand
+        + AssetTransferStatusQuery
+        + EarnCommand
+        + EarnActionStatusQuery
+        + EarnProductQuery
+        + Send
+        + 'static,
+{
+    async fn health(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<CapitalHealthResponse> {
+        let response = CapitalHealthResponse {
+            status: if self.conflux.is_some() {
+                "ready".into()
+            } else {
+                "degraded".into()
+            },
+        };
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+
+    async fn publish_funding_objective(
+        &mut self,
+        request: PublishFundingObjectiveRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<CapitalControlResponse> {
+        let response = self.publish_funding_objective_control(request);
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+
+    async fn cancel_funding_objective(
+        &mut self,
+        request: CancelFundingObjectiveRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<CapitalControlResponse> {
+        let response = self.cancel_funding_objective_control(request);
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+
+    async fn observe_capital_demand(
+        &mut self,
+        request: ObserveCapitalDemandRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<CapitalDemandResponse> {
+        let response = self.observe_capital_demand_control(request);
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+
+    async fn query_capital_availability(
+        &mut self,
+        request: QueryCapitalAvailabilityRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<CapitalAvailabilityResponse> {
+        let response = self
+            .query_availability(request)
+            .map_err(rpc_capital_error)?;
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+
+    async fn reconcile_capital_plan(
+        &mut self,
+        request: ReconcileCapitalPlanRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReconcileCapitalPlanResponse> {
+        let response = self.reconcile_capital_plan_control(request).await;
+        self.publish_rpc_outputs(context)?;
+        Ok(response)
+    }
+}
+
 impl<C> CapitalProcess<C>
 where
     C: AssetTransferCommand
@@ -179,189 +243,188 @@ where
         + Send
         + 'static,
 {
-    async fn handle_rest(&mut self, request: CapitalRestRequest) -> CapitalRestResponse {
-        match request {
-            CapitalRestRequest::Health => CapitalRestResponse::Health(Ok(CapitalHealthResponse {
-                status: if self.conflux.is_some() {
-                    "ready".into()
-                } else {
-                    "degraded".into()
-                },
-            })),
-            CapitalRestRequest::PublishFundingObjective(request) => {
-                let response = if !self.accepting_writes() {
-                    rejected_objective(
-                        request.request_id,
-                        request.objective_id,
-                        request.version,
-                        admission_closed(),
-                    )
-                } else {
-                    let request_id = request.request_id.clone();
-                    let objective_id = request.objective_id.clone();
-                    let version = request.version;
-                    let command = PublishFundingObjective {
+    fn publish_rpc_outputs(&mut self, context: &mut Context<'_, Self>) -> RpcResult<()> {
+        self.publish_contract_outputs(context)
+            .map_err(rpc_process_error)
+    }
+
+    fn publish_funding_objective_control(
+        &mut self,
+        request: PublishFundingObjectiveRequest,
+    ) -> CapitalControlResponse {
+        if !self.accepting_writes() {
+            return rejected_objective(
+                request.request_id,
+                request.objective_id,
+                request.version,
+                admission_closed(),
+            );
+        }
+        let request_id = request.request_id.clone();
+        let objective_id = request.objective_id.clone();
+        let version = request.version;
+        let command = PublishFundingObjective {
+            capital_group_id: request.capital_group_id,
+            objective: FundingObjective {
+                objective_id: request.objective_id,
+                version: request.version,
+                strategy_id: request.strategy_id,
+                destination: location(request.destination),
+                desired_available: request.desired_available,
+                required_by: request.required_by_unix_nanos,
+                expires_at: request.expires_at_unix_nanos,
+                priority: priority(request.priority),
+                confidence_bps: request.confidence_bps,
+                strategy_decision_id: request.strategy_decision_id,
+            },
+            observed_at: request.observed_at_unix_nanos,
+        };
+        match self.application_mut().publish_funding_objective(command) {
+            Ok(receipt) => objective_response(request_id, receipt),
+            Err(error) => rejected_objective(
+                request_id,
+                objective_id,
+                version,
+                control_error("capital_rejected", error.to_string(), false),
+            ),
+        }
+    }
+
+    fn cancel_funding_objective_control(
+        &mut self,
+        request: CancelFundingObjectiveRequest,
+    ) -> CapitalControlResponse {
+        let request_id = request.request_id.clone();
+        let objective_id = request.objective_id.clone();
+        let version = request.expected_version;
+        let command = CancelFundingObjective {
+            capital_group_id: request.capital_group_id,
+            objective_id: request.objective_id,
+            expected_version: request.expected_version,
+            observed_at: request.observed_at_unix_nanos,
+        };
+        match self.application_mut().cancel_funding_objective(command) {
+            Ok(receipt) => objective_response(request_id, receipt),
+            Err(error) => rejected_objective(
+                request_id,
+                objective_id,
+                version,
+                control_error("capital_rejected", error.to_string(), false),
+            ),
+        }
+    }
+
+    fn observe_capital_demand_control(
+        &mut self,
+        request: ObserveCapitalDemandRequest,
+    ) -> CapitalDemandResponse {
+        let request_id = request.request_id.clone();
+        let demand_id = request.demand_id.clone();
+        let result = if !self.accepting_writes() {
+            Err(admission_closed())
+        } else {
+            self.validate_lease_fence(
+                request.destination.account_id.as_str(),
+                &request.destination_lease_fence,
+            )
+            .map_err(|message| control_error("capital_fence_invalid", message, false))
+            .and_then(|()| {
+                self.application_mut()
+                    .observe_demand(ObserveCapitalDemand {
                         capital_group_id: request.capital_group_id,
-                        objective: FundingObjective {
-                            objective_id: request.objective_id,
-                            version: request.version,
+                        demand: CapitalDemand {
+                            demand_id: request.demand_id,
+                            idempotency_key: request.idempotency_key,
                             strategy_id: request.strategy_id,
                             destination: location(request.destination),
-                            desired_available: request.desired_available,
+                            observed_shortfall: request.observed_shortfall,
+                            observed_at: request.observed_at_unix_nanos,
                             required_by: request.required_by_unix_nanos,
                             expires_at: request.expires_at_unix_nanos,
                             priority: priority(request.priority),
                             confidence_bps: request.confidence_bps,
-                            strategy_decision_id: request.strategy_decision_id,
+                            account_watermark: request.account_watermark,
+                            risk_watermark: request.risk_watermark,
+                            launch_id: request.launch_id.to_string(),
+                            instance_id: request.instance_id.to_string(),
+                            destination_lease_fence: request.destination_lease_fence,
+                            causal_references: request.causal_references,
                         },
-                        observed_at: request.observed_at_unix_nanos,
-                    };
-                    match self.application_mut().publish_funding_objective(command) {
-                        Ok(receipt) => objective_response(request_id, receipt),
-                        Err(error) => rejected_objective(
-                            request_id,
-                            objective_id,
-                            version,
-                            control_error("capital_rejected", error.to_string(), false),
-                        ),
-                    }
-                };
-                CapitalRestResponse::PublishFundingObjective(response)
-            },
-            CapitalRestRequest::CancelFundingObjective(request) => {
-                let request_id = request.request_id.clone();
-                let objective_id = request.objective_id.clone();
-                let version = request.expected_version;
-                let command = CancelFundingObjective {
-                    capital_group_id: request.capital_group_id,
-                    objective_id: request.objective_id,
-                    expected_version: request.expected_version,
-                    observed_at: request.observed_at_unix_nanos,
-                };
-                let response = match self.application_mut().cancel_funding_objective(command) {
-                    Ok(receipt) => objective_response(request_id, receipt),
-                    Err(error) => rejected_objective(
-                        request_id,
-                        objective_id,
-                        version,
-                        control_error("capital_rejected", error.to_string(), false),
-                    ),
-                };
-                CapitalRestResponse::CancelFundingObjective(response)
-            },
-            CapitalRestRequest::ObserveCapitalDemand(request) => {
-                let request_id = request.request_id.clone();
-                let demand_id = request.demand_id.clone();
-                let result = if !self.accepting_writes() {
-                    Err(admission_closed())
-                } else {
-                    self.validate_lease_fence(
-                        request.destination.account_id.as_str(),
-                        &request.destination_lease_fence,
-                    )
-                    .map_err(|message| control_error("capital_fence_invalid", message, false))
-                    .and_then(|()| {
-                        self.application_mut()
-                            .observe_demand(ObserveCapitalDemand {
-                                capital_group_id: request.capital_group_id,
-                                demand: CapitalDemand {
-                                    demand_id: request.demand_id,
-                                    idempotency_key: request.idempotency_key,
-                                    strategy_id: request.strategy_id,
-                                    destination: location(request.destination),
-                                    observed_shortfall: request.observed_shortfall,
-                                    observed_at: request.observed_at_unix_nanos,
-                                    required_by: request.required_by_unix_nanos,
-                                    expires_at: request.expires_at_unix_nanos,
-                                    priority: priority(request.priority),
-                                    confidence_bps: request.confidence_bps,
-                                    account_watermark: request.account_watermark,
-                                    risk_watermark: request.risk_watermark,
-                                    launch_id: request.launch_id.to_string(),
-                                    instance_id: request.instance_id.to_string(),
-                                    destination_lease_fence: request.destination_lease_fence,
-                                    causal_references: request.causal_references,
-                                },
-                            })
-                            .map_err(|error| {
-                                control_error("capital_rejected", error.to_string(), false)
-                            })
                     })
-                };
-                let (status, error) = match result {
-                    Ok(CapitalDemandReceipt::Accepted(_)) => (CapitalDemandStatus::Accepted, None),
-                    Ok(CapitalDemandReceipt::Duplicate(_)) => {
-                        (CapitalDemandStatus::Duplicate, None)
-                    },
-                    Err(error) => (CapitalDemandStatus::Rejected, Some(error)),
-                };
-                CapitalRestResponse::ObserveCapitalDemand(CapitalDemandResponse {
-                    request_id,
-                    demand_id,
-                    status,
-                    error,
-                })
-            },
-            CapitalRestRequest::QueryCapitalAvailability(request) => {
-                CapitalRestResponse::QueryCapitalAvailability(self.query_availability(request))
-            },
-            CapitalRestRequest::ReconcileCapitalPlan(request) => {
-                let request_id = request.request_id.clone();
-                let plan_id = request.plan_id.clone();
-                let before = self.application().plan(&plan_id).cloned();
-                let result =
-                    if request.capital_group_id != self.application().snapshot().capital_group_id {
-                        Err(control_error(
-                            "capital_group_mismatch",
-                            "reconcile request does not address this Capital group",
-                            false,
-                        ))
-                    } else if let Some(plan) = before.as_ref() {
-                        self.validate_current_transfer_leases(
-                            plan.source.account_id.as_str(),
-                            plan.destination.account_id.as_str(),
-                        )
-                        .map_err(|message| control_error("capital_fence_invalid", message, false))
-                    } else {
-                        Err(control_error(
-                            "capital_plan_not_found",
-                            "Capital plan was not found",
-                            false,
-                        ))
-                    };
-                let response = match result {
-                    Ok(()) => match self
-                        .reconcile_capital_plan(plan_id.clone(), request.observed_at_unix_nanos)
-                        .await
-                    {
-                        Ok(after) => ReconcileCapitalPlanResponse {
-                            request_id,
-                            plan_id,
-                            status: if before.as_ref() == Some(&after) {
-                                CapitalPlanReconcileStatus::Unchanged
-                            } else {
-                                CapitalPlanReconcileStatus::Reconciled
-                            },
-                            error: None,
-                        },
-                        Err(error) => rejected_reconcile(
-                            request_id,
-                            plan_id,
-                            control_error("capital_reconcile_rejected", error.to_string(), false),
-                        ),
-                    },
-                    Err(error) => rejected_reconcile(request_id, plan_id, error),
-                };
-                CapitalRestResponse::ReconcileCapitalPlan(response)
-            },
+                    .map_err(|error| control_error("capital_rejected", error.to_string(), false))
+            })
+        };
+        let (status, error) = match result {
+            Ok(CapitalDemandReceipt::Accepted(_)) => (CapitalDemandStatus::Accepted, None),
+            Ok(CapitalDemandReceipt::Duplicate(_)) => (CapitalDemandStatus::Duplicate, None),
+            Err(error) => (CapitalDemandStatus::Rejected, Some(error)),
+        };
+        CapitalDemandResponse {
+            request_id,
+            demand_id,
+            status,
+            error,
         }
     }
 
-    async fn refresh_facts(&mut self) -> Result<(), CapitalProcessError> {
+    async fn reconcile_capital_plan_control(
+        &mut self,
+        request: ReconcileCapitalPlanRequest,
+    ) -> ReconcileCapitalPlanResponse {
+        let request_id = request.request_id.clone();
+        let plan_id = request.plan_id.clone();
+        let before = self.application().plan(&plan_id).cloned();
+        let result = if request.capital_group_id != self.application().snapshot().capital_group_id {
+            Err(control_error(
+                "capital_group_mismatch",
+                "reconcile request does not address this Capital group",
+                false,
+            ))
+        } else if let Some(plan) = before.as_ref() {
+            self.validate_current_transfer_leases(
+                plan.source.account_id.as_str(),
+                plan.destination.account_id.as_str(),
+            )
+            .map_err(|message| control_error("capital_fence_invalid", message, false))
+        } else {
+            Err(control_error(
+                "capital_plan_not_found",
+                "Capital plan was not found",
+                false,
+            ))
+        };
+        match result {
+            Ok(()) => match self
+                .reconcile_capital_plan(plan_id.clone(), request.observed_at_unix_nanos)
+                .await
+            {
+                Ok(after) => ReconcileCapitalPlanResponse {
+                    request_id,
+                    plan_id,
+                    status: if before.as_ref() == Some(&after) {
+                        CapitalPlanReconcileStatus::Unchanged
+                    } else {
+                        CapitalPlanReconcileStatus::Reconciled
+                    },
+                    error: None,
+                },
+                Err(error) => rejected_reconcile(
+                    request_id,
+                    plan_id,
+                    control_error("capital_reconcile_rejected", error.to_string(), false),
+                ),
+            },
+            Err(error) => rejected_reconcile(request_id, plan_id, error),
+        }
+    }
+
+    async fn refresh_facts(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), CapitalProcessError> {
         let state = self.conflux.as_ref().ok_or_else(|| {
             CapitalProcessError::Invalid("Capital Conflux runtime was not configured".into())
         })?;
-        let snapshot_root = state.config.snapshot_root.clone();
         let instance_id = state.config.instance_id.clone();
         let automatic_execution = state.config.automatic_execution;
         let plan_ttl_nanos = state.config.plan_ttl_nanos;
@@ -380,20 +443,29 @@ where
         let member_observations = members
             .iter()
             .map(|member| {
-                read_member_account_observation(&snapshot_root, member).unwrap_or_else(|error| {
-                    tracing::warn!(
-                        event = "capital_member_account_unavailable",
-                        account_id = %member.account_id,
-                        error = %error
-                    );
-                    crate::CapitalMemberAccountObservation {
-                        broker: member.broker.clone(),
-                        account_id: member.account_id.clone(),
-                        account_watermark: Sequence::new(0),
-                        account_observed_at: evaluated_at,
-                        account_complete: false,
-                    }
-                })
+                context
+                    .account_client(member.account_id.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "Account contract client is not configured: {}",
+                            member.account_id
+                        )
+                    })
+                    .and_then(|account| read_member_account_observation(account, member))
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(
+                            event = "capital_member_account_unavailable",
+                            account_id = %member.account_id,
+                            error = %error
+                        );
+                        crate::CapitalMemberAccountObservation {
+                            broker: member.broker.clone(),
+                            account_id: member.account_id.clone(),
+                            account_watermark: Sequence::new(0),
+                            account_observed_at: evaluated_at,
+                            account_complete: false,
+                        }
+                    })
             })
             .collect::<Vec<_>>();
         for observation in member_observations {
@@ -404,16 +476,20 @@ where
                 })?;
         }
 
-        let risk_reader = RiskViewReader::open(
-            &snapshot_root,
-            RiskViewKey::latest(format!("risk:{instance_id}")),
-        )
-        .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
-        let risk_frame = risk_reader
+        let risk_latest = context
+            .risk_client("risk")
+            .ok_or_else(|| {
+                CapitalProcessError::Connection(
+                    "Risk contract client is not configured: risk".into(),
+                )
+            })?
+            .latest(format!("risk:{instance_id}"))
+            .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
+        let risk_frame = risk_latest
             .read()
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
         let risk_root = risk_frame
-            .decode()
+            .view()
             .map_err(|error| CapitalProcessError::Connection(error.to_string()))?;
         let risk_state = risk_root.state();
         let risk_metadata = risk_frame.envelope_metadata();
@@ -431,8 +507,16 @@ where
             .collect::<std::collections::BTreeSet<_>>();
         let mut facts = Vec::new();
         for location in &locations {
+            let account = context
+                .account_client(location.account_id.as_str())
+                .ok_or_else(|| {
+                    CapitalProcessError::Connection(format!(
+                        "Account contract client is not configured: {}",
+                        location.account_id
+                    ))
+                })?;
             match read_location_facts(
-                &snapshot_root,
+                account,
                 location,
                 strategy_id.as_str(),
                 risk_state,
@@ -969,6 +1053,14 @@ fn control_error(
         retryable,
         details: BTreeMap::new(),
     }
+}
+
+fn rpc_process_error(error: CapitalProcessError) -> ErrorObjectOwned {
+    rpc_capital_error(control_error("capital_internal", error.to_string(), true))
+}
+
+fn rpc_capital_error(error: CapitalControlError) -> ErrorObjectOwned {
+    business_error(CAPITAL_BUSINESS_ERROR_CODE, error.message.clone(), error)
 }
 
 fn location(value: kairos_capital_contract::FundingLocation) -> FundingLocation {

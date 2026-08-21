@@ -1,12 +1,13 @@
 //! Assembly of the Execution application, concrete resources, and Conflux host.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, HttpControlConfig, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, JsonRpcRuntimeConfig, MmapOutputDeclaration,
 };
 use kairos_execution_contract::{
-    ExecutionHttpControl, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
+    ExecutionControlRpcServer, ExecutionViewKey, ExecutionViewKind, ExecutionViewPublisher,
 };
 
 use super::{
@@ -14,8 +15,8 @@ use super::{
     SqlxExecutionAudit, SqlxExecutionStore, compose_order_entry, configure_execution_dependencies,
     load_execution_routes_from_reference_markets,
 };
-use crate::application::ExecutionApplication;
 use crate::application::core::ExecutionApplicationWiring;
+use crate::application::{ExecutionApplication, ExecutionRpcService};
 use crate::services::audit::ExecutionAudit;
 
 pub struct ExecutionHostConfig {
@@ -24,7 +25,7 @@ pub struct ExecutionHostConfig {
     pub writer_fences: Vec<ExecutionWriterFence>,
     pub state_path: PathBuf,
     pub audit_path: PathBuf,
-    pub reference_database: PathBuf,
+    pub reference_connection: kairos_reference_contract::ReferenceConnection,
     pub manifest_path: PathBuf,
     pub socket_path: PathBuf,
     pub view_root: PathBuf,
@@ -72,24 +73,35 @@ pub fn build_execution_host(
         },
     )?;
 
-    if config.reference_database.exists() {
-        for (access_id, participant_instrument) in load_execution_routes_from_reference_markets(
-            &config.reference_database,
-            &config.route_options,
-        )? {
+    let reference_key = "execution-reference";
+    let reference_database = config.reference_connection.database.clone();
+    let mut reference_snapshot = None;
+    if reference_database.exists() {
+        system
+            .install_reference_connection(reference_key, config.reference_connection, 1)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        let snapshot = system
+            .reference_execution_snapshot(reference_key)
+            .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+        for (access_id, participant_instrument) in
+            load_execution_routes_from_reference_markets(&snapshot, &config.route_options)?
+        {
             application.configure_execution_route(access_id, participant_instrument);
         }
+        reference_snapshot = Some(snapshot);
     } else if !config.simulated {
         return Err(format!(
             "live Execution requires canonical Reference markets: {}",
-            config.reference_database.display()
+            reference_database.display()
         )
         .into());
     }
 
     configure_execution_dependencies(
         &mut application,
+        &mut system,
         &config.manifest_path,
+        reference_snapshot,
         config.backtest,
         128,
     )?;
@@ -98,7 +110,7 @@ pub fn build_execution_host(
 
     let settlement = config
         .simulated
-        .then(|| SimulatedAccountSettlement::from_manifest(&config.manifest_path))
+        .then(|| SimulatedAccountSettlement::from_manifest(&mut system, &config.manifest_path))
         .transpose()?;
     let transport_identity = config.transport_identity.clone();
     application.configure_conflux(
@@ -147,9 +159,11 @@ pub fn build_execution_host(
             ..ConfluxConfig::default()
         },
     )?;
-    Ok(conflux.with_http_control(
+    let invocation = handle.rpc_actor_invocation(Duration::from_secs(30));
+    let methods = ExecutionRpcService::<ExecutionApplication>::new(invocation).into_rpc();
+    Ok(conflux.with_json_rpc(
         handle,
-        ExecutionHttpControl,
-        HttpControlConfig::uds(config.socket_path),
+        methods,
+        JsonRpcRuntimeConfig::uds(config.socket_path),
     ))
 }

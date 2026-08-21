@@ -6,12 +6,12 @@ pub mod logging;
 pub mod runtime;
 pub mod workspace;
 
-pub use control::{ControlApi, ControlServer, RestControlClient};
-pub use incarnation::ProducerIncarnation;
-pub use runtime::{
-    DEGRADED_STATUS, HEALTH_PATH, READY_STATUS, RUNTIME_PROTOCOL_VERSION, STOP_PATH,
-    STOPPING_STATUS,
+pub use control::{
+    CONTROL_API_VERSION, JsonRpcControlClient, SystemCommandResponse, SystemHealthResponse,
+    SystemStopRequest,
 };
+pub use incarnation::ProducerIncarnation;
+pub use runtime::{DEGRADED_STATUS, READY_STATUS, RUNTIME_PROTOCOL_VERSION, STOPPING_STATUS};
 pub use workspace::{
     InstanceWorkspace, ResourceScope, Workspace, WorkspaceFencedLease, WorkspaceManifest,
     WorkspaceProcessLock,

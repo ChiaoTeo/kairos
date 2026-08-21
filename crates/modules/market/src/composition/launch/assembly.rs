@@ -127,31 +127,6 @@ fn collection_market_descriptor(
     Ok(descriptor)
 }
 
-fn reference_endpoint(
-    workspace: &Workspace,
-    aeron_dir: Option<&std::path::Path>,
-) -> Result<kairos_reference_contract::ReferenceEndpoint, MarketStartupError> {
-    Ok(kairos_reference_contract::ReferenceEndpoint {
-        database: workspace
-            .child(&["state", "reference", "reference.sqlite"])
-            .map_err(MarketStartupError::new)?,
-        actor_id: kairos_primitives::runtime::ActorId::new("reference-actor")
-            .map_err(MarketStartupError::new)?,
-        events: kairos_conflux::AeronEndpoint::new(
-            aeron_dir.map(std::path::Path::to_path_buf),
-            kairos_conflux::DEFAULT_AERON_CHANNEL,
-            kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
-        )
-        .map_err(MarketStartupError::new)?,
-    })
-}
-
-fn read_reference_snapshot(
-    client: &kairos_reference_contract::ReferenceClient,
-) -> Result<kairos_reference_contract::ReferenceProjectionSnapshot, MarketStartupError> {
-    client.market_snapshot().map_err(MarketStartupError::new)
-}
-
 #[derive(Debug)]
 pub struct MarketStartupError(String);
 
@@ -243,15 +218,34 @@ pub async fn build_market_host(
     } else {
         MarketCompositionConfig::default()
     };
-    let reference_client = (profile.scope != MarketRuntimeScope::Replay)
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    let reference_client_key = (profile.scope != MarketRuntimeScope::Replay)
         .then(|| {
-            reference_endpoint(&workspace, request.aeron_dir.as_deref())
-                .map(kairos_reference_contract::ReferenceClient::connect)
+            kairos_conflux::reference_connection_from_workspace(
+                &workspace,
+                request.aeron_dir.as_deref(),
+            )
+            .map_err(MarketStartupError::new)
+        })
+        .map(|endpoint| {
+            let key = "market-reference".to_owned();
+            system
+                .install_reference_connection(
+                    key.clone(),
+                    endpoint?,
+                    profile.publication_queue_capacity.max(1),
+                )
+                .map_err(|error| MarketStartupError::new(error.to_string()))?;
+            Ok::<_, MarketStartupError>(key)
         })
         .transpose()?;
-    let initial_reference_snapshot = reference_client
+    let initial_reference_snapshot = reference_client_key
         .as_ref()
-        .map(read_reference_snapshot)
+        .map(|key| {
+            system
+                .reference_market_snapshot(key)
+                .map_err(MarketStartupError::new)
+        })
         .transpose()?;
 
     std::fs::create_dir_all(&view_root).map_err(MarketStartupError::new)?;
@@ -385,19 +379,11 @@ pub async fn build_market_host(
     let history = (!history_specs.is_empty())
         .then(|| spawn_jsonl_history(history_specs).map_err(MarketStartupError::new))
         .transpose()?;
-    let mut system = kairos_conflux::ConfluxSystem::new();
     // A static replay resolves subscriptions from its explicit request and
     // remains independent of the live Reference/Aeron runtime. Live modes
-    // install both client and event stream into Conflux so no watcher task
-    // becomes a second Aeron owner.
-    let reference_projection = if let Some(client) = reference_client {
-        let key = "market-reference".to_owned();
-        let events = client
-            .events(profile.publication_queue_capacity.max(1))
-            .map_err(|error| MarketStartupError::new(error.to_string()))?;
-        system
-            .install_reference_contract(key.clone(), client, events)
-            .map_err(|error| MarketStartupError::new(error.to_string()))?;
+    // use the Reference client held by Conflux so no watcher task becomes a
+    // second Aeron owner and Market does not create a foreign module client.
+    let reference_projection = if let Some(key) = reference_client_key {
         Some(crate::application::ReferenceProjectionConfig {
             client_key: key,
             interval: profile.reference_recovery_interval,

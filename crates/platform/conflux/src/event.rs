@@ -1,11 +1,12 @@
 use kairos_account_contract::AccountEventFrame;
+use kairos_capital_contract::CapitalEventFrame;
 use kairos_execution_contract::ExecutionEventFrame;
 use kairos_integration::{ConnectionDescriptor, ExternalParticipantEvent};
 use kairos_market_contract::MarketEventFrame;
 use kairos_reference_contract::ReferenceEventFrame;
 use kairos_risk_contract::RiskEventFrame;
 
-use crate::{Contract, ResourceState, RestRequestOf};
+use crate::ResourceState;
 
 pub struct ContractEvent<F> {
     pub client: String,
@@ -44,14 +45,14 @@ pub struct ManagedConnectionIdentity {
 }
 
 /// Every event source visible to a Conflux Actor.
-pub enum ConfluxEvent<C: Contract, Local> {
-    Rest(RestRequestOf<C>),
+pub enum ConfluxEvent<LocalEvent = std::convert::Infallible> {
     Account(ContractEvent<AccountEventFrame>),
+    Capital(ContractEvent<CapitalEventFrame>),
     Execution(ContractEvent<ExecutionEventFrame>),
     Market(ContractEvent<MarketEventFrame>),
     Reference(ContractEvent<ReferenceEventFrame>),
     Risk(ContractEvent<RiskEventFrame>),
     Integration(IntegrationEvent),
     System(SystemEvent),
-    Local(Local),
+    Local(LocalEvent),
 }

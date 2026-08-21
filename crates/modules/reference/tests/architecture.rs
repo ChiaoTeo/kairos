@@ -22,7 +22,7 @@ fn reference_control_transport_is_framework_owned() {
     );
     assert!(contract.contains("ReferenceControlRpcClient"));
     assert!(contract.contains("ReferenceControlRpcServer"));
-    assert!(service.contains("#[rpc(client, server, namespace = \"reference\")]"));
+    assert!(service.contains("#[conflux_rpc(namespace = \"reference\")]"));
     for forbidden in ["axum::", "UnixListener", "TcpListener"] {
         assert!(!server.contains(forbidden));
     }
@@ -154,19 +154,41 @@ fn reference_domain_classification_is_not_unconstrained_text() {
 
 #[test]
 fn reference_control_is_jsonrpc_service_first() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let server = source("src/bin/kairos-reference-server.rs");
+    let actor = source("src/application/conflux.rs");
+    let application = source("src/application/mod.rs");
     let service = source("contract/src/control/service.rs");
+    let contract_manifest = source("contract/Cargo.toml");
     let types = source("contract/src/control/types.rs");
+    assert!(!root.join("src/application/rpc.rs").exists());
     assert!(!server.contains("ReferenceHttpControl"));
     assert!(!server.contains("with_http_control"));
+    assert!(server.contains("with_json_rpc"));
     assert!(!types.contains("ReferenceRestRequest"));
     assert!(!types.contains("ReferenceRestResponse"));
     assert!(service.contains("async fn health"));
     assert!(service.contains("async fn refresh"));
     assert!(service.contains("async fn publish"));
     assert!(service.contains("async fn upsert_asset"));
+    assert!(!service.contains("kairos_conflux"));
+    assert!(service.contains("#[conflux_rpc(namespace = \"reference\")]"));
+    assert!(!contract_manifest.contains("kairos-conflux"));
     assert!(!server.contains("mpsc::channel"));
     assert!(!server.contains("oneshot::channel"));
+    assert!(!application.contains("conflux_json_rpc_actor_for"));
+    assert!(application.contains("reference_control_rpc_conflux_actor"));
+    assert!(application.contains("pub trait ReferenceRpcActor"));
+    assert!(application.contains("service ReferenceRpcService"));
+    assert!(!actor.contains("impl ReferenceControlRpcActor for ReferenceApplication"));
+    assert!(actor.contains("impl ConfluxActor for ReferenceApplication"));
+    assert!(actor.contains("impl ReferenceRpcActor for ReferenceApplication"));
+    assert!(actor.contains("async fn health"));
+    assert!(actor.contains("async fn refresh"));
+    assert!(!actor.contains("async fn rpc_health"));
+    assert!(!application.contains("trait ReferenceControlRpcActor"));
+    assert!(!actor.contains("pub struct ReferenceRpcService"));
+    assert!(!actor.contains("impl ReferenceControlRpcServer"));
     let contract = source("contract/src/control/types.rs");
     let health = contract
         .split("pub struct ReferenceHealthResponse")

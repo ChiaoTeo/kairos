@@ -3,17 +3,18 @@ use std::convert::Infallible;
 use std::time::{Duration, Instant};
 
 use kairos_conflux::{
-    AccountQuery, ConfluxActor, ConfluxEvent, Context, Contract, EarnPositionsRequest,
-    EarnProductFamily, EarnProductQuery, ExternalAccountEvent, ExternalAccountEventEnvelope,
-    ExternalParticipantEvent, RestContract, SnapshotEnvelopeMetadata, SystemEvent,
-    TypedConnectionCollection,
+    AccountQuery, ConfluxActor, ConfluxEvent, Context, EarnPositionsRequest, EarnProductFamily,
+    EarnProductQuery, ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalParticipantEvent,
+    SnapshotEnvelopeMetadata, SystemEvent, TypedConnectionCollection,
 };
 use kairos_primitives::account::SegmentKey;
 use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 
 use super::{
-    AccountApplication, AccountError, AccountFactProvenance, AccountSegmentCompleteness,
-    AccountSegmentFreshness, AccountSegmentSyncLifecycle, AccountSegmentSyncMode, RefreshAccount,
+    AccountApplication, AccountError, AccountFactProvenance, AccountRpcActor,
+    AccountSegmentCompleteness, AccountSegmentFreshness, AccountSegmentSyncLifecycle,
+    AccountSegmentSyncMode, RefreshAccount,
 };
 use crate::domain::{AccountEvent, AccountFill};
 use crate::services::integration::{
@@ -26,20 +27,12 @@ use crate::services::publication::{
 use crate::services::refresh::RefreshFetch;
 use crate::services::synchronization::{RETAINED_EVENT_IDS, SegmentSyncState};
 
-pub struct AccountRest;
-
-impl RestContract for AccountRest {
-    type Request = kairos_account_contract::AccountRestRequest;
-    type Response = kairos_account_contract::AccountRestResponse;
-}
-
-impl Contract for AccountApplication {
-    type Rest = AccountRest;
-}
+const ACCOUNT_BUSINESS_ERROR_CODE: i32 = -31_007;
 
 pub(super) struct AccountConfluxState {
     refresh_interval: Duration,
     resolver: AccountInstrumentResolver,
+    reference_client_key: Option<String>,
     segments: BTreeMap<SegmentKey, SegmentSyncState>,
     identity: InstanceIdentity,
     producer_incarnation: u64,
@@ -51,6 +44,7 @@ impl Default for AccountConfluxState {
         Self {
             refresh_interval: Duration::from_secs(30),
             resolver: AccountInstrumentResolver::default(),
+            reference_client_key: None,
             segments: BTreeMap::new(),
             identity: InstanceIdentity::default(),
             producer_incarnation: kairos_workspace::ProducerIncarnation::allocate().get(),
@@ -84,6 +78,10 @@ impl AccountApplication {
         Ok(())
     }
 
+    pub fn configure_reference_client(&mut self, client_key: impl Into<String>) {
+        self.conflux.reference_client_key = Some(client_key.into());
+    }
+
     pub fn configure_publication_identity(&mut self, identity: InstanceIdentity) {
         self.conflux.identity = identity;
     }
@@ -103,11 +101,10 @@ impl ConfluxActor for AccountApplication {
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<kairos_account_contract::AccountRestResponse>, Self::FatalError> {
-        let response = match event {
-            ConfluxEvent::Rest(request) => self.handle_rest(request, context).await.map(Some),
+    ) -> Result<(), Self::FatalError> {
+        match event {
             ConfluxEvent::Integration(event) => {
                 if let ExternalParticipantEvent::Account(envelope) = event.event {
                     self.handle_account_event(
@@ -115,12 +112,10 @@ impl ConfluxActor for AccountApplication {
                         envelope,
                     )?;
                 }
-                Ok(None)
             },
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
                 self.evaluate_freshness();
                 self.refresh_from_system(context, Vec::new()).await?;
-                Ok(None)
             },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 if let Some(binding) = source.strip_prefix("integration:") {
@@ -130,7 +125,6 @@ impl ConfluxActor for AccountApplication {
                         }
                     }
                 }
-                Ok(None)
             },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 if let Some(binding) = source.strip_prefix("integration:") {
@@ -140,13 +134,11 @@ impl ConfluxActor for AccountApplication {
                         }
                     }
                 }
-                Ok(None)
             },
-            ConfluxEvent::Local(value) => match value {},
-            _ => Ok(None),
-        }?;
+            _ => {},
+        };
         self.publish(context)?;
-        Ok(response)
+        Ok(())
     }
 
     async fn stopping(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
@@ -155,6 +147,111 @@ impl ConfluxActor for AccountApplication {
         }
         self.conflux.published_generation = None;
         self.publish(context)
+    }
+}
+
+impl AccountRpcActor for AccountApplication {
+    async fn health(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::Health> {
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(self.contract_health())
+    }
+
+    async fn apply_simulated_settlement(
+        &mut self,
+        settlement: kairos_account_contract::SimulatedSettlement,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AccountCommandStatus> {
+        simulated_fill(settlement)
+            .and_then(|fill| self.apply_simulated_fill(fill))
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(applied_status())
+    }
+
+    async fn apply_simulated_capital_mutation(
+        &mut self,
+        mutation: kairos_account_contract::SimulatedCapitalMutation,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AccountCommandStatus> {
+        simulated_capital_mutation(mutation)
+            .and_then(|mutation| self.apply_simulated_capital_mutation(mutation))
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(applied_status())
+    }
+
+    async fn query_simulated_capital_mutation(
+        &mut self,
+        query: kairos_account_contract::SimulatedCapitalMutationQuery,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::SimulatedCapitalMutationStatusResponse> {
+        let applied = self
+            .simulated_capital_mutation_applied(&query.segment_key, &query.mutation_id)
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(
+            kairos_account_contract::SimulatedCapitalMutationStatusResponse {
+                status: if applied {
+                    kairos_account_contract::SimulatedCapitalMutationStatus::Applied
+                } else {
+                    kairos_account_contract::SimulatedCapitalMutationStatus::NotFound
+                },
+            },
+        )
+    }
+
+    async fn mark_to_market(
+        &mut self,
+        request: kairos_account_contract::MarkToMarketRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AccountCommandStatus> {
+        self.mark_to_market(request.into())
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(applied_status())
+    }
+
+    async fn advance_time(
+        &mut self,
+        request: kairos_account_contract::AdvanceAccountTimeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AdvanceAccountTimeResponse> {
+        self.advance_business_time(request.event_time_unix_nanos.get())
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(kairos_account_contract::AdvanceAccountTimeResponse {
+            event_time_unix_nanos: request.event_time_unix_nanos,
+        })
+    }
+
+    async fn refresh(
+        &mut self,
+        request: kairos_account_contract::AccountSegmentsRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AccountRefreshResponse> {
+        let segments = request.segments;
+        self.refresh_from_system(context, segments.clone())
+            .await
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(self.refresh_response(segments))
+    }
+
+    async fn reconcile(
+        &mut self,
+        request: kairos_account_contract::AccountSegmentsRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_account_contract::AccountRefreshResponse> {
+        let segments = request.segments;
+        self.refresh_from_system(context, segments.clone())
+            .await
+            .map_err(rpc_account_error)?;
+        self.publish(context).map_err(rpc_account_error)?;
+        Ok(self.refresh_response(segments))
     }
 }
 
@@ -246,6 +343,7 @@ impl AccountApplication {
             .into_iter()
             .map(|segment| (segment.segment_key.to_string(), segment))
             .collect::<BTreeMap<_, _>>();
+        self.refresh_reference_snapshot(context)?;
         let resolver = self.conflux.resolver.clone();
         let mut connections = context.connections();
         let mut fetches = Vec::new();
@@ -329,87 +427,6 @@ impl AccountApplication {
             }
         }
         Ok(())
-    }
-
-    async fn handle_rest(
-        &mut self,
-        request: kairos_account_contract::AccountRestRequest,
-        context: &mut Context<'_, Self>,
-    ) -> Result<kairos_account_contract::AccountRestResponse, AccountError> {
-        use kairos_account_contract::{
-            AccountCommandOutcome, AccountCommandStatus, AccountRestRequest, AccountRestResponse,
-        };
-        Ok(match request {
-            AccountRestRequest::Health => AccountRestResponse::Health(Ok(self.contract_health())),
-            AccountRestRequest::ApplySimulatedSettlement(value) => {
-                AccountRestResponse::ApplySimulatedSettlement(
-                    simulated_fill(value)
-                        .and_then(|fill| self.apply_simulated_fill(fill))
-                        .map(|()| AccountCommandStatus {
-                            status: AccountCommandOutcome::Applied,
-                        })
-                        .map_err(control_error),
-                )
-            },
-            AccountRestRequest::ApplySimulatedCapitalMutation(value) => {
-                AccountRestResponse::ApplySimulatedCapitalMutation(
-                    simulated_capital_mutation(value)
-                        .and_then(|mutation| self.apply_simulated_capital_mutation(mutation))
-                        .map(|()| AccountCommandStatus {
-                            status: AccountCommandOutcome::Applied,
-                        })
-                        .map_err(control_error),
-                )
-            },
-            AccountRestRequest::QuerySimulatedCapitalMutation(value) => {
-                AccountRestResponse::QuerySimulatedCapitalMutation(
-                    self.simulated_capital_mutation_applied(
-                        &value.segment_key,
-                        &value.mutation_id,
-                    )
-                    .map(|applied| {
-                        kairos_account_contract::SimulatedCapitalMutationStatusResponse {
-                            status: if applied {
-                                kairos_account_contract::SimulatedCapitalMutationStatus::Applied
-                            } else {
-                                kairos_account_contract::SimulatedCapitalMutationStatus::NotFound
-                            },
-                        }
-                    })
-                    .map_err(control_error),
-                )
-            },
-            AccountRestRequest::MarkToMarket(value) => AccountRestResponse::MarkToMarket(
-                self.mark_to_market(value.into())
-                    .map(|()| AccountCommandStatus {
-                        status: AccountCommandOutcome::Applied,
-                    })
-                    .map_err(control_error),
-            ),
-            AccountRestRequest::AdvanceTime(value) => AccountRestResponse::AdvanceTime(
-                self.advance_business_time(value.event_time_unix_nanos.get())
-                    .map(|()| kairos_account_contract::AdvanceAccountTimeResponse {
-                        event_time_unix_nanos: value.event_time_unix_nanos,
-                    })
-                    .map_err(control_error),
-            ),
-            AccountRestRequest::Refresh(value) => {
-                let segments = value.segments;
-                let result = self
-                    .refresh_from_system(context, segments.clone())
-                    .await
-                    .map(|()| self.refresh_response(segments));
-                AccountRestResponse::Refresh(result.map_err(control_error))
-            },
-            AccountRestRequest::Reconcile(value) => {
-                let segments = value.segments;
-                let result = self
-                    .refresh_from_system(context, segments.clone())
-                    .await
-                    .map(|()| self.refresh_response(segments));
-                AccountRestResponse::Reconcile(result.map_err(control_error))
-            },
-        })
     }
 
     fn refresh_response(
@@ -719,6 +736,27 @@ impl AccountApplication {
             segment.recovery_buffer_depth = state.recovery_events.len() as u64;
         }
     }
+
+    fn refresh_reference_snapshot(
+        &mut self,
+        context: &mut Context<'_, Self>,
+    ) -> Result<(), AccountError> {
+        let Some(client_key) = self.conflux.reference_client_key.as_deref() else {
+            return Ok(());
+        };
+        let Some(client) = context.reference_client(client_key) else {
+            return Err(AccountError::Source(format!(
+                "managed Reference client is missing: {client_key}"
+            )));
+        };
+        let snapshot = client
+            .account_snapshot()
+            .map_err(|error| AccountError::Source(error.to_string()))?;
+        self.conflux
+            .resolver
+            .update_reference_snapshot(snapshot)
+            .map_err(AccountError::Source)
+    }
 }
 
 async fn fetch_accounts<C: AccountQuery, P>(
@@ -799,8 +837,14 @@ async fn fetch_earn_positions<C: EarnProductQuery, P>(
     fetches
 }
 
-fn control_error(error: AccountError) -> kairos_account_contract::AccountControlError {
-    kairos_account_contract::AccountControlError {
+fn applied_status() -> kairos_account_contract::AccountCommandStatus {
+    kairos_account_contract::AccountCommandStatus {
+        status: kairos_account_contract::AccountCommandOutcome::Applied,
+    }
+}
+
+fn rpc_account_error(error: AccountError) -> ErrorObjectOwned {
+    let error = kairos_account_contract::AccountControlError {
         code: "account.request_failed".into(),
         message: error.to_string(),
         retryable: matches!(
@@ -808,7 +852,8 @@ fn control_error(error: AccountError) -> kairos_account_contract::AccountControl
             AccountError::Source(_) | AccountError::Publication(_)
         ),
         details: BTreeMap::new(),
-    }
+    };
+    business_error(ACCOUNT_BUSINESS_ERROR_CODE, error.message.clone(), error)
 }
 
 fn simulated_fill(

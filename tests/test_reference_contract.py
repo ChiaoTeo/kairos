@@ -377,12 +377,15 @@ def test_reference_client_reads_lifecycle_events_by_sequence(
 def test_reference_client_scopes_refresh_and_provider_controls(
     tmp_path, monkeypatch
 ) -> None:
-    observed: list[tuple[str, str, float]] = []
+    observed: list[tuple[str, list[object] | None, float]] = []
 
     def request_sync(socket_path, method, target, body=None, *, timeout):
         assert socket_path == tmp_path / "reference.sock"
-        observed.append((method, target, timeout))
-        return 200, {"status": "ok"}
+        assert method == "POST"
+        assert target == "/"
+        assert isinstance(body, dict)
+        observed.append((str(body["method"]), body.get("params"), timeout))
+        return 200, {"jsonrpc": "2.0", "id": body["id"], "result": {"status": "ok"}}
 
     monkeypatch.setattr(
         "kairospy.infrastructure.transport.commands.request_sync", request_sync
@@ -400,11 +403,11 @@ def test_reference_client_scopes_refresh_and_provider_controls(
     client.set_option_underlying("SPY", False)
 
     assert observed == [
-        ("POST", "/v1/refresh?source=massive-options", 120.0),
-        ("POST", "/v1/sources/pause?source=massive-options", 5.0),
-        ("POST", "/v1/sources/resume?source=massive-options", 5.0),
-        ("POST", "/v1/options/coverage/add?underlying=SPY", 120.0),
-        ("POST", "/v1/options/coverage/remove?underlying=SPY", 120.0),
+        ("reference_refresh", ["massive-options"], 120.0),
+        ("reference_pause_source", ["massive-options"], 5.0),
+        ("reference_resume_source", ["massive-options"], 5.0),
+        ("reference_add_option_coverage", ["SPY"], 120.0),
+        ("reference_remove_option_coverage", ["SPY"], 120.0),
     ]
 
 

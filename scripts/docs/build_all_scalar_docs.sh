@@ -18,8 +18,14 @@ while IFS= read -r spec; do
   specs+=("${spec}")
 done < <(find "${repo_root}/schemas/v2" -type f -name 'control.openapi.yaml' | sort)
 if [[ ${#specs[@]} -eq 0 ]]; then
-  echo "No v2 OpenAPI schemas found" >&2
-  exit 1
+  echo "No v2 OpenAPI control schemas found; skipping Scalar API docs."
+  if [[ ${check_only} -eq 0 ]]; then
+    mkdir -p "${output_dir}"
+    node "${repo_root}/scripts/docs/render_scalar_index.mjs" \
+      "${output_dir}/index.html"
+    echo "Generated ${output_dir}/index.html"
+  fi
+  exit 0
 fi
 
 if [[ ${check_only} -eq 0 ]]; then

@@ -4,22 +4,23 @@
 //! encode/decode capabilities. It does not expose provider payloads or the
 //! Account service's mutable state model.
 
+extern crate self as kairos_account_contract;
+
+use std::path::Path;
+
 pub mod control;
 pub mod encode;
 pub mod error;
 pub mod event;
-pub mod transport;
 pub mod view;
 
-use std::path::PathBuf;
-
 pub use control::{
-    AccountCommandOutcome, AccountCommandStatus, AccountContractClient, AccountControlClient,
-    AccountControlError, AccountHealthStatus, AccountRefreshResponse, AccountRefreshStatus,
-    AccountRestRequest, AccountRestResponse, AccountSegmentsRequest, AdvanceAccountTimeRequest,
-    AdvanceAccountTimeResponse, DecimalValue, Health, MarkToMarketRequest,
-    SimulatedCapitalMutation, SimulatedCapitalMutationKind, SimulatedCapitalMutationQuery,
-    SimulatedCapitalMutationStatus, SimulatedCapitalMutationStatusResponse, SimulatedSettlement,
+    AccountCommandOutcome, AccountCommandStatus, AccountControlError, AccountControlRpcClient,
+    AccountControlRpcServer, AccountHealthStatus, AccountRefreshResponse, AccountRefreshStatus,
+    AccountSegmentsRequest, AdvanceAccountTimeRequest, AdvanceAccountTimeResponse, DecimalValue,
+    Health, MarkToMarketRequest, SimulatedCapitalMutation, SimulatedCapitalMutationKind,
+    SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus,
+    SimulatedCapitalMutationStatusResponse, SimulatedSettlement,
 };
 pub use encode::{
     BalanceEncoder, EncodeContext, ObservedOrderEncoder, PositionEncoder, StatusEncoder,
@@ -27,51 +28,149 @@ pub use encode::{
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{AccountEvent, AccountEventFrame, AccountEventPublisher, AccountEventStream};
+pub type AccountConnection = kairos_protocol::ContractClient;
+
 pub use kairos_transport::AeronEndpoint;
-pub use transport::AccountUdsTransport;
+use kairos_transport::SnapshotEnvelopeMetadata;
 pub use view::{
-    AccountViewKey, AccountViewKind, AccountViewPublisher, AccountViewReader, ViewFrame,
-    ViewMetadata, account_view_path, decode_account_current,
+    AccountViewKey, AccountViewKind, AccountViewPublisher, ViewFrame, ViewMetadata,
+    account_view_path, decode_account_current,
 };
 
 /// Unified public entry point. Control, events and views remain separate
 /// capabilities underneath this facade.
+#[derive(Clone)]
 pub struct AccountClient {
-    control: AccountControlClient,
-    control_socket: PathBuf,
-    view_root: PathBuf,
-    events: AeronEndpoint,
-}
-
-pub struct AccountEndpoint {
-    pub control_socket: PathBuf,
-    pub view_root: PathBuf,
-    pub events: AeronEndpoint,
+    inner: kairos_protocol::ContractClient,
 }
 
 impl AccountClient {
-    pub fn connect(endpoint: AccountEndpoint) -> Self {
-        Self {
-            control: AccountControlClient::connect(endpoint.control_socket.clone()),
-            control_socket: endpoint.control_socket,
-            view_root: endpoint.view_root,
-            events: endpoint.events,
-        }
+    pub fn connect(connection: AccountConnection) -> Self {
+        Self { inner: connection }
     }
 
-    pub fn control(&self) -> &AccountControlClient {
-        &self.control
+    pub fn control(&self) -> impl AccountControlRpcClient + '_ {
+        self.inner.control()
     }
 
     pub fn events(&self, capacity: usize) -> ContractResult<AccountEventStream> {
-        AccountEventStream::connect(&self.events, capacity)
+        AccountEventStream::connect(
+            self.inner
+                .require_aeron_endpoint()
+                .map_err(|error| ContractError::Transport(error.to_string()))?,
+            capacity,
+        )
     }
 
-    pub fn view(&self, key: AccountViewKey) -> ContractResult<view::AccountViewReader> {
-        view::AccountViewReader::open(&self.view_root, key)
+    pub fn account_current(
+        &self,
+        account_runtime_id: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> ContractResult<AccountCurrent> {
+        AccountCurrent::open(
+            self.require_view_root()?,
+            AccountViewKey::new(account_runtime_id, account_id, AccountViewKind::Current)?,
+        )
     }
 
-    pub fn control_socket(&self) -> &std::path::Path {
-        &self.control_socket
+    pub fn observed_orders(
+        &self,
+        account_runtime_id: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> ContractResult<ObservedOrders> {
+        ObservedOrders::open(
+            self.require_view_root()?,
+            AccountViewKey::new(
+                account_runtime_id,
+                account_id,
+                AccountViewKind::ObservedOrders,
+            )?,
+        )
+    }
+
+    fn require_view_root(&self) -> ContractResult<&Path> {
+        self.inner
+            .require_view_root()
+            .map_err(|error| ContractError::Transport(error.to_string()))
+    }
+}
+
+pub struct AccountCurrent {
+    reader: view::AccountViewReader,
+}
+
+impl AccountCurrent {
+    fn open(root: &Path, key: AccountViewKey) -> ContractResult<Self> {
+        Ok(Self {
+            reader: view::AccountViewReader::open(root, key)?,
+        })
+    }
+
+    pub fn read(&self) -> ContractResult<AccountCurrentSnapshot> {
+        Ok(AccountCurrentSnapshot {
+            frame: self.reader.read()?,
+        })
+    }
+
+    pub fn key(&self) -> &AccountViewKey {
+        self.reader.key()
+    }
+}
+
+pub struct AccountCurrentSnapshot {
+    frame: ViewFrame,
+}
+
+impl AccountCurrentSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.frame.generation()
+    }
+
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.frame.envelope_metadata()
+    }
+
+    pub fn view(&self) -> ContractResult<view::AccountCurrentView<'_>> {
+        self.frame.account_current()
+    }
+}
+
+pub struct ObservedOrders {
+    reader: view::AccountViewReader,
+}
+
+impl ObservedOrders {
+    fn open(root: &Path, key: AccountViewKey) -> ContractResult<Self> {
+        Ok(Self {
+            reader: view::AccountViewReader::open(root, key)?,
+        })
+    }
+
+    pub fn read(&self) -> ContractResult<ObservedOrdersSnapshot> {
+        Ok(ObservedOrdersSnapshot {
+            frame: self.reader.read()?,
+        })
+    }
+
+    pub fn key(&self) -> &AccountViewKey {
+        self.reader.key()
+    }
+}
+
+pub struct ObservedOrdersSnapshot {
+    frame: ViewFrame,
+}
+
+impl ObservedOrdersSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.frame.generation()
+    }
+
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.frame.envelope_metadata()
+    }
+
+    pub fn view(&self) -> ContractResult<view::ObservedOrdersCurrentView<'_>> {
+        self.frame.observed_orders()
     }
 }

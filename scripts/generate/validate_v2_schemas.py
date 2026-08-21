@@ -87,7 +87,7 @@ def main() -> int:
         if not match:
             continue
         semantic_root, identifier = (value.strip().strip("`") for value in match.groups())
-        if identifier == "control.openapi.yaml":
+        if identifier.endswith("ControlRpc"):
             continue
         registered.add((semantic_root, identifier))
 

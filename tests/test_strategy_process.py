@@ -32,7 +32,15 @@ def test_strategy_process_starts_without_snapshot_event_join(
     instance = workspace.instance("paper", "l", "i")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{},"accounts":{}}',
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": {
+                    "market": {"socket": str(workspace.paths.process_socket("market"))}
+                },
+                "accounts": {},
+            }
+        ),
         encoding="utf-8",
     )
     process = StrategyProcessController(workspace, ready_timeout=5)
@@ -155,8 +163,16 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
     instance = workspace.instance("backtest", "launch", "run-1")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}'
-        % instance.socket("execution"),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": {
+                    "market": {"socket": str(instance.socket("market"))},
+                    "execution": {"socket": str(instance.socket("execution"))},
+                },
+                "accounts": {},
+            }
+        ),
         encoding="utf-8",
     )
     composition = compose_strategy_process(
@@ -170,7 +186,7 @@ def test_strategy_composition_uses_instance_market_and_account_resources(
         instance.snapshot("market", "market-shared")
     )
     assert (
-        composition.application.context.execution._commands.client.socket_path
+        composition.application.context.execution._commands.client._client.socket_path
         == instance.paths.process_socket("execution")
     )
 
@@ -184,7 +200,15 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     instance = workspace.instance("paper", "manual", "run-1")
     instance.prepare()
     instance.component_manifest().write_text(
-        '{"schema_version":1,"components":{},"accounts":{}}',
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": {
+                    "market": {"socket": str(workspace.paths.process_socket("market"))}
+                },
+                "accounts": {},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -218,7 +242,7 @@ def test_interactive_strategy_composes_without_execution_or_accounts(
     assert disabled.error == "execution is disabled for this launch"
 
 
-def test_authoritative_config_requires_enabled_execution_endpoint(
+def test_authoritative_config_requires_enabled_execution_connection(
     tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -238,7 +262,15 @@ def test_authoritative_config_requires_enabled_execution_endpoint(
         encoding="utf-8",
     )
     instance.component_manifest().write_text(
-        json.dumps({"schema_version": 1, "components": {}, "accounts": {}}),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "components": {
+                    "market": {"socket": str(instance.socket("market"))}
+                },
+                "accounts": {},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -251,7 +283,7 @@ def test_authoritative_config_requires_enabled_execution_endpoint(
         )
 
 
-def test_disabled_execution_ignores_a_residual_manifest_endpoint(
+def test_disabled_execution_ignores_a_residual_manifest_connection(
     tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(
@@ -275,6 +307,7 @@ def test_disabled_execution_ignores_a_residual_manifest_endpoint(
             {
                 "schema_version": 1,
                 "components": {
+                    "market": {"socket": str(instance.socket("market"))},
                     "execution": {"socket": str(instance.socket("execution"))}
                 },
                 "accounts": {},

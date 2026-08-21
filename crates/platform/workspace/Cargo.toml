@@ -20,6 +20,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyperlocal-next.workspace = true
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+jsonrpsee.workspace = true
 libc.workspace = true
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }

@@ -1,8 +1,8 @@
 """Typed clients for already-running business processes.
 
 These clients are part of the System boundary. They expose health and control
-commands through Unix REST; business state is read from module-owned typed
-mmap views.
+commands through JSON-RPC; business state is read from module-owned typed mmap
+views.
 """
 
 from __future__ import annotations
@@ -12,157 +12,419 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .supervisor import UnixRestClient
+from kairospy.infrastructure.unix_http import request_sync
 
 
-@dataclass(frozen=True, slots=True)
-class SystemRestClient:
-    """Synchronous typed facade over the asynchronous Unix REST transport."""
+@dataclass(frozen=True)
+class SystemRpcClient:
+    """Synchronous typed facade over the Unix JSON-RPC transport."""
 
     socket_path: Path
+    view_root: Path | None = None
+    database_path: Path | None = None
+    actor_id: str | None = None
     timeout: float = 3.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.socket_path, Path):
             object.__setattr__(self, "socket_path", Path(self.socket_path))
+        if self.view_root is not None and not isinstance(self.view_root, Path):
+            object.__setattr__(self, "view_root", Path(self.view_root))
+        if self.database_path is not None and not isinstance(self.database_path, Path):
+            object.__setattr__(self, "database_path", Path(self.database_path))
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
 
-    def request(
-        self,
-        method: str,
-        path: str,
-        body: Mapping[str, Any] | bytes | None = None,
-    ) -> dict[str, Any]:
-        if method == "GET" and not self._supports_get_path(path):
-            raise ValueError(
-                "GET /v1/health is the only REST query for this component; read durable business state from typed mmap views"
-            )
-        if isinstance(body, Mapping):
-            payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        else:
-            payload = body
-        import asyncio
-
-        return asyncio.run(
-            UnixRestClient(self.socket_path, timeout=self.timeout).request(
-                method, path, payload
-            )
+    def call(self, method: str, params: list[Any] | None = None) -> dict[str, Any]:
+        if not method or "/" in method:
+            raise ValueError("JSON-RPC method name must be non-empty and path-free")
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": [] if params is None else params,
+        }
+        status, value = request_sync(
+            self.socket_path,
+            "POST",
+            "/",
+            payload,
+            timeout=self.timeout,
         )
-
-    def _supports_get_path(self, path: str) -> bool:
-        return path == "/v1/health"
+        if status >= 400:
+            raise RuntimeError(
+                str(value.get("error", f"JSON-RPC request failed: HTTP {status}"))
+            )
+        if "error" in value:
+            raise RuntimeError(str(value["error"]))
+        return value.get("result", {})
 
     def status(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/health")
+        return self.call("system_health")
 
     def refresh(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/refresh")
+        return self.call("system_refresh")
 
     def stop(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/stop")
+        return self.call("system_stop")
 
     def subscribe(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/subscribe", body)
+        return self.call("system_subscribe", [body])
 
     def unsubscribe(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/unsubscribe", body)
+        return self.call("system_unsubscribe", [body])
 
     def recover(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/recover")
+        return self.call("system_recover")
 
     def command(self, component: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", f"/v1/{component}/command", body)
+        return self.call(f"{component}_command", [body])
+
+    def require_view_root(self) -> Path:
+        if self.view_root is None:
+            raise RuntimeError("component connection manifest is missing a view_root path")
+        return self.view_root
 
 
-class AccountSystemClient(SystemRestClient):
+class AccountSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.account import AccountContractClient
+
+        object.__setattr__(
+            self,
+            "control",
+            AccountContractClient(self.socket_path, timeout=self.timeout),
+        )
+
     def reconcile(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/reconcile")
+        return dict(self.control.reconcile({}))
+
+    def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
+        return dict(self.control.advance_time(event_time_unix_nanos))
+
+    def mark_to_market_event(self, event: object) -> dict[str, Any] | None:
+        from kairospy.infrastructure.contracts.account import (
+            backtest_mark_to_market_request,
+        )
+
+        request = backtest_mark_to_market_request(event)
+        if request is None:
+            return None
+        result = self.control.mark_to_market(request)
+        return {"result": result, "segment_key": request["segment_key"]}
+
+    def current_projection(self, account_id: object):
+        from kairospy.infrastructure.contracts.account import AccountCurrentProjection
+
+        return AccountCurrentProjection(self.require_view_root(), account_id=account_id)
 
 
-class ExecutionSystemClient(SystemRestClient):
-    def _supports_get_path(self, path: str) -> bool:
-        return super()._supports_get_path(path) or path.startswith("/v1/routes")
+class ExecutionSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.execution import ExecutionControlClient
 
-    def routes(self, query: str = "") -> dict[str, Any]:
-        suffix = f"?{query}" if query else ""
-        return self.request("GET", f"/v1/routes{suffix}")
+        object.__setattr__(
+            self,
+            "control",
+            ExecutionControlClient(self.socket_path, timeout=self.timeout),
+        )
+
+    def routes(self, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return dict(self.control.routes(query or {}))
 
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/intents", intent)
+        return dict(self.control.submit_intent(intent))
 
     def cancel_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
-        return self.request(
-            "POST", "/v1/intents/cancel", {"intent_id": intent_id, "reason": reason}
-        )
+        raise NotImplementedError("cancel_intent is not part of ExecutionControlRpc")
 
     def expire_intent(self, intent_id: str, *, reason: str = "") -> dict[str, Any]:
-        return self.request(
-            "POST", "/v1/intents/expire", {"intent_id": intent_id, "reason": reason}
-        )
+        raise NotImplementedError("expire_intent is not part of ExecutionControlRpc")
 
     def submit(
         self, request: Mapping[str, Any], *, dry_run: bool = False
     ) -> dict[str, Any]:
-        return self.request(
-            "POST", "/v1/preview-submit" if dry_run else "/v1/intents", request
-        )
+        if dry_run:
+            raise NotImplementedError("dry-run submit is not part of ExecutionControlRpc")
+        return dict(self.control.submit_intent(request))
 
     def cancel(self, order_id: str, reason: str = "system cancel") -> dict[str, Any]:
-        return self.request("DELETE", f"/v1/orders/{order_id}", {"reason": reason})
+        return dict(self.control.cancel_order(order_id, {"reason": reason}))
 
     def replace(self, order_id: str, replacement: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("PATCH", f"/v1/orders/{order_id}", replacement)
+        return dict(self.control.replace_order(order_id, replacement))
+
+    def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
+        return dict(self.control.advance_time(event_time_unix_nanos))
+
+    def backtest_market(self, event: object) -> dict[str, Any]:
+        from kairospy.infrastructure.contracts.execution import (
+            backtest_market_payload,
+        )
+
+        payload = backtest_market_payload(event)
+        if payload is None:
+            return {"fills": []}
+        return dict(self.control.backtest_market(payload))
+
+    def projection(self, instance: object):
+        from kairospy.infrastructure.contracts.execution import ExecutionProjection
+
+        return ExecutionProjection(instance)
 
 
-class MarketSystemClient(SystemRestClient):
-    def _supports_get_path(self, path: str) -> bool:
-        return super()._supports_get_path(path) or path.startswith("/v1/data-sources")
+class MarketSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.market import MarketControlClient
 
-    def data_sources(self, query: str = "") -> dict[str, Any]:
-        suffix = f"?{query}" if query else ""
-        return self.request("GET", f"/v1/data-sources{suffix}")
+        object.__setattr__(
+            self,
+            "control",
+            MarketControlClient(self.socket_path, timeout=self.timeout),
+        )
+
+    def data_sources(self, query: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return dict(self.control.data_sources(query or {}))
 
     def subscribe(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/subscribe", request)
+        return dict(self.control.subscribe(request))
 
     def unsubscribe(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/unsubscribe", request)
+        subscription_id = str(request.get("subscription_id", ""))
+        headers = {key: str(value) for key, value in request.items() if key != "subscription_id"}
+        return dict(self.control.unsubscribe(subscription_id, headers=headers))
 
     def recover(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/recover")
+        return dict(self.control.recover({}))
 
 
-class RiskSystemClient(SystemRestClient):
+class RiskSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.risk import RiskControlClient
+
+        object.__setattr__(
+            self,
+            "control",
+            RiskControlClient(self.socket_path, timeout=self.timeout),
+        )
+
     def configure(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/configure", request)
+        return dict(self.control.publish_policy(request))
 
     def assess(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/assess", request)
+        return dict(self.control.pre_trade_check(request))
 
     def reserve(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/reserve", request)
+        return dict(self.control.authorize_and_reserve(request))
 
     def release(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/release", request)
+        return dict(self.control.release_reservation(request))
 
     def consume(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/consume", request)
+        return dict(self.control.consume_reservation(request))
+
+    def advance_time(self, event_time_unix_nanos: int) -> dict[str, Any]:
+        return dict(self.control.advance_time(event_time_unix_nanos))
+
+    def latest_projection(self, *, actor_id: str):
+        from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
+
+        return RiskProjection(self.require_view_root(), RiskViewKey(actor_id=actor_id))
 
 
-class ReferenceSystemClient(SystemRestClient):
+class CapitalSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.capital import CapitalContractClient
+
+        object.__setattr__(
+            self,
+            "control",
+            CapitalContractClient(self.socket_path, timeout=self.timeout),
+        )
+
+    def publish_funding_objective(self, objective, **scope: object) -> dict[str, Any]:
+        return dict(self.control.publish_funding_objective(objective, **scope))
+
+    def cancel_funding_objective(
+        self, objective_id: str, *, expected_version: int, **scope: object
+    ) -> dict[str, Any]:
+        return dict(
+            self.control.cancel_funding_objective(
+                objective_id, expected_version=expected_version, **scope
+            )
+        )
+
+    def observe_capital_demand(self, demand, **scope: object) -> dict[str, Any]:
+        return dict(self.control.observe_capital_demand(demand, **scope))
+
+    def availability(self, *, capital_group_id: str, location):
+        return self.control.availability(
+            capital_group_id=capital_group_id,
+            location=location,
+        )
+
+    def reconcile_plan(
+        self,
+        *,
+        capital_group_id: str,
+        plan_id: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return dict(
+            self.control.reconcile_plan(
+                capital_group_id=capital_group_id,
+                plan_id=plan_id,
+                request_id=request_id,
+            )
+        )
+
+    def current_projection(self, capital_group_id: str):
+        from kairospy.infrastructure.contracts.capital import CapitalProjection
+
+        return CapitalProjection(self.require_view_root(), capital_group_id)
+
+
+class ReferenceSystemClient(SystemRpcClient):
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from kairospy.infrastructure.contracts.reference import (
+            ReferenceClient,
+            ReferenceControlClient,
+        )
+
+        object.__setattr__(
+            self,
+            "control",
+            ReferenceControlClient(self.socket_path, timeout=self.timeout),
+        )
+        object.__setattr__(
+            self,
+            "reader",
+            ReferenceClient(
+                socket_path=self.socket_path,
+                database_path=self.database_path,
+                timeout=self.timeout,
+            ),
+        )
+
     def publish(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/publish")
+        return dict(self.control.publish())
 
     def add_asset(self, asset: Mapping[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/v1/assets", asset)
+        return dict(self.control.add_asset(asset))
+
+    def application_client(self):
+        return self.reader
+
+    def health(self) -> dict[str, Any]:
+        return self.reader.health()
+
+    def providers(self) -> dict[str, Any]:
+        return self.reader.providers()
+
+    def catalog(self) -> dict[str, Any]:
+        return self.reader.catalog()
+
+    def events(self, **filters: Any) -> dict[str, Any]:
+        return self.reader.events(**filters)
+
+    def snapshot(self):
+        return self.reader.snapshot()
+
+
+def system_client(
+    component: str, socket_path: str | Path, *, timeout: float = 3.0
+) -> SystemRpcClient:
+    clients = {
+        "account": AccountSystemClient,
+        "execution": ExecutionSystemClient,
+        "market": MarketSystemClient,
+        "reference": ReferenceSystemClient,
+        "risk": RiskSystemClient,
+        "capital": CapitalSystemClient,
+    }
+    client_type = clients.get(component, SystemRpcClient)
+    return client_type(Path(socket_path), timeout=timeout)
+
+
+@dataclass(frozen=True, slots=True)
+class InstanceSystemClients:
+    """Typed business clients owned by one launched Conflux instance."""
+
+    accounts: Mapping[Any, AccountSystemClient]
+    market: MarketSystemClient | None = None
+    risk: RiskSystemClient | None = None
+    execution: ExecutionSystemClient | None = None
+    capital: CapitalSystemClient | None = None
+    reference: ReferenceSystemClient | None = None
+
+    @classmethod
+    def from_connections(cls, connections: Any) -> "InstanceSystemClients":
+        return cls(
+            accounts={
+                account_id: AccountSystemClient(
+                    connection.socket,
+                    view_root=connection.view_root,
+                )
+                for account_id, connection in connections.accounts.items()
+            },
+            market=(
+                None
+                if connections.market is None
+                else MarketSystemClient(
+                    connections.market.socket,
+                    view_root=connections.market.view_root,
+                )
+            ),
+            risk=(
+                None
+                if connections.risk is None
+                else RiskSystemClient(
+                    connections.risk.socket,
+                    view_root=connections.risk.view_root,
+                )
+            ),
+            execution=(
+                None
+                if connections.execution is None
+                else ExecutionSystemClient(
+                    connections.execution.socket,
+                    view_root=connections.execution.view_root,
+                )
+            ),
+            capital=(
+                None
+                if connections.capital is None
+                else CapitalSystemClient(
+                    connections.capital.socket,
+                    view_root=connections.capital.view_root,
+                )
+            ),
+            reference=(
+                None
+                if connections.reference is None
+                else ReferenceSystemClient(
+                    connections.reference.socket,
+                    database_path=connections.reference.database,
+                    actor_id=connections.reference.actor_id,
+                )
+            ),
+        )
 
 
 __all__ = [
-    "SystemRestClient",
+    "SystemRpcClient",
     "AccountSystemClient",
     "ExecutionSystemClient",
     "MarketSystemClient",
     "RiskSystemClient",
+    "CapitalSystemClient",
     "ReferenceSystemClient",
+    "InstanceSystemClients",
+    "system_client",
 ]

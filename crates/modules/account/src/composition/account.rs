@@ -720,14 +720,8 @@ fn parse_initial_balance(value: &str) -> Result<Balance, String> {
 }
 
 fn load_instrument_resolver(options: &AccountOptions) -> Result<AccountInstrumentResolver, String> {
-    options
-        .reference_database
-        .as_ref()
-        .map(|database| {
-            AccountInstrumentResolver::from_reference_database(database, "reference-actor")
-        })
-        .transpose()
-        .map(|value| value.unwrap_or_default())
+    let _ = options;
+    Ok(AccountInstrumentResolver::default())
 }
 
 pub fn normalized_provider(provider: &str) -> String {

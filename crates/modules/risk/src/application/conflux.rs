@@ -1,32 +1,21 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
-use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SnapshotEnvelopeMetadata,
-    SystemEvent,
-};
+use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, SnapshotEnvelopeMetadata, SystemEvent};
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use kairos_risk_contract::{
-    AdvanceRiskTimeResponse, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, Health,
-    RiskCommandStatus, RiskControlError, RiskRestRequest, RiskRestResponse,
+    AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, AuthorizeRequest, CloseCircuitRequest,
+    ConsumeReservationRequest, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, Health,
+    OpenCircuitRequest, PublishPolicyRequest, ReleaseReservationRequest, Reservation,
+    ResizeReservationRequest, RiskCommandStatus, RiskControlError, RiskDecision,
 };
 
 use super::{
     CloseCircuit, ConsumeReservation, OpenCircuit, PublishPolicy, ReleaseReservation,
-    ResizeReservation, RiskApplication, RiskError,
+    ResizeReservation, RiskApplication, RiskError, RiskRpcActor,
 };
 
-/// The REST type pair of the Risk Contract. The Actor implements [`Contract`]
-/// directly; this marker carries no client, endpoint, or runtime state.
-pub struct RiskRest;
-
-impl RestContract for RiskRest {
-    type Request = RiskRestRequest;
-    type Response = RiskRestResponse;
-}
-
-impl Contract for RiskApplication {
-    type Rest = RiskRest;
-}
+const RISK_BUSINESS_ERROR_CODE: i32 = -31_002;
 
 impl ConfluxActor for RiskApplication {
     type FatalError = Infallible;
@@ -42,23 +31,181 @@ impl ConfluxActor for RiskApplication {
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<RiskRestResponse>, Self::FatalError> {
-        let response = match event {
-            ConfluxEvent::Rest(request) => Some(self.handle_rest(request)),
+    ) -> Result<(), Self::FatalError> {
+        match event {
             ConfluxEvent::System(SystemEvent::Timer {
                 name,
                 fired_at_unix_nanos,
             }) if name == "maintenance" => {
                 let _ = self.maintenance_tick(fired_at_unix_nanos.into());
-                None
             },
-            ConfluxEvent::Local(value) => match value {},
-            _ => None,
+            _ => {},
+        };
+        self.publish_contract_outputs(context);
+        Ok(())
+    }
+}
+
+impl RiskRpcActor for RiskApplication {
+    async fn health(&mut self, (): (), context: &mut Context<'_, Self>) -> RpcResult<Health> {
+        let snapshot = self.snapshot();
+        let response = Health {
+            status: "ready".into(),
+            generation: snapshot.generation,
+            event_sequence: snapshot.event_sequence,
+            policy_version: snapshot.policy_version,
+            reservation_count: snapshot.reservations.len() as u64,
+            open_circuit_count: snapshot
+                .circuits
+                .iter()
+                .filter(|circuit| circuit.open)
+                .count() as u64,
         };
         self.publish_contract_outputs(context);
         Ok(response)
+    }
+
+    async fn publish_policy(
+        &mut self,
+        request: PublishPolicyRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<RiskCommandStatus> {
+        let policy = super::contract::policy_from(request.policy).map_err(rpc_invalid)?;
+        self.publish_policy(PublishPolicy { policy })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(RiskCommandStatus {
+            status: "active".into(),
+        })
+    }
+
+    async fn authorize_and_reserve(
+        &mut self,
+        request: AuthorizeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<RiskDecision> {
+        let decision =
+            self.authorize_request(request, RiskControlOperation::AuthorizeAndReserve)?;
+        self.publish_contract_outputs(context);
+        Ok(decision)
+    }
+
+    async fn pre_trade_check(
+        &mut self,
+        request: AuthorizeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<RiskDecision> {
+        let decision = self.authorize_request(request, RiskControlOperation::PreTradeCheck)?;
+        self.publish_contract_outputs(context);
+        Ok(decision)
+    }
+
+    async fn post_trade_check(
+        &mut self,
+        request: AuthorizeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<RiskDecision> {
+        let decision = self.authorize_request(request, RiskControlOperation::PostTradeCheck)?;
+        self.publish_contract_outputs(context);
+        Ok(decision)
+    }
+
+    async fn open_circuit(
+        &mut self,
+        request: OpenCircuitRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_risk_contract::CircuitState> {
+        let scope = super::contract::circuit_scope_from(request.scope).map_err(rpc_invalid)?;
+        let circuit = self
+            .open_circuit(OpenCircuit {
+                scope,
+                at_unix_nanos: request.at_unix_nanos,
+                reset_at_unix_nanos: request.reset_at_unix_nanos,
+                reason: request.reason,
+            })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(super::contract::circuit(&circuit))
+    }
+
+    async fn close_circuit(
+        &mut self,
+        request: CloseCircuitRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<kairos_risk_contract::CircuitState> {
+        let scope = super::contract::circuit_scope_from(request.scope).map_err(rpc_invalid)?;
+        let circuit = self
+            .close_circuit(CloseCircuit {
+                scope,
+                at_unix_nanos: request.at_unix_nanos,
+            })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(super::contract::circuit(&circuit))
+    }
+
+    async fn resize_reservation(
+        &mut self,
+        request: ResizeReservationRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<Reservation> {
+        let amount = super::contract::amount_from(request.amount).map_err(rpc_invalid)?;
+        let reservation = self
+            .resize(ResizeReservation {
+                reservation_id: request.reservation_id,
+                amount,
+                at_unix_nanos: request.at_unix_nanos,
+            })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(super::contract::reservation(&reservation))
+    }
+
+    async fn release_reservation(
+        &mut self,
+        request: ReleaseReservationRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<Reservation> {
+        let reservation = self
+            .release(ReleaseReservation {
+                reservation_id: request.reservation_id,
+                at_unix_nanos: request.at_unix_nanos,
+            })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(super::contract::reservation(&reservation))
+    }
+
+    async fn consume_reservation(
+        &mut self,
+        request: ConsumeReservationRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<Reservation> {
+        let reservation = self
+            .consume(ConsumeReservation {
+                reservation_id: request.reservation_id,
+                at_unix_nanos: request.at_unix_nanos,
+            })
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(super::contract::reservation(&reservation))
+    }
+
+    async fn advance_time(
+        &mut self,
+        request: AdvanceRiskTimeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<AdvanceRiskTimeResponse> {
+        let expired = self
+            .advance_business_time(request.event_time_unix_nanos)
+            .map_err(rpc_control_error)?;
+        self.publish_contract_outputs(context);
+        Ok(AdvanceRiskTimeResponse {
+            event_time_unix_nanos: request.event_time_unix_nanos,
+            expired: expired as u64,
+        })
     }
 }
 
@@ -106,167 +253,36 @@ impl RiskApplication {
         }
     }
 
-    fn handle_rest(&mut self, request: RiskRestRequest) -> RiskRestResponse {
-        match request {
-            RiskRestRequest::Health => {
-                let snapshot = self.snapshot();
-                RiskRestResponse::Health(Ok(Health {
-                    status: "ready".into(),
-                    generation: snapshot.generation,
-                    event_sequence: snapshot.event_sequence,
-                    policy_version: snapshot.policy_version,
-                    reservation_count: snapshot.reservations.len() as u64,
-                    open_circuit_count: snapshot
-                        .circuits
-                        .iter()
-                        .filter(|circuit| circuit.open)
-                        .count() as u64,
-                }))
-            },
-            RiskRestRequest::PublishPolicy(request) => {
-                let result = super::contract::policy_from(request.policy)
-                    .map_err(invalid)
-                    .map(|policy| PublishPolicy { policy })
-                    .and_then(|request| self.publish_policy(request).map_err(control_error))
-                    .map(|()| RiskCommandStatus {
-                        status: "active".into(),
-                    });
-                RiskRestResponse::PublishPolicy(result)
-            },
-            RiskRestRequest::AuthorizeAndReserve(request) => {
-                let result = super::contract::authorize_from(request)
-                    .map_err(invalid)
-                    .and_then(|request| {
-                        let identity = (
-                            request.account_id.clone(),
-                            request.strategy_id.clone(),
-                            request.instrument_id.clone(),
-                        );
-                        self.authorize_and_reserve(request)
-                            .map_err(control_error)
-                            .map(|decision| {
-                                super::contract::decision(
-                                    &decision,
-                                    &identity.0,
-                                    &identity.1,
-                                    &identity.2,
-                                )
-                            })
-                    });
-                RiskRestResponse::AuthorizeAndReserve(result)
-            },
-            RiskRestRequest::PreTradeCheck(request) => {
-                let result = super::contract::authorize_from(request)
-                    .map_err(invalid)
-                    .and_then(|request| {
-                        let identity = (
-                            request.account_id.clone(),
-                            request.strategy_id.clone(),
-                            request.instrument_id.clone(),
-                        );
-                        self.pre_trade_check(request)
-                            .map_err(control_error)
-                            .map(|decision| {
-                                super::contract::decision(
-                                    &decision,
-                                    &identity.0,
-                                    &identity.1,
-                                    &identity.2,
-                                )
-                            })
-                    });
-                RiskRestResponse::PreTradeCheck(result)
-            },
-            RiskRestRequest::PostTradeCheck(request) => {
-                let result = super::contract::authorize_from(request)
-                    .map_err(invalid)
-                    .and_then(|request| {
-                        let identity = (
-                            request.account_id.clone(),
-                            request.strategy_id.clone(),
-                            request.instrument_id.clone(),
-                        );
-                        self.post_trade_check(request)
-                            .map_err(control_error)
-                            .map(|decision| {
-                                super::contract::decision(
-                                    &decision,
-                                    &identity.0,
-                                    &identity.1,
-                                    &identity.2,
-                                )
-                            })
-                    });
-                RiskRestResponse::PostTradeCheck(result)
-            },
-            RiskRestRequest::OpenCircuit(request) => {
-                let result = super::contract::circuit_scope_from(request.scope)
-                    .map_err(invalid)
-                    .map(|scope| OpenCircuit {
-                        scope,
-                        at_unix_nanos: request.at_unix_nanos,
-                        reset_at_unix_nanos: request.reset_at_unix_nanos,
-                        reason: request.reason,
-                    })
-                    .and_then(|request| self.open_circuit(request).map_err(control_error))
-                    .map(|value| super::contract::circuit(&value));
-                RiskRestResponse::OpenCircuit(result)
-            },
-            RiskRestRequest::CloseCircuit(request) => {
-                let result = super::contract::circuit_scope_from(request.scope)
-                    .map_err(invalid)
-                    .map(|scope| CloseCircuit {
-                        scope,
-                        at_unix_nanos: request.at_unix_nanos,
-                    })
-                    .and_then(|request| self.close_circuit(request).map_err(control_error))
-                    .map(|value| super::contract::circuit(&value));
-                RiskRestResponse::CloseCircuit(result)
-            },
-            RiskRestRequest::ResizeReservation(request) => {
-                let result = super::contract::amount_from(request.amount)
-                    .map_err(invalid)
-                    .and_then(|amount| {
-                        Ok(ResizeReservation {
-                            reservation_id: request.reservation_id,
-                            amount,
-                            at_unix_nanos: request.at_unix_nanos,
-                        })
-                    })
-                    .and_then(|request| self.resize(request).map_err(control_error))
-                    .map(|value| super::contract::reservation(&value));
-                RiskRestResponse::ResizeReservation(result)
-            },
-            RiskRestRequest::ReleaseReservation(request) => {
-                let result = Ok(ReleaseReservation {
-                    reservation_id: request.reservation_id,
-                    at_unix_nanos: request.at_unix_nanos,
-                })
-                .and_then(|request| self.release(request).map_err(control_error))
-                .map(|value| super::contract::reservation(&value));
-                RiskRestResponse::ReleaseReservation(result)
-            },
-            RiskRestRequest::ConsumeReservation(request) => {
-                let result = Ok(ConsumeReservation {
-                    reservation_id: request.reservation_id,
-                    at_unix_nanos: request.at_unix_nanos,
-                })
-                .and_then(|request| self.consume(request).map_err(control_error))
-                .map(|value| super::contract::reservation(&value));
-                RiskRestResponse::ConsumeReservation(result)
-            },
-            RiskRestRequest::AdvanceTime(request) => {
-                let result = self
-                    .advance_business_time(request.event_time_unix_nanos)
-                    .map_err(control_error)
-                    .map(|expired| AdvanceRiskTimeResponse {
-                        event_time_unix_nanos: request.event_time_unix_nanos,
-                        expired: expired as u64,
-                    });
-                RiskRestResponse::AdvanceTime(result)
-            },
+    fn authorize_request(
+        &mut self,
+        request: AuthorizeRequest,
+        operation: RiskControlOperation,
+    ) -> RpcResult<RiskDecision> {
+        let identity = (
+            request.account_id.clone(),
+            request.strategy_id.clone(),
+            request.instrument_id.clone(),
+        );
+        let request = super::contract::authorize_from(request).map_err(rpc_invalid)?;
+        let decision = match operation {
+            RiskControlOperation::AuthorizeAndReserve => self.authorize_and_reserve(request),
+            RiskControlOperation::PreTradeCheck => self.pre_trade_check(request),
+            RiskControlOperation::PostTradeCheck => self.post_trade_check(request),
         }
+        .map_err(rpc_control_error)?;
+        Ok(super::contract::decision(
+            &decision,
+            &identity.0,
+            &identity.1,
+            &identity.2,
+        ))
     }
+}
+
+enum RiskControlOperation {
+    AuthorizeAndReserve,
+    PreTradeCheck,
+    PostTradeCheck,
 }
 
 fn now_unix_nanos() -> u64 {
@@ -302,13 +318,29 @@ fn invalid(message: impl Into<String>) -> RiskControlError {
     }
 }
 
+fn rpc_control_error(error: RiskError) -> ErrorObjectOwned {
+    rpc_risk_error(control_error(error))
+}
+
+fn rpc_invalid(message: impl Into<String>) -> ErrorObjectOwned {
+    rpc_risk_error(invalid(message))
+}
+
+fn rpc_risk_error(error: RiskControlError) -> ErrorObjectOwned {
+    business_error(RISK_BUSINESS_ERROR_CODE, error.message.clone(), error)
+}
+
 #[cfg(test)]
 mod tests {
-    use kairos_conflux::{Conflux, ConfluxConfig, ConfluxEvent, ConfluxSystem, ShutdownMode};
-    use kairos_risk_contract::{Amount, AuthorizeRequest, RiskRestRequest, RiskRestResponse};
+    use std::time::Duration;
+
+    use kairos_conflux::{Conflux, ConfluxConfig, ConfluxSystem, ShutdownMode};
+    use kairos_risk_contract::{Amount, AuthorizeRequest};
+
+    use super::RiskRpcActor;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn typed_rest_pair_runs_through_the_single_actor_handle() {
+    async fn rpc_actor_invocation_runs_through_the_single_actor_handle() {
         let actor = crate::composition::compose_risk_application("risk", Vec::new(), None).unwrap();
         let (conflux, handle) =
             Conflux::new(actor, ConfluxSystem::new(), ConfluxConfig::default()).unwrap();
@@ -316,60 +348,45 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let process = tokio::task::spawn_local(conflux.run());
-                let response = handle
-                    .handle(ConfluxEvent::Rest(RiskRestRequest::AuthorizeAndReserve(
-                        AuthorizeRequest {
-                            request_id: kairos_primitives::runtime::RequestId::new("request-1")
-                                .unwrap(),
-                            idempotency_key: kairos_primitives::runtime::IdempotencyKey::new(
-                                "key-1",
-                            )
+                let request = AuthorizeRequest {
+                    request_id: kairos_primitives::runtime::RequestId::new("request-1").unwrap(),
+                    idempotency_key: kairos_primitives::runtime::IdempotencyKey::new("key-1")
+                        .unwrap(),
+                    reservation_id: kairos_primitives::risk::ReservationId::new("reservation-1")
+                        .unwrap(),
+                    account_id: kairos_primitives::account::AccountId::new("account-1").unwrap(),
+                    strategy_id: kairos_primitives::runtime::StrategyId::new("strategy-1").unwrap(),
+                    instrument_id: kairos_primitives::reference::InstrumentId::new("instrument-1")
+                        .unwrap(),
+                    exchange_id: kairos_primitives::reference::Exchange::new("exchange-1").unwrap(),
+                    proposal: kairos_risk_contract::TradeRiskProposal {
+                        notional: Amount::new(10, 0).unwrap(),
+                        initial_margin_rate_bps: 10_000.into(),
+                        account_segment: kairos_primitives::account::SegmentKey::new("usd-m")
                             .unwrap(),
-                            reservation_id: kairos_primitives::risk::ReservationId::new(
-                                "reservation-1",
-                            )
+                        collateral_asset: kairos_primitives::reference::Currency::new("USDT")
                             .unwrap(),
-                            account_id: kairos_primitives::account::AccountId::new("account-1")
-                                .unwrap(),
-                            strategy_id: kairos_primitives::runtime::StrategyId::new("strategy-1")
-                                .unwrap(),
-                            instrument_id: kairos_primitives::reference::InstrumentId::new(
-                                "instrument-1",
-                            )
-                            .unwrap(),
-                            exchange_id: kairos_primitives::reference::Exchange::new("exchange-1")
-                                .unwrap(),
-                            proposal: kairos_risk_contract::TradeRiskProposal {
-                                notional: Amount::new(10, 0).unwrap(),
-                                initial_margin_rate_bps: 10_000.into(),
-                                account_segment: kairos_primitives::account::SegmentKey::new(
-                                    "usd-m",
-                                )
-                                .unwrap(),
-                                collateral_asset: kairos_primitives::reference::Currency::new(
-                                    "USDT",
-                                )
-                                .unwrap(),
-                                reduce_only: false,
-                                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
-                                    "test:fully-funded",
-                                )
-                                .unwrap(),
-                            },
-                            at_unix_nanos: 1.into(),
-                            reservation_ttl_nanos: 10.into(),
-                            dependency_generation: 1.into(),
-                            dependency_event_sequence: 1.into(),
-                            context: None,
-                        },
-                    )))
-                    .await
-                    .unwrap()
-                    .unwrap();
-                let RiskRestResponse::AuthorizeAndReserve(result) = response else {
-                    panic!("unexpected Risk response variant");
+                        reduce_only: false,
+                        margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                            "test:fully-funded",
+                        )
+                        .unwrap(),
+                    },
+                    at_unix_nanos: 1.into(),
+                    reservation_ttl_nanos: 10.into(),
+                    dependency_generation: 1.into(),
+                    dependency_event_sequence: 1.into(),
+                    context: None,
                 };
-                let decision = result.expect("risk request is evaluated successfully");
+                let decision = handle
+                    .rpc_actor_invocation(Duration::from_secs(1))
+                    .call(move |actor, context| {
+                        Box::pin(async move {
+                            RiskRpcActor::authorize_and_reserve(actor, request, context).await
+                        })
+                    })
+                    .await
+                    .unwrap();
                 assert!(!decision.allowed);
 
                 handle.shutdown(ShutdownMode::Drain);

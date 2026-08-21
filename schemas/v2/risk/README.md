@@ -1,8 +1,7 @@
 # Risk v2 contracts
 
-Risk commands are defined by [`control.openapi.yaml`](./control.openapi.yaml)
-and use UDS HTTP/JSON. The shared command envelope and control errors are
-defined by [`common/control.openapi.yaml`](../common/control.openapi.yaml).
+Risk commands are defined by the Risk Rust JSON-RPC contract trait and use the
+workspace Unix control socket.
 `AuthorizeAndReserve` is synchronous and returns the
 authoritative decision plus reservation result. `ConsumeReservation` and
 `ReleaseReservation` are idempotent cleanup commands.

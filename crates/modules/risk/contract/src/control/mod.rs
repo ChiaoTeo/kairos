@@ -1,6 +1,4 @@
-mod client;
-mod http;
+mod service;
 mod types;
-pub use client::{Health, RiskControlClient};
-pub use http::RiskHttpControl;
+pub use service::{RiskControlRpcClient, RiskControlRpcServer};
 pub use types::*;

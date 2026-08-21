@@ -13,6 +13,6 @@ The `owner_id` on a connection row identifies the runtime or business
 component that owns the connection. Connection status is normalized into the
 System vocabulary and must not expose provider-specific domain types.
 
-The shared `common/v2/control.openapi.yaml` health response is the control
-plane contract. It is intentionally separate from the FlatBuffers current
-view, which is a one-shot operational projection for local consumers.
+System-level health and stop methods are exposed through the Conflux JSON-RPC
+control registration. They are intentionally separate from the FlatBuffers
+current view, which is a one-shot operational projection for local consumers.

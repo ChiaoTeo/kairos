@@ -52,7 +52,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         instance.launch_id(),
         instance.instance_id(),
     )?;
-    let reference_database = workspace.child(&["state", "reference", "reference.sqlite"])?;
+    let reference_connection = kairos_conflux::reference_connection_from_workspace(
+        &workspace,
+        args.aeron_dir.as_deref().map(std::path::Path::new),
+    )?;
     let manifest = instance.component_manifest()?;
     let socket = instance.socket("execution")?;
     build_execution_host(ExecutionHostConfig {
@@ -61,7 +64,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         writer_fences,
         state_path: state,
         audit_path: audit,
-        reference_database,
+        reference_connection,
         manifest_path: manifest,
         socket_path: socket,
         view_root,

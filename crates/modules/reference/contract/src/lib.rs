@@ -4,6 +4,8 @@
 //! and control commands. Reference remains the only database writer; business
 //! consumers never depend on its tables or persistence records.
 
+extern crate self as kairos_reference_contract;
+
 pub mod control;
 pub mod encode;
 pub mod error;
@@ -11,8 +13,6 @@ pub mod event;
 pub mod transport;
 
 use std::path::PathBuf;
-
-use kairos_primitives::runtime::ActorId;
 
 pub use control::{
     ReferenceControlError, ReferenceControlRpcClient, ReferenceControlRpcServer,
@@ -28,6 +28,7 @@ pub use event::{
     ReferenceEvent, ReferenceEventFrame, ReferenceEventPublisher, ReferenceEventStream,
     decode_event,
 };
+use kairos_primitives::runtime::ActorId;
 pub use kairos_transport::AeronEndpoint;
 pub use transport::{
     Asset, Entity, Instrument, LifecycleEntry, Listing, Market, ProviderHealthState,
@@ -37,29 +38,40 @@ pub use transport::{
 };
 
 /// Unified Reference client. Business reads use consumer-scoped SQLite queries.
+#[derive(Clone)]
 pub struct ReferenceClient {
+    inner: kairos_protocol::ContractClient,
     database: PathBuf,
     actor_id: ActorId,
-    events: AeronEndpoint,
 }
 
-pub struct ReferenceEndpoint {
+#[derive(Clone)]
+pub struct ReferenceConnection {
+    pub contract: kairos_protocol::ContractClient,
     pub database: PathBuf,
     pub actor_id: ActorId,
-    pub events: AeronEndpoint,
 }
 
 impl ReferenceClient {
-    pub fn connect(endpoint: ReferenceEndpoint) -> Self {
+    pub fn connect(connection: ReferenceConnection) -> Self {
         Self {
-            database: endpoint.database,
-            actor_id: endpoint.actor_id,
-            events: endpoint.events,
+            inner: connection.contract,
+            database: connection.database,
+            actor_id: connection.actor_id,
         }
     }
 
+    pub fn control(&self) -> impl ReferenceControlRpcClient + '_ {
+        self.inner.control()
+    }
+
     pub fn events(&self, capacity: usize) -> ContractResult<ReferenceEventStream> {
-        ReferenceEventStream::connect(&self.events, capacity)
+        ReferenceEventStream::connect(
+            self.inner
+                .require_aeron_endpoint()
+                .map_err(|error| ContractError::Transport(error.to_string()))?,
+            capacity,
+        )
     }
 
     pub fn watermark(&self) -> ContractResult<ReferenceWatermark> {
@@ -77,4 +89,25 @@ impl ReferenceClient {
     pub fn account_snapshot(&self) -> ContractResult<ReferenceProjectionSnapshot> {
         ReferenceSqliteReader::open(&self.database)?.account_snapshot(self.actor_id.as_str())
     }
+}
+
+pub fn read_market_snapshot(
+    database: impl AsRef<std::path::Path>,
+    actor_id: &ActorId,
+) -> ContractResult<ReferenceProjectionSnapshot> {
+    ReferenceSqliteReader::open(database)?.market_snapshot(actor_id.as_str())
+}
+
+pub fn read_execution_snapshot(
+    database: impl AsRef<std::path::Path>,
+    actor_id: &ActorId,
+) -> ContractResult<ReferenceProjectionSnapshot> {
+    ReferenceSqliteReader::open(database)?.execution_snapshot(actor_id.as_str())
+}
+
+pub fn read_account_snapshot(
+    database: impl AsRef<std::path::Path>,
+    actor_id: &ActorId,
+) -> ContractResult<ReferenceProjectionSnapshot> {
+    ReferenceSqliteReader::open(database)?.account_snapshot(actor_id.as_str())
 }

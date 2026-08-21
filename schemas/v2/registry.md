@@ -9,11 +9,9 @@ Current-view entries use the external resource topology and lifecycle defined
 in [`mmap-contract.md`](./mmap-contract.md); a FlatBuffers root alone is not a
 complete mmap contract.
 
-Market and Execution control are intentionally not FlatBuffers roots. Their
-UDS HTTP-shaped contracts are [`schemas/v2/market/control.openapi.yaml`](./market/control.openapi.yaml)
-and [`schemas/v2/execution/control.openapi.yaml`](./execution/control.openapi.yaml):
-JSON/OpenAPI defines command and bounded-status request/response semantics,
-while FlatBuffers is reserved for business events and mmap views.
+Control contracts are intentionally not FlatBuffers roots. Each long-running
+module owns a Rust `#[conflux_rpc]` trait exposed over workspace Unix
+JSON-RPC. FlatBuffers is reserved for business events and mmap views.
 
 | Status | Owner | Shape | Semantic root | File identifier | Publisher/caller | Consumer | Transport/profile |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -63,11 +61,11 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Account | event | `ObservedOrderRemoved` | `AOR2` | Account Actor | reconciliation | Account event stream / retained target |
 | DRAFT | Account | current view | `AccountCurrentView` | `AAV2` | Account Actor | Execution preflight, Strategy Account application | KSS1 mmap / one writer |
 | DRAFT | Account | current view | `ObservedOrdersCurrentView` | `AOV2` | Account Actor | reconciliation | KSS1 mmap / one writer |
-| DRAFT | Risk | command | `AuthorizeAndReserve` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / atomic synchronous decision |
-| DRAFT | Risk | command result | `AuthorizeAndReserveResponse` | `control.openapi.yaml` | Risk Actor | Execution application | UDS HTTP/JSON response |
-| DRAFT | Risk | command | `ConsumeReservation` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / idempotent retry |
-| DRAFT | Risk | command result | `ReservationCleanupResponse` | `control.openapi.yaml` | Risk Actor | Execution application | UDS HTTP/JSON response |
-| DRAFT | Risk | command | `ReleaseReservation` | `control.openapi.yaml` | Execution application | Risk application | UDS HTTP/JSON / idempotent retry |
+| DRAFT | Risk | command | `AuthorizeAndReserve` | `RiskControlRpc` | Execution application | Risk application | Unix JSON-RPC / atomic synchronous decision |
+| DRAFT | Risk | command result | `AuthorizeAndReserveResponse` | `RiskControlRpc` | Risk Actor | Execution application | Unix JSON-RPC response |
+| DRAFT | Risk | command | `ConsumeReservation` | `RiskControlRpc` | Execution application | Risk application | Unix JSON-RPC / idempotent retry |
+| DRAFT | Risk | command result | `ReservationCleanupResponse` | `RiskControlRpc` | Risk Actor | Execution application | Unix JSON-RPC response |
+| DRAFT | Risk | command | `ReleaseReservation` | `RiskControlRpc` | Execution application | Risk application | Unix JSON-RPC / idempotent retry |
 | DRAFT | Risk | event | `RiskDecisionMade` | `RDV2` | Risk Actor | Strategy Risk application, audit | Risk event stream / retained target |
 | DRAFT | Risk | event | `ReservationReserved` | `RRV2` | Risk Actor | Execution, audit | Risk event stream / retained target |
 | DRAFT | Risk | event | `ReservationConsumed` | `RRC2` | Risk Actor | Execution, audit | Risk event stream / retained target |
@@ -76,11 +74,11 @@ while FlatBuffers is reserved for business events and mmap views.
 | DRAFT | Risk | event | `CircuitOpened` | `RKO2` | Risk Actor | Execution, operations | Risk event stream / retained target |
 | DRAFT | Risk | event | `CircuitClosed` | `RKC2` | Risk Actor | Execution, operations | Risk event stream / retained target |
 | DRAFT | Risk | latest view | `RiskLatestView` | `RXV2` | Risk Actor | Execution preflight, operations | KSS1 mmap / one writer |
-| DRAFT | Execution | command | `SubmitExecutionIntent` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / no unsafe retry |
-| DRAFT | Execution | command result | `CommandAccepted` | `control.openapi.yaml` | Execution Actor | Strategy application | UDS HTTP/JSON response |
-| DRAFT | Execution | command | `CancelOrder` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / delivery certainty required |
-| DRAFT | Execution | command | `ReplaceOrder` | `control.openapi.yaml` | Strategy application | Execution application | UDS HTTP/JSON / delivery certainty required |
-| DRAFT | Execution | command | `ReconcileExecution` | `control.openapi.yaml` | operations/Execution application | Execution application | UDS HTTP/JSON / bounded retry |
+| DRAFT | Execution | command | `SubmitExecutionIntent` | `ExecutionControlRpc` | Strategy application | Execution application | Unix JSON-RPC / no unsafe retry |
+| DRAFT | Execution | command result | `CommandAccepted` | `ExecutionControlRpc` | Execution Actor | Strategy application | Unix JSON-RPC response |
+| DRAFT | Execution | command | `CancelOrder` | `ExecutionControlRpc` | Strategy application | Execution application | Unix JSON-RPC / delivery certainty required |
+| DRAFT | Execution | command | `ReplaceOrder` | `ExecutionControlRpc` | Strategy application | Execution application | Unix JSON-RPC / delivery certainty required |
+| DRAFT | Execution | command | `ReconcileExecution` | `ExecutionControlRpc` | operations/Execution application | Execution application | Unix JSON-RPC / bounded retry |
 | DRAFT | Execution | event | `IntentAccepted` | `EIA2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
 | DRAFT | Execution | event | `IntentRejected` | `EIR2` | Execution Actor | Strategy Execution application | Execution event stream / retained target |
 | DRAFT | Execution | event | `IntentLifecycleChanged` | `EIL2` | Execution Actor | Strategy Execution application, audit | Execution event stream / retained target |

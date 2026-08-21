@@ -62,30 +62,6 @@ pub struct MarketControlError {
     pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MarketRestRequest {
-    Health,
-    DataSources(MarketDataSourcesQuery),
-    Subscribe(MarketCommandEnvelope<MarketSubscribePayload>),
-    Unsubscribe(MarketCommandEnvelope<MarketUnsubscribePayload>),
-    ReleaseOwner(MarketCommandEnvelope<MarketReleaseOwnerPayload>),
-    Recover,
-    PauseReplay,
-    ResumeReplay,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MarketRestResponse {
-    Health(Result<MarketHealthResponse, MarketControlError>),
-    DataSources(Result<MarketDataSourcesResponse, MarketControlError>),
-    Subscribe(Result<MarketSubscriptionResponse, MarketControlError>),
-    Unsubscribe(Result<MarketCommandStatus, MarketControlError>),
-    ReleaseOwner(Result<MarketReleaseOwnerResponse, MarketControlError>),
-    Recover(Result<MarketCommandStatus, MarketControlError>),
-    PauseReplay(Result<MarketCommandStatus, MarketControlError>),
-    ResumeReplay(Result<MarketCommandStatus, MarketControlError>),
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataSourcesQuery {
     pub market_id: Option<MarketId>,
@@ -216,8 +192,9 @@ pub enum MarketCommandOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarketCommandEnvelope, MarketOperation, MarketSubscribePayload};
     use kairos_primitives::runtime::{IdempotencyKey, InstanceId, LaunchId, RequestId};
+
+    use super::{MarketCommandEnvelope, MarketOperation, MarketSubscribePayload};
 
     #[test]
     fn subscription_command_has_a_typed_contract_shape() {

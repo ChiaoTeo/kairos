@@ -1,6 +1,7 @@
 # Decision 0006：Contract Control 边界与 Conflux 回调入口
 
-- Status: Accepted
+- Status: Accepted, refined by
+  [Conflux JSON-RPC control boundary](../architecture/conflux-jsonrpc-control.md)
 - Scope: 模块 control contract、Conflux control runtime、业务进程 server 边界
 
 ## Context
@@ -42,7 +43,9 @@ Control 服务协议直接采用 `jsonrpsee`。`kairos-protocol` 只提供项目
 
 后续 control API 应收敛到 jsonrpsee service-first 的形态：每个 RPC method 只在 owner contract 中定义一次，并由 jsonrpsee 派生 client facade 与 server trait。Conflux adapter 实现生成的 server trait，将调用提交给 Actor。边界是 Contract-owned service definition，不是 Conflux route 或手写 HTTP codec。
 
-迁移期间允许保留现有 `RestContract`、`ConfluxEvent::Rest`、`handle_rest` 等名称，但新增设计和重构应朝 `ControlContract`、`ConfluxEvent::Control`、`handle_control`、`submit_control` 的语义收敛。新增业务 control surface 不得复制旧的手写 HTTP server 模式。
+迁移期兼容命名已经被 JSON-RPC control boundary 收口。当前业务模块新增或重构的
+control surface 必须直接使用 Contract-owned jsonrpsee service trait、Conflux
+actor invocation adapter 和 typed RPC actor method，不再保留迁移期兼容 facade。
 
 ## Prohibited Patterns
 

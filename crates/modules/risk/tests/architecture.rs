@@ -81,7 +81,18 @@ fn risk_transport_is_owned_by_conflux_and_not_application() {
         }
     }
 
+    let application = fs::read_to_string(root.join("src/application/conflux.rs")).unwrap();
+    assert!(!application.contains("ConfluxEvent::Rest"));
+    assert!(!application.contains("RestContract"));
+    assert!(application.contains("impl RiskRpcActor for RiskApplication"));
+
     let composition = fs::read_to_string(root.join("src/composition/mod.rs")).unwrap();
-    assert!(composition.contains("with_http_control"));
-    assert!(composition.contains("RiskHttpControl"));
+    assert!(!composition.contains("with_http_control"));
+    assert!(!composition.contains("RiskHttpControl"));
+    assert!(composition.contains("with_json_rpc"));
+    assert!(composition.contains("RiskRpcService"));
+
+    let contract = fs::read_to_string(root.join("contract/src/control/mod.rs")).unwrap();
+    assert!(!contract.contains("RiskHttpControl"));
+    assert!(contract.contains("RiskControlRpcServer"));
 }

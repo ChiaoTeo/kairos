@@ -414,26 +414,25 @@ class ReferenceClient:
 
     def request(
         self,
-        path: str,
+        method: str,
         *,
-        method: str = "GET",
         timeout: float | None = None,
-        **params: object,
+        params: list[object] | dict[str, object] | None = None,
     ) -> dict[str, Any]:
         try:
+            control = self._control()
+            if timeout is not None and timeout != self.timeout:
+                from .control import ReferenceControlClient
+
+                control = ReferenceControlClient(self.socket_path, timeout=timeout)
             return dict(
-                self._control().request(
-                    method,
-                    path,
-                    params=params,
-                    timeout=self.timeout if timeout is None else timeout,
-                )
+                control.call(method, params)
             )
         except OSError as error:
             raise RuntimeError(f"Reference request failed: {error}") from error
 
     def health(self) -> dict[str, Any]:
-        return self.request("/v1/health")
+        return self.request("reference_health")
 
     def providers(self) -> dict[str, Any]:
         health = self.health()
@@ -465,29 +464,30 @@ class ReferenceClient:
 
     def refresh(self, *, source: str | None = None) -> dict[str, Any]:
         return self.request(
-            "/v1/refresh",
-            method="POST",
+            "reference_refresh",
             timeout=max(self.timeout, 120.0),
-            source=source,
+            params=[source],
         )
 
     def set_source_paused(self, source: str, paused: bool) -> dict[str, Any]:
         if not source.strip():
             raise ValueError("source is required")
         return self.request(
-            "/v1/sources/pause" if paused else "/v1/sources/resume",
-            method="POST",
-            source=source,
+            "reference_pause_source" if paused else "reference_resume_source",
+            params=[source],
         )
 
     def set_option_underlying(self, underlying: str, enabled: bool) -> dict[str, Any]:
         if not underlying.strip():
             raise ValueError("underlying is required")
         return self.request(
-            "/v1/options/coverage/add" if enabled else "/v1/options/coverage/remove",
-            method="POST",
+            (
+                "reference_add_option_coverage"
+                if enabled
+                else "reference_remove_option_coverage"
+            ),
             timeout=max(self.timeout, 120.0),
-            underlying=underlying,
+            params=[underlying],
         )
 
     def catalog(self) -> dict[str, Any]:

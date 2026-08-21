@@ -16,6 +16,7 @@ kairos-primitives.workspace = true
 kairos-protocol.workspace = true
 kairos-transport.workspace = true
 kairos-workspace.workspace = true
+jsonrpsee.workspace = true
 reqwest = { workspace = true, features = ["blocking", "gzip", "rustls"] }
 serde.workspace = true
 serde_json.workspace = true

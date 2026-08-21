@@ -6,8 +6,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Mapping
-from urllib.parse import quote, urlencode
+from typing import Any, Mapping, Protocol
 
 from kairospy.strategy import CommandHandle, CommandEnvelope
 from kairospy.application.execution import (
@@ -61,10 +60,52 @@ class UnixJsonCommandClient:
         )
 
 
+class UnixJsonRpcClient:
+    """Synchronous JSON-RPC 2.0 client over a Unix domain socket."""
+
+    def __init__(self, socket_path: str | Path, *, timeout: float = 30.0) -> None:
+        self.socket_path = Path(socket_path)
+        self.timeout = timeout
+        self._next_id = 1
+
+    def call(self, method: str, params: list[object] | None = None) -> dict[str, Any]:
+        if not method or "/" in method:
+            raise ValueError("JSON-RPC method name must be non-empty and path-free")
+        request_id = self._next_id
+        self._next_id += 1
+        status, value = request_sync(
+            self.socket_path,
+            "POST",
+            "/",
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": [] if params is None else params,
+            },
+            timeout=self.timeout,
+        )
+        if status >= 400:
+            raise RuntimeError(
+                str(value.get("error", f"JSON-RPC request failed: HTTP {status}"))
+            )
+        if "error" in value:
+            raise RuntimeError(str(value["error"]))
+        result = value.get("result", {})
+        if not isinstance(result, dict):
+            return {"result": result}
+        return result
+
+
+class JsonRpcCaller(Protocol):
+    def call(self, method: str, params: list[object] | None = None) -> dict[str, Any]:
+        ...
+
+
 class MarketCommandClient:
     def __init__(
         self,
-        client: UnixJsonCommandClient,
+        client: JsonRpcCaller,
         *,
         launch_id: str | None = None,
         workspace_id: str = "workspace",
@@ -118,8 +159,8 @@ class MarketCommandClient:
                 "dynamic": request.dynamic,
             }
         )
-        status, value = self.client.request("POST", "/v1/subscriptions", body)
-        return _handle(request_id, status, value)
+        value = self.client.call("market_subscribe", [body])
+        return _handle(request_id, 202, value)
 
     def unsubscribe(
         self,
@@ -138,27 +179,12 @@ class MarketCommandClient:
         subscription_id = (
             subscription if isinstance(subscription, str) else str(subscription)
         )
-        path = f"/v1/subscriptions/{quote(subscription_id, safe='')}"
-        headers = {
-            "x-kairos-command-id": request_id,
-            "idempotency-key": request_id,
-            "x-kairos-caller-id": strategy_id,
-            "x-kairos-workspace-id": self.workspace_id,
-            "x-kairos-instance-id": instance_id,
-        }
+        body = self._envelope(request_id, strategy_id, instance_id)
+        body["subscription_id"] = subscription_id
         if self.launch_id is not None:
-            headers["x-kairos-launch-id"] = self.launch_id
-        if hasattr(self.client, "request_with_headers"):
-            status, value = self.client.request_with_headers(
-                "DELETE", path, None, headers=headers
-            )
-        else:
-            # Test doubles and older adapters can still exercise the v2 body
-            # shape; the production Unix client uses the OpenAPI headers.
-            body = self._envelope(request_id, strategy_id, instance_id)
-            body["subscription_id"] = subscription_id
-            status, value = self.client.request("DELETE", path, body)
-        return _handle(request_id, status, value)
+            body["launch_id"] = self.launch_id
+        value = self.client.call("market_unsubscribe", [body])
+        return _handle(request_id, 202, value)
 
     def release_owner(
         self,
@@ -168,16 +194,14 @@ class MarketCommandClient:
         request_id: str,
     ) -> CommandHandle:
         body = self._envelope(request_id, strategy_id, instance_id)
-        status, value = self.client.request(
-            "POST", "/v1/subscriptions/release-owner", body
-        )
-        return _handle(request_id, status, value)
+        value = self.client.call("market_release_owner", [body])
+        return _handle(request_id, 202, value)
 
 
 class ExecutionCommandClient:
     def __init__(
         self,
-        client: UnixJsonCommandClient,
+        client: JsonRpcCaller,
         *,
         default_segment: str = "spot",
         allow_trading: bool = True,
@@ -211,11 +235,7 @@ class ExecutionCommandClient:
         evidence = payload.get("admission_evidence")
         if isinstance(evidence, Mapping):
             body["admission_evidence"] = dict(evidence)
-        return self.client.request(
-            "POST",
-            "/v1/intents",
-            body,
-        )
+        return 202, self.client.call("execution_submit_intent", [body])
 
     def target_position(
         self,
@@ -332,10 +352,11 @@ class ExecutionCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        status, value = self.client.request(
-            "POST", "/v1/intents/cancel", {"intent_id": intent_id, "reason": reason}
+        return CommandHandle(
+            request_id,
+            "rejected",
+            error="execution_cancel_intent is not part of ExecutionControlRpc",
         )
-        return _handle(request_id, status, value)
 
     def cancel_order(
         self,
@@ -346,12 +367,8 @@ class ExecutionCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        status, value = self.client.request(
-            "DELETE",
-            f"/v1/orders/{quote(order_id, safe='')}",
-            {"reason": reason},
-        )
-        return _handle(request_id, status, value)
+        value = self.client.call("execution_cancel_order", [order_id, {"reason": reason}])
+        return _handle(request_id, 202, value)
 
     def replace_order(
         self,
@@ -369,10 +386,8 @@ class ExecutionCommandClient:
             body["limit_price"] = _decimal(request.limit_price)
         if request.time_in_force is not None:
             body["options"] = {"time_in_force": request.time_in_force.value.upper()}
-        status, value = self.client.request(
-            "PATCH", f"/v1/orders/{quote(order_id, safe='')}", body
-        )
-        return _handle(request_id, status, value)
+        value = self.client.call("execution_replace_order", [order_id, body])
+        return _handle(request_id, 202, value)
 
     def cancel_all(
         self,
@@ -384,32 +399,11 @@ class ExecutionCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        query = (
-            "" if account_id is None else f"?{urlencode({'account_id': account_id})}"
+        return CommandHandle(
+            request_id,
+            "rejected",
+            error="execution bulk cancel is not part of ExecutionControlRpc",
         )
-        status, value = self.client.request("GET", f"/v1/open-orders{query}")
-        if status >= 400:
-            return _handle(request_id, status, value)
-        canceled: list[str] = []
-        for item in value.get("orders", ()):
-            if not isinstance(item, Mapping):
-                continue
-            if item.get("strategy_id") != strategy_id:
-                continue
-            if instrument_id is not None and item.get("instrument_id") != instrument_id:
-                continue
-            order_id = item.get("order_id")
-            if not isinstance(order_id, str):
-                continue
-            cancel_status, cancel_value = self.client.request(
-                "DELETE",
-                f"/v1/orders/{quote(order_id, safe='')}",
-                {"reason": reason},
-            )
-            if cancel_status >= 400:
-                return _handle(request_id, cancel_status, cancel_value)
-            canceled.append(order_id)
-        return CommandHandle(request_id, "accepted", {"order_ids": canceled})
 
     def pair_arbitrage(
         self,
@@ -741,24 +735,11 @@ class ExecutionCommandClient:
                 "rejected",
                 error="instance_id is required for quote refresh",
             )
-        envelope = CommandEnvelope(
-            command_id=request_id,
-            operation="execution.refresh_quote",
-            strategy_id=strategy_id,
-            instance_id=instance_id,
-            launch_id=self.launch_id,
-            payload={
-                "intent_id": request.intent_id,
-                "bid_price": _decimal(request.bid_price),
-                "ask_price": _decimal(request.ask_price),
-                "quote_observed_at": request.quote_observed_at_unix_nanos,
-                "reason": request.reason,
-            },
+        return CommandHandle(
+            request_id,
+            "rejected",
+            error="execution_refresh_quote is not part of ExecutionControlRpc",
         )
-        status, value = self.client.request(
-            "POST", "/v1/intents/refresh-quote", envelope.as_dict()
-        )
-        return _handle(request_id, status, value)
 
 
 def _decimal(value: Decimal) -> str:

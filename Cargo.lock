@@ -2984,6 +2984,7 @@ dependencies = [
  "clap",
  "flatbuffers",
  "futures-util",
+ "jsonrpsee",
  "kairos-account-contract",
  "kairos-conflux",
  "kairos-primitives",
@@ -3007,6 +3008,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "jsonrpsee",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
@@ -3046,6 +3048,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "jsonrpsee",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
@@ -3061,7 +3064,9 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "futures-util",
+ "jsonrpsee",
  "kairos-account-contract",
+ "kairos-capital-contract",
  "kairos-execution-contract",
  "kairos-integration",
  "kairos-market-contract",
@@ -3076,6 +3081,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "tower",
  "tracing",
 ]
 
@@ -3086,6 +3092,7 @@ dependencies = [
  "clap",
  "flatbuffers",
  "futures-util",
+ "jsonrpsee",
  "kairos-account-contract",
  "kairos-conflux",
  "kairos-execution-contract",
@@ -3114,6 +3121,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "jsonrpsee",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
@@ -3162,6 +3170,7 @@ dependencies = [
  "criterion",
  "flatbuffers",
  "futures-util",
+ "jsonrpsee",
  "kairos-conflux",
  "kairos-market-contract",
  "kairos-primitives",
@@ -3185,6 +3194,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "jsonrpsee",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
@@ -3220,8 +3230,21 @@ dependencies = [
  "flatbuffers",
  "jsonrpsee",
  "kairos-primitives",
+ "kairos-protocol-macros",
+ "kairos-transport",
+ "kairos-workspace",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "kairos-protocol-macros"
+version = "0.2.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3301,6 +3324,7 @@ version = "0.2.0"
 dependencies = [
  "flatbuffers",
  "futures-core",
+ "jsonrpsee",
  "kairos-primitives",
  "kairos-protocol",
  "kairos-transport",
@@ -3339,6 +3363,7 @@ dependencies = [
  "hyper 1.11.0",
  "hyper-util",
  "hyperlocal-next",
+ "jsonrpsee",
  "libc",
  "opentelemetry",
  "opentelemetry-otlp",

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
+from kairospy.application.system.clients import RiskSystemClient
 from kairospy.application.workspace import InstanceWorkspace
-from kairospy.infrastructure.contracts.risk import RiskProjection, RiskViewKey
 from kairospy.infrastructure.transport.risk import AeronRiskEventSource
 from kairospy.domain_types import AccountId
 
@@ -15,18 +13,15 @@ from .application import RiskApplication
 def build_strategy_access(
     *,
     instance: InstanceWorkspace,
-    endpoint: Path | None,
+    client: RiskSystemClient | None = None,
     account_ids: tuple[AccountId, ...],
     strategy_id: str,
 ) -> RiskApplication:
     """Build Risk projection access, or the module-owned unavailable behavior."""
 
-    enabled = endpoint is not None
+    enabled = client is not None
     return RiskApplication(
-        RiskProjection(
-            instance.snapshot("risk", "risk.snapshot"),
-            RiskViewKey(actor_id=f"risk:{instance.instance_id}"),
-        )
+        client.latest_projection(actor_id=f"risk:{instance.instance_id}")
         if enabled
         else None,
         AeronRiskEventSource(

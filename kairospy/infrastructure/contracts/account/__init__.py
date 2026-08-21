@@ -6,11 +6,11 @@ Protocol payloads remain generated FlatBuffers roots; application models are
 kept outside this package.
 """
 
-from .runtime import backtest_mark_to_market
+from .runtime import backtest_mark_to_market_request
 from .control import AccountContractClient
 from .events import decode_event
 from .view import (
-    AccountCurrentViewReader,
+    AccountCurrentProjection,
     AccountViewFrame,
     AccountViewKey,
     AccountViewKind,
@@ -21,13 +21,13 @@ from .view import (
 
 __all__ = [
     "AccountContractClient",
-    "AccountCurrentViewReader",
+    "AccountCurrentProjection",
     "AccountViewFrame",
     "AccountViewKey",
     "AccountViewKind",
     "AccountViewReader",
     "account_view_path",
-    "backtest_mark_to_market",
+    "backtest_mark_to_market_request",
     "decode_event",
     "decode_view",
 ]

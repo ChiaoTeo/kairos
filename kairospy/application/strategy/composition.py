@@ -19,7 +19,7 @@ from kairospy.application.execution import ExecutionPolicy
 from kairospy.application.execution.composition import (
     build_strategy_access as build_execution_access,
 )
-from kairospy.application.launch.application.endpoints import resolve_instance_endpoints
+from kairospy.application.launch.application.connections import resolve_instance_connections
 from kairospy.application.launch.application.strategy_runtime import (
     StrategyLaunchConfig,
 )
@@ -41,6 +41,7 @@ from kairospy.application.reference.composition import (
 from kairospy.application.risk.composition import (
     build_strategy_access as build_risk_access,
 )
+from kairospy.application.system.clients import InstanceSystemClients
 from kairospy.application.workspace import Workspace
 from kairospy.strategy import StrategyIdentity, StrategyLogger
 from .services.decision_journal import StrategyDecisionJournal
@@ -82,15 +83,18 @@ def compose_strategy_process(
         launch_id=launch_id,
         mode=mode,
     )
-    endpoints = resolve_instance_endpoints(instance)
+    connections = resolve_instance_connections(instance)
+    clients = InstanceSystemClients.from_connections(connections)
     if (
         config.authoritative
         and config.execution_enabled
-        and endpoints.execution is None
+        and connections.execution is None
     ):
         raise RuntimeError(
-            "Execution is enabled but the instance manifest has no endpoint"
+            "Execution is enabled but the instance manifest has no connection"
         )
+    if clients.market is None:
+        raise RuntimeError("Market is enabled but the instance manifest has no connection")
 
     identity = StrategyIdentity(
         entrypoint.strategy.strategy_id,
@@ -105,22 +109,16 @@ def compose_strategy_process(
             scope=config.market_scope,
             replayable=mode == "backtest",
         ),
+        client=clients.market,
     )
-    reference = build_reference_access(workspace)
-    account_snapshots = {
-        account_id: endpoint.view_root
-        for account_id, endpoint in endpoints.accounts.items()
-        if endpoint.view_root is not None
-    }
-    if len(account_snapshots) != len(endpoints.accounts):
-        raise RuntimeError("Account endpoint manifest is missing a view_root path")
+    reference = build_reference_access(clients.reference)
     account = build_account_access(
         instance=instance,
-        account_snapshots=account_snapshots,
+        account_clients=clients.accounts,
         required_segments={
-            account_id: endpoint.required_segments
-            for account_id, endpoint in endpoints.accounts.items()
-            if endpoint.required_segments
+            account_id: connection.required_segments
+            for account_id, connection in connections.accounts.items()
+            if connection.required_segments
         },
     )
     portfolio = build_portfolio_access(
@@ -129,29 +127,20 @@ def compose_strategy_process(
         account=account,
     )
     capital_enabled = bool(config.capital.get("enabled", False))
-    if capital_enabled and endpoints.capital is None:
-        raise RuntimeError("Capital is enabled but the instance manifest has no endpoint")
+    if capital_enabled and connections.capital is None:
+        raise RuntimeError("Capital is enabled but the instance manifest has no connection")
     capital = build_capital_access(
         identity=identity,
         capital_group_id=(
             str(config.capital["capital_group_id"]) if capital_enabled else None
         ),
-        account_ids=tuple(endpoints.accounts),
+        account_ids=tuple(connections.accounts),
         account_lease_fences={
-            account_id: endpoint.lease_fence
-            for account_id, endpoint in endpoints.accounts.items()
-            if endpoint.lease_fence is not None
+            account_id: connection.lease_fence
+            for account_id, connection in connections.accounts.items()
+            if connection.lease_fence is not None
         },
-        endpoint=(
-            endpoints.capital.socket
-            if capital_enabled and endpoints.capital is not None
-            else None
-        ),
-        view_root=(
-            endpoints.capital.view_root
-            if capital_enabled and endpoints.capital is not None
-            else None
-        ),
+        client=(clients.capital if capital_enabled else None),
     )
     agent = compose_agent(
         workspace=workspace,
@@ -162,24 +151,20 @@ def compose_strategy_process(
             launch_id,
             instance_id,
             identity.strategy_id,
-            tuple(str(account_id) for account_id in endpoints.accounts),
+            tuple(str(account_id) for account_id in connections.accounts),
         ),
     )
     risk = build_risk_access(
         instance=instance,
-        endpoint=None if endpoints.risk is None else endpoints.risk.socket,
-        account_ids=tuple(endpoints.accounts),
+        client=clients.risk,
+        account_ids=tuple(connections.accounts),
         strategy_id=identity.strategy_id,
     )
     execution = build_execution_access(
         instance=instance,
-        endpoint=(
-            None
-            if not config.execution_enabled or endpoints.execution is None
-            else endpoints.execution.socket
-        ),
+        client=(clients.execution if config.execution_enabled else None),
         identity=identity,
-        account_ids=tuple(endpoints.accounts),
+        account_ids=tuple(connections.accounts),
         policy=ExecutionPolicy(
             allow_trading=config.allow_trading,
             max_order_notional=config.max_order_notional,
@@ -240,7 +225,8 @@ def compose_strategy_process(
         state_path=instance.state("strategy", "state.json"),
         backtest=build_backtest_driver(
             mode=mode,
-            endpoints=endpoints,
+            connections=connections,
+            clients=clients,
             execution_enabled=config.execution_enabled,
         ),
         params=params,

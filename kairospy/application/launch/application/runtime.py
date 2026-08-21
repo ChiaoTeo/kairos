@@ -479,7 +479,7 @@ class LaunchRuntimeApplication:
                 market_runtime_profile=market_runtime_profile,
                 instance_workspace=market_instance_workspace,
             )
-            account_endpoints: dict[str, dict[str, Any]] = {}
+            account_connections: dict[str, dict[str, Any]] = {}
             capital_member_readiness = dict(
                 plan.capital.get("member_readiness") or {}
             )
@@ -506,7 +506,7 @@ class LaunchRuntimeApplication:
                     socket_name=socket_name,
                     instance_workspace=instance_workspace,
                 )
-                account_endpoints[bound_account_id] = {
+                account_connections[bound_account_id] = {
                     "socket": str(instance_workspace.socket(socket_name)),
                     "health": str(instance_workspace.health(socket_name)),
                     "socket_name": socket_name,
@@ -540,7 +540,7 @@ class LaunchRuntimeApplication:
                     "lease_fence": account_lease_fences[bound_account_id],
                 }
             components.ensure_running("risk", instance_workspace=instance_workspace)
-            component_endpoints: dict[str, dict[str, Any]] = {
+            component_connections: dict[str, dict[str, Any]] = {
                 "risk": {
                     "socket": str(instance_workspace.socket("risk")),
                     "health": str(instance_workspace.health("risk")),
@@ -575,14 +575,14 @@ class LaunchRuntimeApplication:
             }
             write_instance_manifest(
                 instance_workspace,
-                accounts=account_endpoints,
-                components=component_endpoints,
+                accounts=account_connections,
+                components=component_connections,
             )
             if bool(plan.capital.get("enabled", False)):
                 components.ensure_running(
                     "capital", instance_workspace=instance_workspace
                 )
-                component_endpoints["capital"] = {
+                component_connections["capital"] = {
                     "socket": str(instance_workspace.socket("capital")),
                     "health": str(instance_workspace.health("capital")),
                     "view_root": str(instance_workspace.snapshot()),
@@ -593,14 +593,14 @@ class LaunchRuntimeApplication:
                     confirm_live=confirm_live,
                     instance_workspace=instance_workspace,
                 )
-                component_endpoints["execution"] = {
+                component_connections["execution"] = {
                     "socket": str(instance_workspace.socket("execution")),
                     "health": str(instance_workspace.health("execution")),
                 }
             write_instance_manifest(
                 instance_workspace,
-                accounts=account_endpoints,
-                components=component_endpoints,
+                accounts=account_connections,
+                components=component_connections,
             )
             params = {**dict(plan.strategy_params), **dict(strategy_params or {})}
             StrategyProcessController(self.workspace).ensure_running(
@@ -757,17 +757,17 @@ class LaunchRuntimeApplication:
             )
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             manifest = {}
-        endpoints = manifest.get("components", {})
+        connections = manifest.get("components", {})
         result: dict[str, dict[str, Any]] = {}
         reference = (
-            endpoints.get("reference", {}) if isinstance(endpoints, dict) else {}
+            connections.get("reference", {}) if isinstance(connections, dict) else {}
         )
         reference_required = not (
             isinstance(reference, dict) and reference.get("required") is False
         )
         if reference_required:
             result["reference"] = components.status("reference")
-        market = endpoints.get("market", {}) if isinstance(endpoints, dict) else {}
+        market = connections.get("market", {}) if isinstance(connections, dict) else {}
         market_socket = (
             str(market.get("socket") or "") if isinstance(market, dict) else ""
         )
@@ -781,7 +781,7 @@ class LaunchRuntimeApplication:
         )
         for name in ("risk", "execution", "capital"):
             if name == "capital" and not (
-                isinstance(endpoints, dict) and name in endpoints
+                isinstance(connections, dict) and name in connections
             ):
                 continue
             result[name] = components.status(

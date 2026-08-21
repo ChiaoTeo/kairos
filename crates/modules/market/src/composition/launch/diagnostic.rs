@@ -4,9 +4,8 @@ use std::time::Duration;
 
 use kairos_conflux::{
     BinanceRestConfig, BinanceWebSocketConfig, Conflux, ConfluxConfig, ConfluxSystem,
-    ConnectionKey, ShutdownMode,
+    ConnectionKey, ProcessPhase, ShutdownMode,
 };
-use kairos_market_contract::{MarketRestRequest, MarketRestResponse};
 use kairos_primitives::runtime::InstanceIdentity;
 
 use crate::application::conflux::{MarketSourceMode, MarketSourcePlan};
@@ -25,7 +24,6 @@ pub async fn run_diagnostic_once(
     provider: DiagnosticProvider,
     endpoint: String,
 ) -> Result<MarketApplication, String> {
-    let baseline_sequence = application.event_sequence();
     let mut system = ConfluxSystem::new();
     let plan = install_connection(&mut system, provider, endpoint)?;
     let view_root = std::env::temp_dir().join(format!(
@@ -62,14 +60,7 @@ pub async fn run_diagnostic_once(
         tokio::select! {
             outcome = &mut process => break outcome.map_err(|error| error.to_string())?,
             _ = probe.tick() => {
-                let Some(MarketRestResponse::Health(Ok(health))) = handle
-                    .handle_rest(MarketRestRequest::Health)
-                    .await
-                    .map_err(|error| format!("Market diagnostic health request failed: {error:?}"))?
-                else {
-                    return Err("Market diagnostic returned an invalid health response".into());
-                };
-                if health.event_sequence > baseline_sequence.into() {
+                if handle.phase() == ProcessPhase::Running {
                     handle.shutdown(ShutdownMode::Drain);
                 }
             }

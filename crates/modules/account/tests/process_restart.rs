@@ -6,8 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
+use kairos_account_contract::view::AccountViewReader;
 use kairos_account_contract::{
-    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader, SimulatedSettlement,
+    AccountControlRpcClient, AccountViewKey, AccountViewKind, SimulatedSettlement,
 };
 use kairos_conflux::SnapshotEnvelopeMetadata;
 use kairos_workspace::Workspace;
@@ -188,27 +189,41 @@ fn account_server_restart_restores_state_and_republishes_a_new_mmap_incarnation(
     let mut first = start_server(&workspace, &aeron_dir);
     let (first_metadata, first_balance) =
         wait_for_snapshot(&snapshot_path, &mut first, None, 1, "1000:0");
-    let client = AccountContractClient::connect(&socket_path).unwrap();
-    client
-        .apply_simulated_settlement(&SimulatedSettlement {
-            fill_id: kairos_primitives::execution::FillId::new("restart-persisted-fill").unwrap(),
-            order_id: Some(
-                kairos_primitives::execution::OrderId::new("restart-persisted-order").unwrap(),
-            ),
-            segment_key: kairos_primitives::account::SegmentKey::new("spot").unwrap(),
-            instrument_id: kairos_primitives::reference::InstrumentId::new("paper:BTC-USDT")
-                .unwrap(),
-            quantity: kairos_primitives::decimal::Quantity::new(1, 0).unwrap(),
-            price: kairos_primitives::decimal::Price::new(100, 0).unwrap(),
-            side: kairos_primitives::execution::OrderSide::Buy,
-            settlement_asset: Some(kairos_primitives::reference::Currency::new("USDT").unwrap()),
-            settlement_delta: Some(
-                kairos_primitives::decimal::SignedQuantity::new(-100, 0).unwrap(),
-            ),
-            fee_asset: None,
-            fee_amount: None,
-            occurred_at_unix_nanos: 1_000_000_000.into(),
-        })
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system
+        .install_account_connection("account", socket_path, None)
+        .unwrap();
+    let client = system.account_client("account").unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(AccountControlRpcClient::apply_simulated_settlement(
+            &client.control(),
+            SimulatedSettlement {
+                fill_id: kairos_primitives::execution::FillId::new("restart-persisted-fill")
+                    .unwrap(),
+                order_id: Some(
+                    kairos_primitives::execution::OrderId::new("restart-persisted-order").unwrap(),
+                ),
+                segment_key: kairos_primitives::account::SegmentKey::new("spot").unwrap(),
+                instrument_id: kairos_primitives::reference::InstrumentId::new("paper:BTC-USDT")
+                    .unwrap(),
+                quantity: kairos_primitives::decimal::Quantity::new(1, 0).unwrap(),
+                price: kairos_primitives::decimal::Price::new(100, 0).unwrap(),
+                side: kairos_primitives::execution::OrderSide::Buy,
+                settlement_asset: Some(
+                    kairos_primitives::reference::Currency::new("USDT").unwrap(),
+                ),
+                settlement_delta: Some(
+                    kairos_primitives::decimal::SignedQuantity::new(-100, 0).unwrap(),
+                ),
+                fee_asset: None,
+                fee_amount: None,
+                occurred_at_unix_nanos: 1_000_000_000.into(),
+            },
+        ))
         .unwrap();
     let (persisted_metadata, persisted_balance) = wait_for_snapshot(
         &snapshot_path,

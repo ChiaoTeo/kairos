@@ -5,11 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from kairospy.application.system.clients import MarketSystemClient
 from kairospy.application.workspace import InstanceWorkspace, Workspace
-from kairospy.infrastructure.transport.commands import (
-    MarketCommandClient,
-    UnixJsonCommandClient,
-)
+from kairospy.infrastructure.transport.commands import MarketCommandClient
 from kairospy.infrastructure.transport.market import (
     AeronMarketEventSource,
     MarketProjection,
@@ -50,20 +48,19 @@ def build_strategy_access(
     instance: InstanceWorkspace,
     identity: StrategyIdentity,
     config: MarketAccessConfig,
+    client: MarketSystemClient,
 ) -> StrategyMarketAccess:
     """Build Market commands, current projection, and events as one access slice."""
 
     if config.scope == "shared":
-        command_socket = workspace.paths.process_socket("market")
         event_socket = workspace.paths.process_socket("market-events")
         snapshot = workspace.paths.child("snapshots", "market", "market-shared")
     else:
-        command_socket = instance.socket("market")
         event_socket = instance.socket("market-events")
         snapshot = instance.snapshot("market", "market-shared")
 
     commands = MarketCommandClient(
-        UnixJsonCommandClient(command_socket),
+        client.control,
         launch_id=identity.launch_id if config.scope == "instance" else None,
         workspace_id=workspace.identity.workspace_id,
     )
@@ -90,24 +87,18 @@ def build_strategy_access(
 
 def release_strategy_owner(
     *,
-    workspace: Workspace,
-    instance: InstanceWorkspace,
+    client: MarketSystemClient,
     identity: StrategyIdentity,
     scope: Literal["shared", "instance"],
 ) -> StrategyOwnerRelease:
     """Release Market demand when the owning Strategy process is unavailable."""
 
-    command_socket = (
-        workspace.paths.process_socket("market")
-        if scope == "shared"
-        else instance.socket("market")
-    )
     request_id = (
         f"{identity.strategy_id}:{identity.instance_id}:"
         "market.release_owner:external-stop"
     )
     handle = MarketCommandClient(
-        UnixJsonCommandClient(command_socket),
+        client.control,
         launch_id=identity.launch_id,
     ).release_owner(
         strategy_id=identity.strategy_id,

@@ -1,27 +1,21 @@
 use std::convert::Infallible;
 
-use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, Contract, RestContract, SystemEvent};
+use kairos_conflux::{ConfluxActor, ConfluxEvent, Context, SystemEvent};
+use kairos_primitives::integration::ProviderId;
 use kairos_primitives::reference::InstrumentId;
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use kairos_reference_contract::{
     ReferenceControlError, ReferenceHealthResponse, ReferenceMutationResponse,
-    ReferenceOptionCoverageResponse, ReferenceProviderHealth,
+    ReferenceOptionCoverageResponse, ReferenceProviderHealth, ReferencePublishResponse,
+    ReferenceRefreshResponse, ReferenceSourceStatusResponse, UpsertAssetRequest,
+    UpsertInstrumentRequest, UpsertListingRequest,
 };
 
-use super::ReferenceApplication;
+use super::{ReferenceApplication, ReferenceRpcActor};
 use crate::domain::ReferenceError;
 
 const EVENT_BATCH_LIMIT: usize = 1_024;
-
-pub struct ReferenceRest;
-
-impl RestContract for ReferenceRest {
-    type Request = ();
-    type Response = ();
-}
-
-impl Contract for ReferenceApplication {
-    type Rest = ReferenceRest;
-}
+const REFERENCE_BUSINESS_ERROR_CODE: i32 = -31_001;
 
 impl ConfluxActor for ReferenceApplication {
     type FatalError = ReferenceError;
@@ -49,10 +43,10 @@ impl ConfluxActor for ReferenceApplication {
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<()>, Self::FatalError> {
-        let response = match event {
+    ) -> Result<(), Self::FatalError> {
+        match event {
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "refresh" => {
                 if let Err(error) = self
                     .refresh_with_connections(&mut context.connections())
@@ -66,12 +60,158 @@ impl ConfluxActor for ReferenceApplication {
                     );
                 }
                 let _ = self.publish_pending(context).await;
-                None
             },
-            ConfluxEvent::Local(value) => match value {},
-            _ => None,
+            _ => {},
         };
-        Ok(response)
+        Ok(())
+    }
+}
+
+impl ReferenceRpcActor for ReferenceApplication {
+    async fn health(
+        &mut self,
+        (): (),
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceHealthResponse> {
+        Ok(self.contract_health().await)
+    }
+
+    async fn refresh(
+        &mut self,
+        source_id: Option<ProviderId>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceRefreshResponse> {
+        let result = match source_id.as_ref() {
+            Some(source_id) => {
+                self.refresh_source_with_connections(source_id.as_str(), &mut context.connections())
+                    .await
+            },
+            None => {
+                self.refresh_with_connections(&mut context.connections())
+                    .await
+            },
+        }
+        .map_err(rpc_reference_error)?;
+        self.publish_pending(context)
+            .await
+            .map_err(rpc_control_error)?;
+        Ok(ReferenceRefreshResponse {
+            generation: result.generation,
+            event_sequence: result.event_sequence,
+            changed: result.changed,
+            change_count: result.change_count as u64,
+            publication_pending: false,
+        })
+    }
+
+    async fn publish(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferencePublishResponse> {
+        let events = self
+            .publish_pending(context)
+            .await
+            .map_err(rpc_control_error)?;
+        Ok(ReferencePublishResponse {
+            generation: self.generation(),
+            events: events as u64,
+        })
+    }
+
+    async fn pause_source(
+        &mut self,
+        source_id: ProviderId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.set_source_paused(source_id.as_str(), true)
+            .await
+            .map_err(rpc_reference_error)?;
+        let _ = self
+            .publish_pending(context)
+            .await
+            .map_err(rpc_control_error)?;
+        Ok(ReferenceSourceStatusResponse {
+            source_id,
+            status: kairos_reference_contract::ReferenceProviderStatus::Paused,
+        })
+    }
+
+    async fn resume_source(
+        &mut self,
+        source_id: ProviderId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceSourceStatusResponse> {
+        self.set_source_paused(source_id.as_str(), false)
+            .await
+            .map_err(rpc_reference_error)?;
+        let _ = self
+            .publish_pending(context)
+            .await
+            .map_err(rpc_control_error)?;
+        Ok(ReferenceSourceStatusResponse {
+            source_id,
+            status: kairos_reference_contract::ReferenceProviderStatus::Ready,
+        })
+    }
+
+    async fn add_option_coverage(
+        &mut self,
+        underlying: InstrumentId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceOptionCoverageResponse> {
+        self.change_option_coverage(underlying, true, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
+    async fn remove_option_coverage(
+        &mut self,
+        underlying: InstrumentId,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceOptionCoverageResponse> {
+        self.change_option_coverage(underlying, false, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
+    async fn upsert_asset(
+        &mut self,
+        request: UpsertAssetRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceMutationResponse> {
+        let generation = ReferenceApplication::upsert_asset(self, request)
+            .await
+            .map_err(rpc_reference_error)?;
+        self.mutation_response(generation, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
+    async fn upsert_instrument(
+        &mut self,
+        request: UpsertInstrumentRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceMutationResponse> {
+        let generation = ReferenceApplication::upsert_instrument(self, request)
+            .await
+            .map_err(rpc_reference_error)?;
+        self.mutation_response(generation, context)
+            .await
+            .map_err(rpc_control_error)
+    }
+
+    async fn upsert_listing(
+        &mut self,
+        request: UpsertListingRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ReferenceMutationResponse> {
+        let generation = ReferenceApplication::upsert_listing(self, request)
+            .await
+            .map_err(rpc_reference_error)?;
+        self.mutation_response(generation, context)
+            .await
+            .map_err(rpc_control_error)
     }
 }
 
@@ -244,4 +384,12 @@ fn control_error(error: ReferenceError) -> ReferenceControlError {
         retryable: error.retryable(),
         details: std::collections::BTreeMap::new(),
     }
+}
+
+fn rpc_control_error(error: ReferenceControlError) -> ErrorObjectOwned {
+    business_error(REFERENCE_BUSINESS_ERROR_CODE, error.message.clone(), error)
+}
+
+fn rpc_reference_error(error: ReferenceError) -> ErrorObjectOwned {
+    rpc_control_error(control_error(error))
 }

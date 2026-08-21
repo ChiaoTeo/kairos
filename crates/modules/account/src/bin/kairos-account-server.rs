@@ -4,28 +4,22 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use kairos_account::AccountApplication;
 use kairos_account::composition::account::{
     AccountOptions, AccountSegmentBinding, compose_binance_async_account_application,
     compose_ibkr_async_account_application, compose_local_account_application_for_segments,
     compose_okx_async_account_application, default_rest_endpoint,
 };
 use kairos_account::composition::registry::{AccountBindingRecord, AccountRegistry};
+use kairos_account::{AccountApplication, AccountRpcService};
 use kairos_account_contract::{
-    AccountRestRequest, AccountRestResponse, AccountSegmentsRequest, AccountViewKey,
-    AccountViewKind, AccountViewPublisher, AeronEndpoint,
+    AccountControlRpcServer, AccountViewKey, AccountViewKind, AccountViewPublisher, AeronEndpoint,
 };
 use kairos_conflux::{
     AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, CredentialStore,
-    HttpControlConfig, MmapOutputDeclaration,
+    JsonRpcRuntimeConfig, MmapOutputDeclaration,
 };
 use kairos_primitives::runtime::InstanceIdentity;
-use kairos_protocol::control::{
-    ControlAction, HttpControlCodec, HttpControlRequest, HttpControlResponse,
-};
 use kairos_workspace::Workspace;
-use serde::de::DeserializeOwned;
-use serde_json::json;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -199,26 +193,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     };
-    let trade_enabled = {
-        trade_access_enabled(
-            record.permissions.contains_key("trade"),
-            record.credential_role.as_deref(),
-        )
-    };
-    let lease_file = trade_enabled.then_some(&record).map(|value| {
-        workspace
-            .child(&[
-                "state",
-                "account-locks",
-                &format!(
-                    "{}.{}",
-                    lease_component(&value.broker),
-                    lease_component(&args.account_id)
-                ),
-                "owner.json",
-            ])
-            .expect("validated account lease path")
-    });
     let refresh_interval = Duration::from_millis(args.refresh_ms);
     let (mut application, system) = composition.into_conflux(refresh_interval)?;
     application.configure_publication_identity(transport_identity);
@@ -230,15 +204,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &args.aeron_channel,
         args.account_events_stream_id,
     )?;
-    run_process(
-        application,
-        system,
-        socket,
-        health,
-        lease_file,
-        args.instance_id,
-    )
-    .await
+    run_process(application, system, socket, health).await
 }
 
 fn configure_publication(
@@ -283,8 +249,6 @@ async fn run_process(
     system: ConfluxSystem,
     socket: PathBuf,
     health_file: PathBuf,
-    lease_file: Option<PathBuf>,
-    instance_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conflux, handle) = Conflux::new(
         application,
@@ -295,157 +259,18 @@ async fn run_process(
         },
     )?;
     let outcome = conflux
-        .with_http_control(
-            handle,
-            AccountHttpControl {
-                lease_file,
-                instance_id,
-            },
-            HttpControlConfig::uds(socket).with_health_file(Some(health_file)),
+        .with_json_rpc(
+            handle.clone(),
+            AccountRpcService::<AccountApplication>::new(
+                handle.rpc_actor_invocation(Duration::from_secs(30)),
+            )
+            .into_rpc(),
+            JsonRpcRuntimeConfig::uds(socket).with_health_file(Some(health_file)),
         )
         .run()
         .await?;
     tracing::info!(event = "process_stopped", component = "account", phase = ?outcome.phase, discarded_inputs = outcome.discarded_inputs, "Account Conflux process stopped");
     Ok(())
-}
-
-struct AccountHttpControl {
-    lease_file: Option<PathBuf>,
-    instance_id: String,
-}
-
-impl HttpControlCodec for AccountHttpControl {
-    type Request = AccountRestRequest;
-    type Response = AccountRestResponse;
-
-    fn component(&self) -> &'static str {
-        "account"
-    }
-
-    fn decode(
-        &self,
-        request: HttpControlRequest<'_>,
-    ) -> Result<ControlAction<Self::Request>, HttpControlResponse> {
-        decode_request(request.method, request.target, request.body)
-    }
-
-    fn encode(&self, response: Self::Response) -> HttpControlResponse {
-        encode_response(response, lease_valid(&self.lease_file, &self.instance_id))
-    }
-
-    fn readiness_request(&self) -> Self::Request {
-        AccountRestRequest::Health
-    }
-}
-
-fn decode_request(
-    method: &str,
-    target: &str,
-    body: &[u8],
-) -> Result<ControlAction<AccountRestRequest>, HttpControlResponse> {
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    match (method, path) {
-        ("POST", "/v1/stop") => Ok(ControlAction::Stop),
-        ("GET", "/v1/health") => Ok(ControlAction::Request(AccountRestRequest::Health)),
-        ("POST", "/v1/simulation/settlements") => Ok(ControlAction::Request(
-            AccountRestRequest::ApplySimulatedSettlement(decode(body)?),
-        )),
-        ("POST", "/v1/simulation/capital-mutations") => Ok(ControlAction::Request(
-            AccountRestRequest::ApplySimulatedCapitalMutation(decode(body)?),
-        )),
-        ("POST", "/v1/simulation/capital-mutations/status") => Ok(ControlAction::Request(
-            AccountRestRequest::QuerySimulatedCapitalMutation(decode(body)?),
-        )),
-        ("POST", "/v1/mark-to-market") => Ok(ControlAction::Request(
-            AccountRestRequest::MarkToMarket(decode(body)?),
-        )),
-        ("POST", "/v1/time/advance") => Ok(ControlAction::Request(
-            AccountRestRequest::AdvanceTime(decode(body)?),
-        )),
-        ("POST", "/v1/refresh") => Ok(ControlAction::Request(AccountRestRequest::Refresh(
-            decode_segments(body)?,
-        ))),
-        ("POST", "/v1/reconcile") => Ok(ControlAction::Request(AccountRestRequest::Reconcile(
-            decode_segments(body)?,
-        ))),
-        (_, "/v1/health") => Err(json_error(405, "health accepts only GET")),
-        (_, "/v1/stop") => Err(json_error(405, "stop accepts only POST")),
-        _ => Err(json_error(404, "unknown Account endpoint")),
-    }
-}
-
-fn decode_segments(body: &[u8]) -> Result<AccountSegmentsRequest, HttpControlResponse> {
-    if body.is_empty() {
-        Ok(AccountSegmentsRequest::default())
-    } else {
-        decode(body)
-    }
-}
-
-fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, HttpControlResponse> {
-    serde_json::from_slice(body).map_err(|cause| json_error(400, &cause.to_string()))
-}
-
-fn encode_response(response: AccountRestResponse, lease_valid: bool) -> HttpControlResponse {
-    match response {
-        AccountRestResponse::Health(Ok(mut value)) => {
-            value.lease_valid = Some(lease_valid);
-            json_response(200, &value)
-        },
-        AccountRestResponse::Health(Err(error))
-        | AccountRestResponse::ApplySimulatedSettlement(Err(error))
-        | AccountRestResponse::ApplySimulatedCapitalMutation(Err(error))
-        | AccountRestResponse::QuerySimulatedCapitalMutation(Err(error))
-        | AccountRestResponse::MarkToMarket(Err(error))
-        | AccountRestResponse::AdvanceTime(Err(error))
-        | AccountRestResponse::Refresh(Err(error))
-        | AccountRestResponse::Reconcile(Err(error)) => {
-            json_response(409, &json!({"error": error}))
-        },
-        AccountRestResponse::ApplySimulatedSettlement(Ok(value))
-        | AccountRestResponse::ApplySimulatedCapitalMutation(Ok(value))
-        | AccountRestResponse::MarkToMarket(Ok(value)) => json_response(200, &value),
-        AccountRestResponse::QuerySimulatedCapitalMutation(Ok(value)) => json_response(200, &value),
-        AccountRestResponse::AdvanceTime(Ok(value)) => json_response(200, &value),
-        AccountRestResponse::Refresh(Ok(value)) | AccountRestResponse::Reconcile(Ok(value)) => {
-            json_response(200, &value)
-        },
-    }
-}
-
-fn lease_valid(lease_file: &Option<PathBuf>, instance_id: &str) -> bool {
-    let Some(path) = lease_file else {
-        return true;
-    };
-    let Ok(value) = std::fs::read(path).and_then(|bytes| {
-        serde_json::from_slice::<serde_json::Value>(&bytes).map_err(std::io::Error::other)
-    }) else {
-        return false;
-    };
-    value
-        .get("launch_instance_id")
-        .and_then(serde_json::Value::as_str)
-        == Some(instance_id)
-        && std::fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .and_then(|modified| {
-                std::time::SystemTime::now()
-                    .duration_since(modified)
-                    .map_err(std::io::Error::other)
-            })
-            .is_ok_and(|age| age <= Duration::from_secs(60))
-}
-
-fn json_response<T: serde::Serialize>(status: u16, value: &T) -> HttpControlResponse {
-    HttpControlResponse::json(
-        status,
-        serde_json::to_vec(value)
-            .unwrap_or_else(|_| br#"{"error":"Account response encoding failed"}"#.to_vec()),
-    )
-}
-
-fn json_error(status: u16, message: &str) -> HttpControlResponse {
-    json_response(status, &json!({"error": message}))
 }
 
 #[derive(Debug, Parser)]
@@ -479,28 +304,6 @@ struct Args {
         value_parser = clap::value_parser!(i32).range(1..)
     )]
     account_events_stream_id: i32,
-}
-
-fn lease_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("_")
-}
-
-fn trade_access_enabled(has_trade_permission: bool, credential_role: Option<&str>) -> bool {
-    has_trade_permission
-        && credential_role.is_none_or(|role| !role.eq_ignore_ascii_case("readonly"))
 }
 
 impl Args {
@@ -560,24 +363,5 @@ impl Args {
             isolated_margin_symbol: record.values.get("isolated_margin_symbol").cloned(),
             reference_database: None,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::trade_access_enabled;
-
-    #[test]
-    fn readonly_credential_never_enables_trade_access() {
-        assert!(!trade_access_enabled(true, Some("readonly")));
-        assert!(!trade_access_enabled(false, Some("readonly")));
-    }
-
-    #[test]
-    fn writable_role_still_requires_discovered_trade_permission() {
-        assert!(trade_access_enabled(true, Some("trading")));
-        assert!(trade_access_enabled(true, None));
-        assert!(!trade_access_enabled(false, Some("trading")));
-        assert!(!trade_access_enabled(false, None));
     }
 }

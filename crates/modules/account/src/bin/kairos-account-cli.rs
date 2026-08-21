@@ -11,10 +11,13 @@ use kairos_account::composition::registry::{
     AccountBindingRecord, AccountCredentialBinding, AccountRegistry,
 };
 use kairos_account::domain::{AccountFill, AccountModel};
-use kairos_account_contract::{AccountRestRequest, AccountRestResponse, SimulatedSettlement};
+use kairos_account_contract::{
+    AccountClient, AccountControlRpcClient, AccountControlRpcServer, AccountSegmentsRequest,
+    SimulatedSettlement,
+};
 use kairos_conflux::{
-    Conflux, ConfluxConfig, ConfluxEvent, CredentialRecord, CredentialStore,
-    ExternalAccountCredentialProfile, ShutdownMode,
+    Conflux, ConfluxConfig, CredentialRecord, CredentialStore, ExternalAccountCredentialProfile,
+    ShutdownMode,
 };
 use kairos_protocol::generated::kairos::common::v_2::{Decimal64, ViewCompleteness};
 use kairos_workspace::Workspace;
@@ -1197,30 +1200,19 @@ async fn run_direct(
     };
     let (application, system) = composition.into_conflux(std::time::Duration::from_secs(30))?;
     let (conflux, handle) = Conflux::new(application, system, ConfluxConfig::default())?;
+    let service = kairos_account::AccountRpcService::new(
+        handle.rpc_actor_invocation(std::time::Duration::from_secs(30)),
+    );
     let commands = async move {
-        let ready = handle
-            .handle(ConfluxEvent::Rest(AccountRestRequest::Health))
+        service
+            .health()
             .await
-            .map_err(|_| "Account Conflux stopped during startup".to_string())?;
-        match ready {
-            Some(AccountRestResponse::Health(Ok(_))) => {},
-            Some(AccountRestResponse::Health(Err(error))) => return Err(error.message),
-            _ => return Err("Account Actor omitted its health response".into()),
-        }
+            .map_err(|error| format!("Account Conflux health failed: {error}"))?;
         if let Some(settlement) = settlement {
-            let response = handle
-                .handle(ConfluxEvent::Rest(
-                    AccountRestRequest::ApplySimulatedSettlement(settlement),
-                ))
+            service
+                .apply_simulated_settlement(settlement)
                 .await
-                .map_err(|_| "Account Conflux stopped during settlement".to_string())?;
-            match response {
-                Some(AccountRestResponse::ApplySimulatedSettlement(Ok(_))) => {},
-                Some(AccountRestResponse::ApplySimulatedSettlement(Err(error))) => {
-                    return Err(error.message);
-                },
-                _ => return Err("Account Actor omitted its settlement response".into()),
-            }
+                .map_err(|error| format!("Account simulated settlement failed: {error}"))?;
         }
         handle.shutdown(ShutdownMode::Drain);
         Ok::<(), String>(())
@@ -1393,6 +1385,18 @@ fn is_runtime_control(command: &Command) -> bool {
     matches!(command, Command::Refresh { .. } | Command::Reconcile { .. })
 }
 
+fn account_client_from_instance(
+    instance: &kairos_workspace::workspace::InstanceWorkspace,
+    socket_name: &str,
+    view_root: Option<std::path::PathBuf>,
+) -> Result<AccountClient, Box<dyn std::error::Error>> {
+    let mut system = kairos_conflux::ConfluxSystem::new();
+    system.install_account_connection("account", instance.socket(socket_name)?, view_root)?;
+    system
+        .account_client("account")
+        .ok_or_else(|| "managed Account client is missing: account".into())
+}
+
 async fn run_runtime_control(
     args: &Cli,
     workspace: &Workspace,
@@ -1406,20 +1410,27 @@ async fn run_runtime_control(
     let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
     let socket_name =
         resolve_runtime_account_resource(&instance, account_id, args.socket_name.as_deref())?;
-    let (path, segments) = match command {
-        Command::Refresh { segments } => ("/v1/refresh", segments),
-        Command::Reconcile { segments } => ("/v1/reconcile", segments),
+    let segments = match command {
+        Command::Refresh { segments } | Command::Reconcile { segments } => segments,
         _ => return Err("command is not an Account runtime control".into()),
     };
-    let body = serde_json::to_vec(&serde_json::json!({
-        "account_id": account_id,
-        "segments": segments,
-    }))?;
-    Ok(
-        kairos_workspace::control::RestControlClient::new(instance.socket(&socket_name)?)
-            .request_json("POST", path, Some(&body))
-            .await?,
-    )
+    let client = account_client_from_instance(&instance, &socket_name, None)?;
+    let segments = segments
+        .iter()
+        .cloned()
+        .map(kairos_primitives::account::SegmentKey::new)
+        .collect::<Result<Vec<_>, _>>()?;
+    let request = AccountSegmentsRequest { segments };
+    let response = match command {
+        Command::Refresh { .. } => {
+            AccountControlRpcClient::refresh(&client.control(), request).await?
+        },
+        Command::Reconcile { .. } => {
+            AccountControlRpcClient::reconcile(&client.control(), request).await?
+        },
+        _ => unreachable!("runtime control command already matched"),
+    };
+    Ok(serde_json::to_value(response)?)
 }
 
 fn runtime_account_diagnostic(
@@ -1500,16 +1511,12 @@ fn read_mmap_query(
         .as_deref()
         .ok_or("--launch-id is required for an Account mmap query")?;
     let instance = workspace.instance(&args.launch_mode, launch_id, &args.instance_id)?;
+    let client = account_client_from_instance(&instance, "account", Some(instance.snapshot(&[])?))?;
     if let Command::OpenOrders { symbol, limit } = command {
-        let view_root = instance.snapshot(&[])?;
-        let key = kairos_account_contract::AccountViewKey::new(
-            format!("account:{account_id}"),
-            account_id,
-            kairos_account_contract::AccountViewKind::ObservedOrders,
-        )?;
-        let frame =
-            kairos_account_contract::view::AccountViewReader::open(view_root, key)?.read()?;
-        let view = frame.observed_orders()?;
+        let frame = client
+            .observed_orders(format!("account:{account_id}"), account_id)?
+            .read()?;
+        let view = frame.view()?;
         let metadata = view.metadata();
         if view.account_id() != account_id
             || metadata.completeness() != ViewCompleteness::COMPLETE
@@ -1558,14 +1565,10 @@ fn read_mmap_query(
         }));
     }
 
-    let view_root = instance.snapshot(&[])?;
-    let key = kairos_account_contract::AccountViewKey::new(
-        format!("account:{account_id}"),
-        account_id,
-        kairos_account_contract::AccountViewKind::Current,
-    )?;
-    let frame = kairos_account_contract::view::AccountViewReader::open(view_root, key)?.read()?;
-    let view = frame.account_current()?;
+    let frame = client
+        .account_current(format!("account:{account_id}"), account_id)?
+        .read()?;
+    let view = frame.view()?;
     let metadata = view.metadata();
     if view.account_id() != account_id
         || metadata.completeness() != ViewCompleteness::COMPLETE

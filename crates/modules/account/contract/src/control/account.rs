@@ -1,22 +1,10 @@
-//! Synchronous Account control/query client.
-//!
-//! This is the JSON control plane only. Account views and events use the v2
-//! FlatBuffers data plane exposed by [`crate::view`] and [`crate::event`].
-
-use std::path::Path;
-use std::time::Duration;
-
 use kairos_primitives::account::SegmentKey;
 use kairos_primitives::decimal::{Price, Quantity, SignedQuantity};
 use kairos_primitives::execution::{FillId, OrderId, OrderSide};
 use kairos_primitives::reference::{Currency, InstrumentId};
 use kairos_primitives::runtime::IdempotencyKey;
 use kairos_primitives::time::{Generation, Sequence, UnixNanos};
-use reqwest::blocking::Client;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-
-use crate::{ContractError, ContractResult};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,104 +98,6 @@ pub struct MarkToMarketRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AdvanceAccountTimeRequest {
     pub event_time_unix_nanos: UnixNanos,
-}
-
-pub struct AccountContractClient {
-    client: Client,
-}
-
-impl AccountContractClient {
-    pub fn connect(socket: impl AsRef<Path>) -> ContractResult<Self> {
-        let client = Client::builder()
-            .unix_socket(socket.as_ref().to_path_buf())
-            .timeout(Duration::from_secs(3))
-            .build()
-            .map_err(|error| ContractError::Transport(format!("build Account client: {error}")))?;
-        Ok(Self { client })
-    }
-
-    pub fn health(&self) -> ContractResult<Health> {
-        self.get("/v1/health")
-    }
-
-    pub fn apply_simulated_settlement(
-        &self,
-        settlement: &SimulatedSettlement,
-    ) -> ContractResult<()> {
-        self.post("/v1/simulation/settlements", settlement)
-    }
-
-    pub fn apply_simulated_capital_mutation(
-        &self,
-        mutation: &SimulatedCapitalMutation,
-    ) -> ContractResult<()> {
-        self.post("/v1/simulation/capital-mutations", mutation)
-    }
-
-    pub fn simulated_capital_mutation_status(
-        &self,
-        query: &SimulatedCapitalMutationQuery,
-    ) -> ContractResult<SimulatedCapitalMutationStatusResponse> {
-        self.post_response("/v1/simulation/capital-mutations/status", query)
-    }
-
-    pub fn mark_to_market(&self, request: &MarkToMarketRequest) -> ContractResult<()> {
-        self.post("/v1/mark-to-market", request)
-    }
-
-    pub fn advance_time(&self, event_time_unix_nanos: UnixNanos) -> ContractResult<()> {
-        self.post(
-            "/v1/time/advance",
-            &AdvanceAccountTimeRequest {
-                event_time_unix_nanos,
-            },
-        )
-    }
-
-    fn get<T: DeserializeOwned>(&self, path: &str) -> ContractResult<T> {
-        let response = self
-            .client
-            .get(format!("http://localhost{path}"))
-            .send()
-            .map_err(|error| ContractError::Transport(format!("GET {path}: {error}")))?;
-        decode_response(path, response)
-    }
-
-    fn post<T: Serialize>(&self, path: &str, body: &T) -> ContractResult<()> {
-        self.post_response::<T, serde_json::Value>(path, body)
-            .map(|_| ())
-    }
-
-    fn post_response<T: Serialize, R: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &T,
-    ) -> ContractResult<R> {
-        let response = self
-            .client
-            .post(format!("http://localhost{path}"))
-            .json(body)
-            .send()
-            .map_err(|error| ContractError::Transport(format!("POST {path}: {error}")))?;
-        decode_response(path, response)
-    }
-}
-
-fn decode_response<T: DeserializeOwned>(
-    path: &str,
-    response: reqwest::blocking::Response,
-) -> ContractResult<T> {
-    let status = response.status();
-    let value: serde_json::Value = response
-        .json()
-        .map_err(|error| ContractError::Transport(format!("decode {path}: {error}")))?;
-    if !status.is_success() {
-        return Err(ContractError::Transport(format!(
-            "{path} failed with HTTP {status}: {value}"
-        )));
-    }
-    serde_json::from_value(value)
-        .map_err(|error| ContractError::Invalid(format!("decode {path} response: {error}")))
 }
 
 #[cfg(test)]

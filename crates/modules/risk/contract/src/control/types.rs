@@ -4,6 +4,18 @@ use kairos_primitives::risk::{DecisionId, PolicyId, ReservationId};
 use kairos_primitives::runtime::{ActorId, IdempotencyKey, RequestId, StrategyId};
 use kairos_primitives::time::{BasisPoints, DurationNanos, Generation, Sequence, UnixNanos};
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Health {
+    pub status: String,
+    pub generation: Generation,
+    pub event_sequence: Sequence,
+    pub policy_version: Generation,
+    pub reservation_count: u64,
+    #[serde(default)]
+    pub open_circuit_count: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RiskControlResponse {
     pub status: Option<String>,
@@ -263,43 +275,6 @@ pub struct AdvanceRiskTimeResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RiskCommandStatus {
     pub status: String,
-}
-
-/// The closed REST operation set owned by the Risk process Contract.
-///
-/// HTTP method/path selection and JSON framing are transport concerns. Once a
-/// request reaches Conflux, the Actor receives one of these typed operations.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RiskRestRequest {
-    Health,
-    PublishPolicy(PublishPolicyRequest),
-    AuthorizeAndReserve(AuthorizeRequest),
-    PreTradeCheck(AuthorizeRequest),
-    PostTradeCheck(AuthorizeRequest),
-    OpenCircuit(OpenCircuitRequest),
-    CloseCircuit(CloseCircuitRequest),
-    ResizeReservation(ResizeReservationRequest),
-    ReleaseReservation(ReleaseReservationRequest),
-    ConsumeReservation(ConsumeReservationRequest),
-    AdvanceTime(AdvanceRiskTimeRequest),
-}
-
-/// Response pair for [`RiskRestRequest`]. Each variant preserves the operation
-/// identity so the Contract host cannot accidentally return one operation's
-/// payload for another request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RiskRestResponse {
-    Health(Result<crate::Health, RiskControlError>),
-    PublishPolicy(Result<RiskCommandStatus, RiskControlError>),
-    AuthorizeAndReserve(Result<RiskDecision, RiskControlError>),
-    PreTradeCheck(Result<RiskDecision, RiskControlError>),
-    PostTradeCheck(Result<RiskDecision, RiskControlError>),
-    OpenCircuit(Result<CircuitState, RiskControlError>),
-    CloseCircuit(Result<CircuitState, RiskControlError>),
-    ResizeReservation(Result<Reservation, RiskControlError>),
-    ReleaseReservation(Result<Reservation, RiskControlError>),
-    ConsumeReservation(Result<Reservation, RiskControlError>),
-    AdvanceTime(Result<AdvanceRiskTimeResponse, RiskControlError>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

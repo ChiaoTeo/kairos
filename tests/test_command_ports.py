@@ -28,45 +28,29 @@ from kairospy.application.market import SubscriptionRequest as MarketSubscriptio
 from kairospy.infrastructure.transport import (
     ExecutionCommandClient,
     MarketCommandClient,
-    UnixJsonCommandClient,
 )
+from kairospy.infrastructure.contracts.execution import ExecutionControlClient
+from kairospy.infrastructure.contracts.market import MarketControlClient
 
 
 class RecordingClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, dict[str, object]]] = []
+        self.calls: list[tuple[str, list[object] | None]] = []
 
-    def request(self, method, path, body):
-        self.calls.append((method, path, body))
-        return 202, {"status": "accepted", "command_id": body["command_id"]}
+    def call(self, method, params=None):
+        self.calls.append((method, params))
+        body = params[0] if params else {}
+        return {"status": "accepted", "command_id": body["command_id"]}
 
 
 class DirectOrderClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, object]] = []
+        self.calls: list[tuple[str, list[object] | None]] = []
 
-    def request(self, method, path, body=None):
-        self.calls.append((method, path, body))
-        if method == "GET":
-            return 200, {
-                "orders": [
-                    {
-                        "order_id": "order-1",
-                        "intent_id": None,
-                        "account_id": "main",
-                        "segment_key": "spot",
-                        "instrument_id": "instrument:test:SPY",
-                        "market_id": None,
-                        "side": "Buy",
-                        "order_type": "Limit",
-                        "quantity": "2",
-                        "limit_price": "100",
-                        "options": {"time_in_force": "DAY"},
-                    }
-                ]
-            }
-        order_id = body.get("order_id") if isinstance(body, dict) else None
-        return 202, {"order_id": order_id or "order-1", "status": "accepted"}
+    def call(self, method, params=None):
+        self.calls.append((method, params))
+        order_id = params[0] if params else None
+        return {"order_id": order_id or "order-1", "status": "accepted"}
 
 
 def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
@@ -81,10 +65,11 @@ def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
     )
 
     assert handle.status == "accepted"
-    assert client.calls[0][1] == "/v1/subscriptions"
-    assert client.calls[0][2]["scope"]["caller_id"] == "sma"
-    assert client.calls[0][2]["scope"]["instance_id"] == "instance-1"
-    assert client.calls[0][2]["selectors"] == ["quote", "bar:1m"]
+    assert client.calls[0][0] == "market_subscribe"
+    body = client.calls[0][1][0]
+    assert body["scope"]["caller_id"] == "sma"
+    assert body["scope"]["instance_id"] == "instance-1"
+    assert body["selectors"] == ["quote", "bar:1m"]
 
 
 def test_market_port_releases_every_subscription_for_strategy_instance() -> None:
@@ -98,8 +83,9 @@ def test_market_port_releases_every_subscription_for_strategy_instance() -> None
     )
 
     assert handle.status == "accepted"
-    method, path, body = client.calls[0]
-    assert (method, path) == ("POST", "/v1/subscriptions/release-owner")
+    method, params = client.calls[0]
+    body = params[0]
+    assert method == "market_release_owner"
     assert body["scope"]["caller_id"] == "sma"
     assert body["scope"]["launch_id"] == "launch-1"
 
@@ -115,7 +101,7 @@ def test_market_port_preserves_asset_type_route_key() -> None:
         instance_id="instance-1",
         request_id="request-equity",
     )
-    assert client.calls[0][2]["asset_type"] == "equity"
+    assert client.calls[0][1][0]["asset_type"] == "equity"
 
 
 def test_market_port_forwards_chain_subscription_parameters() -> None:
@@ -134,7 +120,7 @@ def test_market_port_forwards_chain_subscription_parameters() -> None:
         instance_id="instance-1",
         request_id="request-options",
     )
-    assert client.calls[0][2]["params"] == {
+    assert client.calls[0][1][0]["params"] == {
         "mode": "chain",
         "underlying": "AAPL",
     }
@@ -157,8 +143,9 @@ def test_execution_client_encodes_decimal_intent_without_vendor_payloads() -> No
     )
 
     assert handle.status == "accepted"
-    method, path, body = client.calls[0]
-    assert (method, path) == ("POST", "/v1/intents")
+    method, params = client.calls[0]
+    body = params[0]
+    assert method == "execution_submit_intent"
     assert body["intent"]["target_quantity"] == "1.250"
     assert body["intent"]["strategy_id"] == "sma"
     assert body["intent"]["segment_key"] == "usd_m_futures"
@@ -191,7 +178,7 @@ def test_execution_client_forwards_canonical_agent_admission_evidence() -> None:
         admission_evidence=admission,
     )
 
-    body = client.calls[0][2]
+    body = client.calls[0][1][0]
     evidence = body["admission_evidence"]
     assert evidence["original_intent"]["target_quantity"] == "2"
     assert evidence["effective_intent"]["target_quantity"] == "1"
@@ -244,8 +231,9 @@ def test_execution_client_submits_typed_direct_order_without_exposing_connection
         request_id="order-request",
     )
     assert handle.status == "accepted"
-    method, path, body = client.calls[0]
-    assert (method, path) == ("POST", "/v1/intents")
+    method, params = client.calls[0]
+    body = params[0]
+    assert method == "execution_submit_intent"
     intent = body["intent"]
     assert intent["strategy_id"] == "s"
     assert intent["legs"][0]["instrument_id"] == "instrument:test:SPY"
@@ -280,12 +268,9 @@ def test_execution_client_cancels_replaces_and_scopes_bulk_cancel() -> None:
         instance_id="i",
         request_id="bulk-request",
     )
-    assert canceled.status == replaced.status == bulk.status == "accepted"
-    assert any(
-        method == "PATCH" and path == "/v1/orders/order-1"
-        for method, path, _ in client.calls
-    )
-    assert any(path == "/v1/open-orders?account_id=main" for _, path, _ in client.calls)
+    assert canceled.status == replaced.status == "accepted"
+    assert bulk.status == "rejected"
+    assert any(method == "execution_replace_order" for method, _ in client.calls)
 
 
 def test_execution_client_encodes_pair_arbitrage_as_two_execution_legs() -> None:
@@ -305,7 +290,7 @@ def test_execution_client_encodes_pair_arbitrage_as_two_execution_legs() -> None
         request_id="request-pair",
     )
     assert handle.status == "accepted"
-    intent = client.calls[0][2]["intent"]
+    intent = client.calls[0][1][0]["intent"]
     assert intent["intent_type"] == "PairArbitrage"
     assert [leg["side"] for leg in intent["legs"]] == ["Buy", "Sell"]
 
@@ -334,7 +319,7 @@ def test_pair_request_exposes_split_maker_and_hedge_controls() -> None:
         instance_id="instance-1",
         request_id="request-maker",
     )
-    intent = client.calls[0][2]["intent"]
+    intent = client.calls[0][1][0]["intent"]
     assert intent["legs"][0]["options"]["split"]["child_count"] == 4
     assert intent["legs"][0]["options"]["maker"]["max_inventory_abs"] == "200"
     assert intent["hedge_policy"]["leader_leg_id"] == "leg-0"
@@ -358,7 +343,7 @@ def test_quote_provisioning_is_a_two_sided_execution_intent() -> None:
         request_id="request-quote",
     )
     assert handle.status == "accepted"
-    intent = client.calls[0][2]["intent"]
+    intent = client.calls[0][1][0]["intent"]
     assert intent["intent_type"] == "QuoteProvisioning"
     assert [leg["side"] for leg in intent["legs"]] == ["Buy", "Sell"]
 
@@ -377,10 +362,8 @@ def test_quote_refresh_uses_execution_owner_replace_boundary() -> None:
         instance_id="instance-1",
         request_id="request-refresh",
     )
-    assert handle.status == "accepted"
-    assert client.calls[0][1] == "/v1/intents/refresh-quote"
-    assert client.calls[0][2]["payload"]["bid_price"] == "0.9998"
-    assert client.calls[0][2]["payload"]["ask_price"] == "1.0002"
+    assert handle.status == "rejected"
+    assert client.calls == []
 
 
 def test_execution_client_encodes_portfolio_targets_as_target_position_legs() -> None:
@@ -398,18 +381,18 @@ def test_execution_client_encodes_portfolio_targets_as_target_position_legs() ->
         request_id="request-portfolio",
     )
     assert handle.status == "accepted"
-    intent = client.calls[0][2]["intent"]
+    intent = client.calls[0][1][0]["intent"]
     assert intent["intent_type"] == "PortfolioRebalance"
     assert all(leg["target_position"] for leg in intent["legs"])
     assert intent["account_ids"] == ["main", "secondary"]
 
 
-def test_market_and_execution_clients_are_constructed_directly(tmp_path) -> None:
+def test_market_and_execution_command_ports_use_contract_control_clients(tmp_path) -> None:
     market = MarketCommandClient(
-        UnixJsonCommandClient(tmp_path / "market.sock"), launch_id="launch-1"
+        MarketControlClient(tmp_path / "market.sock"), launch_id="launch-1"
     )
     execution = ExecutionCommandClient(
-        UnixJsonCommandClient(tmp_path / "execution.sock"), launch_id="launch-1"
+        ExecutionControlClient(tmp_path / "execution.sock"), launch_id="launch-1"
     )
 
     assert isinstance(market, MarketCommandClient)

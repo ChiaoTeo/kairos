@@ -1,15 +1,13 @@
 //! Composition shared by the one-shot CLI and the long-running server.
 
 mod config;
-mod publication;
 
 use std::path::Path;
 
 pub use config::{
     ReferenceConfig, ReferenceParticipantConfig, ReferenceProductConfig, ReferenceProviderConfig,
 };
-use kairos_conflux::{BinanceCredential, load_workspace_credential};
-pub use publication::ReferenceEventPublisherRuntime;
+use kairos_conflux::{AeronOutputDeclaration, BinanceCredential, load_workspace_credential};
 
 use crate::ReferenceApplication;
 use crate::domain::ReferenceResult;
@@ -41,7 +39,6 @@ pub struct ReferenceCompositionConfig {
 /// catalog inspection where no media driver is required.
 pub struct ReferenceComposition {
     pub application: ComposedReferenceApplication,
-    pub event_writer: Option<ReferenceEventWriter>,
     system: kairos_conflux::ConfluxSystem,
 }
 
@@ -52,14 +49,8 @@ impl ReferenceComposition {
             .await
     }
 
-    pub fn into_conflux(
-        self,
-    ) -> (
-        ReferenceApplication,
-        kairos_conflux::ConfluxSystem,
-        Option<ReferenceEventWriter>,
-    ) {
-        (self.application, self.system, self.event_writer)
+    pub fn into_conflux(self) -> (ReferenceApplication, kairos_conflux::ConfluxSystem) {
+        (self.application, self.system)
     }
 
     pub fn split_mut(
@@ -67,27 +58,12 @@ impl ReferenceComposition {
     ) -> (
         &mut ComposedReferenceApplication,
         &mut kairos_conflux::ConfluxSystem,
-        Option<&mut ReferenceEventWriter>,
     ) {
-        (
-            &mut self.application,
-            &mut self.system,
-            self.event_writer.as_mut(),
-        )
+        (&mut self.application, &mut self.system)
     }
 }
 
 pub type ComposedReferenceApplication = ReferenceApplication;
-
-pub struct ReferenceEventWriter {
-    output_key: String,
-}
-
-pub struct ReferenceEventWriterConfig {
-    pub aeron_dir: Option<String>,
-    pub aeron_channel: String,
-    pub reference_changes_stream: i32,
-}
 
 /// Canonical provider endpoint defaults shared by the one-shot CLI and the
 /// long-running Reference server.
@@ -435,46 +411,28 @@ fn product_enabled(reference: Option<&ReferenceConfig>, provider: &str, product:
         .unwrap_or(false)
 }
 
-impl ReferenceEventWriter {
-    pub fn declare(
-        config: &ReferenceEventWriterConfig,
-        system: &mut kairos_conflux::ConfluxSystem,
-    ) -> ReferenceResult<Self> {
-        let endpoint = kairos_reference_contract::AeronEndpoint::from_parts(
-            config.aeron_dir.as_deref(),
-            config.aeron_channel.clone(),
-            config.reference_changes_stream,
+pub fn declare_reference_changes_output(
+    config: &ReferenceCompositionConfig,
+    system: &mut kairos_conflux::ConfluxSystem,
+) -> ReferenceResult<()> {
+    let endpoint = kairos_reference_contract::AeronEndpoint::from_parts(
+        config.aeron_dir.as_deref(),
+        config.aeron_channel.clone(),
+        config.reference_changes_stream,
+    )
+    .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
+    system
+        .outputs()
+        .aeron
+        .declare(
+            "reference-changes".to_owned(),
+            AeronOutputDeclaration {
+                endpoint,
+                revision: 1,
+            },
         )
-        .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
-        let output_key = "reference-changes".to_owned();
-        system
-            .outputs()
-            .aeron
-            .declare(
-                output_key.clone(),
-                kairos_conflux::AeronOutputDeclaration {
-                    endpoint,
-                    revision: 1,
-                },
-            )
-            .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
-        Ok(Self { output_key })
-    }
-
-    pub fn publish(
-        &self,
-        system: &mut kairos_conflux::ConfluxSystem,
-        publications: &[crate::ReferencePublication],
-    ) -> ReferenceResult<()> {
-        for publication in publications {
-            system
-                .outputs()
-                .aeron
-                .publish(&self.output_key, publication.payload())
-                .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))?;
-        }
-        Ok(())
-    }
+        .map(|_| ())
+        .map_err(|error| crate::domain::ReferenceError::Publication(error.to_string()))
 }
 
 pub async fn build_application(
@@ -491,21 +449,11 @@ pub async fn build_application(
     let mut system = kairos_conflux::ConfluxSystem::new();
     source_plan.install(&mut system.connections())?;
     let store = SqlxCatalogStore::open(&config.database).await?;
-    let event_writer = if publish {
-        Some(ReferenceEventWriter::declare(
-            &ReferenceEventWriterConfig {
-                aeron_dir: config.aeron_dir.clone(),
-                aeron_channel: config.aeron_channel.clone(),
-                reference_changes_stream: config.reference_changes_stream,
-            },
-            &mut system,
-        )?)
-    } else {
-        None
-    };
+    if publish {
+        declare_reference_changes_output(config, &mut system)?;
+    }
     Ok(ReferenceComposition {
         application: ReferenceApplication::new("reference-actor", source_plan, store).await?,
-        event_writer,
         system,
     })
 }

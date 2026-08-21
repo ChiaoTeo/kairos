@@ -1,61 +1,48 @@
-use kairos_primitives::integration::ProviderId;
-use kairos_primitives::reference::InstrumentId;
-use kairos_protocol::control::jsonrpc::{RpcResult, rpc};
+use kairos_protocol::control::jsonrpc::{RpcResult, conflux_rpc};
 
-use super::{
-    ReferenceHealthResponse, ReferenceMutationResponse, ReferenceOptionCoverageResponse,
-    ReferencePublishResponse, ReferenceRefreshResponse, ReferenceSourceStatusResponse,
-    UpsertAssetRequest, UpsertInstrumentRequest, UpsertListingRequest,
-};
-
-#[rpc(client, server, namespace = "reference")]
+#[conflux_rpc(namespace = "reference")]
 pub trait ReferenceControlRpc {
-    #[method(name = "health")]
-    async fn health(&self) -> RpcResult<ReferenceHealthResponse>;
+    async fn health(&self) -> RpcResult<kairos_reference_contract::ReferenceHealthResponse>;
 
-    #[method(name = "refresh")]
-    async fn refresh(&self, source_id: Option<ProviderId>) -> RpcResult<ReferenceRefreshResponse>;
+    async fn refresh(
+        &self,
+        source_id: Option<kairos_primitives::integration::ProviderId>,
+    ) -> RpcResult<kairos_reference_contract::ReferenceRefreshResponse>;
 
-    #[method(name = "publish")]
-    async fn publish(&self) -> RpcResult<ReferencePublishResponse>;
+    async fn publish(&self) -> RpcResult<kairos_reference_contract::ReferencePublishResponse>;
 
-    #[method(name = "pause_source")]
-    async fn pause_source(&self, source_id: ProviderId)
-    -> RpcResult<ReferenceSourceStatusResponse>;
+    async fn pause_source(
+        &self,
+        source_id: kairos_primitives::integration::ProviderId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
-    #[method(name = "resume_source")]
     async fn resume_source(
         &self,
-        source_id: ProviderId,
-    ) -> RpcResult<ReferenceSourceStatusResponse>;
+        source_id: kairos_primitives::integration::ProviderId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceSourceStatusResponse>;
 
-    #[method(name = "add_option_coverage")]
     async fn add_option_coverage(
         &self,
-        underlying: InstrumentId,
-    ) -> RpcResult<ReferenceOptionCoverageResponse>;
+        underlying: kairos_primitives::reference::InstrumentId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceOptionCoverageResponse>;
 
-    #[method(name = "remove_option_coverage")]
     async fn remove_option_coverage(
         &self,
-        underlying: InstrumentId,
-    ) -> RpcResult<ReferenceOptionCoverageResponse>;
+        underlying: kairos_primitives::reference::InstrumentId,
+    ) -> RpcResult<kairos_reference_contract::ReferenceOptionCoverageResponse>;
 
-    #[method(name = "upsert_asset")]
     async fn upsert_asset(
         &self,
-        request: UpsertAssetRequest,
-    ) -> RpcResult<ReferenceMutationResponse>;
+        request: kairos_reference_contract::UpsertAssetRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceMutationResponse>;
 
-    #[method(name = "upsert_instrument")]
     async fn upsert_instrument(
         &self,
-        request: UpsertInstrumentRequest,
-    ) -> RpcResult<ReferenceMutationResponse>;
+        request: kairos_reference_contract::UpsertInstrumentRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceMutationResponse>;
 
-    #[method(name = "upsert_listing")]
     async fn upsert_listing(
         &self,
-        request: UpsertListingRequest,
-    ) -> RpcResult<ReferenceMutationResponse>;
+        request: kairos_reference_contract::UpsertListingRequest,
+    ) -> RpcResult<kairos_reference_contract::ReferenceMutationResponse>;
 }

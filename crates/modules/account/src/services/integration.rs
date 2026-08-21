@@ -5,7 +5,6 @@
 //! with another public protocol hierarchy.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use kairos_conflux::{
@@ -26,7 +25,7 @@ use crate::domain::{
 
 #[derive(Clone, Default)]
 pub(crate) struct AccountInstrumentResolver {
-    client: Option<Arc<kairos_reference_contract::ReferenceClient>>,
+    snapshot: Arc<Mutex<Option<kairos_reference_contract::ReferenceProjectionSnapshot>>>,
     cache: Arc<
         Mutex<BTreeMap<String, (InstrumentId, Option<kairos_primitives::reference::MarketId>)>>,
     >,
@@ -38,28 +37,27 @@ pub(crate) struct AccountInstrumentResolver {
 }
 
 impl AccountInstrumentResolver {
-    pub(crate) fn from_reference_database(
-        database: impl AsRef<Path>,
-        actor_id: &str,
-    ) -> Result<Self, String> {
-        Ok(Self {
-            client: Some(Arc::new(
-                kairos_reference_contract::ReferenceClient::connect(
-                    kairos_reference_contract::ReferenceEndpoint {
-                        database: database.as_ref().to_path_buf(),
-                        actor_id: kairos_primitives::runtime::ActorId::new(actor_id)
-                            .map_err(|error| error.to_string())?,
-                        events: kairos_conflux::AeronEndpoint::from_parts(
-                            None,
-                            kairos_conflux::DEFAULT_AERON_CHANNEL,
-                            kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
-                        )
-                        .map_err(|error| error.to_string())?,
-                    },
-                ),
-            )),
-            ..Default::default()
-        })
+    pub(crate) fn update_reference_snapshot(
+        &self,
+        snapshot: kairos_reference_contract::ReferenceProjectionSnapshot,
+    ) -> Result<(), String> {
+        let generation = snapshot.generation;
+        *self
+            .snapshot
+            .lock()
+            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())? = Some(snapshot);
+        let mut cached_generation = self
+            .cache_generation
+            .lock()
+            .map_err(|_| "Reference identity cache generation lock poisoned".to_string())?;
+        if *cached_generation != Some(generation) {
+            self.cache
+                .lock()
+                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
+                .clear();
+            *cached_generation = Some(generation);
+        }
+        Ok(())
     }
 
     fn resolve(
@@ -77,35 +75,23 @@ impl AccountInstrumentResolver {
                 .to_ascii_lowercase(),
             provider.source_symbol.as_str().to_ascii_uppercase(),
         );
-        if let Some(client) = &self.client {
-            let generation = client
-                .watermark()
-                .map_err(|error| error.to_string())?
-                .generation;
-            let mut cached_generation = self
-                .cache_generation
-                .lock()
-                .map_err(|_| "Reference identity cache generation lock poisoned".to_string())?;
-            if *cached_generation != Some(generation) {
-                self.cache
-                    .lock()
-                    .map_err(|_| "Reference identity cache lock poisoned".to_string())?
-                    .clear();
-                *cached_generation = Some(generation);
-            }
-            if let Some(value) = self
-                .cache
-                .lock()
-                .map_err(|_| "Reference identity cache lock poisoned".to_string())?
-                .get(&key)
-                .cloned()
-            {
-                return Ok(value);
-            }
+        if let Some(value) = self
+            .cache
+            .lock()
+            .map_err(|_| "Reference identity cache lock poisoned".to_string())?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(value);
         }
 
         let resolved = self.resolve_uncached(provider)?;
-        if self.client.is_some() {
+        if self
+            .snapshot
+            .lock()
+            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())?
+            .is_some()
+        {
             self.cache
                 .lock()
                 .map_err(|_| "Reference identity cache lock poisoned".to_string())?
@@ -173,10 +159,12 @@ impl AccountInstrumentResolver {
         ),
         String,
     > {
-        if let Some(client) = &self.client {
-            let snapshot = client
-                .account_snapshot()
-                .map_err(|error| error.to_string())?;
+        if let Some(snapshot) = self
+            .snapshot
+            .lock()
+            .map_err(|_| "Reference identity snapshot lock poisoned".to_string())?
+            .clone()
+        {
             return Ok((snapshot.markets, snapshot.instruments));
         }
         #[cfg(test)]

@@ -114,9 +114,9 @@ Integration clients or vendor payloads. Cross-process snapshots and events
 use contract-owned FlatBuffers types; JSON is limited to an explicitly
 declared control/configuration boundary.
 
-The Rust runtime is a standard Conflux Actor and Contract host. The Capital
-contract owns the closed `CapitalRestRequest`/`CapitalRestResponse` operation
-set and its HTTP codec; Conflux owns the listener, bounded ingress, readiness,
+The Rust runtime is a standard Conflux Actor and JSON-RPC Contract host. The
+Capital contract owns the closed `CapitalControlRpc` operation set and its typed
+request/response DTOs; Conflux owns the listener, bounded ingress, readiness,
 stop signal, timers, and typed output resources. The Actor handles control,
 periodic Account/Risk fact refresh, automatic plan execution, reconciliation,
 event publication, and snapshot publication on one serialized event loop.
@@ -327,7 +327,7 @@ instance must continue with the same operation and idempotency key.
 A definite pre-delivery expiry or participant rejection records
 `NoCompensationRequired`. A participant-reported terminal failure records
 `HoldAndReview`; Capital does not guess that an inverse movement is safe.
-Operators may invoke `/v1/plans/reconcile` to query an existing fenced
+Operators may invoke `capital_reconcile_capital_plan` to query an existing fenced
 operation, but that command rejects `Prepared` operations and contains no
 amount, route, or idempotency-key override. Open `ReconcileOriginalOperation`
 and `HoldAndReview` decisions are projected as warning or critical Capital

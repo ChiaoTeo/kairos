@@ -6,7 +6,9 @@ use crate::services::risk::SimulatedRiskBehavior;
 /// Concrete readers and workers remain private to the module.
 pub fn configure_execution_dependencies(
     application: &mut crate::application::ExecutionApplication,
+    system: &mut kairos_conflux::ConfluxSystem,
     manifest: impl AsRef<std::path::Path>,
+    reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
     backtest: bool,
     capacity: usize,
 ) -> Result<(), String> {
@@ -16,8 +18,16 @@ pub fn configure_execution_dependencies(
     };
 
     let manifest = manifest.as_ref();
-    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest(manifest)?;
-    let mut order_admission = SocketExecutionOrderAdmission::from_manifest(manifest)?;
+    let mut intent_planner = SocketExecutionIntentPlanner::from_manifest_with_reference_snapshot(
+        system,
+        manifest,
+        reference_snapshot.clone(),
+    )?;
+    let mut order_admission = SocketExecutionOrderAdmission::from_manifest_with_reference_snapshot(
+        system,
+        manifest,
+        reference_snapshot,
+    )?;
     if backtest {
         intent_planner = intent_planner.without_market_snapshot();
         order_admission = order_admission

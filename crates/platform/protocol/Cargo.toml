@@ -8,8 +8,12 @@ description = "Generated FlatBuffers process-boundary contracts for Kairos"
 [dependencies]
 flatbuffers.workspace = true
 jsonrpsee.workspace = true
+kairos-transport.workspace = true
+kairos-workspace.workspace = true
+kairos-protocol-macros.workspace = true
 kairos-primitives.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]

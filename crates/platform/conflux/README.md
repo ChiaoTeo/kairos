@@ -12,12 +12,14 @@ Each process declares:
   connections;
 - one global `ConfluxEvent` handler and an optional local event type.
 
-Conflux currently abstracts only a Contract's closed REST request/response
-pair. View, Aeron, SQLite projections, transport construction, and other
-capabilities remain on each module's concrete Contract implementation.
+Conflux provides typed JSON-RPC control service registration for each
+long-running module contract. View, Aeron, SQLite projections, transport
+construction, and other capabilities remain on each module's concrete
+Contract implementation.
 
-`ConfluxHandle::handle(event)` is the only event entry point. REST events
-return `Some(response)` through the framework; all other events return `None`.
+`ConfluxHandle::handle(event)` is the only event entry point for actor-owned
+work. JSON-RPC methods adapt process control requests into typed application
+calls and keep transport framing out of module actors.
 
 The same concrete client or connection type may have multiple runtime-named
 instances through `ManagedClients<K, C>` and `ManagedConnections<K, C>`.

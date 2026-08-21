@@ -4,9 +4,9 @@ members = [
     "crates/primitives",
     "crates/platform/integration",
     "crates/platform/conflux",
-    # "crates/platform/conflux-macros",
     "crates/platform/network",
     "crates/platform/protocol",
+    "crates/platform/protocol-macros",
     "crates/platform/transport",
     "crates/platform/python-transport",
     "crates/platform/workspace",
@@ -68,6 +68,7 @@ kairos-market-contract = { path = "crates/modules/market/contract" }
 kairos-network = { path = "crates/platform/network" }
 kairos-primitives = { path = "crates/primitives" }
 kairos-protocol = { path = "crates/platform/protocol" }
+kairos-protocol-macros = { path = "crates/platform/protocol-macros" }
 kairos-python-transport = { path = "crates/platform/python-transport" }
 kairos-reference = { path = "crates/modules/reference" }
 kairos-reference-contract = { path = "crates/modules/reference/contract" }
@@ -107,6 +108,8 @@ secrecy = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+proc-macro2 = "1"
+quote = "1"
 sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
@@ -122,8 +125,10 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
     "native-tls",
 ] }
 toml = "0.8"
+tower = "0.5"
 tracing = "0.1"
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
 uuid = { version = "1", features = ["v5"] }
+syn = { version = "2", features = ["full", "parsing", "printing"] }

@@ -3,20 +3,23 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kairos_conflux::{
-    ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract, ExternalParticipantEvent,
-    IntegrationError, MarketQuoteQuery, MarketSubscriptionCommand, MmapOutputDeclaration,
-    RestContract, SnapshotEnvelopeMetadata, SystemEvent,
+    ConfluxActor, ConfluxEvent, ConnectionKey, Context, ExternalParticipantEvent, IntegrationError,
+    MarketQuoteQuery, MarketSubscriptionCommand, MmapOutputDeclaration, SnapshotEnvelopeMetadata,
+    SystemEvent,
 };
 use kairos_market_contract::{
     MarketCommandOutcome, MarketCommandStatus, MarketControlError, MarketDataSource,
     MarketDataSourcesResponse, MarketFeedStatus, MarketHealthResponse, MarketHealthStatus,
-    MarketOperation, MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse,
-    MarketSourceStatus, MarketSubscriptionResponse, MarketSubscriptionStatus, MarketViewPublisher,
-    SubscriptionOwnerKey,
+    MarketOperation, MarketReleaseOwnerPayload, MarketReleaseOwnerResponse, MarketSourceStatus,
+    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionStatus,
+    MarketUnsubscribePayload, MarketViewPublisher, SubscriptionOwnerKey,
 };
 use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 
-use super::{MarketApplication, MarketError, resolve_market, resolve_option_markets};
+use super::{
+    MarketApplication, MarketError, MarketRpcActor, resolve_market, resolve_option_markets,
+};
 use crate::domain::source::{
     SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey, SourceStatus,
 };
@@ -29,6 +32,10 @@ use crate::services::source::{
     with_epoch,
 };
 use crate::{ObservationSelector, SubscriptionId};
+
+const MARKET_BUSINESS_ERROR_CODE: i32 = -31_006;
+
+pub struct MarketLocalEvent(SourceInput);
 
 fn strategy_subscription_owner(
     launch_id: Option<&str>,
@@ -44,10 +51,6 @@ fn strategy_subscription_owner(
     .expect("strategy subscription owner is JSON-compatible")
 }
 
-pub struct MarketRest;
-
-pub struct MarketConfluxEvent(MarketConfluxEventKind);
-
 #[derive(Clone, Copy)]
 pub(crate) enum MarketSourceMode {
     Snapshot(Duration),
@@ -59,10 +62,6 @@ pub(crate) enum MarketSourceMode {
 pub(crate) struct MarketSourcePlan {
     pub(crate) descriptor: SourceDescriptor,
     pub(crate) mode: MarketSourceMode,
-}
-
-enum MarketConfluxEventKind {
-    Source(SourceInput),
 }
 
 pub(crate) struct ReferenceProjectionConfig {
@@ -77,15 +76,6 @@ struct ReferenceProjectionState {
     published_sequence: Option<u64>,
 }
 
-impl RestContract for MarketRest {
-    type Request = MarketRestRequest;
-    type Response = MarketRestResponse;
-}
-
-impl Contract for MarketApplication {
-    type Rest = MarketRest;
-}
-
 pub(crate) struct MarketConfluxState {
     freshness_interval: Duration,
     freshness_max_age: Duration,
@@ -95,7 +85,7 @@ pub(crate) struct MarketConfluxState {
     source_plans: BTreeMap<String, MarketSourcePlan>,
     history: Option<HistoryQueue>,
     reference_projection: Option<ReferenceProjectionState>,
-    command_results: BTreeMap<String, (MarketRestRequest, MarketRestResponse)>,
+    command_results: BTreeMap<String, (serde_json::Value, serde_json::Value)>,
     view_publication: Option<MarketViewPublication>,
 }
 
@@ -171,10 +161,8 @@ impl MarketApplication {
     }
 
     fn spawn_source_inputs(&mut self, context: &mut Context<'_, Self>) {
-        for (source_id, inputs) in self.take_source_inputs() {
-            context.spawn_local_receiver_map(source_id.to_string(), inputs, |input| {
-                MarketConfluxEvent(MarketConfluxEventKind::Source(input))
-            });
+        for (_source_id, inputs) in self.take_source_inputs() {
+            context.spawn_mapped_local_events(inputs, MarketLocalEvent);
         }
     }
 
@@ -299,7 +287,7 @@ fn reference_event_sequence(event: &kairos_reference_contract::ReferenceEvent<'_
 
 impl ConfluxActor for MarketApplication {
     type FatalError = MarketError;
-    type LocalEvent = MarketConfluxEvent;
+    type LocalEvent = MarketLocalEvent;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
         self.activate_managed_sources(context)?;
@@ -315,17 +303,12 @@ impl ConfluxActor for MarketApplication {
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent<MarketLocalEvent>,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<MarketRestResponse>, Self::FatalError> {
-        let response = match event {
-            ConfluxEvent::Rest(request) => {
-                Some(self.handle_rest_idempotent(request, context).await)
-            },
-            ConfluxEvent::Local(MarketConfluxEvent(MarketConfluxEventKind::Source(input))) => {
+    ) -> Result<(), Self::FatalError> {
+        match event {
+            ConfluxEvent::Local(MarketLocalEvent(input)) => {
                 self.apply_source_input(input).await?;
-                self.sync_all_source_subscriptions(context).await?;
-                None
             },
             ConfluxEvent::Reference(reference) => {
                 if self
@@ -342,7 +325,6 @@ impl ConfluxActor for MarketApplication {
                     }
                     self.refresh_reference_universe(context).await?;
                 }
-                None
             },
             ConfluxEvent::System(SystemEvent::Timer {
                 name,
@@ -354,27 +336,23 @@ impl ConfluxActor for MarketApplication {
                     .as_nanos()
                     .min(u128::from(u64::MAX)) as u64;
                 self.evaluate_freshness(fired_at_unix_nanos, max_age);
-                None
             },
             ConfluxEvent::System(SystemEvent::Timer { name, .. })
                 if name.starts_with("market-snapshot:") =>
             {
                 self.poll_managed_snapshot(&name["market-snapshot:".len()..], context)
                     .await?;
-                None
             },
             ConfluxEvent::System(SystemEvent::Timer { name, .. })
                 if name == "reference-universe" =>
             {
                 self.refresh_reference_universe(context).await?;
-                None
             },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 if let Some(source_id) = managed_source_id_from_system_event(&source) {
                     self.mark_managed_source_ready(source_id)?;
                     self.sync_all_source_subscriptions(context).await?;
                 }
-                None
             },
             ConfluxEvent::Integration(integration) => {
                 if let ExternalParticipantEvent::Market(event) = integration.event {
@@ -385,16 +363,14 @@ impl ConfluxActor for MarketApplication {
                     )
                     .await?;
                 }
-                None
             },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 tracing::warn!(component = "market", %source, %error, "Market Conflux source stopped");
-                None
             },
-            _ => None,
+            _ => {},
         };
         self.publish(context).await?;
-        Ok(response)
+        Ok(())
     }
 
     async fn stopping(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
@@ -412,144 +388,249 @@ impl ConfluxActor for MarketApplication {
     }
 }
 
-impl MarketApplication {
-    async fn handle_rest_idempotent(
+impl MarketRpcActor for MarketApplication {
+    async fn health(
         &mut self,
-        request: MarketRestRequest,
+        (): (),
         context: &mut Context<'_, Self>,
-    ) -> MarketRestResponse {
-        const MAX_COMMAND_RESULTS: usize = 4_096;
-        let key = command_key(&request).map(str::to_owned);
-        if let Some(key) = key.as_deref() {
-            if let Some((cached_request, cached_response)) = self.conflux.command_results.get(key) {
-                return if cached_request == &request {
-                    cached_response.clone()
-                } else {
-                    idempotency_conflict(&request)
-                };
-            }
-        }
-        let response = self.handle_rest(request.clone(), context).await;
-        if let Some(key) = key {
-            self.conflux
-                .command_results
-                .insert(key, (request, response.clone()));
-            while self.conflux.command_results.len() > MAX_COMMAND_RESULTS {
-                let Some(oldest) = self.conflux.command_results.keys().next().cloned() else {
-                    break;
-                };
-                self.conflux.command_results.remove(&oldest);
-            }
-        }
-        response
+    ) -> RpcResult<MarketHealthResponse> {
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(self.contract_health())
     }
 
-    async fn handle_rest(
+    async fn data_sources(
         &mut self,
-        request: MarketRestRequest,
+        query: kairos_market_contract::MarketDataSourcesQuery,
         context: &mut Context<'_, Self>,
-    ) -> MarketRestResponse {
-        match request {
-            MarketRestRequest::Health => MarketRestResponse::Health(Ok(self.contract_health())),
-            MarketRestRequest::DataSources(_) => {
-                let view = self.current_view();
-                MarketRestResponse::DataSources(Ok(MarketDataSourcesResponse {
-                    sources: view
-                        .sources
-                        .values()
-                        .map(|source| MarketDataSource {
-                            source_id: source.descriptor.id.clone(),
-                            status: match source.status {
-                                SourceStatus::Starting => MarketSourceStatus::Connecting,
-                                SourceStatus::Ready => MarketSourceStatus::Ready,
-                                SourceStatus::Paused => MarketSourceStatus::Paused,
-                                SourceStatus::Reconnecting => MarketSourceStatus::Reconnecting,
-                                SourceStatus::WarmingUp => MarketSourceStatus::WarmingUp,
-                                SourceStatus::Degraded => MarketSourceStatus::Degraded,
-                                SourceStatus::Stopped => MarketSourceStatus::Disconnected,
-                            },
-                            ready: source.status == crate::SourceStatus::Ready,
-                            stale: source.status == crate::SourceStatus::Degraded,
-                        })
-                        .collect(),
-                }))
-            },
-            MarketRestRequest::Subscribe(command) => {
-                let result = self
-                    .subscribe_contract(command)
-                    .and_then(|response| Ok::<_, MarketError>(response));
-                if result.is_ok() {
-                    if let Err(error) = self.activate_managed_sources(context) {
-                        return MarketRestResponse::Subscribe(Err(control_error(error)));
-                    }
-                    if let Err(error) = self.sync_all_source_subscriptions(context).await {
-                        return MarketRestResponse::Subscribe(Err(control_error(error)));
-                    }
-                    self.spawn_source_inputs(context);
-                }
-                MarketRestResponse::Subscribe(result.map_err(control_error))
-            },
-            MarketRestRequest::Unsubscribe(command) => {
-                let owner = strategy_subscription_owner(
-                    command.launch_id.as_deref(),
-                    &command.instance_id,
-                    &command.strategy_id,
-                );
-                let result = self
-                    .unsubscribe_owned(&command.payload.subscription_id, &owner)
-                    .and_then(|removed| {
-                        removed
-                            .then_some(MarketCommandStatus {
-                                status: MarketCommandOutcome::Applied,
-                            })
-                            .ok_or_else(|| MarketError::NotFound("subscription not found".into()))
-                    });
-                if result.is_ok() {
-                    if let Err(error) = self.sync_all_source_subscriptions(context).await {
-                        return MarketRestResponse::Unsubscribe(Err(control_error(error)));
-                    }
-                }
-                MarketRestResponse::Unsubscribe(result.map_err(control_error))
-            },
-            MarketRestRequest::ReleaseOwner(command) => {
-                let owner = strategy_subscription_owner(
-                    command.launch_id.as_deref(),
-                    &command.instance_id,
-                    &command.strategy_id,
-                );
-                let removed = self.release_subscription_owner(&owner);
-                let result = self.sync_all_source_subscriptions(context).await.map(|()| {
-                    MarketReleaseOwnerResponse {
-                        released_subscriptions: removed,
-                    }
-                });
-                MarketRestResponse::ReleaseOwner(result.map_err(control_error))
-            },
-            MarketRestRequest::Recover => MarketRestResponse::Recover(
-                self.recover_sources()
-                    .await
-                    .map(|()| MarketCommandStatus {
-                        status: MarketCommandOutcome::Accepted,
-                    })
-                    .map_err(control_error),
-            ),
-            MarketRestRequest::PauseReplay => MarketRestResponse::PauseReplay(
-                self.set_replay_paused(true)
-                    .await
-                    .map(|()| MarketCommandStatus {
-                        status: MarketCommandOutcome::Paused,
-                    })
-                    .map_err(control_error),
-            ),
-            MarketRestRequest::ResumeReplay => MarketRestResponse::ResumeReplay(
-                self.set_replay_paused(false)
-                    .await
-                    .map(|()| MarketCommandStatus {
-                        status: MarketCommandOutcome::Running,
-                    })
-                    .map_err(control_error),
-            ),
+    ) -> RpcResult<MarketDataSourcesResponse> {
+        let response = self.data_sources_control(query);
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn subscribe(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketSubscribePayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketSubscriptionResponse> {
+        let response = self.subscribe_control(command, context).await?;
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn unsubscribe(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketUnsubscribePayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketCommandStatus> {
+        let response = self.unsubscribe_control(command, context).await?;
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn release_owner(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketReleaseOwnerPayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketReleaseOwnerResponse> {
+        let response = self.release_owner_control(command, context).await?;
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn recover(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketCommandStatus> {
+        self.recover_sources().await.map_err(rpc_market_error)?;
+        let response = MarketCommandStatus {
+            status: MarketCommandOutcome::Accepted,
+        };
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn pause_replay(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketCommandStatus> {
+        self.set_replay_paused(true)
+            .await
+            .map_err(rpc_market_error)?;
+        let response = MarketCommandStatus {
+            status: MarketCommandOutcome::Paused,
+        };
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+
+    async fn resume_replay(
+        &mut self,
+        (): (),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketCommandStatus> {
+        self.set_replay_paused(false)
+            .await
+            .map_err(rpc_market_error)?;
+        let response = MarketCommandStatus {
+            status: MarketCommandOutcome::Running,
+        };
+        self.publish(context).await.map_err(rpc_market_error)?;
+        Ok(response)
+    }
+}
+
+impl MarketApplication {
+    fn data_sources_control(
+        &self,
+        _query: kairos_market_contract::MarketDataSourcesQuery,
+    ) -> MarketDataSourcesResponse {
+        let view = self.current_view();
+        MarketDataSourcesResponse {
+            sources: view
+                .sources
+                .values()
+                .map(|source| MarketDataSource {
+                    source_id: source.descriptor.id.clone(),
+                    status: match source.status {
+                        SourceStatus::Starting => MarketSourceStatus::Connecting,
+                        SourceStatus::Ready => MarketSourceStatus::Ready,
+                        SourceStatus::Paused => MarketSourceStatus::Paused,
+                        SourceStatus::Reconnecting => MarketSourceStatus::Reconnecting,
+                        SourceStatus::WarmingUp => MarketSourceStatus::WarmingUp,
+                        SourceStatus::Degraded => MarketSourceStatus::Degraded,
+                        SourceStatus::Stopped => MarketSourceStatus::Disconnected,
+                    },
+                    ready: source.status == crate::SourceStatus::Ready,
+                    stale: source.status == crate::SourceStatus::Degraded,
+                })
+                .collect(),
         }
+    }
+
+    fn cached_control_response<T>(
+        &self,
+        key: &str,
+        request: &serde_json::Value,
+    ) -> Option<RpcResult<T>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        self.conflux
+            .command_results
+            .get(key)
+            .map(|(cached_request, cached_response)| {
+                if cached_request == request {
+                    serde_json::from_value(cached_response.clone()).map_err(rpc_invalid)
+                } else {
+                    Err(idempotency_conflict())
+                }
+            })
+    }
+
+    fn remember_control_response<T>(
+        &mut self,
+        key: String,
+        request: serde_json::Value,
+        response: &T,
+    ) -> RpcResult<()>
+    where
+        T: serde::Serialize,
+    {
+        const MAX_COMMAND_RESULTS: usize = 4_096;
+        let response = serde_json::to_value(response).map_err(rpc_invalid)?;
+        self.conflux
+            .command_results
+            .insert(key, (request, response));
+        while self.conflux.command_results.len() > MAX_COMMAND_RESULTS {
+            let Some(oldest) = self.conflux.command_results.keys().next().cloned() else {
+                break;
+            };
+            self.conflux.command_results.remove(&oldest);
+        }
+        Ok(())
+    }
+
+    async fn subscribe_control(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketSubscribePayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketSubscriptionResponse> {
+        let key = command.idempotency_key.to_string();
+        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        if let Some(response) = self.cached_control_response(&key, &request) {
+            return response;
+        }
+        let response = self.subscribe_contract(command).map_err(rpc_market_error)?;
+        self.activate_managed_sources(context)
+            .map_err(rpc_market_error)?;
+        self.sync_all_source_subscriptions(context)
+            .await
+            .map_err(rpc_market_error)?;
+        self.spawn_source_inputs(context);
+        self.remember_control_response(key, request, &response)?;
+        Ok(response)
+    }
+
+    async fn unsubscribe_control(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketUnsubscribePayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketCommandStatus> {
+        let key = command.idempotency_key.to_string();
+        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        if let Some(response) = self.cached_control_response(&key, &request) {
+            return response;
+        }
+        let owner = strategy_subscription_owner(
+            command.launch_id.as_deref(),
+            &command.instance_id,
+            &command.strategy_id,
+        );
+        let removed = self
+            .unsubscribe_owned(&command.payload.subscription_id, &owner)
+            .map_err(rpc_market_error)?;
+        if !removed {
+            return Err(rpc_market_error(MarketError::NotFound(
+                "subscription not found".into(),
+            )));
+        }
+        self.sync_all_source_subscriptions(context)
+            .await
+            .map_err(rpc_market_error)?;
+        let response = MarketCommandStatus {
+            status: MarketCommandOutcome::Applied,
+        };
+        self.remember_control_response(key, request, &response)?;
+        Ok(response)
+    }
+
+    async fn release_owner_control(
+        &mut self,
+        command: kairos_market_contract::MarketCommandEnvelope<MarketReleaseOwnerPayload>,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<MarketReleaseOwnerResponse> {
+        let key = command.idempotency_key.to_string();
+        let request = serde_json::to_value(&command).map_err(rpc_invalid)?;
+        if let Some(response) = self.cached_control_response(&key, &request) {
+            return response;
+        }
+        let owner = strategy_subscription_owner(
+            command.launch_id.as_deref(),
+            &command.instance_id,
+            &command.strategy_id,
+        );
+        let removed = self.release_subscription_owner(&owner);
+        self.sync_all_source_subscriptions(context)
+            .await
+            .map_err(rpc_market_error)?;
+        let response = MarketReleaseOwnerResponse {
+            released_subscriptions: removed,
+        };
+        self.remember_control_response(key, request, &response)?;
+        Ok(response)
     }
 
     fn subscribe_contract(
@@ -784,29 +865,17 @@ impl MarketApplication {
     }
 }
 
-fn command_key(request: &MarketRestRequest) -> Option<&str> {
-    match request {
-        MarketRestRequest::Subscribe(command) => Some(command.idempotency_key.as_str()),
-        MarketRestRequest::Unsubscribe(command) => Some(command.idempotency_key.as_str()),
-        MarketRestRequest::ReleaseOwner(command) => Some(command.idempotency_key.as_str()),
-        _ => None,
-    }
-    .filter(|key| !key.trim().is_empty())
-}
-
-fn idempotency_conflict(request: &MarketRestRequest) -> MarketRestResponse {
-    let error = MarketControlError {
-        code: "command.idempotency_conflict".into(),
-        message: "idempotency key was already used with a different request".into(),
-        retryable: false,
-        details: BTreeMap::new(),
-    };
-    match request {
-        MarketRestRequest::Subscribe(_) => MarketRestResponse::Subscribe(Err(error)),
-        MarketRestRequest::Unsubscribe(_) => MarketRestResponse::Unsubscribe(Err(error)),
-        MarketRestRequest::ReleaseOwner(_) => MarketRestResponse::ReleaseOwner(Err(error)),
-        _ => unreachable!("only commands with idempotency keys can conflict"),
-    }
+fn idempotency_conflict() -> ErrorObjectOwned {
+    business_error(
+        MARKET_BUSINESS_ERROR_CODE,
+        "idempotency key was already used with a different request",
+        MarketControlError {
+            code: "command.idempotency_conflict".into(),
+            message: "idempotency key was already used with a different request".into(),
+            retryable: false,
+            details: BTreeMap::new(),
+        },
+    )
 }
 
 fn snapshot_timer_name(source_id: &SourceId) -> String {
@@ -1159,8 +1228,8 @@ async fn managed_fetch_quotes(
     )))
 }
 
-fn control_error(error: MarketError) -> MarketControlError {
-    MarketControlError {
+fn rpc_market_error(error: MarketError) -> ErrorObjectOwned {
+    let error = MarketControlError {
         code: "market.request_failed".into(),
         message: error.to_string(),
         retryable: matches!(
@@ -1170,7 +1239,21 @@ fn control_error(error: MarketError) -> MarketControlError {
                 | MarketError::Recovery(_)
         ),
         details: Default::default(),
-    }
+    };
+    business_error(MARKET_BUSINESS_ERROR_CODE, error.message.clone(), error)
+}
+
+fn rpc_invalid(error: impl std::fmt::Display) -> ErrorObjectOwned {
+    business_error(
+        MARKET_BUSINESS_ERROR_CODE,
+        error.to_string(),
+        MarketControlError {
+            code: "market.invalid_control_payload".into(),
+            message: error.to_string(),
+            retryable: false,
+            details: Default::default(),
+        },
+    )
 }
 
 fn now_unix_nanos() -> u64 {

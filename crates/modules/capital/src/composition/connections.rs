@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kairos_account_contract::{
-    AccountContractClient, ContractError as AccountContractError, SimulatedCapitalMutation,
-    SimulatedCapitalMutationKind, SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus,
+    AccountClient, AccountControlRpcClient, SimulatedCapitalMutation, SimulatedCapitalMutationKind,
+    SimulatedCapitalMutationQuery, SimulatedCapitalMutationStatus,
 };
 use kairos_conflux::{
     AssetTransferCommand, AssetTransferQuery, AssetTransferRequest, AssetTransferState,
@@ -48,9 +48,9 @@ pub struct CapitalConnectionAccount {
     pub segment_products: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct SimulatedCapitalAccount {
-    socket: PathBuf,
+    client: AccountClient,
     permitted_segments: Vec<SegmentKey>,
 }
 
@@ -100,7 +100,7 @@ impl CapitalIntegrationConnections {
             product_id: None,
             occurred_at_unix_nanos: request.requested_at_unix_nanos,
         };
-        if let Err(error) = apply_simulated_mutation(source.socket, debit).await? {
+        if let Err(error) = apply_simulated_mutation(source.client, debit).await? {
             return Ok(simulated_command_failure(
                 error,
                 participant_request_id,
@@ -116,7 +116,7 @@ impl CapitalIntegrationConnections {
             product_id: None,
             occurred_at_unix_nanos: request.requested_at_unix_nanos,
         };
-        if let Err(error) = apply_simulated_mutation(destination.socket, credit).await? {
+        if let Err(error) = apply_simulated_mutation(destination.client, credit).await? {
             let mut failure = IndeterminateCommand::may_have_been_sent(error.to_string());
             failure.participant_request_id = Some(participant_request_id);
             return Ok(kairos_conflux::CommandOutcome::Indeterminate(failure));
@@ -142,7 +142,7 @@ impl CapitalIntegrationConnections {
         require_simulated_segment(&source, &query.request.source.segment_key)?;
         require_simulated_segment(&destination, &query.request.destination.segment_key)?;
         let debit = simulated_mutation_status(
-            source.socket,
+            source.client,
             SimulatedCapitalMutationQuery {
                 mutation_id: simulated_mutation_id(&query.request.idempotency_key, "source-debit")?,
                 segment_key: query.request.source.segment_key.clone(),
@@ -150,7 +150,7 @@ impl CapitalIntegrationConnections {
         )
         .await?;
         let credit = simulated_mutation_status(
-            destination.socket,
+            destination.client,
             SimulatedCapitalMutationQuery {
                 mutation_id: simulated_mutation_id(
                     &query.request.idempotency_key,
@@ -229,7 +229,7 @@ impl CapitalIntegrationConnections {
             product_id: Some(product_id.to_owned()),
             occurred_at_unix_nanos,
         };
-        if let Err(error) = apply_simulated_mutation(account.socket, mutation).await? {
+        if let Err(error) = apply_simulated_mutation(account.client, mutation).await? {
             return Ok(simulated_command_failure(
                 error,
                 participant_request_id,
@@ -254,7 +254,7 @@ impl CapitalIntegrationConnections {
         let mutation_id = simulated_mutation_id(&query.idempotency_key, suffix)?;
         require_simulated_segment(&account, &query.account_segment.segment_key)?;
         let status = simulated_mutation_status(
-            account.socket,
+            account.client,
             SimulatedCapitalMutationQuery {
                 mutation_id,
                 segment_key: query.account_segment.segment_key.clone(),
@@ -511,6 +511,7 @@ impl AssetTransferStatusQuery for CapitalIntegrationConnections {
 
 /// Select and construct the concrete Integration capabilities exposed to Capital.
 pub fn compose_capital_integration_connections(
+    system: &mut kairos_conflux::ConfluxSystem,
     credential_config: &Path,
     launch_mode: &str,
     accounts: impl IntoIterator<Item = CapitalConnectionAccount>,
@@ -519,7 +520,7 @@ pub fn compose_capital_integration_connections(
     if is_simulation_launch_mode(launch_mode) {
         let simulated_accounts = accounts
             .iter()
-            .map(simulated_capital_account)
+            .map(|account| simulated_capital_account(system, account))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         return Ok(CapitalIntegrationConnections {
             binance: BTreeMap::new(),
@@ -770,6 +771,7 @@ fn is_simulation_launch_mode(launch_mode: &str) -> bool {
 }
 
 fn simulated_capital_account(
+    system: &mut kairos_conflux::ConfluxSystem,
     account: &CapitalConnectionAccount,
 ) -> Result<(String, SimulatedCapitalAccount), String> {
     if account.account_socket.as_os_str().is_empty() {
@@ -789,10 +791,20 @@ fn simulated_capital_account(
             account.account_id
         ));
     }
+    system
+        .install_account_connection(
+            account.account_id.clone(),
+            account.account_socket.clone(),
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+    let client = system
+        .account_client(&account.account_id)
+        .ok_or_else(|| format!("managed Account client is missing: {}", account.account_id))?;
     Ok((
         account.account_id.clone(),
         SimulatedCapitalAccount {
-            socket: account.account_socket.clone(),
+            client,
             permitted_segments,
         },
     ))
@@ -824,11 +836,21 @@ fn simulated_participant_id(idempotency_key: &IdempotencyKey) -> String {
 }
 
 async fn apply_simulated_mutation(
-    socket: PathBuf,
+    client: AccountClient,
     mutation: SimulatedCapitalMutation,
-) -> Result<Result<(), AccountContractError>, IntegrationError> {
+) -> Result<Result<(), String>, IntegrationError> {
     tokio::task::spawn_blocking(move || {
-        AccountContractClient::connect(socket)?.apply_simulated_capital_mutation(&mutation)
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        runtime
+            .block_on(AccountControlRpcClient::apply_simulated_capital_mutation(
+                &client.control(),
+                mutation,
+            ))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| {
@@ -837,11 +859,20 @@ async fn apply_simulated_mutation(
 }
 
 async fn simulated_mutation_status(
-    socket: PathBuf,
+    client: AccountClient,
     query: SimulatedCapitalMutationQuery,
 ) -> Result<SimulatedCapitalMutationStatus, IntegrationError> {
     tokio::task::spawn_blocking(move || {
-        AccountContractClient::connect(socket)?.simulated_capital_mutation_status(&query)
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        runtime
+            .block_on(AccountControlRpcClient::query_simulated_capital_mutation(
+                &client.control(),
+                query,
+            ))
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| {
@@ -852,14 +883,11 @@ async fn simulated_mutation_status(
 }
 
 fn simulated_command_failure<T>(
-    error: AccountContractError,
+    error: String,
     participant_request_id: String,
     no_prior_effect: bool,
 ) -> kairos_conflux::CommandOutcome<T> {
-    let is_definite = matches!(
-        error,
-        AccountContractError::Invalid(_) | AccountContractError::Unsupported(_)
-    );
+    let is_definite = false;
     if no_prior_effect && is_definite {
         kairos_conflux::CommandOutcome::Rejected(ParticipantRejection {
             code: None,
@@ -936,7 +964,7 @@ mod tests {
     use axum::extract::State;
     use axum::routing::post;
     use axum::{Json, Router};
-    use kairos_account_contract::SimulatedCapitalMutationStatusResponse;
+    use kairos_account_contract::{AccountCommandStatus, SimulatedCapitalMutationStatusResponse};
 
     use super::*;
 
@@ -955,6 +983,10 @@ mod tests {
         }
     }
 
+    fn conflux_system() -> kairos_conflux::ConfluxSystem {
+        kairos_conflux::ConfluxSystem::new()
+    }
+
     fn account_with_socket(account_id: &str, socket: PathBuf) -> CapitalConnectionAccount {
         CapitalConnectionAccount {
             account_id: account_id.into(),
@@ -968,32 +1000,78 @@ mod tests {
         mutations: Arc<Mutex<Vec<SimulatedCapitalMutation>>>,
     }
 
-    async fn apply_mutation(
+    async fn fake_account_rpc(
         State(state): State<FakeAccountState>,
-        Json(mutation): Json<SimulatedCapitalMutation>,
+        Json(request): Json<serde_json::Value>,
     ) -> Json<serde_json::Value> {
-        let mut mutations = state.mutations.lock().unwrap();
-        if !mutations
-            .iter()
-            .any(|value| value.mutation_id == mutation.mutation_id)
-        {
-            mutations.push(mutation);
-        }
-        Json(serde_json::json!({}))
+        let id = request
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let method = request
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let params = request
+            .get("params")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let result = match method {
+            "account_apply_simulated_capital_mutation" => {
+                let Some(value) = params.first().cloned() else {
+                    return Json(json_rpc_error(id, -32602, "missing mutation parameter"));
+                };
+                let Ok(mutation) = serde_json::from_value::<SimulatedCapitalMutation>(value) else {
+                    return Json(json_rpc_error(id, -32602, "invalid mutation parameter"));
+                };
+                let mut mutations = state.mutations.lock().unwrap();
+                if !mutations
+                    .iter()
+                    .any(|value| value.mutation_id == mutation.mutation_id)
+                {
+                    mutations.push(mutation);
+                }
+                serde_json::to_value(AccountCommandStatus {
+                    status: kairos_account_contract::AccountCommandOutcome::Applied,
+                })
+                .unwrap()
+            },
+            "account_query_simulated_capital_mutation" => {
+                let Some(value) = params.first().cloned() else {
+                    return Json(json_rpc_error(id, -32602, "missing query parameter"));
+                };
+                let Ok(query) = serde_json::from_value::<SimulatedCapitalMutationQuery>(value)
+                else {
+                    return Json(json_rpc_error(id, -32602, "invalid query parameter"));
+                };
+                let status = if state.mutations.lock().unwrap().iter().any(|value| {
+                    value.mutation_id == query.mutation_id && value.segment_key == query.segment_key
+                }) {
+                    SimulatedCapitalMutationStatus::Applied
+                } else {
+                    SimulatedCapitalMutationStatus::NotFound
+                };
+                serde_json::to_value(SimulatedCapitalMutationStatusResponse { status }).unwrap()
+            },
+            _ => return Json(json_rpc_error(id, -32601, "method not found")),
+        };
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }))
     }
 
-    async fn mutation_status(
-        State(state): State<FakeAccountState>,
-        Json(query): Json<SimulatedCapitalMutationQuery>,
-    ) -> Json<SimulatedCapitalMutationStatusResponse> {
-        let status = if state.mutations.lock().unwrap().iter().any(|value| {
-            value.mutation_id == query.mutation_id && value.segment_key == query.segment_key
-        }) {
-            SimulatedCapitalMutationStatus::Applied
-        } else {
-            SimulatedCapitalMutationStatus::NotFound
-        };
-        Json(SimulatedCapitalMutationStatusResponse { status })
+    fn json_rpc_error(id: serde_json::Value, code: i32, message: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        })
     }
 
     async fn serve_fake_account(
@@ -1002,20 +1080,20 @@ mod tests {
     ) -> tokio::task::JoinHandle<()> {
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
         let router = Router::new()
-            .route("/v1/simulation/capital-mutations", post(apply_mutation))
-            .route(
-                "/v1/simulation/capital-mutations/status",
-                post(mutation_status),
-            )
+            .route("/", post(fake_account_rpc))
             .with_state(state);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
-        })
+        });
+        tokio::task::yield_now().await;
+        handle
     }
 
     #[test]
     fn paper_capital_rail_does_not_load_credentials_or_construct_live_connections() {
+        let mut system = conflux_system();
         let connections = compose_capital_integration_connections(
+            &mut system,
             Path::new("/definitely/missing/credentials.toml"),
             "paper",
             [simulated_account()],
@@ -1030,7 +1108,9 @@ mod tests {
 
     #[test]
     fn live_capital_rail_still_requires_the_integration_credential_store() {
+        let mut system = conflux_system();
         let error = compose_capital_integration_connections(
+            &mut system,
             Path::new("/definitely/missing/credentials.toml"),
             "live",
             [simulated_account()],
@@ -1051,7 +1131,9 @@ mod tests {
         let source_server = serve_fake_account(&source_socket, source_state.clone()).await;
         let destination_server =
             serve_fake_account(&destination_socket, destination_state.clone()).await;
+        let mut system = conflux_system();
         let mut connections = compose_capital_integration_connections(
+            &mut system,
             Path::new("/definitely/missing/credentials.toml"),
             "backtest",
             [

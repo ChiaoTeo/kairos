@@ -3,13 +3,15 @@
 //! The crate owns the control, event, transport and view boundaries. It does
 //! not expose the Risk service actor or its persistence representation.
 
+extern crate self as kairos_risk_contract;
+
+use std::path::Path;
+
 pub mod control;
 pub mod encode;
 pub mod error;
 pub mod event;
-pub mod transport;
 pub mod view;
-use std::path::PathBuf;
 
 pub use control::{
     AdvanceRiskTimeRequest, AdvanceRiskTimeResponse, Allocation, Amount, AuthorizeRequest,
@@ -17,8 +19,8 @@ pub use control::{
     DependencyWatermarks, EnforcementMode, FundingRequirement, Health, LimitView, Metric,
     OpenCircuitRequest, PolicyScope, PublishPolicyRequest, ReasonCode, ReleaseReservationRequest,
     Reservation, ReservationStatus, ResizeReservationRequest, RiskCommandStatus, RiskContext,
-    RiskControlClient, RiskControlError, RiskCurrentView, RiskDecision, RiskEvent, RiskHttpControl,
-    RiskPolicy, RiskRestRequest, RiskRestResponse, TradeRiskProposal,
+    RiskControlError, RiskControlRpcClient, RiskControlRpcServer, RiskCurrentView, RiskDecision,
+    RiskEvent, RiskPolicy, TradeRiskProposal,
 };
 pub use encode::{
     FileRiskSnapshotPublisher, FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter,
@@ -26,38 +28,83 @@ pub use encode::{
 };
 pub use error::{ContractError, ContractResult};
 pub use event::{DecodedRiskEvent, RiskEventFrame, RiskEventStream};
+pub type RiskConnection = kairos_protocol::ContractClient;
+
 pub use kairos_transport::AeronEndpoint;
+use kairos_transport::SnapshotEnvelopeMetadata;
 pub use view::{
-    RiskViewKey, RiskViewKind, RiskViewPublisher, RiskViewReader, ViewFrame, ViewMetadata,
-    risk_view_path,
+    RiskViewKey, RiskViewKind, RiskViewPublisher, ViewFrame, ViewMetadata, risk_view_path,
 };
 
-pub struct RiskEndpoint {
-    pub control_socket: PathBuf,
-    pub view_root: PathBuf,
-    pub events: AeronEndpoint,
-}
+#[derive(Clone)]
 pub struct RiskClient {
-    control: RiskControlClient,
-    view_root: PathBuf,
-    events: AeronEndpoint,
+    inner: kairos_protocol::ContractClient,
 }
 
 impl RiskClient {
-    pub fn connect(endpoint: RiskEndpoint) -> ContractResult<Self> {
-        Ok(Self {
-            control: RiskControlClient::connect(endpoint.control_socket)?,
-            view_root: endpoint.view_root,
-            events: endpoint.events,
-        })
+    pub fn connect(connection: RiskConnection) -> ContractResult<Self> {
+        Ok(Self { inner: connection })
     }
-    pub fn control(&self) -> &RiskControlClient {
-        &self.control
+    pub fn control(&self) -> impl RiskControlRpcClient + '_ {
+        self.inner.control()
     }
     pub fn events(&self, capacity: usize) -> ContractResult<RiskEventStream> {
-        RiskEventStream::connect(&self.events, capacity)
+        RiskEventStream::connect(
+            self.inner
+                .require_aeron_endpoint()
+                .map_err(|error| ContractError::Transport(error.to_string()))?,
+            capacity,
+        )
     }
-    pub fn view(&self, key: RiskViewKey) -> ContractResult<RiskViewReader> {
-        RiskViewReader::open(&self.view_root, key)
+    pub fn latest(&self, actor_id: impl Into<String>) -> ContractResult<RiskLatest> {
+        RiskLatest::open(self.require_view_root()?, RiskViewKey::latest(actor_id))
+    }
+
+    fn require_view_root(&self) -> ContractResult<&Path> {
+        self.inner
+            .require_view_root()
+            .map_err(|error| ContractError::Transport(error.to_string()))
+    }
+}
+
+pub struct RiskLatest {
+    reader: view::RiskViewReader,
+}
+
+impl RiskLatest {
+    fn open(root: &Path, key: RiskViewKey) -> ContractResult<Self> {
+        Ok(Self {
+            reader: view::RiskViewReader::open(root, key)?,
+        })
+    }
+
+    pub fn read(&self) -> ContractResult<RiskLatestSnapshot> {
+        Ok(RiskLatestSnapshot {
+            frame: self.reader.read()?,
+        })
+    }
+
+    pub fn key(&self) -> &RiskViewKey {
+        self.reader.key()
+    }
+}
+
+pub struct RiskLatestSnapshot {
+    frame: ViewFrame,
+}
+
+impl RiskLatestSnapshot {
+    pub fn generation(&self) -> u64 {
+        self.frame.generation()
+    }
+
+    pub fn envelope_metadata(&self) -> SnapshotEnvelopeMetadata {
+        self.frame.envelope_metadata()
+    }
+
+    pub fn view(
+        &self,
+    ) -> ContractResult<kairos_protocol::generated::kairos::risk::v_2::RiskLatestView<'_>> {
+        self.frame.decode()
     }
 }

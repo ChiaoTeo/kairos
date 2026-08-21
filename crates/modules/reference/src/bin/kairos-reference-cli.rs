@@ -13,8 +13,8 @@ use kairos_reference::application::{
     UpsertListingCommand,
 };
 use kairos_reference::composition::{
-    ComposedReferenceApplication, ReferenceCompositionConfig, ReferenceEventWriter,
-    build_application, ensure_database_parent,
+    ComposedReferenceApplication, ReferenceCompositionConfig, build_application,
+    ensure_database_parent,
 };
 use kairos_reference_contract::{
     ReferenceCollection, ReferenceProjectionSnapshot, ReferenceSqliteReader,
@@ -50,8 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut composition = build_application(&config, args.command.requires_publication()).await?;
     composition.activate_sources().await?;
-    let (application, system, writer) = composition.split_mut();
-    let value = execute(application, system, writer, args.command).await?;
+    let (application, system) = composition.split_mut();
+    let value = execute(application, system, args.command).await?;
     println!("{}", render(&value, output));
     Ok(())
 }
@@ -325,7 +325,6 @@ fn matches_field(value: &Value, field: &str, expected: Option<&str>) -> bool {
 async fn execute(
     application: &mut ComposedReferenceApplication,
     system: &mut kairos_conflux::ConfluxSystem,
-    writer: Option<&mut ReferenceEventWriter>,
     command: Command,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let value = match command {
@@ -334,7 +333,7 @@ async fn execute(
             let result = application
                 .refresh_with_connections(&mut system.connections())
                 .await?;
-            publish_pending(writer, application, system).await?;
+            publish_pending(application, system).await?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
@@ -342,14 +341,14 @@ async fn execute(
             })
         },
         Command::Publish => {
-            publish_pending(writer, application, system).await?;
+            publish_pending(application, system).await?;
             json!({ "generation": application.generation() })
         },
         Command::Assets { command } => {
             let publishes = matches!(&command, AssetCommand::Add(_));
             let value = assets(application, command).await?;
             if publishes {
-                publish_pending(writer, application, system).await?;
+                publish_pending(application, system).await?;
             }
             value
         },
@@ -374,7 +373,7 @@ async fn execute(
                         primary_currency_asset_id: None,
                     })
                     .await?;
-                publish_pending(writer, application, system).await?;
+                publish_pending(application, system).await?;
                 json!({"generation": generation})
             },
         },
@@ -391,7 +390,7 @@ async fn execute(
                         effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
                     })
                     .await?;
-                publish_pending(writer, application, system).await?;
+                publish_pending(application, system).await?;
                 json!({"generation": generation})
             },
         },
@@ -403,7 +402,7 @@ async fn execute(
                 let result = application
                     .refresh_with_connections(&mut system.connections())
                     .await?;
-                publish_pending(writer, application, system).await?;
+                publish_pending(application, system).await?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result
                     .events
@@ -445,19 +444,23 @@ async fn execute(
 }
 
 fn publish(
-    writer: Option<&mut ReferenceEventWriter>,
     system: &mut kairos_conflux::ConfluxSystem,
     publications: &[kairos_reference::ReferencePublication],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(writer) = writer else {
+    const OUTPUT: &str = "reference-changes";
+    if !system.outputs().aeron.contains(OUTPUT) {
         return Err("reference publication is not configured for this command".into());
-    };
-    writer.publish(system, publications)?;
+    }
+    for publication in publications {
+        system
+            .outputs()
+            .aeron
+            .publish(OUTPUT, publication.payload())?;
+    }
     Ok(())
 }
 
 async fn publish_pending(
-    mut writer: Option<&mut ReferenceEventWriter>,
     application: &mut ComposedReferenceApplication,
     system: &mut kairos_conflux::ConfluxSystem,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -466,7 +469,7 @@ async fn publish_pending(
         if publications.is_empty() {
             break;
         }
-        publish(writer.as_deref_mut(), system, &publications)?;
+        publish(system, &publications)?;
         let event_ids = publications
             .iter()
             .map(|event| event.event_id().to_owned())

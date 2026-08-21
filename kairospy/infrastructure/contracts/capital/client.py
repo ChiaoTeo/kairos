@@ -11,22 +11,22 @@ from kairospy.application.capital.models import (
     FundingLocation,
     FundingObjective,
 )
-from kairospy.infrastructure.transport.commands import UnixJsonCommandClient
+from kairospy.infrastructure.transport.commands import UnixJsonRpcClient
 
 
 class CapitalContractClient:
     """Low-frequency Strategy/Execution commands for one Capital process."""
 
     def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
-        self._client = UnixJsonCommandClient(socket_path, timeout=timeout)
+        self._client = UnixJsonRpcClient(socket_path, timeout=timeout)
 
     def publish_funding_objective(
         self,
         objective: FundingObjective,
         **scope: object,
     ) -> dict[str, object]:
-        return self._post(
-            "/v1/objectives/publish",
+        return self._call(
+            "capital_publish_funding_objective",
             {
                 **scope,
                 "objective_id": objective.objective_id,
@@ -50,8 +50,8 @@ class CapitalContractClient:
     def cancel_funding_objective(
         self, objective_id: str, *, expected_version: int, **scope: object
     ) -> dict[str, object]:
-        return self._post(
-            "/v1/objectives/cancel",
+        return self._call(
+            "capital_cancel_funding_objective",
             {
                 **scope,
                 "objective_id": objective_id,
@@ -63,8 +63,8 @@ class CapitalContractClient:
     def observe_capital_demand(
         self, demand: CapitalDemand, **scope: object
     ) -> dict[str, object]:
-        return self._post(
-            "/v1/demands/observe",
+        return self._call(
+            "capital_observe_capital_demand",
             {
                 **scope,
                 "demand_id": demand.demand_id,
@@ -86,8 +86,8 @@ class CapitalContractClient:
     def availability(
         self, *, capital_group_id: str, location: FundingLocation
     ) -> CapitalAvailability:
-        value = self._post(
-            "/v1/availability/query",
+        value = self._call(
+            "capital_query_capital_availability",
             {
                 "request_id": f"capital.availability:{time.time_ns()}",
                 "capital_group_id": capital_group_id,
@@ -123,8 +123,8 @@ class CapitalContractClient:
     ) -> dict[str, object]:
         if not capital_group_id.strip() or not plan_id.strip():
             raise ValueError("Capital group and plan identities are required")
-        return self._post(
-            "/v1/plans/reconcile",
+        return self._call(
+            "capital_reconcile_capital_plan",
             {
                 "request_id": request_id or f"capital.reconcile:{time.time_ns()}",
                 "capital_group_id": capital_group_id,
@@ -133,16 +133,8 @@ class CapitalContractClient:
             },
         )
 
-    def _post(self, path: str, body: dict[str, object]) -> dict[str, object]:
-        status, value = self._client.request("POST", path, body)
-        if status >= 400:
-            error = value.get("error")
-            if isinstance(error, dict):
-                message = error.get("message", f"Capital HTTP {status}")
-            else:
-                message = error or value.get("message", f"Capital HTTP {status}")
-            raise RuntimeError(str(message))
-        return value
+    def _call(self, method: str, body: dict[str, object]) -> dict[str, object]:
+        return self._client.call(method, [body])
 
 
 def _location(value: object) -> dict[str, str]:

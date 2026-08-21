@@ -1,19 +1,21 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
-use kairos_capital_contract::{CapitalHttpControl, CapitalViewKey, capital_view_path};
+use kairos_capital_contract::{CapitalControlRpcServer, CapitalViewKey, capital_view_path};
 use kairos_conflux::{
-    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig,
-    HttpControlledConflux, MmapOutputDeclaration,
+    AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem, JsonRpcConfluxRuntime,
+    JsonRpcRuntimeConfig, MmapOutputDeclaration,
 };
 
 use super::CapitalIntegrationConnections;
+use crate::application::CapitalRpcService;
 use crate::{CapitalConfluxConfig, CapitalProcess};
 
-pub type CapitalHost =
-    HttpControlledConflux<CapitalProcess<CapitalIntegrationConnections>, CapitalHttpControl>;
+pub type CapitalHost = JsonRpcConfluxRuntime<CapitalProcess<CapitalIntegrationConnections>>;
 
 pub struct CapitalHostConfig {
     pub runtime: CapitalProcess<CapitalIntegrationConnections>,
+    pub system: ConfluxSystem,
     pub conflux: CapitalConfluxConfig,
     pub socket_path: PathBuf,
     pub health_file: Option<PathBuf>,
@@ -41,7 +43,7 @@ pub fn build_capital_host(mut config: CapitalHostConfig) -> Result<CapitalHost, 
         .runtime
         .configure_conflux(config.conflux)
         .map_err(|error| error.to_string())?;
-    let mut system = ConfluxSystem::new();
+    let mut system = config.system;
     system
         .outputs()
         .mmap
@@ -75,9 +77,11 @@ pub fn build_capital_host(mut config: CapitalHostConfig) -> Result<CapitalHost, 
         },
     )
     .map_err(|error| error.to_string())?;
-    Ok(conflux.with_http_control(
-        handle,
-        CapitalHttpControl,
-        HttpControlConfig::uds(config.socket_path).with_health_file(config.health_file),
-    ))
+    let invocation = handle.rpc_actor_invocation(Duration::from_secs(30));
+    let methods =
+        CapitalRpcService::<CapitalProcess<CapitalIntegrationConnections>>::new(invocation)
+            .into_rpc();
+    let control =
+        JsonRpcRuntimeConfig::uds(config.socket_path).with_health_file(config.health_file);
+    Ok(conflux.with_json_rpc(handle, methods, control))
 }

@@ -24,9 +24,17 @@ impl std::ops::DerefMut for OrderAdmissionContext {
 }
 
 impl OrderAdmissionContext {
-    pub(super) fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
+    pub(super) fn from_manifest_with_reference_snapshot(
+        system: &mut kairos_conflux::ConfluxSystem,
+        path: impl AsRef<Path>,
+        reference_snapshot: Option<kairos_reference_contract::ReferenceProjectionSnapshot>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            dependencies: ExecutionDependencyAccess::from_manifest(path)?,
+            dependencies: ExecutionDependencyAccess::from_manifest_with_reference_snapshot(
+                system,
+                path,
+                reference_snapshot,
+            )?,
             allow_backtest_reference_without_projection: false,
             allow_backtest_balance_without_projection: false,
             reservation_ttl_nanos: 60_000_000_000,

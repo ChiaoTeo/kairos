@@ -1,10 +1,10 @@
 use std::error::Error;
 use std::future::{Future, ready};
 
-use crate::{ConfluxEvent, Context, Contract, RestResponseOf};
+use crate::{ConfluxEvent, Context};
 
 /// A closed Conflux process definition with one global event handler.
-pub trait ConfluxActor: Contract + Sized {
+pub trait ConfluxActor: Send + 'static + Sized {
     type FatalError: Error + Send + Sync + 'static;
     type LocalEvent: Send + 'static;
 
@@ -15,15 +15,12 @@ pub trait ConfluxActor: Contract + Sized {
         ready(Ok(()))
     }
 
-    /// Handles every REST, Contract, Integration, or local event.
-    ///
-    /// REST events return `Some(response)`; events without a response return
-    /// `None`. Conflux delivers the returned value to the Handle caller.
+    /// Handles every Contract, Integration, system, timer, or local event.
     fn handle<'a>(
         &'a mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent<Self::LocalEvent>,
         context: &'a mut Context<'_, Self>,
-    ) -> impl Future<Output = Result<Option<RestResponseOf<Self>>, Self::FatalError>> + 'a;
+    ) -> impl Future<Output = Result<(), Self::FatalError>> + 'a;
 
     fn stopping<'a>(
         &'a mut self,

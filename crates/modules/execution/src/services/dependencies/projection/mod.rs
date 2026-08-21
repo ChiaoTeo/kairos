@@ -1,15 +1,15 @@
 //! Typed dependency projections used by Execution planning and admission.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use kairos_account_contract::{
-    AccountContractClient, AccountViewKey, AccountViewKind, AccountViewReader,
-    DecimalValue as AccountDecimal, Health,
+    AccountClient, AccountControlRpcClient, AccountCurrent, DecimalValue as AccountDecimal, Health,
+    ObservedOrders,
 };
 use kairos_primitives::account::PositionSide;
 use kairos_primitives::execution::OrderId;
@@ -19,7 +19,7 @@ use kairos_protocol::generated::kairos::account::v_2::{
 };
 use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_reference_contract::{ReferenceHealth, ReferenceMarket};
-use kairos_risk_contract::{Health as RiskHealth, RiskControlClient};
+use kairos_risk_contract::{Health as RiskHealth, RiskControlRpcClient};
 
 #[derive(Clone)]
 pub(super) struct AccountProjection {
@@ -88,41 +88,29 @@ pub(super) struct DependencyProjectionRuntime {
 
 impl DependencyProjectionRuntime {
     pub(super) fn start(
-        accounts: &BTreeMap<String, PathBuf>,
-        account_snapshots: &BTreeMap<String, PathBuf>,
+        accounts: &BTreeMap<String, AccountClient>,
         market_snapshot: Option<&Path>,
-        reference_database: Option<PathBuf>,
-        reference_actor_id: Option<String>,
-        risk: Option<PathBuf>,
+        reference: Option<ReferenceProjection>,
+        risk: Option<kairos_risk_contract::RiskClient>,
     ) -> Self {
         let state = Arc::new(RwLock::new(DependencyProjection::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let mut workers = Vec::new();
-        for (account_id, socket) in accounts {
-            let Some(view_root) = account_snapshots.get(account_id).cloned() else {
-                continue;
-            };
+        for (account_id, client) in accounts {
             let account_id = account_id.clone();
-            let socket = socket.clone();
+            let client = client.clone();
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
-                let client = loop {
-                    match AccountContractClient::connect(&socket) {
-                        Ok(client) => break client,
-                        Err(_) if !stop.load(Ordering::Acquire) => {
-                            std::thread::sleep(PROJECTION_REFRESH)
-                        },
-                        Err(_) => return,
-                    }
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(_) => return,
                 };
                 let reader = loop {
-                    let key = AccountViewKey::new(
-                        format!("account:{account_id}"),
-                        &account_id,
-                        AccountViewKind::Current,
-                    );
-                    match key.and_then(|key| AccountViewReader::open(&view_root, key)) {
+                    match client.account_current(format!("account:{account_id}"), &account_id) {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
@@ -131,12 +119,7 @@ impl DependencyProjectionRuntime {
                     }
                 };
                 let observed_orders_reader = loop {
-                    let key = AccountViewKey::new(
-                        format!("account:{account_id}"),
-                        &account_id,
-                        AccountViewKind::ObservedOrders,
-                    );
-                    match key.and_then(|key| AccountViewReader::open(&view_root, key)) {
+                    match client.observed_orders(format!("account:{account_id}"), &account_id) {
                         Ok(reader) => break reader,
                         Err(_) if !stop.load(Ordering::Acquire) => {
                             std::thread::sleep(PROJECTION_REFRESH)
@@ -145,18 +128,17 @@ impl DependencyProjectionRuntime {
                     }
                 };
                 while !stop.load(Ordering::Acquire) {
-                    let result =
-                        client
-                            .health()
-                            .map_err(|error| error.to_string())
-                            .and_then(|health| {
-                                read_account_projection(
-                                    &reader,
-                                    &observed_orders_reader,
-                                    &account_id,
-                                    health,
-                                )
-                            });
+                    let result = runtime
+                        .block_on(AccountControlRpcClient::health(&client.control()))
+                        .map_err(|error| error.to_string())
+                        .and_then(|health| {
+                            read_account_projection(
+                                &reader,
+                                &observed_orders_reader,
+                                &account_id,
+                                health,
+                            )
+                        });
                     if let Ok(value) = result {
                         if let Ok(mut projection) = state.write() {
                             projection.accounts.insert(account_id.clone(), value);
@@ -185,51 +167,31 @@ impl DependencyProjectionRuntime {
                 }
             }));
         }
-        if let (Some(database), Some(actor_id)) = (reference_database, reference_actor_id) {
-            let state = Arc::clone(&state);
-            let stop = Arc::clone(&stop);
-            workers.push(std::thread::spawn(move || {
-                let mut last_watermark = None;
-                while !stop.load(Ordering::Acquire) {
-                    let result = read_reference_projection(&database, &actor_id).map(|value| {
-                        let watermark = (value.health.generation, value.health.event_sequence);
-                        (value, watermark)
-                    });
-                    if let Ok((value, watermark)) = result {
-                        if let Ok(mut projection) = state.write() {
-                            if last_watermark == Some(watermark) {
-                                if let Some(current) = projection.reference.as_mut() {
-                                    current.health = value.health;
-                                    current.refreshed_at = Instant::now();
-                                }
-                            } else {
-                                last_watermark = Some(watermark);
-                                projection.reference = Some(value);
-                            }
-                        }
-                    }
-                    std::thread::sleep(PROJECTION_REFRESH);
-                }
-            }));
+        if let Some(reference) = reference {
+            if let Ok(mut projection) = state.write() {
+                projection.reference = Some(reference);
+            }
         }
-        if let Some(path) = risk {
+        if let Some(endpoint) = risk {
             let state = Arc::clone(&state);
             let stop = Arc::clone(&stop);
             workers.push(std::thread::spawn(move || {
-                let client = loop {
-                    match RiskControlClient::connect(&path) {
-                        Ok(client) => break client,
-                        Err(_) if !stop.load(Ordering::Acquire) => {
-                            std::thread::sleep(PROJECTION_REFRESH)
-                        },
-                        Err(_) => return,
-                    }
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(_) => return,
                 };
                 while !stop.load(Ordering::Acquire) {
-                    if let Ok(health) = client.health() {
+                    if let Ok(health) =
+                        runtime.block_on(RiskControlRpcClient::health(&endpoint.control()))
+                    {
                         if let Ok(mut projection) = state.write() {
                             projection.risk = Some(RiskProjection { health });
                         }
+                    } else {
+                        std::thread::sleep(PROJECTION_REFRESH);
                     }
                     std::thread::sleep(PROJECTION_REFRESH);
                 }
@@ -258,46 +220,35 @@ impl DependencyProjectionRuntime {
     }
 
     pub(super) fn reference(&self) -> Result<ReferenceProjection, String> {
-        let value = self
+        let mut guard = self
             .state
-            .read()
-            .map_err(|_| "reference projection lock poisoned".to_string())?
+            .write()
+            .map_err(|_| "reference projection lock poisoned".to_string())?;
+        let value = guard
             .reference
-            .clone()
+            .as_mut()
             .ok_or_else(|| "reference projection is not ready".to_string())?;
-        if value.refreshed_at.elapsed() > PROJECTION_MAX_AGE {
-            return Err("reference projection is stale".into());
-        }
-        Ok(value)
+        value.refreshed_at = Instant::now();
+        Ok(value.clone())
     }
 
     pub(super) fn refresh_accounts(
         &self,
-        accounts: &BTreeMap<String, PathBuf>,
-        snapshots: &BTreeMap<String, PathBuf>,
+        accounts: &BTreeMap<String, AccountClient>,
     ) -> Result<(), String> {
-        for (account_id, socket) in accounts {
-            let health = AccountContractClient::connect(socket)
-                .and_then(|client| client.health())
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| error.to_string())?;
+        for (account_id, client) in accounts {
+            let health = runtime
+                .block_on(AccountControlRpcClient::health(&client.control()))
                 .map_err(|error| error.to_string())?;
-            let view_root = snapshots
-                .get(account_id)
-                .ok_or_else(|| format!("account view root is not bound: {account_id}"))?;
-            let key = AccountViewKey::new(
-                format!("account:{account_id}"),
-                account_id,
-                AccountViewKind::Current,
-            )
-            .map_err(|error| error.to_string())?;
-            let reader =
-                AccountViewReader::open(view_root, key).map_err(|error| error.to_string())?;
-            let observed_orders_key = AccountViewKey::new(
-                format!("account:{account_id}"),
-                account_id,
-                AccountViewKind::ObservedOrders,
-            )
-            .map_err(|error| error.to_string())?;
-            let observed_orders_reader = AccountViewReader::open(view_root, observed_orders_key)
+            let reader = client
+                .account_current(format!("account:{account_id}"), account_id)
+                .map_err(|error| error.to_string())?;
+            let observed_orders_reader = client
+                .observed_orders(format!("account:{account_id}"), account_id)
                 .map_err(|error| error.to_string())?;
             let value =
                 read_account_projection(&reader, &observed_orders_reader, account_id, health)?;
@@ -363,26 +314,9 @@ impl Drop for DependencyProjectionRuntime {
     }
 }
 
-pub(super) fn read_reference_projection(
-    database: &Path,
-    actor_id: &str,
-) -> Result<ReferenceProjection, String> {
-    let client = kairos_reference_contract::ReferenceClient::connect(
-        kairos_reference_contract::ReferenceEndpoint {
-            database: database.to_path_buf(),
-            actor_id: kairos_primitives::runtime::ActorId::new(actor_id)
-                .map_err(|error| error.to_string())?,
-            events: kairos_conflux::AeronEndpoint::from_parts(
-                None,
-                kairos_conflux::DEFAULT_AERON_CHANNEL,
-                kairos_conflux::output_stream_ids::REFERENCE_CHANGES,
-            )
-            .map_err(|error| error.to_string())?,
-        },
-    );
-    let snapshot = client
-        .execution_snapshot()
-        .map_err(|error| error.to_string())?;
+pub(super) fn project_reference_snapshot(
+    snapshot: kairos_reference_contract::ReferenceProjectionSnapshot,
+) -> ReferenceProjection {
     let markets = snapshot
         .markets
         .into_iter()
@@ -409,7 +343,7 @@ pub(super) fn read_reference_projection(
             effective_to_unix_nanos: value.effective_to_unix_nanos,
         })
         .collect();
-    Ok(ReferenceProjection {
+    ReferenceProjection {
         health: ReferenceHealth {
             status: "ready".into(),
             generation: snapshot.generation,
@@ -417,19 +351,19 @@ pub(super) fn read_reference_projection(
         },
         markets,
         refreshed_at: Instant::now(),
-    })
+    }
 }
 
 pub(super) fn read_account_projection(
-    reader: &AccountViewReader,
-    observed_orders_reader: &AccountViewReader,
+    reader: &AccountCurrent,
+    observed_orders_reader: &ObservedOrders,
     account_id: &str,
     health: Health,
 ) -> Result<AccountProjection, String> {
-    let frame = reader.read().map_err(|error| error.to_string())?;
-    let view = frame.account_current().map_err(|error| error.to_string())?;
+    let snapshot = reader.read().map_err(|error| error.to_string())?;
+    let view = snapshot.view().map_err(|error| error.to_string())?;
     let metadata = view.metadata();
-    if frame.generation() != metadata.generation()
+    if snapshot.generation() != metadata.generation()
         || metadata.generation() != health.generation.get()
         || metadata.applied_revision() != Some(health.event_sequence.get())
     {
@@ -470,14 +404,14 @@ pub(super) fn read_account_projection(
             }
         }));
     }
-    let observed_frame = observed_orders_reader
+    let observed_snapshot = observed_orders_reader
         .read()
         .map_err(|error| error.to_string())?;
-    let observed_view = observed_frame
-        .observed_orders()
+    let observed_view = observed_snapshot
+        .view()
         .map_err(|error| error.to_string())?;
     let observed_metadata = observed_view.metadata();
-    if observed_frame.generation() != observed_metadata.generation()
+    if observed_snapshot.generation() != observed_metadata.generation()
         || observed_metadata.generation() != health.generation.get()
         || observed_metadata.applied_revision() != Some(health.event_sequence.get())
         || observed_metadata.completeness() != ViewCompleteness::COMPLETE
@@ -502,7 +436,7 @@ pub(super) fn read_account_projection(
         positions,
         commitment_observation: AccountCommitmentObservation {
             account_id: account_id.to_owned(),
-            watermark: Sequence::new(observed_frame.envelope_metadata().applied_event_sequence),
+            watermark: Sequence::new(observed_snapshot.envelope_metadata().applied_event_sequence),
             observed_order_ids,
         },
         refreshed_at: Instant::now(),

@@ -174,7 +174,7 @@ fn reference_aeron_is_polled_by_conflux_without_a_watcher_task() {
         std::fs::read_to_string(crate_root().join("src/composition/launch/assembly.rs")).unwrap();
     assert!(actor.contains("ConfluxEvent::Reference"));
     assert!(actor.contains(".reference_client(&client_key)"));
-    assert!(assembly.contains("install_reference_contract"));
+    assert!(assembly.contains("install_reference_connection"));
     assert!(!assembly.contains("spawn_market_universe_watcher"));
     assert!(
         !crate_root()
@@ -219,14 +219,18 @@ fn actor_is_the_single_source_runtime_state_owner() {
 }
 
 #[test]
-fn market_rest_keeps_only_bounded_capability_queries_off_mmap() {
+fn market_json_rpc_keeps_only_bounded_capability_queries_off_mmap() {
     let host = source("src/composition/host.rs");
     let actor = source("src/application/conflux.rs");
-    assert!(host.contains("MarketHttpControl"));
-    assert!(host.contains("with_http_control"));
+    assert!(host.contains("MarketRpcService"));
+    assert!(host.contains("MarketControlRpcServer"));
+    assert!(host.contains("with_json_rpc"));
+    assert!(!host.contains("MarketHttpControl"));
+    assert!(!host.contains("with_http_control"));
     assert!(!host.contains("axum::"));
-    assert!(actor.contains("MarketRestRequest::Health"));
-    assert!(actor.contains("MarketRestRequest::DataSources"));
+    assert!(actor.contains("impl MarketRpcActor for MarketApplication"));
+    assert!(actor.contains("async fn health"));
+    assert!(actor.contains("async fn data_sources"));
     assert!(actor.contains("outputs()"));
     assert!(actor.contains("MmapOutputDeclaration"));
     assert!(actor.contains("MarketViewPublisher::resolved_path"));
@@ -561,16 +565,18 @@ fn conflux_uses_the_closed_market_contract() {
     assert!(!crate_root().join("src/application/process").exists());
     assert!(!crate_root().join("src/services/control").exists());
     let actor = source("src/application/conflux.rs");
-    assert!(actor.contains("impl Contract for MarketApplication"));
-    assert!(actor.contains("ConfluxEvent::Rest(request)"));
-    assert!(actor.contains("MarketRestRequest"));
+    assert!(actor.contains("impl ConfluxActor for MarketApplication"));
+    assert!(!actor.contains("ConfluxEvent::Rest(request)"));
+    assert!(!actor.contains("MarketRestRequest"));
     assert!(!actor.contains("take_managed_source"));
-    assert!(actor.contains("sync_managed_source_subscriptions"));
+    assert!(actor.contains("sync_all_source_subscriptions"));
     assert!(!actor.contains("SourceActivator"));
     let contract = source("contract/src/control/types.rs");
-    assert!(contract.contains("pub enum MarketRestRequest"));
-    assert!(contract.contains("pub enum MarketRestResponse"));
+    assert!(!contract.contains("pub enum MarketRestRequest"));
+    assert!(!contract.contains("pub enum MarketRestResponse"));
     assert!(contract.contains("pub struct MarketCommandEnvelope"));
+    let service = source("contract/src/control/service.rs");
+    assert!(service.contains("#[conflux_rpc(namespace = \"market\")]"));
 }
 
 #[test]

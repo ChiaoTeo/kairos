@@ -24,7 +24,5 @@ pub use crate::services::simulation::{
     SimulationOrder, SimulationOrderRequest, SimulationOrderStatus, SimulationResult,
 };
 
-pub type ExecutionHost = kairos_conflux::HttpControlledConflux<
-    crate::application::ExecutionApplication,
-    kairos_execution_contract::ExecutionHttpControl,
->;
+pub type ExecutionHost =
+    kairos_conflux::JsonRpcConfluxRuntime<crate::application::ExecutionApplication>;

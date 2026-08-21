@@ -11,5 +11,5 @@ mod services;
 
 pub use application::{
     AccountApplication, AccountCurrentView, AccountError, AccountEvent, AccountObservedFill,
-    AccountRuntimeMode, MarkToMarket, ReconcileAccount, RefreshAccount,
+    AccountRpcService, AccountRuntimeMode, MarkToMarket, ReconcileAccount, RefreshAccount,
 };

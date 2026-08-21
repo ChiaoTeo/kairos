@@ -1,13 +1,15 @@
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use kairos_conflux::{AeronOutputDeclaration, Conflux, ConfluxConfig, ConfluxSystem};
+use kairos_conflux::{Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig};
 use kairos_reference::ReferenceApplication;
+use kairos_reference::application::ReferenceRpcService;
 use kairos_reference::composition::{
     ReferenceCompositionConfig, build_application, ensure_database_parent,
 };
-use kairos_reference_contract::AeronEndpoint;
+use kairos_reference_contract::ReferenceControlRpcServer;
 use kairos_workspace::workspace::Workspace;
 use tokio::task::LocalSet;
 
@@ -52,38 +54,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return run_once(&config).await;
     }
 
-    let socket = args
-        .socket
-        .unwrap_or(workspace.process_socket("reference")?);
     let health_file = args
         .health_file
         .or_else(|| workspace.health_file("reference").ok());
-    let composition = build_application(&config, false).await?;
-    let (mut application, system, _) = composition.into_conflux();
+    let socket = args
+        .socket
+        .unwrap_or(workspace.process_socket("reference")?);
+    let composition = build_application(&config, true).await?;
+    let (mut application, system) = composition.into_conflux();
     application.configure_conflux(args.refresh_interval, true);
 
-    let event_endpoint = AeronEndpoint::from_parts(
-        config.aeron_dir.as_deref(),
-        config.aeron_channel.clone(),
-        config.reference_changes_stream,
-    )?;
-    let mut system = system;
-    system.outputs().aeron.declare(
-        "reference-changes".to_owned(),
-        AeronOutputDeclaration {
-            endpoint: event_endpoint,
-            revision: 1,
-        },
-    )?;
-
-    run_process(application, system, socket, health_file).await
+    run_process(application, system, args.rpc_address, socket, health_file).await
 }
 
 async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut composition = build_application(config, true).await?;
     composition.activate_sources().await?;
-    let (mut application, mut system, event_writer) = composition.into_conflux();
-    let writer = event_writer.ok_or("reference publication is not configured")?;
+    let (mut application, mut system) = composition.into_conflux();
     let refresh = application
         .refresh_with_connections(&mut system.connections())
         .await?;
@@ -92,7 +79,12 @@ async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std
         if publications.is_empty() {
             break;
         }
-        writer.publish(&mut system, &publications)?;
+        for publication in &publications {
+            system
+                .outputs()
+                .aeron
+                .publish("reference-changes", publication.payload())?;
+        }
         let event_ids = publications
             .iter()
             .map(|event| event.event_id().to_owned())
@@ -111,8 +103,9 @@ async fn run_once(config: &ReferenceCompositionConfig) -> Result<(), Box<dyn std
 async fn run_process(
     application: ReferenceApplication,
     system: ConfluxSystem,
-    _socket: PathBuf,
-    _health_file: Option<PathBuf>,
+    rpc_address: SocketAddr,
+    socket: PathBuf,
+    health_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conflux, handle) = Conflux::new(
         application,
@@ -122,8 +115,18 @@ async fn run_process(
             ..ConfluxConfig::default()
         },
     )?;
-    drop(handle);
-    let outcome = conflux.run().await?;
+    let invocation = handle.rpc_actor_invocation(Duration::from_secs(30));
+    let methods = ReferenceRpcService::<ReferenceApplication>::new(invocation).into_rpc();
+    let outcome = conflux
+        .with_json_rpc(
+            handle,
+            methods,
+            JsonRpcRuntimeConfig::tcp(rpc_address)
+                .with_uds(socket)
+                .with_health_file(health_file),
+        )
+        .run()
+        .await?;
     tracing::info!(
         event = "process_stopped",
         component = "reference",
@@ -175,6 +178,8 @@ fn parse_refresh_interval(value: &str) -> Result<Duration, String> {
 struct Args {
     #[arg(long)]
     workspace: PathBuf,
+    #[arg(long = "rpc-address", default_value = "127.0.0.1:9474")]
+    rpc_address: SocketAddr,
     #[arg(long)]
     socket: Option<PathBuf>,
     #[arg(long = "health-file")]

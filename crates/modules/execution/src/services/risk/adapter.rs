@@ -1,7 +1,5 @@
 //! Risk reservation command adapter and typed mmap reconciliation.
 
-use std::path::{Path, PathBuf};
-
 use kairos_primitives::decimal::Money;
 use kairos_primitives::risk::ReservationId;
 use kairos_primitives::runtime::{IdempotencyKey, RequestId, StrategyId};
@@ -9,7 +7,9 @@ use kairos_primitives::time::{Generation, Sequence, UnixNanos};
 use kairos_protocol::generated::kairos::common::v_2::ViewCompleteness;
 use kairos_protocol::generated::kairos::risk::v_2::ReservationStatus as RiskViewReservationStatus;
 use kairos_risk_contract::{
-    Amount, AuthorizeRequest, ContractError, RiskContext, RiskControlClient, TradeRiskProposal,
+    Amount, AuthorizeRequest, ConsumeReservationRequest, ReleaseReservationRequest,
+    ResizeReservationRequest, RiskClient, RiskContext, RiskControlRpcClient, RiskDecision,
+    TradeRiskProposal,
 };
 use rust_decimal::Decimal;
 
@@ -20,39 +20,80 @@ use crate::application::{
 use crate::domain::{RiskReservationEvidence, RiskReservationSagaStatus};
 
 pub struct SocketExecutionRiskReservations {
-    risk: PathBuf,
-    risk_snapshot: PathBuf,
+    risk: RiskClient,
     risk_actor_id: String,
-    client: Option<RiskControlClient>,
     reservation_ttl_nanos: u64,
     skip_authorization: bool,
 }
 
 impl SocketExecutionRiskReservations {
     pub(crate) fn new(
-        risk: PathBuf,
-        risk_snapshot: PathBuf,
+        risk: RiskClient,
         risk_actor_id: String,
         reservation_ttl_nanos: u64,
         skip_authorization: bool,
     ) -> Self {
         Self {
             risk,
-            risk_snapshot,
             risk_actor_id,
-            client: None,
             reservation_ttl_nanos,
             skip_authorization,
         }
     }
 
-    fn client(&mut self) -> RiskCommandResult<&RiskControlClient> {
-        if self.client.is_none() {
-            self.client = Some(RiskControlClient::connect(&self.risk).map_err(map_command_error)?);
-        }
-        self.client
-            .as_ref()
-            .ok_or_else(|| RiskCommandFailure::NotSent("risk client is unavailable".into()))
+    fn risk_runtime() -> RiskCommandResult<tokio::runtime::Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))
+    }
+
+    fn health(&mut self) -> RiskCommandResult<kairos_risk_contract::Health> {
+        Self::risk_runtime()?
+            .block_on(RiskControlRpcClient::health(&self.risk.control()))
+            .map_err(map_rpc_error)
+    }
+
+    fn authorize_and_reserve(
+        &mut self,
+        request: AuthorizeRequest,
+    ) -> RiskCommandResult<RiskDecision> {
+        Self::risk_runtime()?
+            .block_on(RiskControlRpcClient::authorize_and_reserve(
+                &self.risk.control(),
+                request,
+            ))
+            .map_err(map_rpc_error)
+    }
+
+    fn resize_reservation(&mut self, request: ResizeReservationRequest) -> RiskCommandResult<()> {
+        Self::risk_runtime()?
+            .block_on(RiskControlRpcClient::resize_reservation(
+                &self.risk.control(),
+                request,
+            ))
+            .map_err(map_rpc_error)
+            .map(|_| ())
+    }
+
+    fn release_reservation(&mut self, request: ReleaseReservationRequest) -> RiskCommandResult<()> {
+        Self::risk_runtime()?
+            .block_on(RiskControlRpcClient::release_reservation(
+                &self.risk.control(),
+                request,
+            ))
+            .map_err(map_rpc_error)
+            .map(|_| ())
+    }
+
+    fn consume_reservation(&mut self, request: ConsumeReservationRequest) -> RiskCommandResult<()> {
+        Self::risk_runtime()?
+            .block_on(RiskControlRpcClient::consume_reservation(
+                &self.risk.control(),
+                request,
+            ))
+            .map_err(map_rpc_error)
+            .map(|_| ())
     }
 }
 
@@ -82,10 +123,7 @@ impl SocketExecutionRiskReservations {
             .map_err(RiskCommandFailure::NotSent);
         }
 
-        let health = self
-            .client()?
-            .health()
-            .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?;
+        let health = self.health()?;
         if health.status != "ready" {
             return Err(RiskCommandFailure::Rejected("risk is not ready".into()));
         }
@@ -98,78 +136,76 @@ impl SocketExecutionRiskReservations {
             })
             .unwrap_or_default();
         let reservation_ttl_nanos = self.reservation_ttl_nanos;
-        let decision = self
-            .client()?
-            .authorize_and_reserve(&AuthorizeRequest {
-                request_id: RequestId::new(request.order_id.to_string())
-                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-                idempotency_key: IdempotencyKey::new(reservation_id.to_string())
-                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-                reservation_id: reservation_id.clone(),
-                account_id: request.account_id.clone(),
-                strategy_id: risk_strategy_id(request.strategy_id.as_ref())
-                    .map_err(RiskCommandFailure::NotSent)?,
-                instrument_id: request.instrument_id.clone(),
-                exchange_id: context.exchange_id.clone().ok_or_else(|| {
+        let authorization = AuthorizeRequest {
+            request_id: RequestId::new(request.order_id.to_string())
+                .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+            idempotency_key: IdempotencyKey::new(reservation_id.to_string())
+                .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+            reservation_id: reservation_id.clone(),
+            account_id: request.account_id.clone(),
+            strategy_id: risk_strategy_id(request.strategy_id.as_ref())
+                .map_err(RiskCommandFailure::NotSent)?,
+            instrument_id: request.instrument_id.clone(),
+            exchange_id: context.exchange_id.clone().ok_or_else(|| {
+                RiskCommandFailure::NotSent(
+                    "Reference market is missing its exchange identity".into(),
+                )
+            })?,
+            proposal: TradeRiskProposal {
+                notional: amount,
+                initial_margin_rate_bps: u64::from(context.initial_margin_rate_bps.ok_or_else(
+                    || {
+                        RiskCommandFailure::NotSent(
+                            "execution route is missing an initial margin rule".into(),
+                        )
+                    },
+                )?)
+                .into(),
+                account_segment: context.funding_segment.clone().ok_or_else(|| {
                     RiskCommandFailure::NotSent(
-                        "Reference market is missing its exchange identity".into(),
+                        "execution route is missing its funding segment".into(),
                     )
                 })?,
-                proposal: TradeRiskProposal {
-                    notional: amount,
-                    initial_margin_rate_bps: u64::from(
-                        context.initial_margin_rate_bps.ok_or_else(|| {
-                            RiskCommandFailure::NotSent(
-                                "execution route is missing an initial margin rule".into(),
-                            )
-                        })?,
+                collateral_asset: context.collateral_asset.clone().ok_or_else(|| {
+                    RiskCommandFailure::NotSent(
+                        "execution route is missing its collateral asset".into(),
                     )
-                    .into(),
-                    account_segment: context.funding_segment.clone().ok_or_else(|| {
+                })?,
+                reduce_only: request.options.reduce_only.unwrap_or(false),
+                margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
+                    context.margin_rule_id.clone().ok_or_else(|| {
                         RiskCommandFailure::NotSent(
-                            "execution route is missing its funding segment".into(),
+                            "execution route is missing a margin rule identity".into(),
                         )
                     })?,
-                    collateral_asset: context.collateral_asset.clone().ok_or_else(|| {
-                        RiskCommandFailure::NotSent(
-                            "execution route is missing its collateral asset".into(),
-                        )
-                    })?,
-                    reduce_only: request.options.reduce_only.unwrap_or(false),
-                    margin_rule_id: kairos_primitives::risk::MarginRuleCode::new(
-                        context.margin_rule_id.clone().ok_or_else(|| {
-                            RiskCommandFailure::NotSent(
-                                "execution route is missing a margin rule identity".into(),
-                            )
-                        })?,
-                    )
-                    .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
-                },
-                at_unix_nanos: now,
-                reservation_ttl_nanos: reservation_ttl_nanos.into(),
-                dependency_generation: health.generation,
-                dependency_event_sequence: health.event_sequence,
-                context: Some(RiskContext {
-                    account_snapshot_watermark: UnixNanos::new(context.account.generation.get()),
-                    market_freshness_watermark: context
-                        .market
-                        .as_ref()
-                        .map(|value| value.generation.get().max(value.event_sequence.get()))
-                        .map(UnixNanos::new)
-                        .unwrap_or_default(),
-                    portfolio_version: context.account.generation,
-                    current_exposure: zero,
-                    current_margin: zero,
-                    available_margin,
-                    current_pnl: zero,
-                    current_drawdown: zero,
-                    market_is_fresh: context.market_is_fresh,
-                    leverage_bps: 0.into(),
-                    price_deviation_bps: 0.into(),
-                    stress_loss: zero,
-                }),
-            })
-            .map_err(map_command_error)?;
+                )
+                .map_err(|error| RiskCommandFailure::NotSent(error.to_string()))?,
+            },
+            at_unix_nanos: now,
+            reservation_ttl_nanos: reservation_ttl_nanos.into(),
+            dependency_generation: health.generation,
+            dependency_event_sequence: health.event_sequence,
+            context: Some(RiskContext {
+                account_snapshot_watermark: UnixNanos::new(context.account.generation.get()),
+                market_freshness_watermark: context
+                    .market
+                    .as_ref()
+                    .map(|value| value.generation.get().max(value.event_sequence.get()))
+                    .map(UnixNanos::new)
+                    .unwrap_or_default(),
+                portfolio_version: context.account.generation,
+                current_exposure: zero,
+                current_margin: zero,
+                available_margin,
+                current_pnl: zero,
+                current_drawdown: zero,
+                market_is_fresh: context.market_is_fresh,
+                leverage_bps: 0.into(),
+                price_deviation_bps: 0.into(),
+                stress_loss: zero,
+            }),
+        };
+        let decision: RiskDecision = self.authorize_and_reserve(authorization)?;
         if !decision.allowed {
             if let Some(requirement) = decision
                 .funding_requirement
@@ -241,7 +277,7 @@ impl SocketExecutionRiskReservations {
         &mut self,
         evidence: &RiskReservationEvidence,
     ) -> Result<Option<RiskReservationEvidence>, String> {
-        read_reservation(&self.risk_snapshot, &self.risk_actor_id, evidence)
+        read_reservation(&self.risk, &self.risk_actor_id, evidence)
     }
 
     pub(super) fn resize(
@@ -253,15 +289,12 @@ impl SocketExecutionRiskReservations {
         if self.skip_authorization {
             return Ok(());
         }
-        self.client()?
-            .resize(
-                &evidence.reservation_id,
-                &Amount::new(amount.mantissa(), amount.scale())
-                    .expect("Money satisfies Risk contract decimal bounds"),
-                at,
-            )
-            .map(|_| ())
-            .map_err(map_command_error)
+        self.resize_reservation(ResizeReservationRequest {
+            reservation_id: evidence.reservation_id.clone(),
+            amount: Amount::new(amount.mantissa(), amount.scale())
+                .expect("Money satisfies Risk contract decimal bounds"),
+            at_unix_nanos: at,
+        })
     }
 
     pub(super) fn release(
@@ -272,10 +305,10 @@ impl SocketExecutionRiskReservations {
         if self.skip_authorization {
             return Ok(());
         }
-        self.client()?
-            .release(&evidence.reservation_id, at)
-            .map(|_| ())
-            .map_err(map_command_error)
+        self.release_reservation(ReleaseReservationRequest {
+            reservation_id: evidence.reservation_id.clone(),
+            at_unix_nanos: at,
+        })
     }
 
     pub(super) fn consume(
@@ -286,23 +319,23 @@ impl SocketExecutionRiskReservations {
         if self.skip_authorization {
             return Ok(());
         }
-        self.client()?
-            .consume(&evidence.reservation_id, at)
-            .map(|_| ())
-            .map_err(map_command_error)
+        self.consume_reservation(ConsumeReservationRequest {
+            reservation_id: evidence.reservation_id.clone(),
+            at_unix_nanos: at,
+        })
     }
 }
 
-fn map_command_error(error: ContractError) -> RiskCommandFailure {
-    match error {
-        ContractError::NotSent(message) => RiskCommandFailure::NotSent(message),
-        ContractError::Indeterminate(message) | ContractError::Transport(message) => {
-            RiskCommandFailure::Indeterminate(message)
-        },
-        ContractError::Rejected(message) => RiskCommandFailure::Rejected(message),
-        ContractError::Invalid(message) | ContractError::Unsupported(message) => {
-            RiskCommandFailure::NotSent(message)
-        },
+fn map_rpc_error(error: jsonrpsee::core::client::Error) -> RiskCommandFailure {
+    let message = error.to_string();
+    if message.contains("No such file")
+        || message.contains("Connection refused")
+        || message.contains("connection refused")
+        || message.contains("not found")
+    {
+        RiskCommandFailure::NotSent(message)
+    } else {
+        RiskCommandFailure::Indeterminate(message)
     }
 }
 
@@ -368,18 +401,16 @@ fn evidence(
 }
 
 fn read_reservation(
-    root: &Path,
+    client: &RiskClient,
     actor_id: &str,
     evidence: &RiskReservationEvidence,
 ) -> Result<Option<RiskReservationEvidence>, String> {
-    let frame = kairos_risk_contract::RiskViewReader::open(
-        root,
-        kairos_risk_contract::RiskViewKey::latest(actor_id),
-    )
-    .and_then(|reader| reader.read())
-    .map_err(|error| format!("read Risk mmap view: {error}"))?;
+    let frame = client
+        .latest(actor_id.to_owned())
+        .and_then(|latest| latest.read())
+        .map_err(|error| format!("read Risk mmap view: {error}"))?;
     let decoded = frame
-        .decode()
+        .view()
         .map_err(|error| format!("decode Risk mmap view: {error}"))?;
     let metadata = decoded.metadata();
     if metadata.completeness() != ViewCompleteness::COMPLETE {

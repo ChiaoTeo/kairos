@@ -6,12 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.application.endpoints import (
-    resolve_instance_endpoints,
+from kairospy.application.launch.application.connections import (
+    resolve_instance_connections,
 )
 from kairospy.application.launch.application.strategy_runtime import (
     StrategyLaunchConfig,
 )
+from kairospy.application.system.clients import MarketSystemClient
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.domain_types import AccountId
 from kairospy.strategy import StrategyIdentity
@@ -71,6 +72,37 @@ def test_business_applications_do_not_import_composition_or_infrastructure() -> 
         assert "import composition" not in source
         assert "from .composition" not in source
         assert (root / f"kairospy/application/{module}/composition.py").is_file()
+
+
+def test_business_composition_uses_system_clients_for_contract_views() -> None:
+    root = Path(__file__).parents[1]
+    for module in ("account", "capital", "execution", "risk"):
+        source = (root / f"kairospy/application/{module}/composition.py").read_text(
+            encoding="utf-8"
+        )
+        for forbidden in (
+            "ViewReader",
+            "CurrentViewReader",
+            "ViewKey",
+            "Projection",
+            "from kairospy.infrastructure.contracts",
+        ):
+            assert forbidden not in source
+
+
+def test_reference_application_does_not_construct_contract_client() -> None:
+    root = Path(__file__).parents[1]
+    source = (
+        (root / "kairospy/application/reference/composition.py").read_text(
+            encoding="utf-8"
+        )
+        + "\n"
+        + (root / "kairospy/application/reference/validation.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "kairospy.infrastructure.contracts.reference" not in source
+    assert "ReferenceClient(" not in source
 
 
 def test_business_applications_do_not_mirror_dependencies_as_private_protocols() -> (
@@ -134,7 +166,7 @@ def test_strategy_launch_config_rejects_identity_mismatch(tmp_path: Path) -> Non
         StrategyLaunchConfig.load(path, launch_id="launch", mode="paper")
 
 
-def test_instance_endpoints_validate_identity_and_accounts(tmp_path: Path) -> None:
+def test_instance_connections_validate_identity_and_accounts(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="typed")
     instance = workspace.instance("paper", "launch", "instance")
     instance.prepare()
@@ -146,6 +178,7 @@ def test_instance_endpoints_validate_identity_and_accounts(tmp_path: Path) -> No
                 "instance_id": "instance",
                 "mode": "paper",
                 "components": {
+                    "market": {"socket": str(instance.socket("market"))},
                     "risk": {"socket": str(instance.socket("risk"))},
                     "execution": {"socket": str(instance.socket("execution"))},
                 },
@@ -160,17 +193,18 @@ def test_instance_endpoints_validate_identity_and_accounts(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    endpoints = resolve_instance_endpoints(instance)
+    connections = resolve_instance_connections(instance)
 
-    assert endpoints.accounts[AccountId("main")].socket == instance.socket(
+    assert connections.accounts[AccountId("main")].socket == instance.socket(
         "account-main"
     )
-    assert endpoints.accounts[AccountId("main")].view_root == instance.snapshot()
-    assert endpoints.risk is not None
-    assert endpoints.execution is not None
+    assert connections.accounts[AccountId("main")].view_root == instance.snapshot()
+    assert connections.market is not None
+    assert connections.risk is not None
+    assert connections.execution is not None
 
 
-def test_instance_endpoints_reject_manifest_for_another_instance(
+def test_instance_connections_reject_manifest_for_another_instance(
     tmp_path: Path,
 ) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "w", workspace_id="typed")
@@ -191,7 +225,7 @@ def test_instance_endpoints_reject_manifest_for_another_instance(
     )
 
     with pytest.raises(RuntimeError, match="instance_id"):
-        resolve_instance_endpoints(instance)
+        resolve_instance_connections(instance)
 
 
 def test_shared_market_access_does_not_claim_launch_instance_scope(
@@ -206,6 +240,7 @@ def test_shared_market_access_does_not_claim_launch_instance_scope(
         instance=instance,
         identity=StrategyIdentity("strategy", "launch", "instance"),
         config=MarketAccessConfig(scope="shared"),
+        client=MarketSystemClient(workspace.paths.process_socket("market")),
     )
 
     assert access.application._launch_id is None

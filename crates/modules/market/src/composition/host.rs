@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-use kairos_conflux::{Conflux, ConfluxConfig, ConfluxSystem, HttpControlConfig};
-use kairos_market_contract::MarketHttpControl;
+use kairos_conflux::{Conflux, ConfluxConfig, ConfluxSystem, JsonRpcRuntimeConfig};
+use kairos_market_contract::MarketControlRpcServer;
 
 use crate::MarketApplication;
+use crate::application::MarketRpcService;
 
 /// Retains the Workspace process lease while the framework-owned host runs.
 /// Listener, request, readiness, health, and shutdown lifecycle all belong to
@@ -42,11 +43,13 @@ impl MarketHost {
                 ..ConfluxConfig::default()
             },
         )?;
+        let invocation = handle.rpc_actor_invocation(std::time::Duration::from_secs(30));
+        let methods = MarketRpcService::<MarketApplication>::new(invocation).into_rpc();
         let outcome = conflux
-            .with_http_control(
+            .with_json_rpc(
                 handle,
-                MarketHttpControl,
-                HttpControlConfig::uds(self.socket).with_health_file(self.health),
+                methods,
+                JsonRpcRuntimeConfig::uds(self.socket).with_health_file(self.health),
             )
             .run()
             .await?;

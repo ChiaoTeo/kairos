@@ -1,43 +1,47 @@
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::time::Duration;
 
 use kairos_conflux::{
-    CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, Contract,
-    ExternalParticipantEvent, IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent,
-    OrderEntryRequest, RestContract, SnapshotEnvelopeMetadata, SystemEvent,
+    CommandOutcome, ConfluxActor, ConfluxEvent, ConnectionKey, Context, ExternalParticipantEvent,
+    IntegrationError, IntegrationEvent, OrderCommand, OrderEntryEvent, OrderEntryRequest,
+    SnapshotEnvelopeMetadata, SystemEvent,
 };
 use kairos_execution_contract::{
-    CompletionPolicy as ContractCompletionPolicy, ExecutionCommandStatus, ExecutionControlError,
+    AdvanceExecutionTimeRequest, AdvanceExecutionTimeResponse, CancelOrderRequest,
+    CompletionPolicy as ContractCompletionPolicy, ExecutionBacktestBar,
+    ExecutionBacktestMarketObservation, ExecutionBacktestMarketRequest,
+    ExecutionBacktestMarketResponse, ExecutionBacktestMetrics, ExecutionBacktestObservationScope,
+    ExecutionBacktestOrder, ExecutionBacktestOrderRequest, ExecutionBacktestOrderStatus,
+    ExecutionBacktestRequest, ExecutionBacktestRunResponse, ExecutionBacktestSimulationConfig,
+    ExecutionBacktestSimulationFill, ExecutionCommandStatus, ExecutionControlError,
     ExecutionHealthResponse, ExecutionIntentRequest, ExecutionOrderOptionsRequest,
-    ExecutionReconcileResponse, ExecutionRestRequest, ExecutionRestResponse,
-    ExecutionRouteCandidateResponse, ExecutionRouteHealth, ExecutionRoutesResponse,
-    FailurePolicy as ContractFailurePolicy, HedgePolicyRequest, IntentAdmissionEvidenceRequest,
+    ExecutionReconcileResponse, ExecutionRouteCandidateResponse, ExecutionRouteHealth,
+    ExecutionRoutesQuery, ExecutionRoutesResponse, FailurePolicy as ContractFailurePolicy,
+    HedgePolicyRequest, IntentAdmissionEvidenceRequest,
     IntentLegRequest as ContractIntentLegRequest, IntentType as ContractIntentType,
+    ReconcileExecutionRequest, ReplaceOrderRequest, SubmitIntentRequest,
 };
 use kairos_primitives::runtime::InstanceIdentity;
+use kairos_protocol::control::jsonrpc::{ErrorObjectOwned, RpcResult, business_error};
 use sha2::{Digest, Sha256};
 
 use super::{
+    BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest, Bar,
     CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionError,
-    ExecutionOrderOptions, ExecutionRouteQuery, IntentAdmissionEvidence, RemoteOrderQuery,
-    SubmitOrder,
+    ExecutionOrderOptions, ExecutionRouteQuery, ExecutionRpcActor, IntentAdmissionEvidence,
+    MarketObservation, ObservationScope, Quote, QuoteBar, RemoteOrderQuery, SubmitOrder, TradeBar,
 };
 use crate::services::actor::RemoteOrderEvent;
 use crate::services::audit::{ExecutionAudit, IntentAdmissionAuditRecord};
 use crate::services::gateway::{ExecutionConnectionPlan, ExecutionWriterFence};
 use crate::services::persistence::ExecutionOutboxEvent;
-use crate::services::simulation::SimulatedAccountSettlement;
+use crate::services::simulation::{
+    SimulatedAccountSettlement, SimulationConfig, SimulationFill, SimulationOrder,
+    SimulationOrderRequest, SimulationOrderStatus,
+};
 
-pub struct ExecutionRest;
-
-impl RestContract for ExecutionRest {
-    type Request = ExecutionRestRequest;
-    type Response = ExecutionRestResponse;
-}
-
-impl Contract for ExecutionApplication {
-    type Rest = ExecutionRest;
-}
+const EXECUTION_BUSINESS_ERROR_CODE: i32 = -31_004;
 
 pub(crate) struct ExecutionConfluxState {
     plans: Vec<ExecutionConnectionPlan>,
@@ -478,7 +482,7 @@ async fn managed_order_history(
 
 impl ConfluxActor for ExecutionApplication {
     type FatalError = ExecutionError;
-    type LocalEvent = ();
+    type LocalEvent = Infallible;
 
     async fn started(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
         self.register_managed_streams(context)?;
@@ -489,11 +493,10 @@ impl ConfluxActor for ExecutionApplication {
 
     async fn handle(
         &mut self,
-        event: ConfluxEvent<Self, Self::LocalEvent>,
+        event: ConfluxEvent,
         context: &mut Context<'_, Self>,
-    ) -> Result<Option<ExecutionRestResponse>, Self::FatalError> {
-        let response = match event {
-            ConfluxEvent::Rest(request) => Some(self.handle_rest(request, context).await),
+    ) -> Result<(), Self::FatalError> {
+        match event {
             ConfluxEvent::Integration(IntegrationEvent {
                 identity,
                 event: ExternalParticipantEvent::Execution(event),
@@ -513,25 +516,21 @@ impl ConfluxActor for ExecutionApplication {
                         },
                     }
                 }
-                None
             },
             ConfluxEvent::System(SystemEvent::SourceReady { source }) => {
                 self.update_route_status(&source, "ready");
-                None
             },
             ConfluxEvent::System(SystemEvent::SourceFailed { source, error }) => {
                 self.update_route_status(&source, "degraded");
                 tracing::warn!(component = "execution", %source, %error, "Execution source failed");
-                None
             },
             ConfluxEvent::System(SystemEvent::Timer { name, .. }) if name == "maintenance" => {
                 self.maintain(context).await?;
-                None
             },
-            _ => None,
+            _ => {},
         };
         self.publish(context)?;
-        Ok(response)
+        Ok(())
     }
 
     async fn stopping(&mut self, context: &mut Context<'_, Self>) -> Result<(), Self::FatalError> {
@@ -539,160 +538,236 @@ impl ConfluxActor for ExecutionApplication {
     }
 }
 
-impl ExecutionApplication {
-    async fn handle_rest(
+impl ExecutionRpcActor for ExecutionApplication {
+    async fn health(
         &mut self,
-        request: ExecutionRestRequest,
+        (): (),
         context: &mut Context<'_, Self>,
-    ) -> ExecutionRestResponse {
-        match request {
-            ExecutionRestRequest::Health => {
-                ExecutionRestResponse::Health(Ok(self.contract_health()))
-            },
-            ExecutionRestRequest::Routes(query) => {
-                let participant = query.participant_id.clone();
-                let parsed = parse_route_query(&query);
-                ExecutionRestResponse::Routes(
-                    parsed
-                        .and_then(|query| {
-                            let routes = self
-                                .available_execution_routes(&query)
-                                .into_iter()
-                                .filter(|route| {
-                                    participant.as_ref().is_none_or(|value| {
-                                        route.participant_id.eq_ignore_ascii_case(value.as_str())
-                                    })
+    ) -> RpcResult<ExecutionHealthResponse> {
+        let response = self.contract_health();
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(response)
+    }
+
+    async fn routes(
+        &mut self,
+        query: ExecutionRoutesQuery,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionRoutesResponse> {
+        let participant = query.participant_id.clone();
+        let query = parse_route_query(&query).map_err(rpc_execution_error)?;
+        let routes = self
+            .available_execution_routes(&query)
+            .into_iter()
+            .filter(|route| {
+                participant
+                    .as_ref()
+                    .is_none_or(|value| route.participant_id.eq_ignore_ascii_case(value.as_str()))
+            })
+            .map(route_response)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(rpc_execution_error)?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(ExecutionRoutesResponse { routes })
+    }
+
+    async fn submit_intent(
+        &mut self,
+        request: SubmitIntentRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionCommandStatus> {
+        let response = self.submit_intent_control(request, context).await?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(response)
+    }
+
+    async fn cancel_order(
+        &mut self,
+        (order_id, request): (kairos_primitives::execution::OrderId, CancelOrderRequest),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionCommandStatus> {
+        let response = self
+            .cancel_managed_order(
+                CancelOrder {
+                    order_id,
+                    reason: request.reason.unwrap_or_default(),
+                },
+                context,
+            )
+            .await
+            .map(|order| command_status("accepted", Some(order.order_id.to_string())))
+            .map_err(rpc_execution_error)?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(response)
+    }
+
+    async fn replace_order(
+        &mut self,
+        (order_id, request): (kairos_primitives::execution::OrderId, ReplaceOrderRequest),
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionCommandStatus> {
+        let response = self
+            .replace_contract_order(order_id, request, context)
+            .await
+            .map_err(rpc_execution_error)?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(response)
+    }
+
+    async fn reconcile(
+        &mut self,
+        request: ReconcileExecutionRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionReconcileResponse> {
+        let query = RemoteOrderQuery {
+            binding_id: request
+                .execution_route_id
+                .map(|route| format!("execution.{route}.query")),
+            order_id: request.order_id,
+            limit: Some(200),
+            ..Default::default()
+        };
+        let changed = self
+            .reconcile_managed_orders(query, context)
+            .await
+            .map_err(rpc_execution_error)?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(ExecutionReconcileResponse {
+            changed: changed as u64,
+        })
+    }
+
+    async fn advance_time(
+        &mut self,
+        request: AdvanceExecutionTimeRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<AdvanceExecutionTimeResponse> {
+        self.advance_time(request.event_time_unix_nanos.get())
+            .map_err(rpc_execution_error)?;
+        self.advance_due_intent_orders_managed(
+            request.event_time_unix_nanos.get(),
+            usize::MAX,
+            context,
+        )
+        .await
+        .map_err(rpc_execution_error)?;
+        self.publish(context).map_err(rpc_execution_error)?;
+        Ok(AdvanceExecutionTimeResponse {
+            advanced_to_unix_nanos: request.event_time_unix_nanos,
+        })
+    }
+
+    async fn backtest_run(
+        &mut self,
+        request: ExecutionBacktestRequest,
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionBacktestRunResponse> {
+        BacktestApplication::run(backtest_request(request))
+            .map(backtest_run_response)
+            .map_err(|error| rpc_execution_error(ExecutionError::Invalid(error)))
+    }
+
+    async fn backtest_market(
+        &mut self,
+        request: ExecutionBacktestMarketRequest,
+        _context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionBacktestMarketResponse> {
+        BacktestApplication::run(BacktestRequest {
+            initial_equity: "0".parse().expect("zero money is valid"),
+            market_events: vec![market_observation(request.event)],
+            ..BacktestRequest::default()
+        })
+        .map(|response| ExecutionBacktestMarketResponse {
+            fills: response
+                .fills
+                .into_iter()
+                .map(simulation_fill_response)
+                .collect(),
+        })
+        .map_err(|error| rpc_execution_error(ExecutionError::Invalid(error)))
+    }
+}
+
+impl ExecutionApplication {
+    async fn submit_intent_control(
+        &mut self,
+        request: SubmitIntentRequest,
+        context: &mut Context<'_, Self>,
+    ) -> RpcResult<ExecutionCommandStatus> {
+        let command_id = request.envelope.command_id;
+        let idempotency_key = request
+            .envelope
+            .idempotency_key
+            .or_else(|| {
+                command_id.as_ref().map(|value| {
+                    kairos_primitives::runtime::IdempotencyKey::new(value.to_string())
+                        .expect("request id is a valid idempotency fallback")
+                })
+            })
+            .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
+        let decoded = decode_contract_intent(request.intent);
+        let prepared = decoded.and_then(|intent| {
+            let evidence = decode_intent_admission_evidence(request.admission_evidence, &intent)?;
+            Ok((intent, evidence))
+        });
+        let mut admission_result = "rejected".to_owned();
+        let mut admission: Option<(IntentAdmissionEvidence, String, String)> = None;
+        let result = match (prepared, idempotency_key) {
+            (Ok((intent, evidence)), Ok(key)) => {
+                if let Some(evidence) = evidence {
+                    admission = Some((evidence, key.to_string(), intent.intent_id.to_string()));
+                }
+                match self.accept_intent_with_idempotency_deferred(intent, key.to_string()) {
+                    Ok((intent, duplicate)) => {
+                        admission_result = if duplicate { "duplicate" } else { "accepted" }.into();
+                        if !duplicate {
+                            let business_now = self
+                                .business_time_unix_nanos()
+                                .unwrap_or_else(now_unix_nanos);
+                            if let Err(error) = self
+                                .advance_due_intent_orders_managed(
+                                    business_now,
+                                    usize::MAX,
+                                    context,
+                                )
+                                .await
+                            {
+                                Err(error)
+                            } else {
+                                Ok(ExecutionCommandStatus {
+                                    status: "accepted".into(),
+                                    command_id: command_id.clone(),
+                                    intent_id: Some(intent.intent.intent_id.clone()),
+                                    order_id: None,
                                 })
-                                .map(route_response)
-                                .collect::<Result<Vec<_>, _>>()?;
-                            Ok(ExecutionRoutesResponse { routes })
-                        })
-                        .map_err(control_error),
-                )
-            },
-            ExecutionRestRequest::SubmitIntent(request) => {
-                let command_id = request.envelope.command_id;
-                let idempotency_key = request
-                    .envelope
-                    .idempotency_key
-                    .or_else(|| {
-                        command_id.as_ref().map(|value| {
-                            kairos_primitives::runtime::IdempotencyKey::new(value.to_string())
-                                .expect("request id is a valid idempotency fallback")
-                        })
-                    })
-                    .ok_or_else(|| ExecutionError::Invalid("idempotency_key is required".into()));
-                let decoded = decode_contract_intent(request.intent);
-                let prepared = decoded.and_then(|intent| {
-                    let evidence =
-                        decode_intent_admission_evidence(request.admission_evidence, &intent)?;
-                    Ok((intent, evidence))
-                });
-                let mut admission_result = "rejected".to_owned();
-                let mut admission: Option<(IntentAdmissionEvidence, String, String)> = None;
-                let result = match (prepared, idempotency_key) {
-                    (Ok((intent, evidence)), Ok(key)) => {
-                        if let Some(evidence) = evidence {
-                            admission =
-                                Some((evidence, key.to_string(), intent.intent_id.to_string()));
-                        }
-                        match self.accept_intent_with_idempotency_deferred(intent, key.to_string())
-                        {
-                            Ok((intent, duplicate)) => {
-                                admission_result =
-                                    if duplicate { "duplicate" } else { "accepted" }.into();
-                                if !duplicate {
-                                    let business_now = self
-                                        .business_time_unix_nanos()
-                                        .unwrap_or_else(now_unix_nanos);
-                                    if let Err(error) = self
-                                        .advance_due_intent_orders_managed(
-                                            business_now,
-                                            usize::MAX,
-                                            context,
-                                        )
-                                        .await
-                                    {
-                                        Err(error)
-                                    } else {
-                                        Ok(ExecutionCommandStatus {
-                                            status: "accepted".into(),
-                                            command_id: command_id.clone(),
-                                            intent_id: Some(intent.intent.intent_id.clone()),
-                                            order_id: None,
-                                        })
-                                    }
-                                } else {
-                                    Ok(ExecutionCommandStatus {
-                                        status: "duplicate".into(),
-                                        command_id: command_id.clone(),
-                                        intent_id: Some(intent.intent.intent_id.clone()),
-                                        order_id: None,
-                                    })
-                                }
-                            },
-                            Err(error) => Err(error),
+                            }
+                        } else {
+                            Ok(ExecutionCommandStatus {
+                                status: "duplicate".into(),
+                                command_id: command_id.clone(),
+                                intent_id: Some(intent.intent.intent_id.clone()),
+                                order_id: None,
+                            })
                         }
                     },
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                };
-                if let Some((evidence, idempotency_key, intent_id)) = admission {
-                    self.conflux
-                        .pending_admissions
-                        .push(IntentAdmissionAuditRecord {
-                            command_id: command_id.map(|value| value.to_string()),
-                            idempotency_key,
-                            intent_id,
-                            evidence,
-                            admission_result,
-                            created_at_unix_nanos: now_unix_nanos(),
-                        });
+                    Err(error) => Err(error),
                 }
-                ExecutionRestResponse::SubmitIntent(result.map_err(control_error))
             },
-            ExecutionRestRequest::CancelOrder { order_id, request } => {
-                let result = self
-                    .cancel_managed_order(
-                        CancelOrder {
-                            order_id,
-                            reason: request.reason.unwrap_or_default(),
-                        },
-                        context,
-                    )
-                    .await
-                    .map(|order| command_status("accepted", Some(order.order_id.to_string())));
-                ExecutionRestResponse::CancelOrder(result.map_err(control_error))
-            },
-            ExecutionRestRequest::ReplaceOrder { order_id, request } => {
-                let result = self
-                    .replace_contract_order(order_id, request, context)
-                    .await;
-                ExecutionRestResponse::ReplaceOrder(result.map_err(control_error))
-            },
-            ExecutionRestRequest::Reconcile(request) => {
-                let query = Ok(RemoteOrderQuery {
-                    binding_id: request
-                        .execution_route_id
-                        .map(|route| format!("execution.{route}.query")),
-                    order_id: request.order_id,
-                    limit: Some(200),
-                    ..Default::default()
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        };
+        if let Some((evidence, idempotency_key, intent_id)) = admission {
+            self.conflux
+                .pending_admissions
+                .push(IntentAdmissionAuditRecord {
+                    command_id: command_id.map(|value| value.to_string()),
+                    idempotency_key,
+                    intent_id,
+                    evidence,
+                    admission_result,
+                    created_at_unix_nanos: now_unix_nanos(),
                 });
-                ExecutionRestResponse::Reconcile(
-                    match query {
-                        Ok(query) => {
-                            self.reconcile_managed_orders(query, context)
-                                .await
-                                .map(|changed| ExecutionReconcileResponse {
-                                    changed: changed as u64,
-                                })
-                        },
-                        Err(error) => Err(error),
-                    }
-                    .map_err(control_error),
-                )
-            },
         }
+        result.map_err(rpc_execution_error)
     }
 
     async fn replace_contract_order(
@@ -1013,6 +1088,198 @@ fn parse_route_query(
     })
 }
 
+fn backtest_request(request: ExecutionBacktestRequest) -> BacktestRequest {
+    BacktestRequest {
+        initial_equity: request.initial_equity,
+        equity_curve: request
+            .equity_curve
+            .into_iter()
+            .map(|point| BacktestEquityPoint {
+                observed_at_unix_nanos: point.observed_at_unix_nanos,
+                equity: point.equity,
+            })
+            .collect(),
+        fills: request
+            .fills
+            .into_iter()
+            .map(|fill| BacktestFill {
+                instrument_id: fill.instrument_id,
+                side: fill.side,
+                quantity: fill.quantity,
+                price: fill.price,
+                fee: fill.fee,
+                occurred_at_unix_nanos: fill.occurred_at_unix_nanos,
+            })
+            .collect(),
+        risk_free_rate: request.risk_free_rate,
+        annualization_periods: request.annualization_periods,
+        market_events: request
+            .market_events
+            .into_iter()
+            .map(market_observation)
+            .collect(),
+        orders: request
+            .orders
+            .into_iter()
+            .map(simulation_order_request)
+            .collect(),
+        simulation: simulation_config(request.simulation),
+    }
+}
+
+fn market_observation(value: ExecutionBacktestMarketObservation) -> MarketObservation {
+    match value {
+        ExecutionBacktestMarketObservation::Quote(value) => MarketObservation::Quote(Quote {
+            scope: observation_scope(value.scope),
+            instrument_id: value.instrument_id,
+            bid_price: value.bid_price,
+            bid_quantity: value.bid_quantity,
+            ask_price: value.ask_price,
+            ask_quantity: value.ask_quantity,
+            observed_at_unix_nanos: value.observed_at_unix_nanos,
+            source_id: value.source_id,
+        }),
+        ExecutionBacktestMarketObservation::Bar(value) => MarketObservation::Bar(bar(value)),
+        ExecutionBacktestMarketObservation::TradeBar(value) => {
+            MarketObservation::TradeBar(TradeBar {
+                bar: bar(value.bar),
+            })
+        },
+        ExecutionBacktestMarketObservation::QuoteBar(value) => {
+            MarketObservation::QuoteBar(QuoteBar {
+                bar: bar(value.bar),
+            })
+        },
+    }
+}
+
+fn observation_scope(value: ExecutionBacktestObservationScope) -> ObservationScope {
+    match value {
+        ExecutionBacktestObservationScope::Market { market_id } => {
+            ObservationScope::Market { market_id }
+        },
+        ExecutionBacktestObservationScope::Consolidated {
+            instrument_id,
+            network_id,
+        } => ObservationScope::Consolidated {
+            instrument_id,
+            network_id,
+        },
+    }
+}
+
+fn bar(value: ExecutionBacktestBar) -> Bar {
+    Bar {
+        scope: observation_scope(value.scope),
+        instrument_id: value.instrument_id,
+        timeframe: value.timeframe,
+        open: value.open,
+        high: value.high,
+        low: value.low,
+        close: value.close,
+        volume: value.volume,
+        observed_at_unix_nanos: value.observed_at_unix_nanos,
+        source_id: value.source_id,
+        derivation: value.derivation,
+    }
+}
+
+fn simulation_config(value: ExecutionBacktestSimulationConfig) -> SimulationConfig {
+    SimulationConfig {
+        fee_bps: value.fee_bps,
+        fee_currency: value.fee_currency,
+        slippage_bps: value.slippage_bps,
+        enforce_quote_quantity: value.enforce_quote_quantity,
+    }
+}
+
+fn simulation_order_request(value: ExecutionBacktestOrderRequest) -> SimulationOrderRequest {
+    SimulationOrderRequest {
+        order_id: value.order_id,
+        instrument_id: value.instrument_id,
+        market_id: value.market_id,
+        side: value.side,
+        order_type: value.order_type,
+        quantity: value.quantity,
+        limit_price: value.limit_price,
+        submitted_at_unix_nanos: value.submitted_at_unix_nanos,
+    }
+}
+
+fn backtest_run_response(
+    value: crate::application::BacktestRunResult,
+) -> ExecutionBacktestRunResponse {
+    ExecutionBacktestRunResponse {
+        metrics: backtest_metrics(value.metrics),
+        orders: value
+            .orders
+            .into_iter()
+            .map(simulation_order_response)
+            .collect(),
+        fills: value
+            .fills
+            .into_iter()
+            .map(simulation_fill_response)
+            .collect(),
+    }
+}
+
+fn backtest_metrics(value: BacktestMetrics) -> ExecutionBacktestMetrics {
+    ExecutionBacktestMetrics {
+        trade_count: value.trade_count,
+        win_count: value.win_count,
+        loss_count: value.loss_count,
+        win_rate: value.win_rate,
+        gross_profit: value.gross_profit,
+        gross_loss: value.gross_loss,
+        net_profit: value.net_profit,
+        max_drawdown: value.max_drawdown,
+        max_drawdown_pct: value.max_drawdown_pct,
+        sharpe: value.sharpe,
+    }
+}
+
+fn simulation_order_response(value: SimulationOrder) -> ExecutionBacktestOrder {
+    ExecutionBacktestOrder {
+        request: ExecutionBacktestOrderRequest {
+            order_id: value.request.order_id,
+            instrument_id: value.request.instrument_id,
+            market_id: value.request.market_id,
+            side: value.request.side,
+            order_type: value.request.order_type,
+            quantity: value.request.quantity,
+            limit_price: value.request.limit_price,
+            submitted_at_unix_nanos: value.request.submitted_at_unix_nanos,
+        },
+        status: match value.status {
+            SimulationOrderStatus::Accepted => ExecutionBacktestOrderStatus::Accepted,
+            SimulationOrderStatus::PartiallyFilled => ExecutionBacktestOrderStatus::PartiallyFilled,
+            SimulationOrderStatus::Filled => ExecutionBacktestOrderStatus::Filled,
+            SimulationOrderStatus::Canceled => ExecutionBacktestOrderStatus::Canceled,
+            SimulationOrderStatus::Rejected => ExecutionBacktestOrderStatus::Rejected,
+        },
+        filled_quantity: value.filled_quantity,
+        remaining_quantity: value.remaining_quantity,
+        updated_at_unix_nanos: value.updated_at_unix_nanos,
+        reason: value.reason,
+    }
+}
+
+fn simulation_fill_response(value: SimulationFill) -> ExecutionBacktestSimulationFill {
+    ExecutionBacktestSimulationFill {
+        fill_id: value.fill_id,
+        order_id: value.order_id,
+        instrument_id: value.instrument_id,
+        execution_market_id: value.execution_market_id,
+        side: value.side,
+        quantity: value.quantity,
+        price: value.price,
+        fee: value.fee,
+        fee_currency: value.fee_currency,
+        occurred_at_unix_nanos: value.occurred_at_unix_nanos,
+    }
+}
+
 fn route_response(
     route: super::ExecutionRouteCandidate,
 ) -> Result<ExecutionRouteCandidateResponse, ExecutionError> {
@@ -1231,13 +1498,6 @@ fn canonical_typed_hash<T: serde::Serialize>(value: &T) -> Result<String, Execut
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-#[cfg(test)]
-fn canonical_value_hash(value: &serde_json::Value) -> Result<String, ExecutionError> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| ExecutionError::Invalid(format!("cannot canonicalize Intent: {error}")))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
 fn same_revision_identity(
     original: &ExecuteStrategyIntent,
     effective: &ExecuteStrategyIntent,
@@ -1268,34 +1528,16 @@ fn control_error(error: impl ToString) -> ExecutionControlError {
         message: error.to_string(),
     }
 }
+
+fn rpc_execution_error(error: impl ToString) -> ErrorObjectOwned {
+    let error = control_error(error);
+    business_error(EXECUTION_BUSINESS_ERROR_CODE, error.message.clone(), error)
+}
+
 fn now_unix_nanos() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         .min(u64::MAX as u128) as u64
-}
-
-#[cfg(test)]
-mod admission_tests {
-    use super::canonical_value_hash;
-    use crate::application::ExecuteStrategyIntent;
-
-    fn evidence(
-        original: &ExecuteStrategyIntent,
-        effective: &ExecuteStrategyIntent,
-        outcome: &str,
-    ) -> serde_json::Value {
-        let original = serde_json::to_value(original).unwrap();
-        let effective = serde_json::to_value(effective).unwrap();
-        serde_json::json!({
-            "source": "decision_agent",
-            "decision_id": "decision-1",
-            "outcome": outcome,
-            "original_hash": canonical_value_hash(&original).unwrap(),
-            "effective_hash": canonical_value_hash(&effective).unwrap(),
-            "original_intent": original,
-            "effective_intent": effective,
-        })
-    }
 }

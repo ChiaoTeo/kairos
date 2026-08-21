@@ -11,7 +11,7 @@ use crate::domain::subscription::SubscriptionState;
 
 /// Replay-only recovery state for the single Market Actor.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ReplayCheckpoint {
+pub struct ReplayCheckpoint {
     pub actor_id: ActorId,
     pub generation: Generation,
     pub event_sequence: Sequence,

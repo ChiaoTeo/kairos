@@ -1,14 +1,12 @@
-mod client;
-mod http;
+mod service;
 mod types;
 
-pub use client::MarketControlClient;
-pub use http::MarketHttpControl;
+pub use service::{MarketControlRpcClient, MarketControlRpcServer};
 pub use types::{
     MarketCommandEnvelope, MarketCommandOutcome, MarketCommandStatus, MarketControlError,
     MarketDataSource, MarketDataSourcesQuery, MarketDataSourcesResponse, MarketFeedStatus,
     MarketHealthResponse, MarketHealthStatus, MarketOperation, MarketReleaseOwnerPayload,
-    MarketReleaseOwnerResponse, MarketRestRequest, MarketRestResponse, MarketSourceStatus,
-    MarketSubscribePayload, MarketSubscriptionResponse, MarketSubscriptionStatus,
-    MarketUnsubscribePayload, SubscriptionOwnerKey,
+    MarketReleaseOwnerResponse, MarketSourceStatus, MarketSubscribePayload,
+    MarketSubscriptionResponse, MarketSubscriptionStatus, MarketUnsubscribePayload,
+    SubscriptionOwnerKey,
 };

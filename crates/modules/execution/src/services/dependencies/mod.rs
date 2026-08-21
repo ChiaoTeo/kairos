@@ -1,8 +1,8 @@
 //! Runtime intent planning and safety checks.
 //!
 //! Execution owns the plan and lifecycle, while this composition adapter
-//! talks to the already-running Account/Risk/Market processes through their
-//! Unix sockets.  No business state is cached here.
+//! talks to the already-running Account/Risk/Market processes through
+//! Conflux-owned contract clients. No business state is cached here.
 
 mod access;
 mod order_admission;
@@ -11,7 +11,7 @@ mod projection;
 mod workers;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kairos_primitives::account::PositionSide;
 use kairos_primitives::decimal::{Money, Price};
@@ -19,7 +19,7 @@ use kairos_primitives::execution::OrderId;
 use kairos_primitives::reference::{InstrumentId, InstrumentKind, MarketId};
 use kairos_primitives::runtime::StrategyId;
 use kairos_primitives::time::UnixNanos;
-use kairos_reference_contract::ReferenceMarket;
+use kairos_reference_contract::{ReferenceMarket, ReferenceProjectionSnapshot};
 use projection::*;
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -114,8 +114,17 @@ pub struct SocketExecutionIntentPlanner {
 }
 
 impl SocketExecutionIntentPlanner {
-    pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
-        IntentPlanningContext::from_manifest(path).map(|context| Self { context })
+    pub fn from_manifest_with_reference_snapshot(
+        system: &mut kairos_conflux::ConfluxSystem,
+        path: impl AsRef<Path>,
+        reference_snapshot: Option<ReferenceProjectionSnapshot>,
+    ) -> Result<Self, String> {
+        IntentPlanningContext::from_manifest_with_reference_snapshot(
+            system,
+            path,
+            reference_snapshot,
+        )
+        .map(|context| Self { context })
     }
 
     pub fn without_market_snapshot(mut self) -> Self {
@@ -154,8 +163,17 @@ pub struct SocketExecutionOrderAdmission {
 }
 
 impl SocketExecutionOrderAdmission {
-    pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self, String> {
-        OrderAdmissionContext::from_manifest(path).map(|context| Self { context })
+    pub fn from_manifest_with_reference_snapshot(
+        system: &mut kairos_conflux::ConfluxSystem,
+        path: impl AsRef<Path>,
+        reference_snapshot: Option<ReferenceProjectionSnapshot>,
+    ) -> Result<Self, String> {
+        OrderAdmissionContext::from_manifest_with_reference_snapshot(
+            system,
+            path,
+            reference_snapshot,
+        )
+        .map(|context| Self { context })
     }
 
     pub fn without_market_snapshot(mut self) -> Self {

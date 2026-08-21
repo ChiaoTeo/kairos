@@ -37,6 +37,11 @@ pub use crate::domain::subscription::{
 };
 pub use crate::domain::view::{MarketView, MarketViewFreshness};
 
+kairos_market_contract::market_control_rpc_conflux_actor! {
+    pub trait MarketRpcActor;
+    service MarketRpcService;
+}
+
 /// Public Market use-case facade around the sole mutable Market Actor.
 pub struct MarketApplication {
     pub(crate) actor: crate::services::actor::MarketActor,
