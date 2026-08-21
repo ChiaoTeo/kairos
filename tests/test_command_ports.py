@@ -67,9 +67,11 @@ def test_market_port_adapts_typed_subscription_to_owner_command() -> None:
     assert handle.status == "accepted"
     assert client.calls[0][0] == "market_subscribe"
     body = client.calls[0][1][0]
-    assert body["scope"]["caller_id"] == "sma"
-    assert body["scope"]["instance_id"] == "instance-1"
-    assert body["selectors"] == ["quote", "bar:1m"]
+    assert body["schema_version"] == 2
+    assert body["operation"] == "subscribe"
+    assert body["strategy_id"] == "sma"
+    assert body["instance_id"] == "instance-1"
+    assert body["payload"]["selectors"] == ["quote", "bar:1m"]
 
 
 def test_market_port_releases_every_subscription_for_strategy_instance() -> None:
@@ -86,8 +88,11 @@ def test_market_port_releases_every_subscription_for_strategy_instance() -> None
     method, params = client.calls[0]
     body = params[0]
     assert method == "market_release_owner"
-    assert body["scope"]["caller_id"] == "sma"
-    assert body["scope"]["launch_id"] == "launch-1"
+    assert body["schema_version"] == 2
+    assert body["operation"] == "release_owner"
+    assert body["strategy_id"] == "sma"
+    assert body["launch_id"] == "launch-1"
+    assert body["payload"] == {}
 
 
 def test_market_port_preserves_asset_type_route_key() -> None:
@@ -101,7 +106,7 @@ def test_market_port_preserves_asset_type_route_key() -> None:
         instance_id="instance-1",
         request_id="request-equity",
     )
-    assert client.calls[0][1][0]["asset_type"] == "equity"
+    assert client.calls[0][1][0]["payload"]["asset_type"] == "equity"
 
 
 def test_market_port_forwards_chain_subscription_parameters() -> None:
@@ -120,7 +125,7 @@ def test_market_port_forwards_chain_subscription_parameters() -> None:
         instance_id="instance-1",
         request_id="request-options",
     )
-    assert client.calls[0][1][0]["params"] == {
+    assert client.calls[0][1][0]["payload"]["params"] == {
         "mode": "chain",
         "underlying": "AAPL",
     }

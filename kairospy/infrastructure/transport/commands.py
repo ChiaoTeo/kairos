@@ -116,27 +116,27 @@ class MarketCommandClient:
         self.workspace_id = workspace_id
         self.market_runtime_id = market_runtime_id
 
-    def _scope(self, strategy_id: str, instance_id: str) -> dict[str, str]:
-        scope = {
-            "caller_id": strategy_id,
-            "workspace_id": self.workspace_id,
-            "market_runtime_id": self.market_runtime_id,
-        }
-        if self.launch_id is not None:
-            scope["launch_id"] = self.launch_id
-        if instance_id:
-            scope["instance_id"] = instance_id
-        return scope
-
     def _envelope(
-        self, request_id: str, strategy_id: str, instance_id: str
+        self,
+        request_id: str,
+        strategy_id: str,
+        instance_id: str,
+        *,
+        operation: str,
+        payload: Mapping[str, object],
     ) -> dict[str, object]:
-        return {
+        envelope: dict[str, object] = {
+            "schema_version": 2,
             "command_id": request_id,
             "idempotency_key": request_id,
-            "scope": self._scope(strategy_id, instance_id),
-            "requested_at_unix_nanos": time.time_ns(),
+            "operation": operation,
+            "strategy_id": strategy_id,
+            "instance_id": instance_id,
+            "payload": dict(payload),
         }
+        if self.launch_id is not None:
+            envelope["launch_id"] = self.launch_id
+        return envelope
 
     def subscribe(
         self,
@@ -146,9 +146,12 @@ class MarketCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        body = self._envelope(request_id, strategy_id, instance_id)
-        body.update(
-            {
+        body = self._envelope(
+            request_id,
+            strategy_id,
+            instance_id,
+            operation="subscribe",
+            payload={
                 "subject": request.subject,
                 "selectors": list(request.selectors),
                 "source_id": request.source_id,
@@ -157,7 +160,7 @@ class MarketCommandClient:
                 "asset_type": request.asset_type,
                 "params": dict(request.params),
                 "dynamic": request.dynamic,
-            }
+            },
         )
         value = self.client.call("market_subscribe", [body])
         return _handle(request_id, 202, value)
@@ -179,10 +182,13 @@ class MarketCommandClient:
         subscription_id = (
             subscription if isinstance(subscription, str) else str(subscription)
         )
-        body = self._envelope(request_id, strategy_id, instance_id)
-        body["subscription_id"] = subscription_id
-        if self.launch_id is not None:
-            body["launch_id"] = self.launch_id
+        body = self._envelope(
+            request_id,
+            strategy_id,
+            instance_id,
+            operation="unsubscribe",
+            payload={"subscription_id": subscription_id},
+        )
         value = self.client.call("market_unsubscribe", [body])
         return _handle(request_id, 202, value)
 
@@ -193,7 +199,13 @@ class MarketCommandClient:
         instance_id: str,
         request_id: str,
     ) -> CommandHandle:
-        body = self._envelope(request_id, strategy_id, instance_id)
+        body = self._envelope(
+            request_id,
+            strategy_id,
+            instance_id,
+            operation="release_owner",
+            payload={},
+        )
         value = self.client.call("market_release_owner", [body])
         return _handle(request_id, 202, value)
 

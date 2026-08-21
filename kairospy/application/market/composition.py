@@ -99,7 +99,7 @@ def release_strategy_owner(
     )
     handle = MarketCommandClient(
         client.control,
-        launch_id=identity.launch_id,
+        launch_id=identity.launch_id if scope == "instance" else None,
     ).release_owner(
         strategy_id=identity.strategy_id,
         instance_id=identity.instance_id,

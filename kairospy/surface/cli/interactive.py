@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shlex
 
+from prettytable import PrettyTable
 import typer
 
 from kairospy.application.launch.application import LaunchRegistryApplication
@@ -25,6 +26,19 @@ class GuidedCommand:
     needs_workspace: bool = True
 
 
+@dataclass(slots=True)
+class InteractiveContext:
+    owner: object | None
+    snapshot: ObserveSnapshot | None
+    workspace_arg: Path | None
+    selected_launch: str | None = None
+    selected_service: str | None = None
+    reference_asset_code: str | None = None
+    last_command: str | None = None
+    last_status: int | None = None
+    shell_path: tuple[str, ...] = ()
+
+
 def run_interactive(
     *,
     workspace: Path | None,
@@ -33,32 +47,337 @@ def run_interactive(
     yes: bool,
     execute: ExecuteCommand,
 ) -> int:
-    """Run one guided CLI action and return the executed command status."""
+    """Run the interactive Kairos operator shell."""
 
     typer.echo("Kairos 交互式操作")
     typer.echo("选择你想完成的事情，Kairos 会引导你完成下一步。")
     typer.echo()
 
     owner = _workspace(workspace)
-    snapshot = _snapshot(owner) if owner is not None else None
-    _print_workspace_summary(owner, snapshot)
+    context = InteractiveContext(
+        owner=owner,
+        snapshot=_snapshot(owner) if owner is not None else None,
+        workspace_arg=workspace,
+    )
+    if dry_run or no_exec:
+        return _run_one_shot_preview(context)
+    return _run_shell(context, execute=execute, yes=yes)
 
-    command = _choose_command(owner, snapshot)
-    argv = _with_workspace(command, workspace)
+
+def _run_one_shot_preview(context: InteractiveContext) -> int:
+    _print_context(context)
+    command = _choose_command(context)
+    argv = _with_workspace(command, context.workspace_arg)
     typer.echo()
     typer.echo(f"准备执行：{_display_command(argv)}")
     typer.echo(f"用途：{command.summary}")
+    typer.echo("已开启 dry-run/no-exec，只展示命令，不执行。")
+    return 0
 
-    if dry_run or no_exec:
-        typer.echo("已开启 dry-run/no-exec，只展示命令，不执行。")
-        return 0
 
+def _run_shell(
+    context: InteractiveContext, *, execute: ExecuteCommand, yes: bool
+) -> int:
+    _print_context(context)
+    typer.echo("输入序号选择产品动作；也可以输入命令。exit 退出。")
+    while True:
+        _print_shell_menu(context)
+        try:
+            line = input(f"{_prompt_path(context)}> ").strip()
+        except EOFError:
+            typer.echo()
+            return context.last_status or 0
+        if not line:
+            continue
+        if line in {"exit", "quit", "q"}:
+            return context.last_status or 0
+        if line == "help":
+            _print_shell_help(context)
+            continue
+        if line in {"summary", "status"} and not context.shell_path:
+            _print_context(context)
+            continue
+        if line == "refresh":
+            _refresh_context(context)
+            _print_context(context)
+            continue
+        if line in {"home", "/"}:
+            context.shell_path = ()
+            continue
+        if line == "back":
+            context.shell_path = context.shell_path[:-1]
+            if context.shell_path != ("system",):
+                context.selected_service = None
+            continue
+        command = _shell_command(context, line)
+        if command is None:
+            typer.echo("无法识别这个命令。输入 help 查看当前上下文可用动作。")
+            continue
+        _execute_guided_command(context, command, execute=execute, yes=yes)
+
+
+def _prompt_path(context: InteractiveContext) -> str:
+    return "/" + "/".join(context.shell_path)
+
+
+def _print_shell_menu(context: InteractiveContext) -> None:
+    path = context.shell_path
+    if not path:
+        typer.echo(
+            "\n".join(
+                (
+                    "产品入口：",
+                    "  1. 系统服务",
+                    "  2. 策略运行",
+                    "  3. Reference 查询",
+                    "  4. 账户 / 行情 / 订单",
+                    "  5. 数据与研究",
+                    "  6. 诊断",
+                    "  7. 观测台",
+                    "  8. 命令地图",
+                )
+            )
+        )
+        return
+    if path == ("system",):
+        typer.echo(
+            "\n".join(
+                (
+                    "系统服务：",
+                    "  1. reference",
+                    "  2. market",
+                    "  3. 查看所有系统服务",
+                    "  4. 运行 system doctor",
+                    "  5. 修复 stale 运行资源",
+                )
+            )
+        )
+        return
+    if path in {("system", "reference"), ("system", "market")}:
+        service = path[-1]
+        typer.echo(
+            "\n".join(
+                (
+                    f"{service} 动作：",
+                    "  1. 查看状态",
+                    "  2. 启动",
+                    "  3. 停止",
+                    "  4. 重启",
+                    "  5. 查看日志",
+                )
+            )
+        )
+
+
+def _print_shell_help(context: InteractiveContext) -> None:
+    path = context.shell_path
+    if not path:
+        typer.echo(
+            "\n".join(
+                (
+                    "可用命令：",
+                    "  system              进入系统服务",
+                    "  system reference    进入 /system/reference",
+                    "  system market       进入 /system/market",
+                    "  summary             显示当前概览",
+                    "  refresh             刷新状态",
+                    "  exit                退出",
+                )
+            )
+        )
+        return
+    if path == ("system",):
+        typer.echo(
+            "\n".join(
+                (
+                    "可用命令：",
+                    "  reference           进入 reference 服务",
+                    "  market              进入 market 服务",
+                    "  list                查看系统服务列表",
+                    "  doctor              运行 system doctor",
+                    "  repair              修复 stale 运行资源",
+                    "  back                返回上一级",
+                    "  home                回到根上下文",
+                )
+            )
+        )
+        return
+    if path in {("system", "reference"), ("system", "market")}:
+        service = path[-1]
+        typer.echo(
+            "\n".join(
+                (
+                    f"当前服务：{service}",
+                    "可用命令：",
+                    "  status              查看状态",
+                    "  start               启动服务",
+                    "  stop                停止服务",
+                    "  restart             重启服务",
+                    "  logs                查看日志",
+                    "  back                返回 /system",
+                    "  home                回到根上下文",
+                )
+            )
+        )
+        return
+    typer.echo("输入 back 返回上一级，home 回到根上下文，exit 退出。")
+
+
+def _refresh_context(context: InteractiveContext) -> None:
+    context.owner = _workspace(context.workspace_arg)
+    context.snapshot = _snapshot(context.owner) if context.owner is not None else None
+
+
+def _shell_command(context: InteractiveContext, line: str) -> GuidedCommand | None:
+    try:
+        parts = tuple(shlex.split(line))
+    except ValueError as error:
+        typer.echo(f"命令解析失败：{error}")
+        return None
+    if not parts:
+        return None
+    path = context.shell_path
+    if not path:
+        return _root_shell_command(context, parts)
+    if path == ("system",):
+        return _system_shell_command(context, parts)
+    if path in {("system", "reference"), ("system", "market")}:
+        return _system_service_shell_command(context, parts)
+    return None
+
+
+def _root_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    if parts in {("1",), ("system",)}:
+        context.shell_path = ("system",)
+        return None
+    if parts in {("system", "reference"), ("reference",)}:
+        context.shell_path = ("system", "reference")
+        context.selected_service = "reference"
+        return None
+    if parts in {("system", "market"), ("market",)}:
+        context.shell_path = ("system", "market")
+        context.selected_service = "market"
+        return None
+    if parts in {("8",), ("quickstart",), ("map",)}:
+        return GuidedCommand(("quickstart",), "查看 CLI 场景地图", needs_workspace=False)
+    if parts in {("6",), ("doctor",)}:
+        return GuidedCommand(("project", "doctor"), "检查项目 readiness")
+    if parts in {("7",), ("observe",)}:
+        return GuidedCommand(("observe",), "打开项目观测台")
+    return None
+
+
+def _system_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    if parts in {("1",), ("reference",)}:
+        context.shell_path = ("system", "reference")
+        context.selected_service = "reference"
+        return None
+    if parts in {("2",), ("market",)}:
+        context.shell_path = ("system", "market")
+        context.selected_service = "market"
+        return None
+    if parts in {("3",), ("list",), ("ls",), ("status",)}:
+        return GuidedCommand(
+            ("system", "list", "--format", "table"), "列出 workspace 系统服务状态"
+        )
+    if parts in {("4",), ("doctor",)}:
+        return GuidedCommand(("system", "doctor"), "诊断 socket、健康文件和锁")
+    if parts in {("5",), ("repair",)}:
+        return GuidedCommand(
+            ("system", "repair"), "清理确认 stale 的运行资源", dangerous=True
+        )
+    return None
+
+
+def _system_service_shell_command(
+    context: InteractiveContext, parts: tuple[str, ...]
+) -> GuidedCommand | None:
+    component = context.shell_path[-1]
+    context.selected_service = component
+    mapping = {
+        "1": (
+            ("system", "status", "--component", component, "--format", "text"),
+            f"查看 {component} 状态",
+            False,
+        ),
+        "status": (
+            ("system", "status", "--component", component, "--format", "text"),
+            f"查看 {component} 状态",
+            False,
+        ),
+        "2": (
+            ("system", "up", "--component", component, "--format", "text"),
+            f"启动 {component}",
+            True,
+        ),
+        "start": (
+            ("system", "up", "--component", component, "--format", "text"),
+            f"启动 {component}",
+            True,
+        ),
+        "3": (
+            ("system", "down", "--component", component, "--format", "text"),
+            f"停止 {component}",
+            True,
+        ),
+        "stop": (
+            ("system", "down", "--component", component, "--format", "text"),
+            f"停止 {component}",
+            True,
+        ),
+        "4": (
+            ("system", "restart", "--component", component, "--format", "text"),
+            f"重启 {component}",
+            True,
+        ),
+        "restart": (
+            ("system", "restart", "--component", component, "--format", "text"),
+            f"重启 {component}",
+            True,
+        ),
+        "5": (
+            ("system", "logs", "--component", component),
+            f"查看 {component} 日志",
+            False,
+        ),
+        "logs": (
+            ("system", "logs", "--component", component),
+            f"查看 {component} 日志",
+            False,
+        ),
+    }
+    selected = mapping.get(parts[0]) if len(parts) == 1 else None
+    if selected is None:
+        return None
+    argv, summary, dangerous = selected
+    return GuidedCommand(argv, summary, dangerous=dangerous)
+
+
+def _execute_guided_command(
+    context: InteractiveContext,
+    command: GuidedCommand,
+    *,
+    execute: ExecuteCommand,
+    yes: bool,
+) -> None:
+    argv = _with_workspace(command, context.workspace_arg)
+    display = _display_command(argv)
+    typer.echo(f"准备执行：{display}")
+    typer.echo(f"用途：{command.summary}")
     if command.dangerous and not yes:
         typer.echo("这个动作可能改变运行状态。")
     if not yes and not typer.confirm("确认执行这个命令吗？", default=True):
         typer.echo("已取消。")
-        return 0
-    return execute(argv)
+        context.last_command = display
+        context.last_status = 0
+        return
+    context.last_command = display
+    context.last_status = execute(argv)
+    _refresh_context(context)
 
 
 def _workspace(workspace: Path | None):
@@ -82,36 +401,101 @@ def _snapshot(owner) -> ObserveSnapshot | None:
         return None
 
 
-def _print_workspace_summary(owner, snapshot: ObserveSnapshot | None) -> None:
+def _print_context(context: InteractiveContext) -> None:
+    owner = context.owner
+    snapshot = context.snapshot
     if owner is None:
         return
-    typer.echo(f"Workspace：{owner.workspace_id}")
-    typer.echo(f"路径：{owner.paths.project_root}")
+    typer.echo(_workspace_table(owner.workspace_id, str(owner.paths.project_root)))
+    typer.echo()
+    typer.echo("当前上下文")
+    typer.echo(_context_table(context))
+    typer.echo()
     if snapshot is None:
         typer.echo("状态：暂时无法读取运行状态")
         typer.echo()
         return
-    launches = ", ".join(
-        f"{item.get('launch_id', '-')}/{item.get('state', 'unknown')}"
-        for item in snapshot.launches[:3]
-    )
-    components = ", ".join(
-        f"{name}={value.get('status', 'unknown')}"
-        for name, value in sorted(snapshot.components.items())
-    )
-    typer.echo(f"Launch：{launches or '暂无运行记录'}")
-    typer.echo(f"System：{components or '暂无组件状态'}")
-    typer.echo(f"建议下一步：{recommended_action(snapshot)}")
+    typer.echo("策略运行")
+    typer.echo(_launch_table(snapshot))
+    typer.echo()
+    typer.echo("系统服务")
+    typer.echo(_shared_service_table(snapshot))
+    typer.echo(f"建议：{recommended_action(snapshot)}")
     typer.echo()
 
 
-def _choose_command(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand:
+def _context_table(context: InteractiveContext) -> str:
+    table = PrettyTable(["上下文", "值"])
+    table.align = "l"
+    table.add_row(["launch", context.selected_launch or "-"])
+    table.add_row(["system service", context.selected_service or "-"])
+    table.add_row(["reference asset", context.reference_asset_code or "-"])
+    table.add_row(["last command", context.last_command or "-"])
+    table.add_row(
+        [
+            "last status",
+            "-" if context.last_status is None else str(context.last_status),
+        ]
+    )
+    return str(table)
+
+
+def _workspace_table(workspace_id: str, project_root: str) -> str:
+    table = PrettyTable(["项目", "值"])
+    table.align = "l"
+    table.add_row(["workspace", workspace_id])
+    table.add_row(["路径", project_root])
+    return str(table)
+
+
+def _launch_table(snapshot: ObserveSnapshot) -> str:
+    launches = _unique_launches(snapshot)
+    if not launches:
+        return "暂无 launch 记录"
+    table = PrettyTable(["launch", "mode", "state", "instance"])
+    table.align = "l"
+    for item in launches[:5]:
+        table.add_row(
+            [
+                str(item.get("launch_id", "-")),
+                str(item.get("mode", "-")),
+                str(item.get("state", "unknown")),
+                str(item.get("instance_id", "-")),
+            ]
+        )
+    return str(table)
+
+
+def _unique_launches(snapshot: ObserveSnapshot) -> tuple[dict[str, object], ...]:
+    values: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in snapshot.launches:
+        launch_id = str(item.get("launch_id") or "").strip()
+        mode = str(item.get("mode") or "").strip()
+        key = (launch_id, mode)
+        if not launch_id or key in seen:
+            continue
+        seen.add(key)
+        values.append(dict(item))
+    return tuple(values)
+
+
+def _shared_service_table(snapshot: ObserveSnapshot) -> str:
+    table = PrettyTable(["service", "status"])
+    table.align = "l"
+    for name in ("reference", "market"):
+        status = snapshot.components.get(name, {}).get("status", "unknown")
+        table.add_row([name, status])
+    return str(table)
+
+
+def _choose_command(context: InteractiveContext) -> GuidedCommand:
     choice = _prompt_menu(
         "你想做什么？",
         (
             ("1", "从零开始创建项目并运行示例"),
             ("2", "运行或查看某个策略"),
-            ("3", "维护系统运行组件"),
+            ("3", "维护系统服务"),
             ("4", "查询账户、行情、订单或 Reference"),
             ("5", "处理数据与研究流程"),
             ("6", "诊断现在哪里不对"),
@@ -122,15 +506,15 @@ def _choose_command(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand:
     if choice == "1":
         return _start_from_scratch()
     if choice == "2":
-        return _strategy_workflow(owner, snapshot)
+        return _strategy_workflow(context)
     if choice == "3":
-        return _system_workflow()
+        return _system_workflow(context)
     if choice == "4":
-        return _convenience_workflow()
+        return _convenience_workflow(context)
     if choice == "5":
         return _data_research_workflow()
     if choice == "6":
-        return _diagnose_workflow(owner, snapshot)
+        return _diagnose_workflow(context.owner, context.snapshot)
     if choice == "7":
         return GuidedCommand(("observe",), "打开项目观测台")
     return GuidedCommand(("quickstart",), "查看 CLI 场景地图", needs_workspace=False)
@@ -157,8 +541,11 @@ def _start_from_scratch() -> GuidedCommand:
     )
 
 
-def _strategy_workflow(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand:
-    launch_id = _prompt_launch_id(owner, snapshot)
+def _strategy_workflow(context: InteractiveContext) -> GuidedCommand:
+    launch_id = _prompt_launch_id(
+        context.owner, context.snapshot, context.selected_launch
+    )
+    context.selected_launch = launch_id
     action = _prompt_menu(
         "你想对这个策略做什么？",
         (
@@ -192,57 +579,69 @@ def _strategy_workflow(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand
     return GuidedCommand(argv, summary, dangerous=dangerous)
 
 
-def _system_workflow() -> GuidedCommand:
-    action = _prompt_menu(
-        "你想维护哪个系统动作？",
+def _system_workflow(context: InteractiveContext) -> GuidedCommand:
+    service = _prompt_menu(
+        "你想维护哪个系统服务？",
         (
-            ("1", "列出组件"),
-            ("2", "查看某个组件状态"),
-            ("3", "启动 reference 或 market"),
-            ("4", "停止 reference 或 market"),
-            ("5", "重启 reference 或 market"),
-            ("6", "查看组件日志"),
-            ("7", "运行 system doctor"),
-            ("8", "修复 stale 运行资源"),
+            ("1", "reference"),
+            ("2", "market"),
+            ("3", "查看所有系统服务"),
+            ("4", "运行 system doctor"),
+            ("5", "修复 stale 运行资源"),
         ),
     )
-    if action == "1":
-        return GuidedCommand(("system", "list"), "列出 workspace 组件状态")
-    if action == "7":
+    if service == "3":
+        return GuidedCommand(
+            ("system", "list", "--format", "table"), "列出 workspace 系统服务状态"
+        )
+    if service == "4":
         return GuidedCommand(("system", "doctor"), "诊断 socket、健康文件和锁")
-    if action == "8":
+    if service == "5":
         return GuidedCommand(
             ("system", "repair"), "清理确认 stale 的运行资源", dangerous=True
         )
-    component = _prompt_component(
-        "组件名",
-        default="market",
-        choices=("reference", "market", "account", "risk", "execution"),
+
+    component = "reference" if service == "1" else "market"
+    context.selected_service = component
+    action = _prompt_menu(
+        f"你想对 {component} 做什么？",
+        (
+            ("1", "查看状态"),
+            ("2", "启动"),
+            ("3", "停止"),
+            ("4", "重启"),
+            ("5", "查看日志"),
+        ),
     )
+    if action == "1":
+        return GuidedCommand(
+            ("system", "status", "--component", component, "--format", "text"),
+            f"查看 {component} 状态",
+        )
     if action == "2":
         return GuidedCommand(
-            ("system", "status", "--component", component), "查看组件状态"
+            ("system", "up", "--component", component, "--format", "text"),
+            f"启动 {component}",
+            True,
         )
     if action == "3":
         return GuidedCommand(
-            ("system", "up", "--component", component), "启动 workspace 组件", True
+            ("system", "down", "--component", component, "--format", "text"),
+            f"停止 {component}",
+            True,
         )
     if action == "4":
         return GuidedCommand(
-            ("system", "down", "--component", component), "停止 workspace 组件", True
-        )
-    if action == "5":
-        return GuidedCommand(
-            ("system", "restart", "--component", component),
-            "重启 workspace 组件",
+            ("system", "restart", "--component", component, "--format", "text"),
+            f"重启 {component}",
             True,
         )
     return GuidedCommand(
-        ("system", "logs", "--component", component), "查看组件日志"
+        ("system", "logs", "--component", component), f"查看 {component} 日志"
     )
 
 
-def _convenience_workflow() -> GuidedCommand:
+def _convenience_workflow(context: InteractiveContext) -> GuidedCommand:
     choice = _prompt_menu(
         "你想查询或操作什么？",
         (
@@ -297,7 +696,7 @@ def _convenience_workflow() -> GuidedCommand:
             "查看订单状态",
         )
     if choice == "6":
-        return _reference_workflow()
+        return _reference_workflow(context)
     if choice == "7":
         underlying = typer.prompt(
             "underlying instrument id",
@@ -325,7 +724,7 @@ def _convenience_workflow() -> GuidedCommand:
     )
 
 
-def _reference_workflow() -> GuidedCommand:
+def _reference_workflow(context: InteractiveContext) -> GuidedCommand:
     choice = _prompt_menu(
         "你想查询 Reference 里的什么？",
         (
@@ -351,7 +750,10 @@ def _reference_workflow() -> GuidedCommand:
             "查看当前可用 market",
         )
     if choice == "2":
-        asset_code = typer.prompt("asset code / symbol", default="AAPL").strip()
+        asset_code = typer.prompt(
+            "asset code / symbol", default=context.reference_asset_code or "AAPL"
+        ).strip()
+        context.reference_asset_code = asset_code
         return GuidedCommand(
             (
                 "reference",
@@ -456,13 +858,22 @@ def _diagnose_workflow(owner, snapshot: ObserveSnapshot | None) -> GuidedCommand
     return GuidedCommand(("system", "doctor"), "检查系统运行资源")
 
 
-def _prompt_launch_id(owner, snapshot: ObserveSnapshot | None) -> str:
+def _prompt_launch_id(
+    owner, snapshot: ObserveSnapshot | None, selected_launch: str | None = None
+) -> str:
     launch_ids = _launch_ids(owner, snapshot)
     if launch_ids:
         typer.echo("可用 launch：")
         for index, launch_id in enumerate(launch_ids, start=1):
             typer.echo(f"  {index}. {launch_id}")
-        value = typer.prompt("选择 launch 序号或直接输入 launch id", default="1").strip()
+        default = (
+            str(launch_ids.index(selected_launch) + 1)
+            if selected_launch in launch_ids
+            else "1"
+        )
+        value = typer.prompt(
+            "选择 launch 序号或直接输入 launch id", default=default
+        ).strip()
         if value.isdigit() and 1 <= int(value) <= len(launch_ids):
             return launch_ids[int(value) - 1]
         return value

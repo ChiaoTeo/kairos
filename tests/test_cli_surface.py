@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -588,7 +589,10 @@ def test_interactive_dry_run_selects_launch_action(tmp_path, monkeypatch) -> Non
         == 0
     )
     text = output.getvalue()
-    assert "Workspace：demo" in text
+    assert "workspace" in text
+    assert "demo" in text
+    assert "系统服务" in text
+    assert "account=not_running" not in text
     assert "可用 launch" in text
     assert (
         "准备执行：kairos launch status demo-backtest --workspace "
@@ -603,6 +607,98 @@ def test_interactive_short_alias_opens_command_map(monkeypatch) -> None:
 
     assert execute_argv(["i", "--dry-run"], output) == 0
     assert "准备执行：kairos quickstart" in output.getvalue()
+
+
+def test_interactive_system_menu_restarts_market(tmp_path, monkeypatch) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    answers = iter(["3", "2", "4"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    text = output.getvalue()
+    assert "你想维护哪个系统服务" in text
+    assert "你想对 market 做什么" in text
+    assert (
+        "准备执行：kairos system restart --component market --format text"
+        in text
+    )
+
+
+def test_interactive_system_menu_does_not_offer_instance_components(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    answers = iter(["3", "1", "1"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert (
+        execute_argv(
+            [
+                "interactive",
+                "--workspace",
+                str(workspace.paths.root),
+                "--dry-run",
+            ],
+            output,
+        )
+        == 0
+    )
+    text = output.getvalue()
+    assert "account/risk/execution" not in text
+    assert (
+        "准备执行：kairos system status --component reference --format text"
+        in text
+    )
+
+
+def test_interactive_session_keeps_context_between_actions(
+    tmp_path, monkeypatch
+) -> None:
+    from kairospy.surface.cli.interactive import run_interactive
+
+    workspace = WorkspaceApplication().init_project(
+        tmp_path / "demo", workspace_id="demo"
+    )
+    output = StringIO()
+    shell_input = iter(["1", "2", "4", "8", "exit"])
+    confirmations = iter([True, True])
+    executed: list[tuple[str, ...]] = []
+    monkeypatch.setattr("builtins.input", lambda *args, **kwargs: next(shell_input))
+    monkeypatch.setattr("typer.confirm", lambda *args, **kwargs: next(confirmations))
+
+    with redirect_stdout(output):
+        status = run_interactive(
+            workspace=workspace.paths.root,
+            dry_run=False,
+            no_exec=False,
+            yes=False,
+            execute=lambda argv: executed.append(tuple(argv)) or 0,
+        )
+
+    text = output.getvalue()
+    assert status == 0
+    assert executed[0][:4] == ("system", "restart", "--component", "market")
+    assert "/system/market>" in text
+    assert "| system service  | market" in text
+    assert "kairos system restart --component market --format text" in text
+    assert "| last status     | 0" in text
 
 
 def test_interactive_convenience_option_chain_uses_current_reference_option(
